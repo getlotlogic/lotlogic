@@ -655,7 +655,7 @@ function JobsPage({ lots, violations, loading, lotStates }) {
                   {v.plate_text && <span className="plate-tag">{v.plate_text}</span>}
                   {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                   {v.space_number && <span className="job-tag">Space <strong>#{v.space_number}</strong></span>}
-                  {v.vehicle_type && <span className="job-tag"><!-- car --><strong>{v.vehicle_type}</strong></span>}
+                  {v.vehicle_type && <span className="job-tag"><strong>{v.vehicle_type}</strong></span>}
                   <span className="job-tag"><strong>{fmtTime(v.detected_at)}</strong></span>
                 </div>
               </div>
