@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"/>
   <title>LotLogic Operator</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -13,8 +13,8 @@
     html { -webkit-text-size-adjust: 100%; }
     body {
       font-family: 'Inter', -apple-system, sans-serif;
-      background: #111318;
-      color: #f0f2f5;
+      background: #0c0e14;
+      color: #e8eaf0;
       min-height: 100vh;
       -webkit-tap-highlight-color: transparent;
     }
@@ -25,107 +25,130 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 24px;
-      background: #111318;
+      padding: 32px 24px;
+      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(59,130,246,.12) 0%, transparent 70%), #0c0e14;
     }
-    .login-box {
-      width: 100%;
-      max-width: 380px;
+    .login-box { width: 100%; max-width: 360px; }
+    .login-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
     }
-    .login-wordmark {
-      font-size: 26px;
-      font-weight: 800;
-      color: #fff;
-      letter-spacing: -.5px;
-      margin-bottom: 6px;
+    .login-shield {
+      width: 38px;
+      height: 38px;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 4px 16px rgba(59,130,246,.35);
+      flex-shrink: 0;
     }
-    .login-wordmark span { color: #f97316; }
-    .login-tagline {
-      font-size: 14px;
-      color: #6b7280;
-      margin-bottom: 36px;
-    }
+    .login-wordmark { font-size: 26px; font-weight: 800; color: #fff; letter-spacing: -.5px; }
+    .login-wordmark span { color: #3b82f6; }
+    .login-tagline { font-size: 13px; color: #4b5563; margin-bottom: 36px; margin-top: 4px; letter-spacing: .01em; }
     .field-label {
-      font-size: 13px;
-      font-weight: 600;
-      color: #9ca3af;
-      margin-bottom: 7px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #6b7280;
+      margin-bottom: 8px;
       display: block;
       text-transform: uppercase;
-      letter-spacing: .04em;
+      letter-spacing: .08em;
     }
     .field-input {
       width: 100%;
-      background: #1c1f27;
-      border: 1.5px solid #2a2d38;
-      border-radius: 10px;
+      background: #13151d;
+      border: 1.5px solid #1e2235;
+      border-radius: 12px;
       padding: 14px 16px;
-      font-size: 16px; /* prevent zoom on iOS */
-      color: #f0f2f5;
+      font-size: 16px;
+      color: #e8eaf0;
       outline: none;
       font-family: inherit;
-      transition: border-color .15s;
+      transition: border-color .2s, box-shadow .2s;
     }
-    .field-input:focus { border-color: #f97316; }
-    .field-input::placeholder { color: #3d4147; }
+    .field-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+    .field-input::placeholder { color: #2a2d3a; }
     .login-btn {
       width: 100%;
-      margin-top: 18px;
-      background: #f97316;
+      margin-top: 16px;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
       color: #fff;
       border: none;
-      border-radius: 10px;
+      border-radius: 12px;
       padding: 15px;
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 700;
       cursor: pointer;
       font-family: inherit;
-      transition: background .15s;
-      letter-spacing: .01em;
+      transition: opacity .15s, transform .1s;
+      letter-spacing: .02em;
+      box-shadow: 0 4px 20px rgba(59,130,246,.3);
     }
-    .login-btn:active { background: #ea6c0a; }
-    .login-btn:disabled { background: #7c3c13; color: #c2742e; cursor: not-allowed; }
+    .login-btn:active { opacity: .85; transform: scale(.99); }
+    .login-btn:disabled { opacity: .4; cursor: not-allowed; }
     .login-error {
       margin-top: 14px;
-      background: #2a1010;
-      border: 1px solid #5c1a1a;
-      border-radius: 8px;
+      background: rgba(220,38,38,.1);
+      border: 1px solid rgba(220,38,38,.3);
+      border-radius: 10px;
       padding: 12px 14px;
       font-size: 13px;
       color: #fca5a5;
     }
 
     /* ── App shell ── */
-    .app { display: flex; flex-direction: column; min-height: 100vh; }
+    .app { display: flex; flex-direction: column; min-height: 100vh; background: #0c0e14; }
 
     /* ── Header ── */
     .header {
-      background: #111318;
-      border-bottom: 1px solid #1e2130;
-      padding: 0 16px;
-      height: 56px;
+      background: rgba(12,14,20,.95);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid #1a1d2e;
+      padding: 0 20px;
+      padding-top: env(safe-area-inset-top);
+      height: calc(58px + env(safe-area-inset-top));
       display: flex;
-      align-items: center;
+      align-items: flex-end;
+      padding-bottom: 11px;
       justify-content: space-between;
       position: sticky;
       top: 0;
       z-index: 50;
     }
-    .header-wordmark { font-size: 18px; font-weight: 800; color: #fff; letter-spacing: -.3px; }
-    .header-wordmark span { color: #f97316; }
-    .header-right { display: flex; align-items: center; gap: 10px; }
-    .header-name { font-size: 13px; color: #6b7280; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .signout-btn {
-      background: none;
-      border: 1.5px solid #2a2d38;
-      color: #6b7280;
-      padding: 6px 12px;
+    .header-left { display: flex; align-items: center; gap: 9px; }
+    .header-shield {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
       border-radius: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+    }
+    .header-wordmark { font-size: 17px; font-weight: 800; color: #fff; letter-spacing: -.3px; }
+    .header-wordmark span { color: #3b82f6; }
+    .header-right { display: flex; align-items: center; gap: 10px; }
+    .header-name { font-size: 12px; color: #4b5563; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .signout-btn {
+      background: #13151d;
+      border: 1px solid #1e2235;
+      color: #6b7280;
+      padding: 6px 13px;
+      border-radius: 8px;
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
       font-family: inherit;
+      transition: color .15s, border-color .15s;
     }
+    .signout-btn:active { color: #e8eaf0; border-color: #374151; }
 
     /* ── Bottom nav ── */
     .bottom-nav {
@@ -133,11 +156,15 @@
       bottom: 0;
       left: 0;
       right: 0;
-      background: #111318;
-      border-top: 1px solid #1e2130;
+      background: rgba(12,14,20,.97);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-top: 1px solid #1a1d2e;
       display: flex;
       z-index: 50;
       padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
     }
     .nav-item {
       flex: 1;
@@ -149,18 +176,29 @@
       cursor: pointer;
       border: none;
       background: none;
-      color: #4b5563;
+      color: #374151;
       font-family: inherit;
-      transition: color .1s;
+      transition: color .15s;
       position: relative;
     }
-    .nav-item.active { color: #f97316; }
-    .nav-icon { font-size: 22px; line-height: 1; }
-    .nav-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+    .nav-item.active { color: #3b82f6; }
+    .nav-item.active::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 28px;
+      height: 2px;
+      background: #3b82f6;
+      border-radius: 0 0 3px 3px;
+    }
+    .nav-icon { font-size: 21px; line-height: 1; }
+    .nav-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
     .nav-badge {
       position: absolute;
-      top: 6px;
-      right: calc(50% - 18px);
+      top: 5px;
+      right: calc(50% - 20px);
       background: #ef4444;
       color: #fff;
       font-size: 10px;
@@ -169,12 +207,15 @@
       padding: 1px 6px;
       min-width: 18px;
       text-align: center;
+      border: 1.5px solid #0c0e14;
     }
 
     /* ── Page content ── */
     .page-content {
       flex: 1;
-      padding: 16px 16px calc(70px + env(safe-area-inset-bottom));
+      padding: 20px 16px calc(76px + env(safe-area-inset-bottom));
+      padding-left: calc(16px + env(safe-area-inset-left));
+      padding-right: calc(16px + env(safe-area-inset-right));
       max-width: 640px;
       margin: 0 auto;
       width: 100%;
@@ -183,80 +224,101 @@
     /* ── Section headers ── */
     .section-header {
       display: flex;
-      align-items: baseline;
+      align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
     .section-title {
-      font-size: 19px;
+      font-size: 18px;
       font-weight: 800;
-      color: #f9fafb;
-      letter-spacing: -.3px;
+      color: #f3f4f6;
+      letter-spacing: -.4px;
     }
     .section-count {
-      font-size: 13px;
-      color: #6b7280;
+      font-size: 12px;
+      font-weight: 600;
+      color: #374151;
+      background: #13151d;
+      border: 1px solid #1e2235;
+      padding: 3px 10px;
+      border-radius: 20px;
     }
 
     /* ── Loading / empty ── */
-    .loader { display: flex; align-items: center; justify-content: center; padding: 60px 0; gap: 10px; color: #4b5563; font-size: 14px; }
-    .spin { width: 18px; height: 18px; border: 2px solid #1e2130; border-top-color: #f97316; border-radius: 50%; animation: spin .6s linear infinite; }
+    .loader { display: flex; align-items: center; justify-content: center; padding: 60px 0; gap: 10px; color: #374151; font-size: 14px; }
+    .spin { width: 18px; height: 18px; border: 2px solid #1e2235; border-top-color: #3b82f6; border-radius: 50%; animation: spin .7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .empty-state { text-align: center; padding: 56px 20px; }
-    .empty-icon { font-size: 44px; margin-bottom: 14px; }
-    .empty-title { font-size: 17px; font-weight: 700; color: #d1d5db; margin-bottom: 6px; }
-    .empty-body { font-size: 14px; color: #4b5563; }
+    .empty-state { text-align: center; padding: 60px 20px; }
+    .empty-icon { font-size: 42px; margin-bottom: 14px; opacity: .7; }
+    .empty-title { font-size: 16px; font-weight: 700; color: #9ca3af; margin-bottom: 6px; }
+    .empty-body { font-size: 13px; color: #374151; }
 
-    /* ── Job cards (violations) ── */
+    /* ── Job cards ── */
     .job-card {
-      background: #1c1f27;
-      border: 1.5px solid #2a2d38;
-      border-radius: 14px;
-      margin-bottom: 12px;
+      background: #13151d;
+      border: 1px solid #1e2235;
+      border-radius: 16px;
+      margin-bottom: 10px;
       overflow: hidden;
+      box-shadow: 0 2px 12px rgba(0,0,0,.3);
     }
-    .job-card.urgent { border-color: #7f1d1d; }
-    .job-urgent-bar { background: #dc2626; padding: 6px 14px; font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: .06em; display: flex; align-items: center; gap: 6px; }
-    .job-body { padding: 14px; }
-    .job-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 10px; }
-    .job-lot-name { font-size: 15px; font-weight: 700; color: #f9fafb; line-height: 1.2; }
-    .job-lot-addr { font-size: 12px; color: #6b7280; margin-top: 2px; }
+    .job-card.urgent { border-color: rgba(220,38,38,.4); box-shadow: 0 2px 16px rgba(220,38,38,.12); }
+    .job-urgent-bar {
+      background: linear-gradient(90deg, #dc2626, #b91c1c);
+      padding: 7px 16px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #fff;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .job-body { padding: 14px 16px; }
+    .job-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+    .job-lot-name { font-size: 15px; font-weight: 700; color: #f3f4f6; line-height: 1.3; }
+    .job-lot-addr { font-size: 12px; color: #4b5563; margin-top: 3px; }
     .job-timer {
-      background: #111318;
-      border-radius: 8px;
-      padding: 6px 10px;
+      background: #0c0e14;
+      border: 1px solid #1e2235;
+      border-radius: 10px;
+      padding: 7px 11px;
       text-align: center;
-      min-width: 60px;
+      min-width: 62px;
       flex-shrink: 0;
     }
-    .job-timer-val { font-size: 17px; font-weight: 800; color: #f97316; font-variant-numeric: tabular-nums; }
+    .job-timer-val { font-size: 18px; font-weight: 800; color: #3b82f6; font-variant-numeric: tabular-nums; line-height: 1; }
     .job-timer-val.long { color: #ef4444; }
-    .job-timer-label { font-size: 9px; color: #4b5563; text-transform: uppercase; letter-spacing: .05em; margin-top: 1px; }
-    .job-details { display: flex; flex-wrap: wrap; gap: 8px; }
+    .job-timer-label { font-size: 9px; color: #374151; text-transform: uppercase; letter-spacing: .07em; margin-top: 3px; font-weight: 600; }
+    .job-details { display: flex; flex-wrap: wrap; gap: 7px; }
     .job-tag {
-      background: #111318;
-      border-radius: 6px;
+      background: #0c0e14;
+      border: 1px solid #1e2235;
+      border-radius: 8px;
       padding: 5px 10px;
       font-size: 12px;
-      color: #9ca3af;
+      color: #6b7280;
       display: flex;
       align-items: center;
       gap: 5px;
     }
-    .job-tag strong { color: #e5e7eb; font-weight: 600; }
+    .job-tag strong { color: #d1d5db; font-weight: 600; }
     .plate-tag {
       background: #fef3c7;
-      color: #1c1917;
-      border-radius: 6px;
-      padding: 5px 10px;
+      color: #1c1009;
+      border-radius: 7px;
+      padding: 5px 11px;
       font-size: 13px;
       font-weight: 800;
       font-family: 'Courier New', monospace;
-      letter-spacing: .08em;
+      letter-spacing: .1em;
+      border: 1.5px solid #fbbf24;
     }
     .job-footer {
-      border-top: 1px solid #1e2130;
-      padding: 10px 14px;
+      border-top: 1px solid #1a1d2e;
+      padding: 10px 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -265,59 +327,45 @@
       font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: .05em;
-      padding: 3px 10px;
+      letter-spacing: .06em;
+      padding: 4px 10px;
       border-radius: 20px;
     }
-    .job-type-tag.unauthorized { background: #431407; color: #fb923c; }
-    .job-type-tag.overtime { background: #1e1b4b; color: #a5b4fc; }
-    .job-type-tag.default { background: #1f2937; color: #9ca3af; }
-    .job-resolved-footer { font-size: 12px; color: #4b5563; }
+    .job-type-tag.unauthorized { background: rgba(59,130,246,.12); color: #60a5fa; border: 1px solid rgba(59,130,246,.2); }
+    .job-type-tag.overtime { background: rgba(139,92,246,.12); color: #a78bfa; border: 1px solid rgba(139,92,246,.2); }
+    .job-type-tag.default { background: #13151d; color: #6b7280; border: 1px solid #1e2235; }
     .job-action { font-size: 12px; font-weight: 600; color: #34d399; }
 
     /* ── Lot cards ── */
     .lot-card {
-      background: #1c1f27;
-      border: 1.5px solid #2a2d38;
-      border-radius: 14px;
-      margin-bottom: 12px;
+      background: #13151d;
+      border: 1px solid #1e2235;
+      border-radius: 16px;
+      margin-bottom: 10px;
       overflow: hidden;
+      box-shadow: 0 2px 12px rgba(0,0,0,.3);
     }
-    .lot-card-top {
-      padding: 14px;
-      display: flex;
-      align-items: flex-start;
-      gap: 14px;
-    }
-    .lot-status-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      margin-top: 4px;
-      flex-shrink: 0;
-    }
-    .lot-status-dot.on { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+    .lot-card-top { padding: 16px; display: flex; align-items: flex-start; gap: 14px; }
+    .lot-status-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+    .lot-status-dot.on { background: #4ade80; box-shadow: 0 0 8px rgba(74,222,128,.5); }
     .lot-status-dot.off { background: #ef4444; }
-    .lot-status-dot.warn { background: #f97316; box-shadow: 0 0 6px #f97316; }
+    .lot-status-dot.warn { background: #3b82f6; box-shadow: 0 0 8px rgba(59,130,246,.5); }
     .lot-info { flex: 1; min-width: 0; }
-    .lot-name { font-size: 16px; font-weight: 700; color: #f9fafb; }
-    .lot-addr { font-size: 13px; color: #6b7280; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .lot-numbers { display: flex; gap: 14px; margin-top: 10px; }
-    .lot-num { text-align: center; }
-    .lot-num-val { font-size: 22px; font-weight: 800; color: #f9fafb; }
+    .lot-name { font-size: 16px; font-weight: 700; color: #f3f4f6; }
+    .lot-addr { font-size: 12px; color: #4b5563; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lot-numbers { display: flex; gap: 20px; margin-top: 12px; }
+    .lot-num { }
+    .lot-num-val { font-size: 24px; font-weight: 800; color: #f3f4f6; line-height: 1; }
     .lot-num-val.red { color: #ef4444; }
     .lot-num-val.green { color: #4ade80; }
-    .lot-num-label { font-size: 11px; color: #4b5563; text-transform: uppercase; letter-spacing: .04em; margin-top: 1px; }
-    .lot-actions {
-      border-top: 1px solid #1e2130;
-      display: flex;
-    }
+    .lot-num-label { font-size: 10px; color: #374151; text-transform: uppercase; letter-spacing: .06em; margin-top: 3px; font-weight: 600; }
+    .lot-actions { border-top: 1px solid #1a1d2e; display: flex; }
     .lot-action-btn {
       flex: 1;
-      padding: 12px;
+      padding: 13px;
       border: none;
       background: none;
-      color: #9ca3af;
+      color: #6b7280;
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
@@ -326,118 +374,112 @@
       align-items: center;
       justify-content: center;
       gap: 6px;
-      border-right: 1px solid #1e2130;
+      border-right: 1px solid #1a1d2e;
       transition: color .15s, background .15s;
     }
     .lot-action-btn:last-child { border-right: none; }
-    .lot-action-btn:active { background: #111318; }
-    .lot-action-btn.primary { color: #f97316; }
+    .lot-action-btn:active { background: #0c0e14; }
+    .lot-action-btn.primary { color: #3b82f6; }
     .lot-action-btn a { color: inherit; text-decoration: none; }
 
     /* ── Cam snapshot ── */
-    .cam-sheet {
-      background: #111318;
-      border-radius: 0 0 14px 14px;
-      overflow: hidden;
-    }
-    .cam-row {
-      border-top: 1px solid #1e2130;
-      padding: 10px 14px;
-    }
-    .cam-row-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
-    }
-    .cam-name { font-size: 12px; font-weight: 600; color: #9ca3af; display: flex; align-items: center; gap: 6px; }
-    .cam-time { font-size: 11px; color: #4b5563; }
-    .cam-img-wrap { border-radius: 8px; overflow: hidden; background: #0a0b0e; aspect-ratio: 16/9; position: relative; }
+    .cam-sheet { background: #0c0e14; border-radius: 0 0 16px 16px; overflow: hidden; }
+    .cam-row { border-top: 1px solid #1a1d2e; padding: 12px 16px; }
+    .cam-row-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .cam-name { font-size: 12px; font-weight: 600; color: #6b7280; display: flex; align-items: center; gap: 6px; }
+    .cam-time { font-size: 11px; color: #374151; }
+    .cam-img-wrap { border-radius: 10px; overflow: hidden; background: #080a0f; aspect-ratio: 16/9; position: relative; }
     .cam-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .cam-offline { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #374151; font-size: 13px; }
+    .cam-offline { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #1e2235; font-size: 13px; }
     .cam-viol-overlay {
       position: absolute;
-      bottom: 6px;
-      left: 6px;
-      background: rgba(220,38,38,.85);
+      bottom: 8px;
+      left: 8px;
+      background: rgba(220,38,38,.9);
       color: #fff;
       font-size: 11px;
       font-weight: 700;
-      padding: 3px 8px;
-      border-radius: 5px;
+      padding: 4px 9px;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
     }
     .expand-cams-btn {
       width: 100%;
       border: none;
       background: none;
-      color: #f97316;
+      color: #3b82f6;
       font-size: 13px;
       font-weight: 600;
-      padding: 12px;
+      padding: 13px;
       cursor: pointer;
       font-family: inherit;
-      border-top: 1px solid #1e2130;
+      border-top: 1px solid #1a1d2e;
+      transition: opacity .15s;
     }
+    .expand-cams-btn:active { opacity: .7; }
 
     /* ── Earnings ── */
     .earnings-hero {
-      background: #1c1f27;
-      border: 1.5px solid #2a2d38;
-      border-radius: 14px;
-      padding: 20px;
+      background: linear-gradient(135deg, #13151d 0%, #1a1410 100%);
+      border: 1px solid #2a1e10;
+      border-radius: 16px;
+      padding: 24px 20px;
       margin-bottom: 16px;
       text-align: center;
+      box-shadow: 0 4px 24px rgba(59,130,246,.08);
     }
-    .earnings-label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #6b7280; margin-bottom: 8px; }
-    .earnings-amount { font-size: 46px; font-weight: 800; color: #f9fafb; letter-spacing: -1px; }
-    .earnings-amount span { color: #f97316; }
-    .earnings-sub { font-size: 13px; color: #4b5563; margin-top: 6px; }
-    .earnings-period-row { display: flex; gap: 10px; margin-bottom: 16px; }
+    .earnings-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: #4b5563; margin-bottom: 10px; }
+    .earnings-amount { font-size: 48px; font-weight: 800; color: #f3f4f6; letter-spacing: -2px; line-height: 1; }
+    .earnings-amount span { color: #3b82f6; }
+    .earnings-sub { font-size: 13px; color: #374151; margin-top: 8px; font-weight: 500; }
+    .earnings-period-row { display: flex; gap: 8px; margin-bottom: 16px; }
     .period-btn {
       flex: 1;
-      padding: 10px;
+      padding: 10px 8px;
       border-radius: 10px;
-      border: 1.5px solid #2a2d38;
-      background: #1c1f27;
-      color: #6b7280;
+      border: 1px solid #1e2235;
+      background: #13151d;
+      color: #4b5563;
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
       font-family: inherit;
       transition: all .15s;
     }
-    .period-btn.active { border-color: #f97316; color: #f97316; background: #1c1107; }
+    .period-btn.active { border-color: rgba(59,130,246,.4); color: #3b82f6; background: rgba(59,130,246,.08); }
     .earnings-breakdown {
-      background: #1c1f27;
-      border: 1.5px solid #2a2d38;
-      border-radius: 14px;
+      background: #13151d;
+      border: 1px solid #1e2235;
+      border-radius: 16px;
       overflow: hidden;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.3);
     }
     .breakdown-header {
       padding: 12px 16px;
-      border-bottom: 1px solid #1e2130;
-      font-size: 12px;
+      border-bottom: 1px solid #1a1d2e;
+      font-size: 11px;
       font-weight: 700;
-      color: #6b7280;
+      color: #374151;
       text-transform: uppercase;
-      letter-spacing: .01em;
+      letter-spacing: .08em;
     }
     .breakdown-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
       padding: 13px 16px;
-      border-bottom: 1px solid #111318;
+      border-bottom: 1px solid #0c0e14;
+      transition: background .1s;
     }
     .breakdown-row:last-child { border-bottom: none; }
-    .breakdown-left { }
-    .breakdown-date { font-size: 13px; color: #e5e7eb; font-weight: 600; }
-    .breakdown-lot { font-size: 12px; color: #4b5563; margin-top: 2px; }
+    .breakdown-row:active { background: #0c0e14; }
+    .breakdown-date { font-size: 13px; color: #d1d5db; font-weight: 600; }
+    .breakdown-lot { font-size: 12px; color: #374151; margin-top: 2px; }
     .breakdown-right { text-align: right; }
-    .breakdown-amt { font-size: 15px; font-weight: 700; color: #f97316; }
-    .breakdown-action { font-size: 11px; color: #4b5563; text-transform: capitalize; margin-top: 2px; }
-    .breakdown-plate { font-family: 'Courier New', monospace; font-size: 11px; color: #6b7280; font-weight: 600; }
+    .breakdown-amt { font-size: 15px; font-weight: 700; color: #3b82f6; }
+    .breakdown-action { font-size: 11px; color: #374151; text-transform: capitalize; margin-top: 2px; }
+    .breakdown-plate { font-family: 'Courier New', monospace; font-size: 11px; color: #4b5563; font-weight: 600; margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -516,8 +558,11 @@ function LoginPage({ onLogin }) {
   return (
     <div className="login-page">
       <div className="login-box">
-        <div className="login-wordmark">Lot<span>Logic</span></div>
-        <div className="login-tagline">Operator portal — sign in to get started</div>
+        <div className="login-logo">
+          <div className="login-shield">🛡️</div>
+          <div className="login-wordmark">Lot<span>Logic</span></div>
+        </div>
+        <div className="login-tagline">Enforcement portal — sign in to get started</div>
         <form onSubmit={submit}>
           <label className="field-label">Your email</label>
           <input
@@ -615,7 +660,7 @@ function JobsPage({ lots, violations, loading, lotStates }) {
                   {v.violation_type || 'Violation'}
                 </span>
                 {lot?.address && (
-                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener" style={{fontSize:13, color:'#f97316', fontWeight:600, textDecoration:'none'}}>
+                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener" style={{fontSize:13, color:'#3b82f6', fontWeight:600, textDecoration:'none'}}>
                     📍 Directions
                   </a>
                 )}
@@ -710,7 +755,7 @@ function LotsPage({ lots, lotStates, loading }) {
                     <div className="lot-num-label">Open jobs</div>
                   </div>
                   <div className="lot-num">
-                    <div className="lot-num-val" style={{color: camsOn < camsTotal ? '#f97316' : '#4ade80'}}>
+                    <div className="lot-num-val" style={{color: camsOn < camsTotal ? '#3b82f6' : '#4ade80'}}>
                       {camsOn}<span style={{fontSize:14, color:'#4b5563'}}>/{camsTotal}</span>
                     </div>
                     <div className="lot-num-label">Cams online</div>
@@ -851,7 +896,7 @@ function EarningsPage({ violations, lots }) {
               <div key={action} className="breakdown-row">
                 <div style={{fontSize:15, fontWeight:700, color:'#e5e7eb', textTransform:'capitalize'}}>{action}</div>
                 <div style={{textAlign:'right'}}>
-                  <div style={{fontSize:15, fontWeight:700, color:'#f97316'}}>{fmtMoney(earned)}</div>
+                  <div style={{fontSize:15, fontWeight:700, color:'#3b82f6'}}>{fmtMoney(earned)}</div>
                   <div style={{fontSize:12, color:'#4b5563'}}>{count}×</div>
                 </div>
               </div>
@@ -966,7 +1011,10 @@ function App() {
   return (
     <div className="app">
       <div className="header">
-        <div className="header-wordmark">Lot<span>Logic</span></div>
+        <div className="header-left">
+          <div className="header-shield">🛡️</div>
+          <div className="header-wordmark">Lot<span>Logic</span></div>
+        </div>
         <div className="header-right">
           <div className="header-name">{owner.business_name || owner.contact_name}</div>
           <button className="signout-btn" onClick={logout}>Sign out</button>
