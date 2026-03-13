@@ -43,7 +43,10 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 18px;
+      font-size: 12px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -.5px;
       box-shadow: 0 4px 16px rgba(59,130,246,.35);
       flex-shrink: 0;
     }
@@ -130,7 +133,10 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 13px;
+      font-size: 9px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -.3px;
     }
     .header-wordmark { font-size: 17px; font-weight: 800; color: #fff; letter-spacing: -.3px; }
     .header-wordmark span { color: #3b82f6; }
@@ -193,7 +199,6 @@
       background: #3b82f6;
       border-radius: 0 0 3px 3px;
     }
-    .nav-icon { font-size: 21px; line-height: 1; }
     .nav-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
     .nav-badge {
       position: absolute;
@@ -559,7 +564,7 @@ function LoginPage({ onLogin }) {
     <div className="login-page">
       <div className="login-box">
         <div className="login-logo">
-          <div className="login-shield">🛡️</div>
+          <div className="login-shield">LL</div>
           <div className="login-wordmark">Lot<span>Logic</span></div>
         </div>
         <div className="login-tagline">Enforcement portal — sign in to get started</div>
@@ -616,7 +621,6 @@ function JobsPage({ lots, violations, loading, lotStates }) {
 
       {active.length === 0 ? (
         <div className="empty-state" style={{marginBottom: 28}}>
-          <div className="empty-icon">✅</div>
           <div className="empty-title">All clear</div>
           <div className="empty-body">No violations pending at your lots right now</div>
         </div>
@@ -631,7 +635,7 @@ function JobsPage({ lots, violations, loading, lotStates }) {
             <div key={v.id} className={`job-card ${urgent ? 'urgent' : ''}`}>
               {urgent && (
                 <div className="job-urgent-bar">
-                  🔴 Needs attention — waiting {timer.val} {timer.unit}
+                  Needs attention — waiting {timer.val} {timer.unit}
                 </div>
               )}
               <div className="job-body">
@@ -651,8 +655,8 @@ function JobsPage({ lots, violations, loading, lotStates }) {
                   {v.plate_text && <span className="plate-tag">{v.plate_text}</span>}
                   {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                   {v.space_number && <span className="job-tag">Space <strong>#{v.space_number}</strong></span>}
-                  {v.vehicle_type && <span className="job-tag">🚗 <strong>{v.vehicle_type}</strong></span>}
-                  <span className="job-tag">📅 <strong>{fmtTime(v.detected_at)}</strong></span>
+                  {v.vehicle_type && <span className="job-tag"><!-- car --><strong>{v.vehicle_type}</strong></span>}
+                  <span className="job-tag"><strong>{fmtTime(v.detected_at)}</strong></span>
                 </div>
               </div>
               <div className="job-footer">
@@ -661,7 +665,7 @@ function JobsPage({ lots, violations, loading, lotStates }) {
                 </span>
                 {lot?.address && (
                   <a href={mapsLink(lot.address)} target="_blank" rel="noopener" style={{fontSize:13, color:'#3b82f6', fontWeight:600, textDecoration:'none'}}>
-                    📍 Directions
+                    Directions →
                   </a>
                 )}
               </div>
@@ -721,7 +725,6 @@ function LotsPage({ lots, lotStates, loading }) {
   if (lots.length === 0) {
     return (
       <div className="empty-state">
-        <div className="empty-icon">🅿️</div>
         <div className="empty-title">No lots yet</div>
         <div className="empty-body">Your lots will appear here once they're set up</div>
       </div>
@@ -770,10 +773,10 @@ function LotsPage({ lots, lotStates, loading }) {
 
             <div className="lot-actions">
               <button className="lot-action-btn primary" onClick={() => setExpandedCams(p => ({...p, [lot.id]: !camsExpanded}))}>
-                📷 {camsExpanded ? 'Hide cams' : `View cams (${camsTotal})`}
+                {camsExpanded ? 'Hide Cameras' : `Cameras (${camsTotal})`}
               </button>
               <button className="lot-action-btn">
-                <a href={mapsLink(lot.address)} target="_blank" rel="noopener">📍 Directions</a>
+                <a href={mapsLink(lot.address)} target="_blank" rel="noopener">Directions →</a>
               </button>
             </div>
 
@@ -806,11 +809,11 @@ function LotsPage({ lots, lotStates, loading }) {
                             loading="lazy"
                           />
                           {cam.active_violations > 0 && (
-                            <div className="cam-viol-overlay">⚠️ {cam.active_violations} open</div>
+                            <div className="cam-viol-overlay">{cam.active_violations} open</div>
                           )}
                         </>
                       ) : (
-                        <div className="cam-offline">{cam.online ? '📷 No snapshot yet' : '📵 Camera offline'}</div>
+                        <div className="cam-offline">{cam.online ? 'No snapshot yet' : 'Camera offline'}</div>
                       )}
                     </div>
                     {cam.latest_snapshot && (
@@ -908,7 +911,6 @@ function EarningsPage({ violations, lots }) {
       {/* Line items */}
       {resolved.length === 0 ? (
         <div className="empty-state">
-          <div className="empty-icon">💰</div>
           <div className="empty-title">No earnings yet {period !== 'all' ? 'this period' : ''}</div>
           <div className="empty-body">Completed jobs will show up here</div>
         </div>
@@ -1003,16 +1005,16 @@ function App() {
   const pending = violations.filter(v => v.status === 'pending').length;
 
   const tabs = [
-    { id: 'jobs',     icon: '🚨', label: 'Jobs',    badge: pending },
-    { id: 'lots',     icon: '🅿️', label: 'Lots',    badge: 0 },
-    { id: 'earnings', icon: '💰', label: 'Earnings', badge: 0 },
+    { id: 'jobs',     label: 'Jobs',     badge: pending },
+    { id: 'lots',     label: 'Lots',     badge: 0 },
+    { id: 'earnings', label: 'Earnings', badge: 0 },
   ];
 
   return (
     <div className="app">
       <div className="header">
         <div className="header-left">
-          <div className="header-shield">🛡️</div>
+          <div className="header-shield">LL</div>
           <div className="header-wordmark">Lot<span>Logic</span></div>
         </div>
         <div className="header-right">
@@ -1031,7 +1033,6 @@ function App() {
         {tabs.map(t => (
           <button key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
             {t.badge > 0 && <span className="nav-badge">{t.badge}</span>}
-            <span className="nav-icon">{t.icon}</span>
             <span className="nav-label">{t.label}</span>
           </button>
         ))}
