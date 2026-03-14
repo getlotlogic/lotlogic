@@ -1662,9 +1662,14 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
               )}
               <div className="job-body" style={{cursor:'pointer'}} onClick={() => setSelectedViol(v)}>
                 <div className="job-top">
-                  <div>
+                  <div style={{flex:1}}>
                     <div className="job-lot-name">{lot?.name || 'Unknown Lot'}</div>
                     <div className="job-lot-addr">{lot?.address || ''}</div>
+                    {v.sms_sent_at && (
+                      <div style={{display:'inline-flex', alignItems:'center', gap:4, marginTop:4, fontSize:10, fontWeight:600, color: v.sms_delivered ? '#4ade80' : '#fbbf24', background: v.sms_delivered ? 'rgba(74,222,128,.08)' : 'rgba(251,191,36,.08)', border:`1px solid ${v.sms_delivered ? 'rgba(74,222,128,.2)' : 'rgba(251,191,36,.2)'}`, padding:'2px 7px', borderRadius:4}}>
+                        {v.sms_delivered ? '✓ SMS Delivered' : '○ SMS Sent'} · {timeAgo(v.sms_sent_at)}
+                      </div>
+                    )}
                   </div>
                   {timer && (
                     <div className="job-timer">
