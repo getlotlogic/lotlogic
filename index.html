@@ -1105,6 +1105,9 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
   const [snapshotUrl, setSnapshotUrl] = useState(null);
   const [imgLoading, setImgLoading] = useState(true);
   const [zoomed, setZoomed] = useState(false);
+  const [manualPlate, setManualPlate] = useState('');
+  const [savingPlate, setSavingPlate] = useState(false);
+  const { addToast } = useToast();
 
   useEffect(() => {
     if (!violation?.snapshot_id) return;
@@ -1169,7 +1172,7 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
                 {timer ? `${timer.val} ${timer.unit}` : '—'}
               </div>
             </div>
-            <div className="viol-modal-stat">
+            <div className="viol-modal-stat" style={{gridColumn: violation.plate_text ? 'auto' : '1 / -1'}}>
               <div className="viol-modal-stat-label">License Plate</div>
               {violation.plate_text ? (
                 <div className="viol-modal-stat-val" style={{fontFamily:'Courier New, monospace', letterSpacing:'.1em', display:'flex', alignItems:'center', gap:6}}>
@@ -1181,9 +1184,50 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
                   })()}
                 </div>
               ) : (
-                <div className="viol-modal-stat-val" style={{color:'#6b7280', display:'flex', alignItems:'center', gap:5}}>
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#6b7280" strokeWidth="1.5"/><line x1="4" y1="4" x2="12" y2="12" stroke="#6b7280" strokeWidth="1.5"/></svg>
-                  Not captured
+                <div style={{display:'flex', alignItems:'center', gap:8}}>
+                  <div className="viol-modal-stat-val" style={{color:'#6b7280', display:'flex', alignItems:'center', gap:5, flex:'none'}}>
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#6b7280" strokeWidth="1.5"/><line x1="4" y1="4" x2="12" y2="12" stroke="#6b7280" strokeWidth="1.5"/></svg>
+                    Not captured
+                  </div>
+                  <div style={{display:'flex', alignItems:'center', gap:4, flex:1}}>
+                    <input
+                      type="text"
+                      placeholder="Enter plate manually"
+                      value={manualPlate}
+                      onChange={e => setManualPlate(e.target.value.toUpperCase())}
+                      maxLength={10}
+                      style={{
+                        background:'#13151d', border:'1px solid #1e2235', borderRadius:6, padding:'5px 8px',
+                        fontSize:12, color:'#e8eaf0', fontFamily:'Courier New, monospace', letterSpacing:'.1em',
+                        width:110, outline:'none',
+                      }}
+                      onFocus={e => { e.target.style.borderColor = '#3b82f6'; }}
+                      onBlur={e => { e.target.style.borderColor = '#1e2235'; }}
+                    />
+                    {manualPlate.trim().length >= 2 && (
+                      <button
+                        disabled={savingPlate}
+                        onClick={async () => {
+                          setSavingPlate(true);
+                          try {
+                            await apiFetch(`/violations/${violation.id}/action`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ action: 'plate_correction', plate_text: manualPlate.trim() }),
+                            });
+                            addToast('Plate saved', 'success');
+                            if (onAction) onAction();
+                          } catch {
+                            addToast('Could not save plate — backend may not support this yet', 'error');
+                          } finally { setSavingPlate(false); }
+                        }}
+                        style={{
+                          background:'#2563eb', color:'#fff', border:'none', borderRadius:6, padding:'5px 10px',
+                          fontSize:11, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap',
+                        }}
+                      >{savingPlate ? '…' : 'Save'}</button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1198,10 +1242,17 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
             <div className="viol-modal-stat">
               <div className="viol-modal-stat-label">Vehicle</div>
               <div className="viol-modal-stat-val" style={{textTransform:'capitalize', display:'flex', alignItems:'center', gap:6}}>
-                {violation.vehicle_color && (
+                {displayColor(violation.vehicle_color) ? (
                   <span style={{width:12, height:12, borderRadius:4, background:colorHex(violation.vehicle_color), border:'1.5px solid rgba(255,255,255,.2)', flexShrink:0}} />
+                ) : (
+                  <span style={{width:12, height:12, borderRadius:4, background:'repeating-conic-gradient(#4b5563 0% 25%, #374151 0% 50%) 50%/6px 6px', border:'1.5px solid rgba(255,255,255,.1)', flexShrink:0}} title="Color not detected" />
                 )}
-                {[violation.vehicle_color, violation.vehicle_type].filter(Boolean).join(' ') || '—'}
+                {displayColor(violation.vehicle_color)
+                  ? [violation.vehicle_color, violation.vehicle_type !== 'car' ? violation.vehicle_type : null].filter(Boolean).join(' ')
+                  : (violation.vehicle_type && violation.vehicle_type !== 'car' ? violation.vehicle_type : 'Unknown')}
+                {isLowConfColor(violation.vehicle_color) && (
+                  <span style={{fontSize:9, color:'#6b7280', fontWeight:600, textTransform:'uppercase', letterSpacing:'.05em'}}>low conf</span>
+                )}
               </div>
             </div>
             {violation.vehicle_make && (
@@ -1433,6 +1484,14 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
   const violsWithPlate = totalViols.filter(v => v.plate_text);
   const plateReadRate = totalViols.length > 0 ? Math.round((violsWithPlate.length / totalViols.length) * 100) : null;
 
+  // AI detection quality metrics
+  const violsWithColor = totalViols.filter(v => displayColor(v.vehicle_color));
+  const colorDetRate = totalViols.length > 0 ? Math.round((violsWithColor.length / totalViols.length) * 100) : null;
+  const violsWithType = totalViols.filter(v => v.vehicle_type && v.vehicle_type !== 'car');
+  const aiHealthScore = totalViols.length > 0
+    ? Math.round(((plateReadRate || 0) * 0.5 + (colorDetRate || 0) * 0.3 + (violsWithType.length / totalViols.length * 100) * 0.2))
+    : null;
+
   const actionLabels = { boot: 'Boot', tow: 'Tow', dismissed: 'Dismiss', already_gone: 'Already Gone', no_action: 'No Action' };
   const actionColors = { boot: '#fbbf24', tow: '#ef4444', dismissed: '#a78bfa', already_gone: '#6b7280', no_action: '#6b7280' };
 
@@ -1527,6 +1586,30 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
               <span style={{width:7, height:7, borderRadius:'50%', background: plateReadRate >= 60 ? '#4ade80' : plateReadRate >= 30 ? '#fbbf24' : '#ef4444', flexShrink:0}} /> {plateReadRate}% plate read rate
             </div>
           )}
+          {colorDetRate != null && (
+            <div className="cam-det-chip" style={{padding:'5px 10px', background: colorDetRate >= 60 ? 'rgba(74,222,128,.08)' : colorDetRate >= 30 ? 'rgba(251,191,36,.08)' : 'rgba(239,68,68,.08)', border: `1px solid ${colorDetRate >= 60 ? 'rgba(74,222,128,.2)' : colorDetRate >= 30 ? 'rgba(251,191,36,.2)' : 'rgba(239,68,68,.2)'}`}}>
+              <span style={{width:7, height:7, borderRadius:'50%', background: colorDetRate >= 60 ? '#4ade80' : colorDetRate >= 30 ? '#fbbf24' : '#ef4444', flexShrink:0}} /> {colorDetRate}% color detected
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* AI Detection Health banner - only show for owners when quality is poor */}
+      {isOwner && aiHealthScore != null && aiHealthScore < 50 && (
+        <div style={{
+          background:'rgba(245,158,11,.06)', border:'1px solid rgba(245,158,11,.2)', borderRadius:10,
+          padding:'10px 14px', marginBottom:14, display:'flex', alignItems:'flex-start', gap:10
+        }}>
+          <div style={{fontSize:16, flexShrink:0, marginTop:1}}>⚠</div>
+          <div>
+            <div style={{fontSize:13, fontWeight:700, color:'#f59e0b', marginBottom:2}}>AI Detection Quality: {aiHealthScore}%</div>
+            <div style={{fontSize:11, color:'#92400e', lineHeight:1.4}}>
+              {(plateReadRate || 0) < 30 && 'Plate reads are low — camera resolution may be too low (640px). '}
+              {(colorDetRate || 0) < 30 && 'Color detection is unreliable — YOLO nano model needs upgrading. '}
+              {violsWithType.length === 0 && 'No vehicle type differentiation — all classified as "car". '}
+              <span style={{color:'#b45309'}}>These require backend changes (model upgrade + camera resolution).</span>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1606,13 +1689,18 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
                       No plate
                     </span>
                   )}
-                  {v.vehicle_color && (
+                  {displayColor(v.vehicle_color) ? (
                     <span className="job-tag" style={{display:'flex', alignItems:'center', gap:4}}>
                       <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(255,255,255,.15)', flexShrink:0}} />
                       <strong style={{textTransform:'capitalize'}}>{v.vehicle_color}</strong>
                     </span>
+                  ) : (
+                    <span className="job-tag" style={{display:'flex', alignItems:'center', gap:4, color:'#4b5563'}}>
+                      <span style={{width:8, height:8, borderRadius:3, background:'repeating-conic-gradient(#4b5563 0% 25%, #374151 0% 50%) 50%/4px 4px', border:'1px solid rgba(255,255,255,.08)', flexShrink:0}} />
+                      <strong>Unknown</strong>
+                    </span>
                   )}
-                  {v.vehicle_type && <span className="job-tag"><strong style={{textTransform:'capitalize'}}>{v.vehicle_type}</strong></span>}
+                  {v.vehicle_type && v.vehicle_type !== 'car' && <span className="job-tag"><strong style={{textTransform:'capitalize'}}>{v.vehicle_type}</strong></span>}
                   {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                   {v.space_number && <span className="job-tag">Space <strong>#{v.space_number}</strong></span>}
                   <span className="job-tag"><strong>{fmtTime(v.detected_at)}</strong></span>
@@ -1678,7 +1766,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
                   <div className="job-details">
                     {v.plate_text ? (
                       <span className="plate-tag" style={{display:'flex', alignItems:'center', gap:4}}>
-                        {v.vehicle_color && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(0,0,0,.2)', flexShrink:0}} />}
+                        {displayColor(v.vehicle_color) && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(0,0,0,.2)', flexShrink:0}} />}
                         {v.plate_text}
                       </span>
                     ) : (
@@ -1750,6 +1838,17 @@ const COLOR_MAP = {
 function colorHex(name) {
   if (!name) return '#6b7280';
   return COLOR_MAP[name.toLowerCase()] || '#6b7280';
+}
+// Is the color "low confidence" (gray is the YOLO default when detection fails)
+function isLowConfColor(name) {
+  if (!name) return true;
+  const lc = name.toLowerCase();
+  return lc === 'gray' || lc === 'grey';
+}
+// Display-friendly color name
+function displayColor(name) {
+  if (!name || isLowConfColor(name)) return null;
+  return name;
 }
 
 // ── Zone editor (full-screen draw/edit/delete/save + live feed + detections) ──
@@ -2499,6 +2598,21 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                         </div>
                       )}
 
+                      {/* Camera config info */}
+                      <div style={{display:'flex', gap:6, flexWrap:'wrap', marginTop:4}}>
+                        <span className="cam-det-chip" style={{color:'#4b5563', fontSize:10}}>
+                          {cam.snapshot_width || 640}×{cam.snapshot_height || 360}px
+                        </span>
+                        <span className="cam-det-chip" style={{color:'#4b5563', fontSize:10}}>
+                          Poll: {cam.poll_interval_sec || 30}s
+                        </span>
+                        {(cam.snapshot_width || 640) <= 640 && (
+                          <span className="cam-det-chip" style={{color:'#f59e0b', fontSize:10, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.2)'}}>
+                            Low resolution — plate reads may be inaccurate
+                          </span>
+                        )}
+                      </div>
+
                       {/* Plate readings list */}
                       {plateReadings.length > 0 && (
                         <div style={{display:'flex', gap:6, flexWrap:'wrap', marginTop:6}}>
@@ -2745,7 +2859,7 @@ function EarningsPage({ violations, lots, isOwner }) {
                   <div className="breakdown-lot">{lot?.name || '—'}</div>
                   {v.plate_text && (
                     <div className="breakdown-plate" style={{display:'flex', alignItems:'center', gap:4}}>
-                      {v.vehicle_color && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(255,255,255,.1)', flexShrink:0}} />}
+                      {displayColor(v.vehicle_color) && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(255,255,255,.1)', flexShrink:0}} />}
                       {v.plate_text}
                     </div>
                   )}
@@ -2843,14 +2957,18 @@ function OperatorActivityPage({ violations, lots }) {
                     <div className="job-details">
                       {v.plate_text && (
                         <span className="plate-tag" style={{fontSize:11, padding:'3px 8px', display:'flex', alignItems:'center', gap:4}}>
-                          {v.vehicle_color && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(0,0,0,.2)', flexShrink:0}} />}
+                          {displayColor(v.vehicle_color) && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(0,0,0,.2)', flexShrink:0}} />}
                           {v.plate_text}
                         </span>
                       )}
-                      {v.vehicle_color && !v.plate_text && (
-                        <span className="job-tag" style={{display:'flex', alignItems:'center', gap:4}}>
-                          <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(255,255,255,.15)', flexShrink:0}} />
-                          <strong style={{textTransform:'capitalize'}}>{v.vehicle_color} {v.vehicle_type || ''}</strong>
+                      {!v.plate_text && (
+                        <span className="job-tag" style={{display:'flex', alignItems:'center', gap:4, color: displayColor(v.vehicle_color) ? 'inherit' : '#4b5563'}}>
+                          {displayColor(v.vehicle_color) ? (
+                            <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(255,255,255,.15)', flexShrink:0}} />
+                          ) : (
+                            <span style={{width:8, height:8, borderRadius:3, background:'repeating-conic-gradient(#4b5563 0% 25%, #374151 0% 50%) 50%/4px 4px', border:'1px solid rgba(255,255,255,.08)', flexShrink:0}} />
+                          )}
+                          <strong style={{textTransform:'capitalize'}}>{displayColor(v.vehicle_color) || 'Unknown'} {v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : ''}</strong>
                         </span>
                       )}
                       {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
