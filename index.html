@@ -485,6 +485,84 @@
     .breakdown-amt { font-size: 15px; font-weight: 700; color: #3b82f6; }
     .breakdown-action { font-size: 11px; color: #374151; text-transform: capitalize; margin-top: 2px; }
     .breakdown-plate { font-family: 'Courier New', monospace; font-size: 11px; color: #4b5563; font-weight: 600; margin-top: 2px; }
+
+    /* ── Zone overlay (read-only on snapshots) ── */
+    .cam-img-wrap { position: relative; }
+    .zone-overlay-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+    .zone-poly { stroke-width: 1.5; fill-opacity: 0.18; }
+    .zone-poly.no_parking { fill: #ef4444; stroke: #ef4444; }
+    .zone-poly.time_limited { fill: #8b5cf6; stroke: #8b5cf6; }
+    .zone-poly.handicap_only { fill: #eab308; stroke: #eab308; }
+    .zone-label-text { font-size: 8px; font-weight: 700; fill: #fff; pointer-events: none; }
+
+    /* ── Zone editor (full-screen) ── */
+    .zone-editor-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: #0c0e14; z-index: 200; display: flex; flex-direction: column;
+    }
+    .ze-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; border-bottom: 1px solid #1a1d2e; background: #13151d; flex-shrink: 0;
+    }
+    .ze-title { font-size: 16px; font-weight: 700; color: #f3f4f6; }
+    .ze-btn {
+      padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+      cursor: pointer; border: none; font-family: inherit; transition: opacity .15s;
+    }
+    .ze-btn:active { opacity: .7; }
+    .ze-btn-primary { background: #3b82f6; color: #fff; }
+    .ze-btn-danger { background: rgba(239,68,68,.15); color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
+    .ze-btn-ghost { background: #1e2235; color: #9ca3af; }
+    .ze-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .ze-canvas-wrap {
+      flex: 1; position: relative; overflow: hidden; cursor: crosshair;
+      display: flex; align-items: center; justify-content: center; background: #080a0f;
+    }
+    .ze-canvas-wrap img { max-width: 100%; max-height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
+    .ze-svg {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    }
+    .ze-poly { stroke-width: 2; fill-opacity: 0.2; cursor: pointer; }
+    .ze-poly.selected { stroke-dasharray: 6 3; fill-opacity: 0.3; stroke-width: 2.5; }
+    .ze-vertex {
+      r: 5; fill: #fff; stroke: #3b82f6; stroke-width: 2; cursor: grab;
+    }
+    .ze-vertex:hover { r: 7; }
+    .ze-drawing-line { stroke: #3b82f6; stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; }
+    .ze-drawing-poly { fill: rgba(59,130,246,.15); stroke: #3b82f6; stroke-width: 1.5; }
+
+    .ze-toolbar {
+      display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid #1a1d2e;
+      background: #13151d; flex-shrink: 0; flex-wrap: wrap; align-items: center;
+    }
+    .ze-zone-list {
+      display: flex; gap: 6px; flex-wrap: wrap; flex: 1;
+    }
+    .ze-zone-chip {
+      padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+      cursor: pointer; border: 1.5px solid transparent; transition: all .15s;
+    }
+    .ze-zone-chip.active { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.25); }
+
+    .ze-panel {
+      padding: 12px 16px; border-top: 1px solid #1a1d2e; background: #13151d; flex-shrink: 0;
+    }
+    .ze-panel-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .ze-panel-row:last-child { margin-bottom: 0; }
+    .ze-panel-label { font-size: 11px; font-weight: 600; color: #6b7280; min-width: 50px; text-transform: uppercase; letter-spacing: .05em; }
+    .ze-panel-input {
+      flex: 1; background: #0c0e14; border: 1px solid #1e2235; border-radius: 6px;
+      padding: 6px 10px; font-size: 13px; color: #e8eaf0; outline: none; font-family: inherit;
+    }
+    .ze-panel-input:focus { border-color: #3b82f6; }
+    .ze-panel-select {
+      flex: 1; background: #0c0e14; border: 1px solid #1e2235; border-radius: 6px;
+      padding: 6px 10px; font-size: 13px; color: #e8eaf0; outline: none; font-family: inherit;
+      appearance: none; -webkit-appearance: none;
+    }
+    .ze-panel-select:focus { border-color: #3b82f6; }
+    .ze-status { font-size: 12px; color: #4b5563; padding: 4px 0; }
+    .ze-hint { font-size: 11px; color: #374151; text-align: center; padding: 8px; }
   </style>
 </head>
 <body>
@@ -550,9 +628,12 @@ function LoginPage({ onLogin }) {
         apiFetch('/owners').catch(() => []),
         apiFetch('/partners').catch(() => []),
       ]);
-      const ownerMatch = owners.find(o => o.email?.toLowerCase() === needle);
+      // Prefer last match — most recently created account is typically the active one
+      const ownerMatches = owners.filter(o => o.email?.toLowerCase() === needle);
+      const ownerMatch = ownerMatches.length > 0 ? ownerMatches[ownerMatches.length - 1] : null;
       if (ownerMatch) { onLogin({ ...ownerMatch, _role: 'owner' }); return; }
-      const partnerMatch = partners.find(p => p.email?.toLowerCase() === needle);
+      const partnerMatches = partners.filter(p => p.email?.toLowerCase() === needle);
+      const partnerMatch = partnerMatches.length > 0 ? partnerMatches[partnerMatches.length - 1] : null;
       if (partnerMatch) { onLogin({ ...partnerMatch, _role: 'partner', business_name: partnerMatch.company_name }); return; }
       setError("No account found for that email. Contact your LotLogic rep if you think this is wrong.");
     } catch {
@@ -715,9 +796,310 @@ function JobsPage({ lots, violations, loading, lotStates }) {
   );
 }
 
+// ── Zone overlay (read-only, shown on camera snapshots) ──────
+function ZoneOverlay({ zones }) {
+  if (!zones || zones.length === 0) return null;
+  return (
+    <svg className="zone-overlay-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+      {zones.map(z => {
+        const pts = (z.polygon || []).map(p => `${p.x},${p.y}`).join(' ');
+        const cx = (z.polygon || []).reduce((s, p) => s + p.x, 0) / (z.polygon?.length || 1);
+        const cy = (z.polygon || []).reduce((s, p) => s + p.y, 0) / (z.polygon?.length || 1);
+        return (
+          <g key={z.zone_id}>
+            <polygon className={`zone-poly ${z.zone_type || 'no_parking'}`} points={pts} />
+            {z.label && <text className="zone-label-text" x={cx} y={cy} textAnchor="middle" dominantBaseline="central">{z.label}</text>}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ── Zone editor (full-screen draw/edit/delete/save) ──────────
+function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
+  const [frameUrl, setFrameUrl] = useState(null);
+  const [zones, setZones] = useState(() => (existingZones || []).map(z => ({...z})));
+  const [selectedIdx, setSelectedIdx] = useState(null);
+  const [drawing, setDrawing] = useState(false);
+  const [newPoints, setNewPoints] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [dragIdx, setDragIdx] = useState(null);
+  const svgRef = useRef(null);
+  const imgRef = useRef(null);
+
+  const ZONE_COLORS = { no_parking: '#ef4444', time_limited: '#8b5cf6', handicap_only: '#eab308' };
+
+  // Load live frame
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFrame() {
+      try {
+        const r = await fetch(API + `/cameras/${cameraId}/frame`, { headers: { 'X-API-Key': API_KEY } });
+        if (!r.ok) throw new Error(r.status);
+        const blob = await r.blob();
+        if (!cancelled) setFrameUrl(URL.createObjectURL(blob));
+      } catch { if (!cancelled) setError('Could not load camera frame'); }
+    }
+    loadFrame();
+    return () => { cancelled = true; };
+  }, [cameraId]);
+
+  function svgPoint(e) {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const rect = svg.getBoundingClientRect();
+    return {
+      x: Math.round(((e.clientX - rect.left) / rect.width) * 10000) / 100,
+      y: Math.round(((e.clientY - rect.top) / rect.height) * 10000) / 100,
+    };
+  }
+
+  function handleCanvasClick(e) {
+    if (dragIdx !== null) return;
+    const pt = svgPoint(e);
+    if (!pt) return;
+
+    if (drawing) {
+      // Check if clicking near first point to close
+      if (newPoints.length >= 3) {
+        const first = newPoints[0];
+        const dist = Math.sqrt((pt.x - first.x) ** 2 + (pt.y - first.y) ** 2);
+        if (dist < 3) { finishDrawing(); return; }
+      }
+      setNewPoints(prev => [...prev, pt]);
+    } else {
+      setSelectedIdx(null);
+    }
+  }
+
+  function handleDoubleClick(e) {
+    e.preventDefault();
+    if (drawing && newPoints.length >= 3) {
+      finishDrawing();
+    }
+  }
+
+  function finishDrawing() {
+    const id = 'zone_' + (zones.length + 1) + '_' + Date.now().toString(36);
+    const newZone = {
+      zone_id: id,
+      label: 'Z' + (zones.length + 1),
+      zone_type: 'no_parking',
+      time_limit_minutes: null,
+      polygon: [...newPoints],
+    };
+    setZones(prev => [...prev, newZone]);
+    setSelectedIdx(zones.length);
+    setDrawing(false);
+    setNewPoints([]);
+  }
+
+  function handleVertexDrag(e, zoneIdx, pointIdx) {
+    e.stopPropagation();
+    e.preventDefault();
+    setDragIdx({ zoneIdx, pointIdx });
+
+    function onMove(ev) {
+      const pt = svgPoint(ev);
+      if (!pt) return;
+      setZones(prev => {
+        const updated = [...prev];
+        const z = { ...updated[zoneIdx], polygon: [...updated[zoneIdx].polygon] };
+        z.polygon[pointIdx] = pt;
+        updated[zoneIdx] = z;
+        return updated;
+      });
+    }
+
+    function onUp() {
+      setDragIdx(null);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onUp);
+    }
+
+    function onTouchMove(ev) {
+      if (ev.touches.length === 1) {
+        onMove(ev.touches[0]);
+      }
+    }
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+  }
+
+  function deleteZone(idx) {
+    setZones(prev => prev.filter((_, i) => i !== idx));
+    setSelectedIdx(null);
+  }
+
+  function updateZoneProp(idx, key, val) {
+    setZones(prev => {
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], [key]: val };
+      return updated;
+    });
+  }
+
+  async function save() {
+    setSaving(true);
+    setError('');
+    try {
+      await apiFetch(`/cameras/${cameraId}/zones`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ zones }),
+      });
+      if (onSave) onSave(zones);
+      onClose();
+    } catch (e) {
+      setError('Failed to save zones: ' + e.message);
+    } finally { setSaving(false); }
+  }
+
+  const selected = selectedIdx !== null ? zones[selectedIdx] : null;
+
+  return (
+    <div className="zone-editor-overlay">
+      <div className="ze-header">
+        <div className="ze-title">{cameraName} — Zone Editor</div>
+        <div style={{display:'flex', gap:8}}>
+          <button className="ze-btn ze-btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="ze-btn ze-btn-primary" onClick={save} disabled={saving}>
+            {saving ? 'Saving…' : 'Save Zones'}
+          </button>
+        </div>
+      </div>
+
+      <div className="ze-body">
+        {error && <div style={{padding:'8px 16px', background:'rgba(220,38,38,.1)', color:'#fca5a5', fontSize:13}}>{error}</div>}
+
+        <div className="ze-canvas-wrap" onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
+          {frameUrl ? (
+            <img ref={imgRef} src={frameUrl} alt="Camera frame" draggable="false" />
+          ) : (
+            <div style={{color:'#374151', fontSize:14}}>Loading frame…</div>
+          )}
+
+          <svg ref={svgRef} className="ze-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+            {/* Existing zones */}
+            {zones.map((z, i) => {
+              const pts = z.polygon.map(p => `${p.x},${p.y}`).join(' ');
+              const color = ZONE_COLORS[z.zone_type] || '#ef4444';
+              const isSelected = i === selectedIdx;
+              const cx = z.polygon.reduce((s, p) => s + p.x, 0) / z.polygon.length;
+              const cy = z.polygon.reduce((s, p) => s + p.y, 0) / z.polygon.length;
+              return (
+                <g key={z.zone_id}>
+                  <polygon
+                    className={`ze-poly ${isSelected ? 'selected' : ''}`}
+                    points={pts}
+                    fill={color}
+                    stroke={color}
+                    onClick={e => { e.stopPropagation(); setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}
+                  />
+                  <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
+                    style={{fontSize:'3px', fill:'#fff', fontWeight:700, pointerEvents:'none'}}>
+                    {z.label}
+                  </text>
+                  {isSelected && z.polygon.map((p, pi) => (
+                    <circle key={pi} className="ze-vertex" cx={p.x} cy={p.y} r={1.2}
+                      style={{fill:'#fff', stroke:color, strokeWidth:0.5, cursor:'grab'}}
+                      onMouseDown={e => handleVertexDrag(e, i, pi)}
+                      onTouchStart={e => { e.preventDefault(); handleVertexDrag(e.touches[0], i, pi); }}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  ))}
+                </g>
+              );
+            })}
+
+            {/* Drawing in progress */}
+            {drawing && newPoints.length > 0 && (
+              <g>
+                <polygon className="ze-drawing-poly"
+                  points={newPoints.map(p => `${p.x},${p.y}`).join(' ')} />
+                {newPoints.map((p, i) => (
+                  <circle key={i} cx={p.x} cy={p.y} r={1}
+                    style={{fill: i === 0 ? '#3b82f6' : '#fff', stroke:'#3b82f6', strokeWidth:0.4}} />
+                ))}
+              </g>
+            )}
+          </svg>
+        </div>
+
+        {/* Drawing hint */}
+        {drawing && (
+          <div className="ze-hint">
+            Click to place points. {newPoints.length >= 3 ? 'Double-click or click first point to close the polygon.' : `Need ${3 - newPoints.length} more point${3 - newPoints.length > 1 ? 's' : ''}.`}
+          </div>
+        )}
+
+        {/* Toolbar: zone chips + new zone button */}
+        <div className="ze-toolbar">
+          <div className="ze-zone-list">
+            {zones.map((z, i) => (
+              <span key={z.zone_id}
+                className={`ze-zone-chip ${i === selectedIdx ? 'active' : ''}`}
+                style={{background: (ZONE_COLORS[z.zone_type] || '#ef4444') + '22', color: ZONE_COLORS[z.zone_type] || '#ef4444'}}
+                onClick={() => { setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}>
+                {z.label || z.zone_id}
+              </span>
+            ))}
+          </div>
+          <button className="ze-btn ze-btn-primary" style={{padding:'6px 14px', fontSize:12}}
+            onClick={() => { setDrawing(true); setSelectedIdx(null); setNewPoints([]); }}
+            disabled={drawing}>
+            + New Zone
+          </button>
+        </div>
+
+        {/* Properties panel for selected zone */}
+        {selected && !drawing && (
+          <div className="ze-panel">
+            <div className="ze-panel-row">
+              <span className="ze-panel-label">Label</span>
+              <input className="ze-panel-input" value={selected.label || ''} onChange={e => updateZoneProp(selectedIdx, 'label', e.target.value)} />
+            </div>
+            <div className="ze-panel-row">
+              <span className="ze-panel-label">Type</span>
+              <select className="ze-panel-select" value={selected.zone_type || 'no_parking'}
+                onChange={e => updateZoneProp(selectedIdx, 'zone_type', e.target.value)}>
+                <option value="no_parking">No Parking</option>
+                <option value="time_limited">Time Limited</option>
+                <option value="handicap_only">Handicap Only</option>
+              </select>
+            </div>
+            {selected.zone_type === 'time_limited' && (
+              <div className="ze-panel-row">
+                <span className="ze-panel-label">Limit</span>
+                <input className="ze-panel-input" type="number" min="1" placeholder="Minutes"
+                  value={selected.time_limit_minutes || ''} onChange={e => updateZoneProp(selectedIdx, 'time_limit_minutes', parseInt(e.target.value) || null)} />
+                <span style={{fontSize:12, color:'#6b7280'}}>min</span>
+              </div>
+            )}
+            <div className="ze-panel-row" style={{marginTop:4}}>
+              <span className="ze-panel-label">{selected.polygon.length} pts</span>
+              <button className="ze-btn ze-btn-danger" style={{padding:'5px 12px', fontSize:12}} onClick={() => deleteZone(selectedIdx)}>
+                Delete Zone
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Lots tab ──────────────────────────────────────────────────
-function LotsPage({ lots, lotStates, loading }) {
+function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   const [expandedCams, setExpandedCams] = useState({});
+  const [editingZones, setEditingZones] = useState(null); // { cameraId, cameraName, lotId, zones }
 
   if (loading && lots.length === 0) {
     return <div className="loader"><div className="spin" /> Loading lots…</div>;
@@ -795,9 +1177,17 @@ function LotsPage({ lots, lotStates, loading }) {
                           </span>
                         )}
                       </div>
-                      {cam.latest_snapshot && (
-                        <div className="cam-time">{fmtTime(cam.latest_snapshot.captured_at)}</div>
-                      )}
+                      <div style={{display:'flex', alignItems:'center', gap:8}}>
+                        {ownerRole === 'owner' && (
+                          <button className="ze-btn ze-btn-ghost" style={{padding:'3px 10px', fontSize:11}}
+                            onClick={() => setEditingZones({ cameraId: cam.camera_id, cameraName: cam.camera_name, lotId: lot.id, zones: cam.zones || [] })}>
+                            Edit Zones
+                          </button>
+                        )}
+                        {cam.latest_snapshot && (
+                          <div className="cam-time">{fmtTime(cam.latest_snapshot.captured_at)}</div>
+                        )}
+                      </div>
                     </div>
                     <div className="cam-img-wrap">
                       {cam.latest_snapshot?.url ? (
@@ -807,7 +1197,9 @@ function LotsPage({ lots, lotStates, loading }) {
                             src={cam.latest_snapshot.url}
                             alt={cam.camera_name}
                             loading="lazy"
+                            onError={e => { e.target.style.display = 'none'; e.target.nextSibling && (e.target.parentNode.innerHTML = '<div class="cam-offline">Snapshot unavailable</div>'); }}
                           />
+                          <ZoneOverlay zones={cam.zones} />
                           {cam.active_violations > 0 && (
                             <div className="cam-viol-overlay">{cam.active_violations} open</div>
                           )}
@@ -821,6 +1213,7 @@ function LotsPage({ lots, lotStates, loading }) {
                         {cam.latest_snapshot.vehicles_detected != null
                           ? `${cam.latest_snapshot.vehicles_detected} vehicle${cam.latest_snapshot.vehicles_detected !== 1 ? 's' : ''} detected`
                           : 'Snapshot saved'}
+                        {cam.zones && cam.zones.length > 0 && ` · ${cam.zones.length} zone${cam.zones.length > 1 ? 's' : ''}`}
                       </div>
                     )}
                   </div>
@@ -836,6 +1229,17 @@ function LotsPage({ lots, lotStates, loading }) {
           </div>
         );
       })}
+
+      {/* Zone editor overlay */}
+      {editingZones && (
+        <ZoneEditor
+          cameraId={editingZones.cameraId}
+          cameraName={editingZones.cameraName}
+          existingZones={editingZones.zones}
+          onClose={() => setEditingZones(null)}
+          onSave={(savedZones) => { if (onZonesSaved) onZonesSaved(); }}
+        />
+      )}
     </div>
   );
 }
@@ -946,7 +1350,6 @@ function App() {
   const [lots, setLots] = useState([]);
   const [lotStates, setLotStates] = useState({});
   const [violations, setViolations] = useState([]);
-  const [revenue, setRevenue] = useState(null);
   const [loading, setLoading] = useState(false);
   const timerRef = useRef(null);
 
@@ -954,9 +1357,9 @@ function App() {
     if (!o) return;
     if (!silent) setLoading(true);
     try {
-      // Owners see only their own lots; partners see only lots they are assigned to
+      // Owners see only their own lots; partners see lots in their market filtered by partner_id
       const lotsUrl = o._role === 'partner'
-        ? `/lots` // fetched below, filtered client-side by partner_id
+        ? `/lots?market_id=${o.market_id}`
         : `/lots?owner_id=${o.id}`;
       let lotsData = await apiFetch(lotsUrl);
       if (o._role === 'partner') {
@@ -990,7 +1393,7 @@ function App() {
 
   function logout() {
     clearInterval(timerRef.current);
-    setOwner(null); setLots([]); setLotStates({}); setViolations([]); setRevenue(null);
+    setOwner(null); setLots([]); setLotStates({}); setViolations([]);
     setTab('jobs');
   }
 
@@ -1025,7 +1428,7 @@ function App() {
 
       <div className="page-content">
         {tab === 'jobs'     && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} />}
-        {tab === 'lots'     && <LotsPage lots={lots} lotStates={lotStates} loading={loading} />}
+        {tab === 'lots'     && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
         {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} />}
       </div>
 
