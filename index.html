@@ -787,6 +787,196 @@
     }
     .ze-toggle.on::after { transform: translateX(16px); }
     .ze-toggle-label { font-size: 11px; font-weight: 600; color: #6b7280; }
+
+    /* ── Loading skeletons ── */
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .skeleton {
+      background: linear-gradient(90deg, #13151d 25%, #1e2235 50%, #13151d 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s ease infinite;
+      border-radius: 8px;
+    }
+    .skeleton-card {
+      background: #13151d; border: 1px solid #1e2235; border-radius: 16px;
+      margin-bottom: 10px; overflow: hidden; padding: 16px;
+    }
+    .skeleton-line { height: 12px; margin-bottom: 10px; border-radius: 6px; }
+    .skeleton-line.w60 { width: 60%; }
+    .skeleton-line.w40 { width: 40%; }
+    .skeleton-line.w80 { width: 80%; }
+    .skeleton-line.w30 { width: 30%; }
+    .skeleton-line.thick { height: 20px; }
+    .skeleton-row { display: flex; gap: 8px; }
+    .skeleton-circle { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; }
+    .skeleton-img { width: 100%; aspect-ratio: 16/9; border-radius: 10px; }
+    .skeleton-kpi { flex: 1; height: 68px; border-radius: 12px; }
+
+    /* ── Card entrance animations ── */
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .card-animated {
+      animation: cardIn .35s ease both;
+    }
+    .card-animated:nth-child(1) { animation-delay: 0s; }
+    .card-animated:nth-child(2) { animation-delay: .05s; }
+    .card-animated:nth-child(3) { animation-delay: .1s; }
+    .card-animated:nth-child(4) { animation-delay: .15s; }
+    .card-animated:nth-child(5) { animation-delay: .2s; }
+    .card-animated:nth-child(6) { animation-delay: .25s; }
+    .card-animated:nth-child(7) { animation-delay: .3s; }
+    .card-animated:nth-child(8) { animation-delay: .35s; }
+
+    /* ── Search / filter bar ── */
+    .search-bar {
+      display: flex; gap: 8px; margin-bottom: 14px; align-items: center;
+    }
+    .search-input {
+      flex: 1; background: #13151d; border: 1px solid #1e2235; border-radius: 10px;
+      padding: 10px 14px 10px 36px; font-size: 14px; color: #e8eaf0;
+      outline: none; font-family: inherit; transition: border-color .2s, box-shadow .2s;
+      position: relative;
+    }
+    .search-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
+    .search-input::placeholder { color: #2a2d3a; }
+    .search-wrap { position: relative; flex: 1; }
+    .search-icon {
+      position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+      width: 16px; height: 16px; color: #374151; pointer-events: none;
+    }
+    .filter-chip {
+      padding: 8px 14px; border-radius: 10px; font-size: 12px; font-weight: 600;
+      cursor: pointer; border: 1px solid #1e2235; background: #13151d; color: #4b5563;
+      font-family: inherit; transition: all .15s; white-space: nowrap;
+    }
+    .filter-chip.active { border-color: rgba(59,130,246,.4); color: #3b82f6; background: rgba(59,130,246,.08); }
+    .filter-chip:active { transform: scale(.96); }
+
+    /* ── Inline bar chart ── */
+    .bar-chart { margin-bottom: 16px; }
+    .bar-chart-row {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+    }
+    .bar-chart-label { font-size: 12px; font-weight: 600; color: #9ca3af; min-width: 52px; text-align: right; }
+    .bar-chart-track {
+      flex: 1; height: 24px; background: #0c0e14; border-radius: 6px; overflow: hidden;
+      border: 1px solid #1e2235;
+    }
+    .bar-chart-fill {
+      height: 100%; border-radius: 5px; display: flex; align-items: center; padding-left: 8px;
+      font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap;
+      transition: width .6s ease;
+      min-width: fit-content;
+    }
+    .bar-chart-value { font-size: 12px; font-weight: 700; color: #6b7280; min-width: 40px; }
+
+    /* ── Confidence bar ── */
+    .conf-bar-wrap {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .conf-bar {
+      width: 40px; height: 4px; background: #1e2235; border-radius: 2px; overflow: hidden;
+    }
+    .conf-bar-fill { height: 100%; border-radius: 2px; transition: width .3s; }
+
+    /* ── Settings page ── */
+    .settings-section {
+      background: #13151d; border: 1px solid #1e2235; border-radius: 16px;
+      overflow: hidden; margin-bottom: 12px;
+    }
+    .settings-section-title {
+      padding: 12px 16px; font-size: 11px; font-weight: 700; color: #374151;
+      text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid #0c0e14;
+    }
+    .settings-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px; border-bottom: 1px solid #0c0e14;
+    }
+    .settings-row:last-child { border-bottom: none; }
+    .settings-row-info { flex: 1; min-width: 0; }
+    .settings-row-label { font-size: 14px; font-weight: 600; color: #e8eaf0; }
+    .settings-row-desc { font-size: 12px; color: #4b5563; margin-top: 2px; }
+    .settings-row-value { font-size: 13px; color: #6b7280; font-weight: 500; max-width: 180px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ── Occupancy bar ── */
+    .occupancy-wrap { margin-top: 10px; }
+    .occupancy-bar-track {
+      width: 100%; height: 6px; background: #1e2235; border-radius: 3px; overflow: hidden;
+    }
+    .occupancy-bar-fill { height: 100%; border-radius: 3px; transition: width .4s ease; }
+    .occupancy-label { display: flex; justify-content: space-between; margin-top: 4px; font-size: 10px; color: #4b5563; font-weight: 600; }
+
+    /* ── Connection indicator ── */
+    .conn-indicator {
+      display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+      padding: 4px 10px; border-radius: 6px; background: rgba(74,222,128,.08);
+      border: 1px solid rgba(74,222,128,.15);
+    }
+    .conn-indicator.online { color: #4ade80; }
+    .conn-indicator.offline { color: #ef4444; background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.15); }
+    .conn-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .conn-dot.on { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,.4); }
+    .conn-dot.off { background: #ef4444; }
+
+    /* ── Relative time badge ── */
+    .time-ago {
+      font-size: 10px; font-weight: 600; color: #374151; padding: 2px 6px;
+      background: #0c0e14; border: 1px solid #1e2235; border-radius: 4px;
+    }
+
+    /* ── Snapshot zoom ── */
+    .snap-zoom-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 300;
+      background: rgba(0,0,0,.9); backdrop-filter: blur(12px);
+      display: flex; align-items: center; justify-content: center;
+      cursor: zoom-out; animation: fadeIn .2s ease;
+    }
+    .snap-zoom-overlay img {
+      max-width: 95vw; max-height: 90vh; object-fit: contain; border-radius: 8px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    }
+    .snap-zoom-close {
+      position: absolute; top: 20px; right: 20px; width: 36px; height: 36px;
+      border-radius: 50%; background: rgba(255,255,255,.1); border: none;
+      color: #fff; font-size: 18px; cursor: pointer; display: flex;
+      align-items: center; justify-content: center; transition: background .15s;
+    }
+    .snap-zoom-close:hover { background: rgba(255,255,255,.2); }
+
+    /* ── Trend indicator ── */
+    .trend { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 700; }
+    .trend.up { color: #4ade80; }
+    .trend.down { color: #ef4444; }
+    .trend.flat { color: #6b7280; }
+
+    /* ── Stat card enhanced ── */
+    .stat-card {
+      background: #13151d; border: 1px solid #1e2235; border-radius: 14px;
+      padding: 14px 16px; display: flex; flex-direction: column; gap: 2px;
+    }
+    .stat-card-header { display: flex; align-items: center; justify-content: space-between; }
+    .stat-card-val { font-size: 26px; font-weight: 800; line-height: 1; color: #f3f4f6; }
+    .stat-card-label { font-size: 10px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
+    .stat-card-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+
+    /* ── Pulsing alert dot ── */
+    @keyframes pulse-ring {
+      0% { transform: scale(1); opacity: 1; }
+      100% { transform: scale(2.5); opacity: 0; }
+    }
+    .alert-pulse { position: relative; }
+    .alert-pulse::after {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      border-radius: 50%; border: 2px solid currentColor;
+      animation: pulse-ring 1.5s ease infinite;
+    }
+
+    /* ── Smooth page transitions ── */
+    .page-enter { animation: cardIn .3s ease both; }
   </style>
 </head>
 <body>
@@ -814,6 +1004,43 @@ function elapsed(isoStr) {
   if (mins < 60) return { val: mins, unit: 'MIN', long: mins >= 45 };
   const hrs = Math.floor(mins / 60);
   return { val: hrs, unit: 'HR', long: hrs >= 2 };
+}
+
+function timeAgo(isoStr) {
+  if (!isoStr) return '';
+  const secs = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+  if (secs < 60) return 'just now';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+// ── Loading skeleton ─────────────────────────────────────────
+function SkeletonCards({ count = 3 }) {
+  return Array.from({ length: count }).map((_, i) => (
+    <div key={i} className="skeleton-card" style={{ animationDelay: `${i * .05}s` }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+        <div className="skeleton skeleton-circle" />
+        <div style={{ flex: 1 }}>
+          <div className="skeleton skeleton-line w60" />
+          <div className="skeleton skeleton-line w40" />
+        </div>
+      </div>
+      <div className="skeleton skeleton-line w80" />
+      <div className="skeleton skeleton-line w30" />
+    </div>
+  ));
+}
+
+function SkeletonKPIs() {
+  return (
+    <div className="kpi-bar">
+      {[1, 2, 3, 4].map(i => <div key={i} className="skeleton skeleton-kpi" />)}
+    </div>
+  );
 }
 
 function fmtMoney(cents) {
@@ -874,9 +1101,10 @@ function ConfirmDialog({ title, body, confirmLabel, confirmColor, onConfirm, onC
 }
 
 // ── Violation detail modal ────────────────────────────────────
-function ViolationModal({ violation, lot, onClose, onAction }) {
+function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
   const [snapshotUrl, setSnapshotUrl] = useState(null);
   const [imgLoading, setImgLoading] = useState(true);
+  const [zoomed, setZoomed] = useState(false);
 
   useEffect(() => {
     if (!violation?.snapshot_id) return;
@@ -893,17 +1121,37 @@ function ViolationModal({ violation, lot, onClose, onAction }) {
     <div className="viol-modal-overlay" onClick={onClose}>
       <div className="viol-modal" onClick={e => e.stopPropagation()}>
         <div className="viol-modal-handle" />
-        {snapshotUrl ? (
-          <img className="viol-modal-img" src={snapshotUrl} alt="Violation snapshot"
-            onLoad={() => setImgLoading(false)}
-            onError={() => setImgLoading(false)}
-            style={{display: imgLoading ? 'none' : 'block'}} />
-        ) : null}
-        {(imgLoading && violation.snapshot_id) && (
-          <div style={{width:'100%', aspectRatio:'16/9', background:'#080a0f', display:'flex', alignItems:'center', justifyContent:'center', color:'#374151', fontSize:13}}>
-            Loading snapshot…
-          </div>
-        )}
+        <div style={{position:'relative'}}>
+          {snapshotUrl ? (
+            <img className="viol-modal-img" src={snapshotUrl} alt="Violation snapshot"
+              onLoad={() => setImgLoading(false)}
+              onError={() => setImgLoading(false)}
+              style={{display: imgLoading ? 'none' : 'block', cursor:'zoom-in'}}
+              onClick={() => setZoomed(true)} />
+          ) : null}
+          {(imgLoading && violation.snapshot_id) && (
+            <div style={{width:'100%', aspectRatio:'16/9', background:'#080a0f', display:'flex', alignItems:'center', justifyContent:'center'}}>
+              <div className="spin" style={{marginRight:8}} />
+              <span style={{color:'#374151', fontSize:13}}>Loading snapshot</span>
+            </div>
+          )}
+          {/* Detection confidence bar overlay */}
+          {snapshotUrl && !imgLoading && violation.confidence && (
+            <div style={{position:'absolute', top:8, right:8, background:'rgba(0,0,0,.7)', backdropFilter:'blur(4px)', borderRadius:6, padding:'4px 8px', display:'flex', alignItems:'center', gap:6}}>
+              <span style={{fontSize:10, fontWeight:700, color:'#fff'}}>AI</span>
+              <div className="conf-bar" style={{width:50}}>
+                <div className="conf-bar-fill" style={{width: `${Math.round(parseFloat(violation.confidence) * 100)}%`, background: parseFloat(violation.confidence) > 0.8 ? '#4ade80' : parseFloat(violation.confidence) > 0.5 ? '#fbbf24' : '#ef4444'}} />
+              </div>
+              <span style={{fontSize:10, fontWeight:700, color:'#9ca3af'}}>{Math.round(parseFloat(violation.confidence) * 100)}%</span>
+            </div>
+          )}
+          {/* Time ago badge */}
+          {snapshotUrl && !imgLoading && (
+            <div style={{position:'absolute', bottom:8, right:8}}>
+              <span className="time-ago">{timeAgo(violation.detected_at)}</span>
+            </div>
+          )}
+        </div>
         <div className="viol-modal-body">
           <div className="viol-modal-title">{lot?.name || 'Unknown Lot'}</div>
           <div className="viol-modal-sub">{lot?.address} · {fmtDate(violation.detected_at)} {fmtTime(violation.detected_at)}</div>
@@ -969,6 +1217,21 @@ function ViolationModal({ violation, lot, onClose, onAction }) {
             )}
           </div>
 
+          {/* SMS notification status */}
+          {violation.sms_sent_at && (
+            <div style={{background:'#0c0e14', border:'1px solid #1e2235', borderRadius:10, padding:'10px 12px', marginBottom:14, display:'flex', alignItems:'center', gap:8}}>
+              <span style={{fontSize:14}}>
+                {violation.sms_delivered ? '✓' : '○'}
+              </span>
+              <div>
+                <div style={{fontSize:12, fontWeight:600, color: violation.sms_delivered ? '#4ade80' : '#fbbf24'}}>
+                  SMS {violation.sms_delivered ? 'Delivered' : 'Sent'}
+                </div>
+                <div style={{fontSize:11, color:'#4b5563'}}>{timeAgo(violation.sms_sent_at)}</div>
+              </div>
+            </div>
+          )}
+
           {isPending && (
             <div className="job-actions-row" style={{padding:0, border:'none'}}>
               <button className="action-btn boot" onClick={() => onAction(violation.id, 'boot')}>Boot</button>
@@ -979,6 +1242,7 @@ function ViolationModal({ violation, lot, onClose, onAction }) {
           )}
         </div>
       </div>
+      {zoomed && <ImageZoom src={snapshotUrl} alt="Violation snapshot" onClose={() => setZoomed(false)} />}
     </div>
   );
 }
@@ -992,6 +1256,32 @@ function NavIconLots() {
 }
 function NavIconEarnings() {
   return <div className="nav-icon"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg></div>;
+}
+function NavIconAccount() {
+  return <div className="nav-icon"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>;
+}
+function NavIconActivity() {
+  return <div className="nav-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>;
+}
+
+// ── Search icon SVG ──────────────────────────────────────────
+function SearchIcon() {
+  return (
+    <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+  );
+}
+
+// ── Image zoom overlay ──────────────────────────────────────
+function ImageZoom({ src, alt, onClose }) {
+  if (!src) return null;
+  return (
+    <div className="snap-zoom-overlay" onClick={onClose}>
+      <img src={src} alt={alt || 'Zoomed view'} onClick={e => e.stopPropagation()} />
+      <button className="snap-zoom-close" onClick={onClose}>✕</button>
+    </div>
+  );
 }
 
 // ── Login ─────────────────────────────────────────────────────
@@ -1056,7 +1346,7 @@ function LoginPage({ onLogin }) {
 }
 
 // ── Jobs tab (current violations) ─────────────────────────────
-function JobsPage({ lots, violations, loading, lotStates, onAction }) {
+function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
   const [selectedViol, setSelectedViol] = useState(null);
   const [confirm, setConfirm] = useState(null);
@@ -1130,12 +1420,30 @@ function JobsPage({ lots, violations, loading, lotStates, onAction }) {
     }
   }
 
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all'); // all | urgent | plates
+
+  // Filter active jobs
+  const filteredActive = active.filter(v => {
+    if (filter === 'urgent') { const t = elapsed(v.detected_at); return t?.val >= 30; }
+    if (filter === 'plates') return !!v.plate_text;
+    return true;
+  }).filter(v => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (v.plate_text?.toLowerCase().includes(q)) ||
+      (v.vehicle_color?.toLowerCase().includes(q)) ||
+      (v.vehicle_type?.toLowerCase().includes(q)) ||
+      (lotMap[v.lot_id]?.name?.toLowerCase().includes(q)) ||
+      (v.zone_id?.toLowerCase().includes(q));
+  });
+
   if (loading && violations.length === 0) {
-    return <div className="loader"><div className="spin" /> Loading jobs…</div>;
+    return <div className="page-enter"><SkeletonKPIs /><SkeletonCards count={4} /></div>;
   }
 
   return (
-    <div>
+    <div className="page-enter">
       {/* KPI bar */}
       <div className="kpi-bar">
         <div className="kpi-card">
@@ -1173,19 +1481,38 @@ function JobsPage({ lots, violations, loading, lotStates, onAction }) {
         </div>
       )}
 
+      {/* Search and filter */}
+      {active.length > 0 && (
+        <div className="search-bar">
+          <div className="search-wrap">
+            <SearchIcon />
+            <input className="search-input" placeholder="Search plate, color, lot…" value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+          <button className={`filter-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>All</button>
+          <button className={`filter-chip ${filter === 'urgent' ? 'active' : ''}`} onClick={() => setFilter('urgent')}>Urgent</button>
+          <button className={`filter-chip ${filter === 'plates' ? 'active' : ''}`} onClick={() => setFilter('plates')}>Plates</button>
+        </div>
+      )}
+
       {/* Active jobs */}
       <div className="section-header">
         <div className="section-title">Open Jobs</div>
-        <div className="section-count">{active.length} active</div>
+        <div className="section-count">{filteredActive.length} active</div>
       </div>
 
-      {active.length === 0 ? (
+      {filteredActive.length === 0 && active.length > 0 ? (
+        <div className="empty-state" style={{marginBottom: 28, padding:'30px 20px'}}>
+          <div className="empty-title">No matches</div>
+          <div className="empty-body">Try adjusting your search or filter</div>
+        </div>
+      ) : filteredActive.length === 0 ? (
         <div className="empty-state" style={{marginBottom: 28}}>
+          <div style={{width:48, height:48, borderRadius:12, background:'rgba(74,222,128,.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22}}>✓</div>
           <div className="empty-title">All clear</div>
           <div className="empty-body">No violations pending at your lots right now</div>
         </div>
       ) : (
-        active.map(v => {
+        filteredActive.map((v, idx) => {
           const lot = lotMap[v.lot_id];
           const timer = elapsed(v.detected_at);
           const urgent = timer?.val >= 45;
@@ -1193,9 +1520,10 @@ function JobsPage({ lots, violations, loading, lotStates, onAction }) {
           const typeClass = v.violation_type?.toLowerCase().includes('unauthorized')
             ? 'unauthorized' : v.violation_type?.toLowerCase().includes('overtime') ? 'overtime' : 'default';
           return (
-            <div key={v.id} className={`job-card ${urgent ? 'urgent' : ''}`}>
+            <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''}`}>
               {urgent && (
                 <div className="job-urgent-bar">
+                  <span style={{display:'inline-block', width:6, height:6, borderRadius:'50%', background:'#fff', animation:'pulse-dot 1.5s infinite'}} />
                   Needs attention — waiting {timer.val} {timer.unit}
                 </div>
               )}
@@ -1312,6 +1640,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction }) {
           lot={lotMap[selectedViol.lot_id]}
           onClose={() => setSelectedViol(null)}
           onAction={(violId, action) => requestAction(violId, action)}
+          isOwner={isOwner}
         />
       )}
 
@@ -1935,11 +2264,12 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   const { addToast } = useToast();
 
   if (loading && lots.length === 0) {
-    return <div className="loader"><div className="spin" /> Loading lots…</div>;
+    return <div className="page-enter"><SkeletonKPIs /><SkeletonCards count={3} /></div>;
   }
   if (lots.length === 0) {
     return (
       <div className="empty-state">
+        <div style={{width:48, height:48, borderRadius:12, background:'rgba(59,130,246,.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22}}>P</div>
         <div className="empty-title">No lots yet</div>
         <div className="empty-body">Your lots will appear here once they're set up</div>
       </div>
@@ -1947,7 +2277,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   }
 
   return (
-    <div>
+    <div className="page-enter">
       <div className="section-header">
         <div className="section-title">Your Lots</div>
         <div className="section-count">{lots.length} lot{lots.length !== 1 ? 's' : ''}</div>
@@ -2173,7 +2503,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
 }
 
 // ── Earnings tab ──────────────────────────────────────────────
-function EarningsPage({ violations, lots }) {
+function EarningsPage({ violations, lots, isOwner }) {
   const [period, setPeriod] = useState('month');
   const [revSummary, setRevSummary] = useState(null);
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
@@ -2208,8 +2538,26 @@ function EarningsPage({ violations, lots }) {
   const byAction = revSummary?.by_action_type || {};
   const actionEntries = Object.entries(byAction).filter(([k, v]) => v > 0 && k !== 'pending');
 
+  // Daily earnings for bar chart (last 7 days)
+  const dailyEarnings = [];
+  for (let i = 6; i >= 0; i--) {
+    const dayStart = new Date(); dayStart.setHours(0,0,0,0); dayStart.setDate(dayStart.getDate() - i);
+    const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
+    const dayViols = resolved.filter(v => {
+      const ts = new Date(v.resolved_at || v.detected_at);
+      return ts >= dayStart && ts < dayEnd;
+    });
+    const dayRev = dayViols.reduce((s, v) => s + (v.our_revenue || 0), 0);
+    dailyEarnings.push({
+      label: dayStart.toLocaleDateString('en-US', { weekday: 'short' }),
+      value: dayRev,
+      count: dayViols.length,
+    });
+  }
+  const maxDailyRev = Math.max(...dailyEarnings.map(d => d.value), 1);
+
   return (
-    <div>
+    <div className="page-enter">
       {/* Period picker */}
       <div className="earnings-period-row">
         {['week','month','all'].map(p => (
@@ -2225,7 +2573,7 @@ function EarningsPage({ violations, lots }) {
         <div className="earnings-amount">
           <span>$</span>{(totalOurs / 100).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}
         </div>
-        <div className="earnings-sub">{actionsExecuted} job{actionsExecuted !== 1 ? 's' : ''} completed · {fmtMoney(totalGross)} gross</div>
+        <div className="earnings-sub">{actionsExecuted} job{actionsExecuted !== 1 ? 's' : ''} completed{isOwner ? ` · ${fmtMoney(totalGross)} gross` : ''}</div>
       </div>
 
       {/* KPI cards */}
@@ -2246,6 +2594,29 @@ function EarningsPage({ violations, lots }) {
         </div>
       </div>
 
+      {/* Weekly earnings bar chart */}
+      {period !== 'all' && (
+        <div className="earnings-breakdown" style={{marginBottom:16}}>
+          <div className="breakdown-header">Daily Earnings (Last 7 Days)</div>
+          <div style={{padding:'12px 16px'}}>
+            {dailyEarnings.map((d, i) => (
+              <div key={i} className="bar-chart-row">
+                <div className="bar-chart-label">{d.label}</div>
+                <div className="bar-chart-track">
+                  <div className="bar-chart-fill" style={{
+                    width: `${Math.max((d.value / maxDailyRev) * 100, d.value > 0 ? 8 : 0)}%`,
+                    background: d.value > 0 ? 'linear-gradient(90deg, #3b82f6, #2563eb)' : 'transparent',
+                  }}>
+                    {d.value > 0 && fmtMoney(d.value)}
+                  </div>
+                </div>
+                <div className="bar-chart-value">{d.count} job{d.count !== 1 ? 's' : ''}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Action breakdown */}
       {actionEntries.length > 0 && (
         <div className="earnings-breakdown" style={{marginBottom:16}}>
@@ -2265,8 +2636,8 @@ function EarningsPage({ violations, lots }) {
         </div>
       )}
 
-      {/* Per-lot breakdown */}
-      {revSummary?.by_lot && revSummary.by_lot.length > 0 && (
+      {/* Per-lot breakdown (owner only) */}
+      {isOwner && revSummary?.by_lot && revSummary.by_lot.length > 0 && (
         <div className="earnings-breakdown" style={{marginBottom:16}}>
           <div className="breakdown-header">By Lot</div>
           {revSummary.by_lot.map(item => {
@@ -2300,7 +2671,12 @@ function EarningsPage({ violations, lots }) {
                 <div className="breakdown-left">
                   <div className="breakdown-date">{fmtDate(v.resolved_at || v.detected_at)} · {fmtTime(v.resolved_at || v.detected_at)}</div>
                   <div className="breakdown-lot">{lot?.name || '—'}</div>
-                  {v.plate_text && <div className="breakdown-plate">{v.plate_text}</div>}
+                  {v.plate_text && (
+                    <div className="breakdown-plate" style={{display:'flex', alignItems:'center', gap:4}}>
+                      {v.vehicle_color && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(255,255,255,.1)', flexShrink:0}} />}
+                      {v.plate_text}
+                    </div>
+                  )}
                 </div>
                 <div className="breakdown-right">
                   <div className="breakdown-amt">{v.our_revenue ? fmtMoney(v.our_revenue) : '—'}</div>
@@ -2315,6 +2691,188 @@ function EarningsPage({ violations, lots }) {
   );
 }
 
+// ── Operator Activity page (no revenue, just job history) ────
+function OperatorActivityPage({ violations, lots }) {
+  const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
+
+  // Show completed actions in last 7 days
+  const cutoff = Date.now() - 7 * 86400000;
+  const completed = violations
+    .filter(v => v.status !== 'pending' && v.action_taken && new Date(v.resolved_at || v.detected_at) > cutoff)
+    .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
+
+  // Stats
+  const today = Date.now() - 86400000;
+  const todayCount = completed.filter(v => new Date(v.resolved_at || v.detected_at) > today).length;
+  const weekCount = completed.length;
+
+  const actionColors = { boot: '#fbbf24', tow: '#f87171', dismissed: '#a78bfa', no_action: '#6b7280', already_gone: '#6b7280' };
+
+  // Group by date
+  const grouped = {};
+  completed.forEach(v => {
+    const dateKey = fmtDate(v.resolved_at || v.detected_at);
+    if (!grouped[dateKey]) grouped[dateKey] = [];
+    grouped[dateKey].push(v);
+  });
+  const dateGroups = Object.entries(grouped);
+
+  return (
+    <div className="page-enter">
+      <div className="section-header">
+        <div className="section-title">Your Activity</div>
+        <div className="section-count">{weekCount} this week</div>
+      </div>
+
+      <div className="kpi-bar" style={{marginBottom:16}}>
+        <div className="kpi-card">
+          <div className="kpi-val blue">{todayCount}</div>
+          <div className="kpi-label">Today</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val green">{weekCount}</div>
+          <div className="kpi-label">This Week</div>
+        </div>
+        <div className="kpi-card">
+          <div className={`kpi-val ${todayCount > 0 ? 'green' : 'red'}`}>
+            {todayCount > 0 ? 'Active' : 'None'}
+          </div>
+          <div className="kpi-label">Status</div>
+        </div>
+      </div>
+
+      {dateGroups.length === 0 ? (
+        <div className="empty-state">
+          <div style={{width:48, height:48, borderRadius:12, background:'rgba(59,130,246,.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22}}>⚡</div>
+          <div className="empty-title">No activity yet</div>
+          <div className="empty-body">Completed jobs will appear here as you work</div>
+        </div>
+      ) : (
+        dateGroups.map(([dateLabel, items]) => (
+          <div key={dateLabel}>
+            <div style={{fontSize:12, fontWeight:700, color:'#4b5563', marginBottom:8, marginTop:16, textTransform:'uppercase', letterSpacing:'.06em'}}>
+              {dateLabel}
+            </div>
+            {items.map(v => {
+              const lot = lotMap[v.lot_id];
+              const col = actionColors[v.action_taken?.toLowerCase()] || '#9ca3af';
+              return (
+                <div key={v.id} className="job-card card-animated" style={{marginBottom:8}}>
+                  <div className="job-body" style={{padding:'12px 16px'}}>
+                    <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8}}>
+                      <div>
+                        <div style={{fontSize:14, fontWeight:700, color:'#f3f4f6'}}>{lot?.name || 'Unknown Lot'}</div>
+                        <div style={{fontSize:12, color:'#4b5563'}}>{fmtTime(v.resolved_at || v.detected_at)}</div>
+                      </div>
+                      <span style={{padding:'4px 10px', borderRadius:20, fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'.04em', color:col, background:col + '15', border:`1px solid ${col}33`}}>
+                        {(v.action_taken || 'handled').replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                    <div className="job-details">
+                      {v.plate_text && (
+                        <span className="plate-tag" style={{fontSize:11, padding:'3px 8px', display:'flex', alignItems:'center', gap:4}}>
+                          {v.vehicle_color && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(0,0,0,.2)', flexShrink:0}} />}
+                          {v.plate_text}
+                        </span>
+                      )}
+                      {v.vehicle_color && !v.plate_text && (
+                        <span className="job-tag" style={{display:'flex', alignItems:'center', gap:4}}>
+                          <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(255,255,255,.15)', flexShrink:0}} />
+                          <strong style={{textTransform:'capitalize'}}>{v.vehicle_color} {v.vehicle_type || ''}</strong>
+                        </span>
+                      )}
+                      {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
+                      <span className="time-ago">{timeAgo(v.resolved_at || v.detected_at)}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ── Account / Settings page ────────────────────────────────────
+function AccountPage({ user, onLogout }) {
+  const isOwner = user._role === 'owner';
+  return (
+    <div className="page-enter">
+      {/* Profile card */}
+      <div style={{textAlign:'center', marginBottom:20}}>
+        <div style={{width:64, height:64, borderRadius:16, background:'linear-gradient(135deg, #3b82f6, #2563eb)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22, fontWeight:800, color:'#fff'}}>
+          {(user.contact_name || user.business_name || 'U').charAt(0).toUpperCase()}
+        </div>
+        <div style={{fontSize:20, fontWeight:800, color:'#f3f4f6'}}>{user.contact_name || user.business_name}</div>
+        <div style={{fontSize:13, color:'#4b5563', marginTop:2}}>{user.email}</div>
+        <div style={{marginTop:6}}>
+          <span style={{fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, textTransform:'uppercase', letterSpacing:'.06em',
+            background: isOwner ? 'rgba(59,130,246,.12)' : 'rgba(139,92,246,.12)',
+            color: isOwner ? '#60a5fa' : '#a78bfa',
+            border: `1px solid ${isOwner ? 'rgba(59,130,246,.2)' : 'rgba(139,92,246,.2)'}`}}>
+            {isOwner ? 'Lot Owner' : 'Enforcement Operator'}
+          </span>
+        </div>
+      </div>
+
+      {/* Account info */}
+      <div className="settings-section">
+        <div className="settings-section-title">Account</div>
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Role</div>
+            <div className="settings-row-desc">{isOwner ? 'Full access to lots, cameras, earnings, and zones' : 'Access to jobs and enforcement actions'}</div>
+          </div>
+          <div className="settings-row-value" style={{color: isOwner ? '#60a5fa' : '#a78bfa'}}>{isOwner ? 'Owner' : 'Operator'}</div>
+        </div>
+        {user.business_name && (
+          <div className="settings-row">
+            <div className="settings-row-info"><div className="settings-row-label">Organization</div></div>
+            <div className="settings-row-value">{user.business_name}</div>
+          </div>
+        )}
+        {user.phone && (
+          <div className="settings-row">
+            <div className="settings-row-info"><div className="settings-row-label">Phone</div></div>
+            <div className="settings-row-value">{user.phone}</div>
+          </div>
+        )}
+      </div>
+
+      {/* App info */}
+      <div className="settings-section">
+        <div className="settings-section-title">App</div>
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Auto-refresh</div>
+            <div className="settings-row-desc">Data refreshes every 30 seconds</div>
+          </div>
+          <div className="settings-row-value" style={{color:'#4ade80'}}>Active</div>
+        </div>
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">SMS Notifications</div>
+            <div className="settings-row-desc">Violation alerts sent via SMS</div>
+          </div>
+          <div className="settings-row-value" style={{color:'#4ade80'}}>Enabled</div>
+        </div>
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Version</div>
+          </div>
+          <div className="settings-row-value">2.4.0</div>
+        </div>
+      </div>
+
+      <button className="login-btn" style={{background:'rgba(239,68,68,.15)', color:'#f87171', boxShadow:'none', border:'1px solid rgba(239,68,68,.3)'}} onClick={onLogout}>
+        Sign Out
+      </button>
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────
 function App() {
   const [owner, setOwner] = useState(null);
@@ -2323,13 +2881,16 @@ function App() {
   const [lotStates, setLotStates] = useState({});
   const [violations, setViolations] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState(null);
   const timerRef = useRef(null);
+
+  const isOwner = owner?._role === 'owner';
+  const isOperator = owner?._role === 'partner';
 
   const loadData = useCallback(async (o, silent = false) => {
     if (!o) return;
     if (!silent) setLoading(true);
     try {
-      // Owners see only their own lots; partners see lots in their market filtered by partner_id
       const lotsUrl = o._role === 'partner'
         ? `/lots?market_id=${o.market_id}`
         : `/lots?owner_id=${o.id}`;
@@ -2353,7 +2914,7 @@ function App() {
         items.forEach(v => flat.push({ ...v, lot_id: v.lot_id || lot.id }));
       });
       setViolations(flat);
-      // Revenue is computed client-side from lot-scoped violations (no global endpoint)
+      setLastRefresh(new Date());
     } catch (e) { console.error(e); }
     finally { if (!silent) setLoading(false); }
   }, []);
@@ -2379,11 +2940,20 @@ function App() {
 
   const pending = violations.filter(v => v.status === 'pending').length;
 
-  const navIcons = { jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings };
-  const tabs = [
+  // Role-based navigation:
+  // Operators: Jobs + Activity + Account
+  // Owners: Jobs + Lots + Earnings + Account
+  const navIcons = { jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, activity: NavIconActivity, account: NavIconAccount };
+  const tabs = isOwner ? [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
+    { id: 'account',  label: 'Account',  badge: 0 },
+  ] : [
+    { id: 'jobs',     label: 'Jobs',     badge: pending },
+    { id: 'activity', label: 'Activity', badge: 0 },
+    { id: 'earnings', label: 'Earnings', badge: 0 },
+    { id: 'account',  label: 'Account',  badge: 0 },
   ];
 
   return (
@@ -2394,15 +2964,22 @@ function App() {
           <div className="header-wordmark">Lot<span>Logic</span></div>
         </div>
         <div className="header-right">
+          {lastRefresh && (
+            <div className={`conn-indicator online`}>
+              <span className="conn-dot on" />
+              <span>Live</span>
+            </div>
+          )}
           <div className="header-name">{owner.business_name || owner.contact_name}</div>
-          <button className="signout-btn" onClick={logout}>Sign out</button>
         </div>
       </div>
 
       <div className="page-content">
-        {tab === 'jobs'     && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} />}
-        {tab === 'lots'     && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
-        {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} />}
+        {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} />}
+        {tab === 'lots' && isOwner && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
+        {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} />}
+        {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
+        {tab === 'account' && <AccountPage user={owner} onLogout={logout} />}
       </div>
 
       <div className="bottom-nav">
