@@ -486,6 +486,115 @@
     .breakdown-action { font-size: 11px; color: #374151; text-transform: capitalize; margin-top: 2px; }
     .breakdown-plate { font-family: 'Courier New', monospace; font-size: 11px; color: #4b5563; font-weight: 600; margin-top: 2px; }
 
+    /* ── KPI bar ── */
+    .kpi-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+    .kpi-card {
+      flex: 1; background: #13151d; border: 1px solid #1e2235; border-radius: 12px;
+      padding: 12px 10px; text-align: center;
+    }
+    .kpi-val { font-size: 22px; font-weight: 800; line-height: 1; color: #f3f4f6; }
+    .kpi-val.blue { color: #3b82f6; }
+    .kpi-val.green { color: #4ade80; }
+    .kpi-val.red { color: #ef4444; }
+    .kpi-val.yellow { color: #fbbf24; }
+    .kpi-label { font-size: 9px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
+
+    /* ── Action buttons on violation cards ── */
+    .job-actions-row {
+      display: flex; gap: 6px; padding: 10px 16px; border-top: 1px solid #1a1d2e;
+      flex-wrap: wrap;
+    }
+    .action-btn {
+      flex: 1; min-width: 70px; padding: 9px 6px; border-radius: 8px; border: 1.5px solid;
+      font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;
+      transition: all .15s; text-align: center; text-transform: uppercase; letter-spacing: .04em;
+    }
+    .action-btn:active { transform: scale(.96); }
+    .action-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+    .action-btn.boot { background: rgba(251,191,36,.1); border-color: rgba(251,191,36,.4); color: #fbbf24; }
+    .action-btn.boot:hover:not(:disabled) { background: rgba(251,191,36,.2); }
+    .action-btn.tow { background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.4); color: #f87171; }
+    .action-btn.tow:hover:not(:disabled) { background: rgba(239,68,68,.2); }
+    .action-btn.dismiss { background: rgba(139,92,246,.1); border-color: rgba(139,92,246,.4); color: #a78bfa; }
+    .action-btn.dismiss:hover:not(:disabled) { background: rgba(139,92,246,.2); }
+    .action-btn.gone { background: rgba(107,114,128,.1); border-color: rgba(107,114,128,.4); color: #9ca3af; }
+    .action-btn.gone:hover:not(:disabled) { background: rgba(107,114,128,.2); }
+
+    /* ── Violation detail modal ── */
+    .viol-modal-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100;
+      background: rgba(0,0,0,.7); backdrop-filter: blur(8px);
+      display: flex; align-items: flex-end; justify-content: center;
+      animation: fadeIn .2s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    .viol-modal {
+      background: #13151d; border-radius: 20px 20px 0 0; width: 100%; max-width: 640px;
+      max-height: 90vh; overflow-y: auto; animation: slideUp .3s ease;
+      border: 1px solid #1e2235; border-bottom: none;
+    }
+    .viol-modal-handle { width: 36px; height: 4px; background: #374151; border-radius: 2px; margin: 10px auto 0; }
+    .viol-modal-img { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #080a0f; display: block; }
+    .viol-modal-body { padding: 16px; }
+    .viol-modal-title { font-size: 18px; font-weight: 800; color: #f3f4f6; margin-bottom: 4px; }
+    .viol-modal-sub { font-size: 13px; color: #4b5563; margin-bottom: 14px; }
+    .viol-modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+    .viol-modal-stat {
+      background: #0c0e14; border: 1px solid #1e2235; border-radius: 10px; padding: 10px 12px;
+    }
+    .viol-modal-stat-label { font-size: 10px; font-weight: 600; color: #4b5563; text-transform: uppercase; letter-spacing: .06em; }
+    .viol-modal-stat-val { font-size: 15px; font-weight: 700; color: #e8eaf0; margin-top: 2px; }
+
+    /* ── Toast notifications ── */
+    .toast-container {
+      position: fixed; top: calc(60px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+      z-index: 300; display: flex; flex-direction: column; gap: 8px; pointer-events: none; width: 90%; max-width: 400px;
+    }
+    .toast {
+      padding: 12px 16px; border-radius: 12px; font-size: 13px; font-weight: 600;
+      animation: toastIn .3s ease, toastOut .3s ease 2.7s forwards;
+      pointer-events: auto; text-align: center;
+    }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(-10px); } }
+    .toast.success { background: rgba(74,222,128,.15); border: 1px solid rgba(74,222,128,.3); color: #4ade80; }
+    .toast.error { background: rgba(239,68,68,.15); border: 1px solid rgba(239,68,68,.3); color: #f87171; }
+    .toast.info { background: rgba(59,130,246,.15); border: 1px solid rgba(59,130,246,.3); color: #60a5fa; }
+
+    /* ── Confirm dialog ── */
+    .confirm-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 250;
+      background: rgba(0,0,0,.6); backdrop-filter: blur(4px);
+      display: flex; align-items: center; justify-content: center; padding: 24px;
+    }
+    .confirm-box {
+      background: #1a1d2e; border: 1px solid #2a2d3e; border-radius: 16px; padding: 24px;
+      max-width: 320px; width: 100%; text-align: center;
+    }
+    .confirm-title { font-size: 17px; font-weight: 700; color: #f3f4f6; margin-bottom: 8px; }
+    .confirm-body { font-size: 13px; color: #6b7280; margin-bottom: 20px; line-height: 1.5; }
+    .confirm-btns { display: flex; gap: 10px; }
+    .confirm-btns button { flex: 1; padding: 12px; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; border: none; transition: opacity .15s; }
+    .confirm-btns button:active { opacity: .7; }
+    .confirm-cancel { background: #13151d; color: #9ca3af; }
+    .confirm-ok { color: #fff; }
+
+    /* ── Nav icons ── */
+    .nav-icon { width: 20px; height: 20px; }
+    .nav-icon svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* ── Pull to refresh ── */
+    .ptr-indicator {
+      text-align: center; padding: 8px 0; color: #374151; font-size: 12px; font-weight: 600;
+      transition: all .2s;
+    }
+
+    /* ── Camera health ── */
+    .cam-health { display: flex; gap: 10px; margin-top: 6px; }
+    .cam-health-stat { font-size: 10px; color: #4b5563; }
+    .cam-health-stat strong { color: #6b7280; }
+
     /* ── Zone overlay (read-only on snapshots) ── */
     .cam-img-wrap { position: relative; }
     .zone-overlay-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -611,6 +720,149 @@ function mapsLink(address) {
   return `https://maps.google.com/?q=${encodeURIComponent(address)}`;
 }
 
+// ── Toast system ──────────────────────────────────────────────
+const ToastContext = React.createContext({ addToast: () => {} });
+
+function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+  const addToast = useCallback((msg, type = 'info') => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, msg, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
+  }, []);
+  return (
+    <ToastContext.Provider value={{ addToast }}>
+      {children}
+      <div className="toast-container">
+        {toasts.map(t => <div key={t.id} className={`toast ${t.type}`}>{t.msg}</div>)}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+function useToast() { return React.useContext(ToastContext); }
+
+// ── Confirm dialog ────────────────────────────────────────────
+function ConfirmDialog({ title, body, confirmLabel, confirmColor, onConfirm, onCancel }) {
+  return (
+    <div className="confirm-overlay" onClick={onCancel}>
+      <div className="confirm-box" onClick={e => e.stopPropagation()}>
+        <div className="confirm-title">{title}</div>
+        <div className="confirm-body">{body}</div>
+        <div className="confirm-btns">
+          <button className="confirm-cancel" onClick={onCancel}>Cancel</button>
+          <button className="confirm-ok" style={{background: confirmColor || '#3b82f6'}} onClick={onConfirm}>{confirmLabel || 'Confirm'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Violation detail modal ────────────────────────────────────
+function ViolationModal({ violation, lot, onClose, onAction }) {
+  const [snapshotUrl, setSnapshotUrl] = useState(null);
+  const [imgLoading, setImgLoading] = useState(true);
+
+  useEffect(() => {
+    if (!violation?.snapshot_id) return;
+    apiFetch(`/snapshots/${violation.snapshot_id}/url`)
+      .then(data => setSnapshotUrl(data.url))
+      .catch(() => {});
+  }, [violation?.snapshot_id]);
+
+  if (!violation) return null;
+  const timer = elapsed(violation.detected_at);
+  const isPending = violation.status === 'pending';
+
+  return (
+    <div className="viol-modal-overlay" onClick={onClose}>
+      <div className="viol-modal" onClick={e => e.stopPropagation()}>
+        <div className="viol-modal-handle" />
+        {snapshotUrl ? (
+          <img className="viol-modal-img" src={snapshotUrl} alt="Violation snapshot"
+            onLoad={() => setImgLoading(false)}
+            onError={() => setImgLoading(false)}
+            style={{display: imgLoading ? 'none' : 'block'}} />
+        ) : null}
+        {(imgLoading && violation.snapshot_id) && (
+          <div style={{width:'100%', aspectRatio:'16/9', background:'#080a0f', display:'flex', alignItems:'center', justifyContent:'center', color:'#374151', fontSize:13}}>
+            Loading snapshot…
+          </div>
+        )}
+        <div className="viol-modal-body">
+          <div className="viol-modal-title">{lot?.name || 'Unknown Lot'}</div>
+          <div className="viol-modal-sub">{lot?.address} · {fmtDate(violation.detected_at)} {fmtTime(violation.detected_at)}</div>
+
+          <div className="viol-modal-grid">
+            <div className="viol-modal-stat">
+              <div className="viol-modal-stat-label">Status</div>
+              <div className="viol-modal-stat-val" style={{color: isPending ? '#fbbf24' : '#4ade80'}}>
+                {isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
+              </div>
+            </div>
+            <div className="viol-modal-stat">
+              <div className="viol-modal-stat-label">Wait Time</div>
+              <div className="viol-modal-stat-val" style={{color: timer?.long ? '#ef4444' : '#3b82f6'}}>
+                {timer ? `${timer.val} ${timer.unit}` : '—'}
+              </div>
+            </div>
+            {violation.plate_text && (
+              <div className="viol-modal-stat">
+                <div className="viol-modal-stat-label">Plate</div>
+                <div className="viol-modal-stat-val" style={{fontFamily:'Courier New, monospace', letterSpacing:'.1em'}}>{violation.plate_text}</div>
+              </div>
+            )}
+            <div className="viol-modal-stat">
+              <div className="viol-modal-stat-label">Zone</div>
+              <div className="viol-modal-stat-val">{violation.zone_id || '—'}</div>
+            </div>
+            <div className="viol-modal-stat">
+              <div className="viol-modal-stat-label">Type</div>
+              <div className="viol-modal-stat-val" style={{textTransform:'capitalize'}}>{(violation.violation_type || '').replace(/_/g, ' ')}</div>
+            </div>
+            <div className="viol-modal-stat">
+              <div className="viol-modal-stat-label">Vehicle</div>
+              <div className="viol-modal-stat-val" style={{textTransform:'capitalize'}}>{[violation.vehicle_color, violation.vehicle_type].filter(Boolean).join(' ') || '—'}</div>
+            </div>
+            {violation.our_revenue > 0 && (
+              <div className="viol-modal-stat">
+                <div className="viol-modal-stat-label">Revenue</div>
+                <div className="viol-modal-stat-val" style={{color:'#4ade80'}}>{fmtMoney(violation.our_revenue)}</div>
+              </div>
+            )}
+            {violation.confidence && (
+              <div className="viol-modal-stat">
+                <div className="viol-modal-stat-label">Confidence</div>
+                <div className="viol-modal-stat-val">{Math.round(parseFloat(violation.confidence) * 100)}%</div>
+              </div>
+            )}
+          </div>
+
+          {isPending && (
+            <div className="job-actions-row" style={{padding:0, border:'none'}}>
+              <button className="action-btn boot" onClick={() => onAction(violation.id, 'boot')}>Boot</button>
+              <button className="action-btn tow" onClick={() => onAction(violation.id, 'tow')}>Tow</button>
+              <button className="action-btn dismiss" onClick={() => onAction(violation.id, 'dismissed')}>Dismiss</button>
+              <button className="action-btn gone" onClick={() => onAction(violation.id, 'already_gone')}>Gone</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SVG Nav Icons ─────────────────────────────────────────────
+function NavIconJobs() {
+  return <div className="nav-icon"><svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg></div>;
+}
+function NavIconLots() {
+  return <div className="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>;
+}
+function NavIconEarnings() {
+  return <div className="nav-icon"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg></div>;
+}
+
 // ── Login ─────────────────────────────────────────────────────
 function LoginPage({ onLogin }) {
   const [email, setEmail] = useState('');
@@ -673,8 +925,12 @@ function LoginPage({ onLogin }) {
 }
 
 // ── Jobs tab (current violations) ─────────────────────────────
-function JobsPage({ lots, violations, loading, lotStates }) {
+function JobsPage({ lots, violations, loading, lotStates, onAction }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
+  const [selectedViol, setSelectedViol] = useState(null);
+  const [confirm, setConfirm] = useState(null); // { violId, action }
+  const [acting, setActing] = useState(null); // violId currently being actioned
+  const { addToast } = useToast();
 
   // Active jobs = pending violations, oldest first (most urgent first)
   const active = violations
@@ -686,7 +942,44 @@ function JobsPage({ lots, violations, loading, lotStates }) {
   const recent = violations
     .filter(v => v.status !== 'pending' && new Date(v.resolved_at || v.detected_at) > cutoff)
     .sort((a, b) => new Date(b.resolved_at || 0) - new Date(a.resolved_at || 0))
-    .slice(0, 10);
+    .slice(0, 20);
+
+  // KPIs
+  const avgWaitMins = active.length > 0
+    ? Math.round(active.reduce((s, v) => s + (Date.now() - new Date(v.detected_at)) / 60000, 0) / active.length)
+    : 0;
+  const todayResolved = recent.length;
+  const todayRevenue = recent.reduce((s, v) => s + (v.our_revenue || 0), 0);
+
+  const actionLabels = { boot: 'Boot', tow: 'Tow', dismissed: 'Dismiss', already_gone: 'Already Gone', no_action: 'No Action' };
+  const actionColors = { boot: '#fbbf24', tow: '#ef4444', dismissed: '#a78bfa', already_gone: '#6b7280', no_action: '#6b7280' };
+
+  async function handleAction(violId, action) {
+    setConfirm(null);
+    setActing(violId);
+    try {
+      await apiFetch(`/violations/${violId}/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      addToast(`${actionLabels[action] || action} recorded successfully`, 'success');
+      setSelectedViol(null);
+      if (onAction) onAction();
+    } catch (e) {
+      addToast(`Failed to record action: ${e.message}`, 'error');
+    } finally { setActing(null); }
+  }
+
+  function requestAction(violId, action) {
+    if (action === 'tow') {
+      setConfirm({ violId, action, title: 'Confirm Tow', body: 'This will record a tow for this vehicle. The tow fee will be applied. Continue?', color: '#ef4444' });
+    } else if (action === 'boot') {
+      setConfirm({ violId, action, title: 'Confirm Boot', body: 'This will record a boot for this vehicle. The boot fee will be applied. Continue?', color: '#fbbf24' });
+    } else {
+      handleAction(violId, action);
+    }
+  }
 
   if (loading && violations.length === 0) {
     return <div className="loader"><div className="spin" /> Loading jobs…</div>;
@@ -694,6 +987,26 @@ function JobsPage({ lots, violations, loading, lotStates }) {
 
   return (
     <div>
+      {/* KPI bar */}
+      <div className="kpi-bar">
+        <div className="kpi-card">
+          <div className={`kpi-val ${active.length > 0 ? 'red' : 'green'}`}>{active.length}</div>
+          <div className="kpi-label">Pending</div>
+        </div>
+        <div className="kpi-card">
+          <div className={`kpi-val ${avgWaitMins >= 45 ? 'red' : 'blue'}`}>{avgWaitMins}<span style={{fontSize:12}}>m</span></div>
+          <div className="kpi-label">Avg Wait</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val green">{todayResolved}</div>
+          <div className="kpi-label">Today</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val green">{fmtMoney(todayRevenue)}</div>
+          <div className="kpi-label">Earned</div>
+        </div>
+      </div>
+
       {/* Active jobs */}
       <div className="section-header">
         <div className="section-title">Open Jobs</div>
@@ -710,6 +1023,7 @@ function JobsPage({ lots, violations, loading, lotStates }) {
           const lot = lotMap[v.lot_id];
           const timer = elapsed(v.detected_at);
           const urgent = timer?.val >= 45;
+          const isActing = acting === v.id;
           const typeClass = v.violation_type?.toLowerCase().includes('unauthorized')
             ? 'unauthorized' : v.violation_type?.toLowerCase().includes('overtime') ? 'overtime' : 'default';
           return (
@@ -719,7 +1033,7 @@ function JobsPage({ lots, violations, loading, lotStates }) {
                   Needs attention — waiting {timer.val} {timer.unit}
                 </div>
               )}
-              <div className="job-body">
+              <div className="job-body" style={{cursor:'pointer'}} onClick={() => setSelectedViol(v)}>
                 <div className="job-top">
                   <div>
                     <div className="job-lot-name">{lot?.name || 'Unknown Lot'}</div>
@@ -737,15 +1051,32 @@ function JobsPage({ lots, violations, loading, lotStates }) {
                   {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                   {v.space_number && <span className="job-tag">Space <strong>#{v.space_number}</strong></span>}
                   {v.vehicle_type && <span className="job-tag"><strong>{v.vehicle_type}</strong></span>}
+                  {v.vehicle_color && <span className="job-tag"><strong style={{textTransform:'capitalize'}}>{v.vehicle_color}</strong></span>}
                   <span className="job-tag"><strong>{fmtTime(v.detected_at)}</strong></span>
                 </div>
               </div>
+              {/* Action buttons */}
+              <div className="job-actions-row">
+                <button className="action-btn boot" disabled={isActing} onClick={() => requestAction(v.id, 'boot')}>
+                  {isActing ? '…' : 'Boot'}
+                </button>
+                <button className="action-btn tow" disabled={isActing} onClick={() => requestAction(v.id, 'tow')}>
+                  {isActing ? '…' : 'Tow'}
+                </button>
+                <button className="action-btn dismiss" disabled={isActing} onClick={() => requestAction(v.id, 'dismissed')}>
+                  Dismiss
+                </button>
+                <button className="action-btn gone" disabled={isActing} onClick={() => requestAction(v.id, 'already_gone')}>
+                  Gone
+                </button>
+              </div>
               <div className="job-footer">
                 <span className={`job-type-tag ${typeClass}`}>
-                  {v.violation_type || 'Violation'}
+                  {(v.violation_type || 'Violation').replace(/_/g, ' ')}
                 </span>
                 {lot?.address && (
-                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener" style={{fontSize:13, color:'#3b82f6', fontWeight:600, textDecoration:'none'}}>
+                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener" style={{fontSize:13, color:'#3b82f6', fontWeight:600, textDecoration:'none'}}
+                    onClick={e => e.stopPropagation()}>
                     Directions →
                   </a>
                 )}
@@ -764,10 +1095,10 @@ function JobsPage({ lots, violations, loading, lotStates }) {
           </div>
           {recent.map(v => {
             const lot = lotMap[v.lot_id];
-            const actionColor = { booted: '#fbbf24', towed: '#f87171', dismissed: '#a78bfa', noaction: '#6b7280' };
+            const actionColor = { boot: '#fbbf24', tow: '#f87171', dismissed: '#a78bfa', no_action: '#6b7280', already_gone: '#6b7280' };
             const col = actionColor[v.action_taken?.toLowerCase()] || '#9ca3af';
             return (
-              <div key={v.id} className="job-card">
+              <div key={v.id} className="job-card" style={{cursor:'pointer'}} onClick={() => setSelectedViol(v)}>
                 <div className="job-body">
                   <div className="job-top">
                     <div>
@@ -784,13 +1115,35 @@ function JobsPage({ lots, violations, loading, lotStates }) {
                   <div className="job-details">
                     {v.plate_text && <span className="plate-tag">{v.plate_text}</span>}
                     {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
-                    <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{v.action_taken || 'handled'}</strong></span>
+                    <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'handled').replace(/_/g, ' ')}</strong></span>
                   </div>
                 </div>
               </div>
             );
           })}
         </>
+      )}
+
+      {/* Violation detail modal */}
+      {selectedViol && (
+        <ViolationModal
+          violation={selectedViol}
+          lot={lotMap[selectedViol.lot_id]}
+          onClose={() => setSelectedViol(null)}
+          onAction={(violId, action) => requestAction(violId, action)}
+        />
+      )}
+
+      {/* Confirm dialog */}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={actionLabels[confirm.action]}
+          confirmColor={confirm.color}
+          onConfirm={() => handleAction(confirm.violId, confirm.action)}
+          onCancel={() => setConfirm(null)}
+        />
       )}
     </div>
   );
@@ -1216,6 +1569,12 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                         {cam.zones && cam.zones.length > 0 && ` · ${cam.zones.length} zone${cam.zones.length > 1 ? 's' : ''}`}
                       </div>
                     )}
+                    {cam.last_heartbeat && (
+                      <div style={{fontSize:10, color:'#374151', marginTop:4}}>
+                        Last heartbeat: {fmtTime(cam.last_heartbeat)}
+                        {cam.channel !== undefined && ` · Ch ${cam.channel}`}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1246,32 +1605,39 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
 
 // ── Earnings tab ──────────────────────────────────────────────
 function EarningsPage({ violations, lots }) {
-  const [period, setPeriod] = useState('week');
+  const [period, setPeriod] = useState('month');
+  const [revSummary, setRevSummary] = useState(null);
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
 
-  // Filter resolved violations by period
-  const now = Date.now();
-  const cutoffs = {
-    week:  now - 7 * 86400000,
-    month: now - 30 * 86400000,
-    all:   0,
-  };
+  const periodDays = { week: 7, month: 30, all: 365 };
+  const periodLabels = { week: 'This Week', month: 'This Month', all: 'All Time' };
 
+  // Fetch revenue summary from dedicated endpoint
+  useEffect(() => {
+    apiFetch(`/violations/revenue?days=${periodDays[period]}`)
+      .then(data => setRevSummary(data))
+      .catch(() => setRevSummary(null));
+  }, [period]);
+
+  // Also compute from local violations as fallback for line items
+  const now = Date.now();
+  const cutoffs = { week: now - 7 * 86400000, month: now - 30 * 86400000, all: 0 };
   const resolved = violations.filter(v => {
     if (!v.action_taken || v.status === 'pending') return false;
     const ts = new Date(v.resolved_at || v.detected_at).getTime();
     return ts >= cutoffs[period];
   }).sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
 
-  const totalOurs = resolved.reduce((s, v) => s + (v.our_revenue || 0), 0);
-  const totalGross = resolved.reduce((s, v) => s + (v.gross_revenue || 0), 0);
-  const actionCounts = {};
-  resolved.forEach(v => {
-    const k = v.action_taken || 'other';
-    actionCounts[k] = (actionCounts[k] || 0) + 1;
-  });
+  // Use server summary if available, else local computation
+  const totalOurs = revSummary ? revSummary.our_revenue_cents : resolved.reduce((s, v) => s + (v.our_revenue || 0), 0);
+  const totalGross = revSummary ? revSummary.gross_revenue_cents : resolved.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+  const totalViolations = revSummary ? revSummary.total_violations : resolved.length;
+  const actionsExecuted = revSummary ? revSummary.actions_executed : resolved.length;
+  const actionRate = revSummary ? revSummary.action_rate : (totalViolations > 0 ? actionsExecuted / totalViolations : 0);
 
-  const periodLabels = { week: 'This Week', month: 'This Month', all: 'All Time' };
+  // Action breakdown from server
+  const byAction = revSummary?.by_action_type || {};
+  const actionEntries = Object.entries(byAction).filter(([k, v]) => v > 0 && k !== 'pending');
 
   return (
     <div>
@@ -1290,22 +1656,59 @@ function EarningsPage({ violations, lots }) {
         <div className="earnings-amount">
           <span>$</span>{(totalOurs / 100).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}
         </div>
-        <div className="earnings-sub">{resolved.length} job{resolved.length !== 1 ? 's' : ''} completed · {fmtMoney(totalGross)} gross</div>
+        <div className="earnings-sub">{actionsExecuted} job{actionsExecuted !== 1 ? 's' : ''} completed · {fmtMoney(totalGross)} gross</div>
+      </div>
+
+      {/* KPI cards */}
+      <div className="kpi-bar" style={{marginBottom:16}}>
+        <div className="kpi-card">
+          <div className="kpi-val blue">{totalViolations}</div>
+          <div className="kpi-label">Violations</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val green">{actionsExecuted}</div>
+          <div className="kpi-label">Actioned</div>
+        </div>
+        <div className="kpi-card">
+          <div className={`kpi-val ${actionRate >= 0.5 ? 'green' : actionRate >= 0.2 ? 'yellow' : 'red'}`}>
+            {Math.round(actionRate * 100)}%
+          </div>
+          <div className="kpi-label">Action Rate</div>
+        </div>
       </div>
 
       {/* Action breakdown */}
-      {Object.keys(actionCounts).length > 0 && (
+      {actionEntries.length > 0 && (
         <div className="earnings-breakdown" style={{marginBottom:16}}>
           <div className="breakdown-header">By Action</div>
-          {Object.entries(actionCounts).map(([action, count]) => {
-            const earned = resolved.filter(v => v.action_taken === action).reduce((s,v) => s + (v.our_revenue||0), 0);
+          {actionEntries.map(([action, count]) => {
+            const colors = { boots: '#fbbf24', tows: '#f87171', dismissed: '#a78bfa', no_action: '#6b7280', already_gone: '#6b7280' };
             return (
               <div key={action} className="breakdown-row">
-                <div style={{fontSize:15, fontWeight:700, color:'#e5e7eb', textTransform:'capitalize'}}>{action}</div>
-                <div style={{textAlign:'right'}}>
-                  <div style={{fontSize:15, fontWeight:700, color:'#3b82f6'}}>{fmtMoney(earned)}</div>
-                  <div style={{fontSize:12, color:'#4b5563'}}>{count}×</div>
+                <div style={{display:'flex', alignItems:'center', gap:8}}>
+                  <span style={{width:8, height:8, borderRadius:'50%', background: colors[action] || '#6b7280', flexShrink:0}} />
+                  <span style={{fontSize:15, fontWeight:700, color:'#e5e7eb', textTransform:'capitalize'}}>{action.replace(/_/g, ' ')}</span>
                 </div>
+                <div style={{fontSize:15, fontWeight:700, color:'#6b7280'}}>{count}×</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Per-lot breakdown */}
+      {revSummary?.by_lot && revSummary.by_lot.length > 0 && (
+        <div className="earnings-breakdown" style={{marginBottom:16}}>
+          <div className="breakdown-header">By Lot</div>
+          {revSummary.by_lot.map(item => {
+            const lot = lotMap[item.lot_id];
+            return (
+              <div key={item.lot_id} className="breakdown-row">
+                <div>
+                  <div style={{fontSize:14, fontWeight:600, color:'#d1d5db'}}>{lot?.name || item.lot_id?.slice(0,8)}</div>
+                  <div style={{fontSize:12, color:'#4b5563'}}>{item.actions} action{item.actions !== 1 ? 's' : ''}</div>
+                </div>
+                <div className="breakdown-amt">{fmtMoney(item.our_revenue_cents)}</div>
               </div>
             );
           })}
@@ -1320,8 +1723,8 @@ function EarningsPage({ violations, lots }) {
         </div>
       ) : (
         <div className="earnings-breakdown">
-          <div className="breakdown-header">All Jobs {periodLabels[period]}</div>
-          {resolved.map(v => {
+          <div className="breakdown-header">Recent Jobs</div>
+          {resolved.slice(0, 30).map(v => {
             const lot = lotMap[v.lot_id];
             return (
               <div key={v.id} className="breakdown-row">
@@ -1332,7 +1735,7 @@ function EarningsPage({ violations, lots }) {
                 </div>
                 <div className="breakdown-right">
                   <div className="breakdown-amt">{v.our_revenue ? fmtMoney(v.our_revenue) : '—'}</div>
-                  <div className="breakdown-action">{v.action_taken || v.status}</div>
+                  <div className="breakdown-action">{(v.action_taken || v.status).replace(/_/g, ' ')}</div>
                 </div>
               </div>
             );
@@ -1407,6 +1810,7 @@ function App() {
 
   const pending = violations.filter(v => v.status === 'pending').length;
 
+  const navIcons = { jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings };
   const tabs = [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
@@ -1427,24 +1831,28 @@ function App() {
       </div>
 
       <div className="page-content">
-        {tab === 'jobs'     && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} />}
+        {tab === 'jobs'     && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} />}
         {tab === 'lots'     && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
         {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} />}
       </div>
 
       <div className="bottom-nav">
-        {tabs.map(t => (
-          <button key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
-            {t.badge > 0 && <span className="nav-badge">{t.badge}</span>}
-            <span className="nav-label">{t.label}</span>
-          </button>
-        ))}
+        {tabs.map(t => {
+          const Icon = navIcons[t.id];
+          return (
+            <button key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
+              {t.badge > 0 && <span className="nav-badge">{t.badge}</span>}
+              {Icon && <Icon />}
+              <span className="nav-label">{t.label}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+ReactDOM.createRoot(document.getElementById('root')).render(<ToastProvider><App /></ToastProvider>);
 </script>
 </body>
 </html>
