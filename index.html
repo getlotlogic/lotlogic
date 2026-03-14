@@ -1169,17 +1169,24 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
                 {timer ? `${timer.val} ${timer.unit}` : '—'}
               </div>
             </div>
-            {violation.plate_text && (
-              <div className="viol-modal-stat">
-                <div className="viol-modal-stat-label">License Plate</div>
+            <div className="viol-modal-stat">
+              <div className="viol-modal-stat-label">License Plate</div>
+              {violation.plate_text ? (
                 <div className="viol-modal-stat-val" style={{fontFamily:'Courier New, monospace', letterSpacing:'.1em', display:'flex', alignItems:'center', gap:6}}>
                   {violation.plate_text}
-                  {violation.plate_confidence != null && (
-                    <span style={{fontSize:11, color:'#4b5563', fontFamily:'Inter, sans-serif'}}>({Math.round(parseFloat(violation.plate_confidence) * 100)}%)</span>
-                  )}
+                  {violation.plate_confidence != null && (() => {
+                    const conf = Math.round(parseFloat(violation.plate_confidence) * 100);
+                    const confColor = conf >= 80 ? '#4ade80' : conf >= 50 ? '#fbbf24' : '#ef4444';
+                    return <span style={{fontSize:11, fontWeight:600, color:confColor, fontFamily:'Inter, sans-serif'}}>({conf}%)</span>;
+                  })()}
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="viol-modal-stat-val" style={{color:'#6b7280', display:'flex', alignItems:'center', gap:5}}>
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#6b7280" strokeWidth="1.5"/><line x1="4" y1="4" x2="12" y2="12" stroke="#6b7280" strokeWidth="1.5"/></svg>
+                  Not captured
+                </div>
+              )}
+            </div>
             <div className="viol-modal-stat">
               <div className="viol-modal-stat-label">Zone</div>
               <div className="viol-modal-stat-val">{violation.zone_id || '—'}</div>
@@ -1209,12 +1216,21 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
                 <div className="viol-modal-stat-val" style={{color:'#4ade80'}}>{fmtMoney(violation.our_revenue)}</div>
               </div>
             )}
-            {violation.confidence && (
-              <div className="viol-modal-stat">
-                <div className="viol-modal-stat-label">Confidence</div>
-                <div className="viol-modal-stat-val">{Math.round(parseFloat(violation.confidence) * 100)}%</div>
-              </div>
-            )}
+            {violation.confidence && (() => {
+              const conf = Math.round(parseFloat(violation.confidence) * 100);
+              const confColor = conf >= 80 ? '#4ade80' : conf >= 50 ? '#fbbf24' : '#ef4444';
+              return (
+                <div className="viol-modal-stat">
+                  <div className="viol-modal-stat-label">AI Confidence</div>
+                  <div className="viol-modal-stat-val" style={{color:confColor, display:'flex', alignItems:'center', gap:6}}>
+                    {conf}%
+                    <div style={{flex:1, maxWidth:60, height:4, borderRadius:2, background:'#1e2235'}}>
+                      <div style={{width:`${conf}%`, height:'100%', borderRadius:2, background:confColor}} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* SMS notification status */}
@@ -1390,6 +1406,11 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
     type: v.vehicle_type,
   }));
 
+  // Plate read rate across all violations
+  const totalViols = [...active, ...recent];
+  const violsWithPlate = totalViols.filter(v => v.plate_text);
+  const plateReadRate = totalViols.length > 0 ? Math.round((violsWithPlate.length / totalViols.length) * 100) : null;
+
   const actionLabels = { boot: 'Boot', tow: 'Tow', dismissed: 'Dismiss', already_gone: 'Already Gone', no_action: 'No Action' };
   const actionColors = { boot: '#fbbf24', tow: '#ef4444', dismissed: '#a78bfa', already_gone: '#6b7280', no_action: '#6b7280' };
 
@@ -1427,6 +1448,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
   const filteredActive = active.filter(v => {
     if (filter === 'urgent') { const t = elapsed(v.detected_at); return t?.val >= 30; }
     if (filter === 'plates') return !!v.plate_text;
+    if (filter === 'no_plate') return !v.plate_text;
     return true;
   }).filter(v => {
     if (!search.trim()) return true;
@@ -1478,6 +1500,11 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
               <span className="det-dot plates" /> {livePlates} plate{livePlates !== 1 ? 's' : ''} read
             </div>
           )}
+          {plateReadRate != null && (
+            <div className="cam-det-chip" style={{padding:'5px 10px', background: plateReadRate >= 60 ? 'rgba(74,222,128,.08)' : plateReadRate >= 30 ? 'rgba(251,191,36,.08)' : 'rgba(239,68,68,.08)', border: `1px solid ${plateReadRate >= 60 ? 'rgba(74,222,128,.2)' : plateReadRate >= 30 ? 'rgba(251,191,36,.2)' : 'rgba(239,68,68,.2)'}`}}>
+              <span style={{width:7, height:7, borderRadius:'50%', background: plateReadRate >= 60 ? '#4ade80' : plateReadRate >= 30 ? '#fbbf24' : '#ef4444', flexShrink:0}} /> {plateReadRate}% plate read rate
+            </div>
+          )}
         </div>
       )}
 
@@ -1491,6 +1518,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
           <button className={`filter-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>All</button>
           <button className={`filter-chip ${filter === 'urgent' ? 'active' : ''}`} onClick={() => setFilter('urgent')}>Urgent</button>
           <button className={`filter-chip ${filter === 'plates' ? 'active' : ''}`} onClick={() => setFilter('plates')}>Plates</button>
+          <button className={`filter-chip ${filter === 'no_plate' ? 'active' : ''}`} onClick={() => setFilter('no_plate')} style={filter === 'no_plate' ? {background:'rgba(239,68,68,.15)', borderColor:'rgba(239,68,68,.4)', color:'#f87171'} : {}}>No Plate</button>
         </div>
       )}
 
@@ -1541,10 +1569,19 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
                   )}
                 </div>
                 <div className="job-details">
-                  {v.plate_text && (
+                  {v.plate_text ? (
                     <span className="plate-tag" style={{display:'flex', alignItems:'center', gap:5}}>
                       {v.plate_text}
-                      {v.confidence && <span style={{fontSize:9, opacity:.7, fontFamily:'Inter, sans-serif', fontWeight:600, letterSpacing:0}}>{Math.round(parseFloat(v.confidence) * 100)}%</span>}
+                      {v.confidence && (() => {
+                        const conf = Math.round(parseFloat(v.confidence) * 100);
+                        const confColor = conf >= 80 ? '#4ade80' : conf >= 50 ? '#fbbf24' : '#ef4444';
+                        return <span style={{fontSize:9, fontWeight:700, color:confColor, fontFamily:'Inter, sans-serif', letterSpacing:0}}>{conf}%</span>;
+                      })()}
+                    </span>
+                  ) : (
+                    <span className="plate-tag no-plate" style={{display:'flex', alignItems:'center', gap:4, background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.25)', color:'#f87171'}}>
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#f87171" strokeWidth="2"/><line x1="4" y1="4" x2="12" y2="12" stroke="#f87171" strokeWidth="2"/></svg>
+                      No plate
                     </span>
                   )}
                   {v.vehicle_color && (
@@ -1617,11 +1654,13 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
                     )}
                   </div>
                   <div className="job-details">
-                    {v.plate_text && (
+                    {v.plate_text ? (
                       <span className="plate-tag" style={{display:'flex', alignItems:'center', gap:4}}>
                         {v.vehicle_color && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(0,0,0,.2)', flexShrink:0}} />}
                         {v.plate_text}
                       </span>
+                    ) : (
+                      <span className="plate-tag no-plate" style={{display:'flex', alignItems:'center', gap:4, background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.2)', color:'#ef4444', fontSize:10}}>No plate</span>
                     )}
                     {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                     <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'handled').replace(/_/g, ' ')}</strong></span>
@@ -2420,6 +2459,15 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                           {snapPlates > 0 && (
                             <span className="cam-det-chip"><span className="det-dot plates" /> {snapPlates} plate{snapPlates !== 1 ? 's' : ''}</span>
                           )}
+                          {snapVehicles > 0 && (() => {
+                            const rate = Math.round((snapPlates / snapVehicles) * 100);
+                            const rateColor = rate >= 60 ? '#4ade80' : rate >= 30 ? '#fbbf24' : '#ef4444';
+                            return (
+                              <span className="cam-det-chip" style={{background:`${rateColor}08`, border:`1px solid ${rateColor}33`}}>
+                                <span style={{width:6, height:6, borderRadius:'50%', background:rateColor, flexShrink:0}} /> {rate}% plate read
+                              </span>
+                            );
+                          })()}
                           {snapVehicles === 0 && snapPeople === 0 && snapPlates === 0 && (
                             <span className="cam-det-chip" style={{color:'#374151'}}>No detections</span>
                           )}
@@ -2443,9 +2491,11 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                                 <span className="plate-tag" style={{fontSize:11, padding:'3px 8px'}}>
                                   {plateText}
                                 </span>
-                                {pr.confidence != null && (
-                                  <span style={{fontSize:10, color:'#4b5563'}}>{Math.round(parseFloat(pr.confidence) * 100)}%</span>
-                                )}
+                                {pr.confidence != null && (() => {
+                                  const conf = Math.round(parseFloat(pr.confidence) * 100);
+                                  const confColor = conf >= 80 ? '#4ade80' : conf >= 50 ? '#fbbf24' : '#ef4444';
+                                  return <span style={{fontSize:10, fontWeight:600, color:confColor}}>{conf}%</span>;
+                                })()}
                               </div>
                             );
                           })}
