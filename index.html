@@ -1537,6 +1537,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
     return (v.plate_text?.toLowerCase().includes(q)) ||
       (v.vehicle_color?.toLowerCase().includes(q)) ||
       (v.vehicle_type?.toLowerCase().includes(q)) ||
+      (v.vehicle_make?.toLowerCase().includes(q)) ||
+      (v.vehicle_model?.toLowerCase().includes(q)) ||
       (lotMap[v.lot_id]?.name?.toLowerCase().includes(q)) ||
       (v.zone_id?.toLowerCase().includes(q));
   });
@@ -1706,6 +1708,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
                     </span>
                   )}
                   {v.vehicle_type && v.vehicle_type !== 'car' && <span className="job-tag"><strong style={{textTransform:'capitalize'}}>{v.vehicle_type}</strong></span>}
+                  {v.vehicle_make && <span className="job-tag" style={{color:'#8b5cf6'}}><strong style={{textTransform:'capitalize'}}>{[v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</strong></span>}
                   {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                   {v.space_number && <span className="job-tag">Space <strong>#{v.space_number}</strong></span>}
                   <span className="job-tag"><strong>{fmtTime(v.detected_at)}</strong></span>
@@ -2605,15 +2608,32 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
 
                       {/* Camera config info */}
                       <div style={{display:'flex', gap:6, flexWrap:'wrap', marginTop:4}}>
+                        <span className="cam-det-chip" style={{
+                          color: cam.deployment_profile === 'lte_solar' ? '#f59e0b' : '#3b82f6',
+                          fontSize:10,
+                          background: cam.deployment_profile === 'lte_solar' ? 'rgba(245,158,11,.08)' : 'rgba(59,130,246,.08)',
+                          border: cam.deployment_profile === 'lte_solar' ? '1px solid rgba(245,158,11,.2)' : '1px solid rgba(59,130,246,.2)',
+                          fontWeight:600,
+                        }}>
+                          {cam.deployment_profile === 'lte_solar' ? 'LTE + Solar' : 'Wired'}
+                        </span>
                         <span className="cam-det-chip" style={{color:'#4b5563', fontSize:10}}>
-                          {cam.snapshot_width || 640}×{cam.snapshot_height || 360}px
+                          {cam.snapshot_width || 640}x{cam.snapshot_height || 360}px
                         </span>
                         <span className="cam-det-chip" style={{color:'#4b5563', fontSize:10}}>
                           Poll: {cam.poll_interval_sec || 30}s
                         </span>
+                        {cam.deployment_profile === 'lte_solar' && cam.bandwidth_budget_mb && (
+                          <span className="cam-det-chip" style={{
+                            color: (cam.bandwidth_used_mb || 0) >= cam.bandwidth_budget_mb * 0.9 ? '#ef4444' : '#6b7280',
+                            fontSize:10
+                          }}>
+                            BW: {cam.bandwidth_used_mb || 0}/{cam.bandwidth_budget_mb} MB
+                          </span>
+                        )}
                         {(cam.snapshot_width || 640) <= 640 && (
                           <span className="cam-det-chip" style={{color:'#f59e0b', fontSize:10, background:'rgba(245,158,11,.08)', border:'1px solid rgba(245,158,11,.2)'}}>
-                            Low resolution — plate reads may be inaccurate
+                            Low resolution
                           </span>
                         )}
                       </div>
@@ -2976,6 +2996,7 @@ function OperatorActivityPage({ violations, lots }) {
                           <strong style={{textTransform:'capitalize'}}>{displayColor(v.vehicle_color) || 'Unknown'} {v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : ''}</strong>
                         </span>
                       )}
+                      {v.vehicle_make && <span className="job-tag" style={{color:'#8b5cf6'}}><strong style={{textTransform:'capitalize'}}>{[v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</strong></span>}
                       {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                       <span className="time-ago">{timeAgo(v.resolved_at || v.detected_at)}</span>
                     </div>
