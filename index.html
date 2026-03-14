@@ -1317,13 +1317,35 @@ function LoginPage({ onLogin }) {
         apiFetch('/owners').catch(() => []),
         apiFetch('/partners').catch(() => []),
       ]);
-      // Prefer last match — most recently created account is typically the active one
+      // Find matching accounts — if duplicates exist, check which has lots assigned
       const ownerMatches = owners.filter(o => o.email?.toLowerCase() === needle);
-      const ownerMatch = ownerMatches.length > 0 ? ownerMatches[ownerMatches.length - 1] : null;
-      if (ownerMatch) { onLogin({ ...ownerMatch, _role: 'owner' }); return; }
+      if (ownerMatches.length > 0) {
+        let ownerMatch = ownerMatches[ownerMatches.length - 1]; // default to last
+        if (ownerMatches.length > 1) {
+          // Check which owner actually has lots
+          const lotsChecks = await Promise.all(ownerMatches.map(o =>
+            apiFetch(`/lots?owner_id=${o.id}`).then(l => l.length).catch(() => 0)
+          ));
+          const withLots = ownerMatches.findIndex((_, i) => lotsChecks[i] > 0);
+          if (withLots >= 0) ownerMatch = ownerMatches[withLots];
+        }
+        onLogin({ ...ownerMatch, _role: 'owner' }); return;
+      }
       const partnerMatches = partners.filter(p => p.email?.toLowerCase() === needle);
-      const partnerMatch = partnerMatches.length > 0 ? partnerMatches[partnerMatches.length - 1] : null;
-      if (partnerMatch) { onLogin({ ...partnerMatch, _role: 'partner', business_name: partnerMatch.company_name }); return; }
+      if (partnerMatches.length > 0) {
+        let partnerMatch = partnerMatches[partnerMatches.length - 1]; // default to last
+        if (partnerMatches.length > 1) {
+          // Check which partner actually has lots assigned
+          const lotsChecks = await Promise.all(partnerMatches.map(p =>
+            apiFetch(`/lots?market_id=${p.market_id}`).then(lots =>
+              lots.filter(l => String(l.partner_id) === String(p.id)).length
+            ).catch(() => 0)
+          ));
+          const withLots = partnerMatches.findIndex((_, i) => lotsChecks[i] > 0);
+          if (withLots >= 0) partnerMatch = partnerMatches[withLots];
+        }
+        onLogin({ ...partnerMatch, _role: 'partner', business_name: partnerMatch.company_name }); return;
+      }
       setError("No account found for that email. Contact your LotLogic rep if you think this is wrong.");
     } catch {
       setError("Can't connect right now. Check your connection and try again.");
@@ -2991,7 +3013,7 @@ function App() {
   const pending = violations.filter(v => v.status === 'pending').length;
 
   // Role-based navigation:
-  // Operators: Jobs + Activity + Account
+  // Operators: Jobs + Lots (assigned) + Activity + Earnings + Account
   // Owners: Jobs + Lots + Earnings + Account
   const navIcons = { jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, activity: NavIconActivity, account: NavIconAccount };
   const tabs = isOwner ? [
@@ -3001,6 +3023,7 @@ function App() {
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
+    { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'activity', label: 'Activity', badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
@@ -3026,7 +3049,7 @@ function App() {
 
       <div className="page-content">
         {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} />}
-        {tab === 'lots' && isOwner && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
+        {tab === 'lots' && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
         {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} />}
         {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
         {tab === 'account' && <AccountPage user={owner} onLogout={logout} />}
