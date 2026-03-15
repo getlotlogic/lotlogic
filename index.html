@@ -12,6 +12,58 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { -webkit-text-size-adjust: 100%; }
+    :root {
+      --bg-primary: #0c0e14;
+      --bg-card: #13151d;
+      --bg-inset: #080a0f;
+      --bg-elevated: #1a1d2e;
+      --border: #1e2235;
+      --border-subtle: #1a1d2e;
+      --text-primary: #f3f4f6;
+      --text-secondary: #e8eaf0;
+      --text-muted: #6b7280;
+      --text-faint: #4b5563;
+      --text-ghost: #374151;
+      --text-dim: #2a2d3a;
+      --accent: #3b82f6;
+      --accent-dark: #2563eb;
+      --green: #4ade80;
+      --red: #ef4444;
+      --yellow: #fbbf24;
+      --purple: #a78bfa;
+      --unknown-pattern: repeating-conic-gradient(#4b5563 0% 25%, #374151 0% 50%) 50%/4px 4px;
+      --unknown-border: rgba(255,255,255,.08);
+      --snapshot-bg: #080a0f;
+      --earnings-gradient: linear-gradient(135deg, #13151d 0%, #1a1410 100%);
+      --earnings-border: #2a1e10;
+      --revenue-bg: #0a1a0a;
+    }
+    .theme-light {
+      --bg-primary: #f8f9fb;
+      --bg-card: #fff;
+      --bg-inset: #f3f4f6;
+      --bg-elevated: #fff;
+      --border: #e5e7eb;
+      --border-subtle: #e5e7eb;
+      --text-primary: #1a1a2e;
+      --text-secondary: #1a1a2e;
+      --text-muted: #6b7280;
+      --text-faint: #6b7280;
+      --text-ghost: #9ca3af;
+      --text-dim: #c0c4cc;
+      --accent: #2563eb;
+      --accent-dark: #1d4ed8;
+      --green: #16a34a;
+      --red: #dc2626;
+      --yellow: #d97706;
+      --purple: #7c3aed;
+      --unknown-pattern: repeating-conic-gradient(#d1d5db 0% 25%, #e5e7eb 0% 50%) 50%/4px 4px;
+      --unknown-border: rgba(0,0,0,.1);
+      --snapshot-bg: #e5e7eb;
+      --earnings-gradient: linear-gradient(135deg, #fff 0%, #fef9f0 100%);
+      --earnings-border: #e5e7eb;
+      --revenue-bg: #f0fdf4;
+    }
     body {
       font-family: 'Inter', -apple-system, sans-serif;
       background: #0c0e14;
@@ -27,7 +79,7 @@
       align-items: center;
       justify-content: center;
       padding: 32px 24px;
-      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(59,130,246,.12) 0%, transparent 70%), #0c0e14;
+      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(59,130,246,.08) 0%, transparent 70%), var(--bg-primary);
     }
     .login-box { width: 100%; max-width: 360px; }
     .login-logo {
@@ -426,8 +478,8 @@
 
     /* ── Earnings ── */
     .earnings-hero {
-      background: linear-gradient(135deg, #13151d 0%, #1a1410 100%);
-      border: 1px solid #2a1e10;
+      background: var(--earnings-gradient);
+      border: 1px solid var(--earnings-border);
       border-radius: 16px;
       padding: 24px 20px;
       margin-bottom: 16px;
@@ -1144,7 +1196,7 @@
     .theme-light .search-icon { color: #9ca3af; }
 
     /* Earnings hero */
-    .theme-light .earnings-hero { background: linear-gradient(135deg, #fff 0%, #fef9f0 100%); border-color: #e5e7eb; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    .theme-light .earnings-hero { box-shadow: 0 1px 4px rgba(0,0,0,.06); }
 
     /* Bar chart */
     .theme-light .bar-chart-track { background: #f3f4f6; border-color: #e5e7eb; }
@@ -1205,6 +1257,73 @@
 
     /* Data source badge */
     .theme-light .data-source-badge { background: rgba(74,222,128,.06); color: #16a34a; border-color: rgba(74,222,128,.15); }
+
+    /* Login on light theme */
+    .theme-light .login-page { background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(37,99,235,.06) 0%, transparent 70%), #f8f9fb; }
+    .theme-light .login-wordmark { color: #1a1a2e; }
+    .theme-light .login-shield { box-shadow: 0 4px 16px rgba(37,99,235,.2); }
+    .theme-light .field-input { background: #fff; border-color: #e5e7eb; color: #1a1a2e; }
+    .theme-light .field-input::placeholder { color: #c0c4cc; }
+    .theme-light .field-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+    .theme-light .field-label { color: #6b7280; }
+    .theme-light .login-btn { background: linear-gradient(135deg, #2563eb, #1d4ed8); box-shadow: 0 4px 20px rgba(37,99,235,.2); }
+    .theme-light .login-error { background: rgba(220,38,38,.06); border-color: rgba(220,38,38,.2); color: #dc2626; }
+
+    /* KPI values on light theme — use darker, more readable colors */
+    .theme-light .kpi-val.blue { color: #2563eb; }
+    .theme-light .kpi-val.green { color: #16a34a; }
+    .theme-light .kpi-val.red { color: #dc2626; }
+    .theme-light .kpi-val.yellow { color: #d97706; }
+    .theme-light .kpi-val { color: #1a1a2e; }
+
+    /* Plate tags on light theme */
+    .theme-light .plate-tag { background: #fef9ee; color: #92400e; border-color: #f59e0b; }
+    .theme-light .plate-tag.no-plate { background: rgba(220,38,38,.06); border-color: rgba(220,38,38,.2); color: #dc2626; }
+
+    /* Action buttons on light theme — bolder backgrounds */
+    .theme-light .action-btn.boot { background: rgba(245,158,11,.08); border-color: rgba(245,158,11,.4); color: #d97706; }
+    .theme-light .action-btn.boot:hover:not(:disabled) { background: rgba(245,158,11,.15); }
+    .theme-light .action-btn.tow { background: rgba(220,38,38,.06); border-color: rgba(220,38,38,.3); color: #dc2626; }
+    .theme-light .action-btn.tow:hover:not(:disabled) { background: rgba(220,38,38,.12); }
+    .theme-light .action-btn.dismiss { background: rgba(124,58,237,.06); border-color: rgba(124,58,237,.3); color: #7c3aed; }
+    .theme-light .action-btn.dismiss:hover:not(:disabled) { background: rgba(124,58,237,.12); }
+    .theme-light .action-btn.gone { background: rgba(107,114,128,.06); border-color: rgba(107,114,128,.3); color: #6b7280; }
+    .theme-light .action-btn.gone:hover:not(:disabled) { background: rgba(107,114,128,.12); }
+
+    /* Timer / badge colors on light theme */
+    .theme-light .job-timer-val { color: #2563eb; }
+    .theme-light .job-timer-val.long { color: #dc2626; }
+    .theme-light .lot-num-val.red { color: #dc2626; }
+    .theme-light .lot-num-val.green { color: #16a34a; }
+    .theme-light .lot-status-dot.warn { background: #2563eb; }
+
+    /* Urgent card on light theme */
+    .theme-light .job-card.urgent { border-color: rgba(220,38,38,.3); box-shadow: 0 2px 12px rgba(220,38,38,.08); }
+
+    /* Violation type tags on light theme */
+    .theme-light .job-type-tag.unauthorized { background: rgba(37,99,235,.06); color: #2563eb; border-color: rgba(37,99,235,.2); }
+    .theme-light .job-type-tag.overtime { background: rgba(124,58,237,.06); color: #7c3aed; border-color: rgba(124,58,237,.2); }
+    .theme-light .job-type-tag.default { background: #f3f4f6; color: #6b7280; border-color: #e5e7eb; }
+
+    /* Breakdown amounts */
+    .theme-light .breakdown-amt { color: #2563eb; }
+
+    /* Revenue earned badge on completed jobs */
+    .theme-light .job-action { color: #16a34a; }
+
+    /* Earnings amount */
+    .theme-light .earnings-amount span { color: #2563eb; }
+
+    /* Connection indicator */
+    .theme-light .conn-indicator.online { color: #16a34a; }
+    .theme-light .conn-dot.on { background: #16a34a; box-shadow: 0 0 6px rgba(22,163,74,.3); }
+
+    /* Confidence bar */
+    .theme-light .conf-bar { background: #e5e7eb; }
+
+    /* Trend colors */
+    .theme-light .trend.up { color: #16a34a; }
+    .theme-light .trend.down { color: #dc2626; }
   </style>
 </head>
 <body>
@@ -1654,21 +1773,21 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
               onClick={() => setZoomed(true)} />
           ) : null}
           {(imgLoading && violation.snapshot_id) && (
-            <div style={{width:'100%', aspectRatio:'16/9', background:'#080a0f', display:'flex', alignItems:'center', justifyContent:'center'}}>
+            <div style={{width:'100%', aspectRatio:'16/9', background:'var(--snapshot-bg)', display:'flex', alignItems:'center', justifyContent:'center'}}>
               <div className="spin" style={{marginRight:8}} />
-              <span style={{color:'#374151', fontSize:13}}>Loading snapshot</span>
+              <span style={{color:'var(--text-ghost)', fontSize:13}}>Loading snapshot</span>
             </div>
           )}
           {!violation.snapshot_id && (
-            <div style={{width:'100%', aspectRatio:'16/9', background:'#0d0f17', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M3 16l4-4 4 4 4-4 5 5"/></svg>
-              <span style={{color:'#4b5563', fontSize:12, fontWeight:500}}>No photo available</span>
+            <div style={{width:'100%', aspectRatio:'16/9', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-ghost)" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M3 16l4-4 4 4 4-4 5 5"/></svg>
+              <span style={{color:'var(--text-faint)', fontSize:12, fontWeight:500}}>No photo available</span>
             </div>
           )}
           {(!imgLoading && !snapshotUrl && violation.snapshot_id) && (
-            <div style={{width:'100%', aspectRatio:'16/9', background:'#0d0f17', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#4b5563" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
-              <span style={{color:'#4b5563', fontSize:12, fontWeight:500}}>Photo failed to load</span>
+            <div style={{width:'100%', aspectRatio:'16/9', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
+              <span style={{color:'var(--text-faint)', fontSize:12, fontWeight:500}}>Photo failed to load</span>
             </div>
           )}
           {/* Detection confidence bar overlay */}
@@ -1678,7 +1797,7 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
               <div className="conf-bar" style={{width:50}}>
                 <div className="conf-bar-fill" style={{width: `${Math.round(parseFloat(violation.confidence) * 100)}%`, background: parseFloat(violation.confidence) > 0.8 ? '#4ade80' : parseFloat(violation.confidence) > 0.5 ? '#fbbf24' : '#ef4444'}} />
               </div>
-              <span style={{fontSize:10, fontWeight:700, color:'#9ca3af'}}>{Math.round(parseFloat(violation.confidence) * 100)}%</span>
+              <span style={{fontSize:10, fontWeight:700, color:'var(--text-ghost)'}}>{Math.round(parseFloat(violation.confidence) * 100)}%</span>
             </div>
           )}
           {/* Time ago badge */}
@@ -1695,13 +1814,13 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
           <div className="viol-modal-grid">
             <div className="viol-modal-stat">
               <div className="viol-modal-stat-label">Status</div>
-              <div className="viol-modal-stat-val" style={{color: isPending ? '#fbbf24' : '#4ade80'}}>
+              <div className="viol-modal-stat-val" style={{color: isPending ? 'var(--yellow)' : 'var(--green)'}}>
                 {isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
               </div>
             </div>
             <div className="viol-modal-stat">
               <div className="viol-modal-stat-label">Wait Time</div>
-              <div className="viol-modal-stat-val" style={{color: timer?.long ? '#ef4444' : '#3b82f6'}}>
+              <div className="viol-modal-stat-val" style={{color: timer?.long ? 'var(--red)' : 'var(--accent)'}}>
                 {timer ? `${timer.val} ${timer.unit}` : '—'}
               </div>
             </div>
@@ -1718,7 +1837,7 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
                 </div>
               ) : (
                 <div style={{display:'flex', alignItems:'center', gap:8}}>
-                  <div className="viol-modal-stat-val" style={{color:'#6b7280', display:'flex', alignItems:'center', gap:5, flex:'none'}}>
+                  <div className="viol-modal-stat-val" style={{color:'var(--text-muted)', display:'flex', alignItems:'center', gap:5, flex:'none'}}>
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#6b7280" strokeWidth="1.5"/><line x1="4" y1="4" x2="12" y2="12" stroke="#6b7280" strokeWidth="1.5"/></svg>
                     Not captured
                   </div>
@@ -1730,8 +1849,8 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
                       onChange={e => setManualPlate(e.target.value.toUpperCase())}
                       maxLength={10}
                       style={{
-                        background:'#13151d', border:'1px solid #1e2235', borderRadius:6, padding:'5px 8px',
-                        fontSize:12, color:'#e8eaf0', fontFamily:'Courier New, monospace', letterSpacing:'.1em',
+                        background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:6, padding:'5px 8px',
+                        fontSize:12, color:'var(--text-secondary)', fontFamily:'Courier New, monospace', letterSpacing:'.1em',
                         width:110, outline:'none',
                       }}
                       onFocus={e => { e.target.style.borderColor = '#3b82f6'; }}
@@ -1774,13 +1893,13 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
                 {displayColor(violation.vehicle_color) ? (
                   <span style={{width:12, height:12, borderRadius:4, background:colorHex(violation.vehicle_color), border:'1.5px solid rgba(255,255,255,.2)', flexShrink:0}} />
                 ) : (
-                  <span style={{width:12, height:12, borderRadius:4, background:'repeating-conic-gradient(#4b5563 0% 25%, #374151 0% 50%) 50%/6px 6px', border:'1.5px solid rgba(255,255,255,.1)', flexShrink:0}} title="Color not detected" />
+                  <span style={{width:12, height:12, borderRadius:4, background:'var(--unknown-pattern)', border:'1.5px solid var(--unknown-border)', flexShrink:0}} title="Color not detected" />
                 )}
                 {displayColor(violation.vehicle_color)
                   ? [violation.vehicle_color, violation.vehicle_type !== 'car' ? violation.vehicle_type : null].filter(Boolean).join(' ')
                   : (violation.vehicle_type && violation.vehicle_type !== 'car' ? violation.vehicle_type : 'Unknown')}
                 {isLowConfColor(violation.vehicle_color) && (
-                  <span style={{fontSize:9, color:'#6b7280', fontWeight:600, textTransform:'uppercase', letterSpacing:'.05em'}}>low conf</span>
+                  <span style={{fontSize:9, color:'var(--text-muted)', fontWeight:600, textTransform:'uppercase', letterSpacing:'.05em'}}>low conf</span>
                 )}
               </div>
             </div>
@@ -1793,7 +1912,7 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
             {violation.our_revenue > 0 && (
               <div className="viol-modal-stat">
                 <div className="viol-modal-stat-label">Revenue</div>
-                <div className="viol-modal-stat-val" style={{color:'#4ade80'}}>{fmtMoney(violation.our_revenue)}</div>
+                <div className="viol-modal-stat-val" style={{color:'var(--green)'}}>{fmtMoney(violation.our_revenue)}</div>
               </div>
             )}
             {violation.confidence && (() => {
@@ -1815,15 +1934,15 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
 
           {/* SMS notification status */}
           {violation.sms_sent_at && (
-            <div style={{background:'#0c0e14', border:'1px solid #1e2235', borderRadius:10, padding:'10px 12px', marginBottom:14, display:'flex', alignItems:'center', gap:8}}>
+            <div style={{background:'var(--bg-inset)', border:'1px solid var(--border)', borderRadius:10, padding:'10px 12px', marginBottom:14, display:'flex', alignItems:'center', gap:8}}>
               <span style={{fontSize:14}}>
                 {violation.sms_delivered ? '✓' : '○'}
               </span>
               <div>
-                <div style={{fontSize:12, fontWeight:600, color: violation.sms_delivered ? '#4ade80' : '#fbbf24'}}>
+                <div style={{fontSize:12, fontWeight:600, color: violation.sms_delivered ? 'var(--green)' : 'var(--yellow)'}}>
                   SMS {violation.sms_delivered ? 'Delivered' : 'Sent'}
                 </div>
-                <div style={{fontSize:11, color:'#4b5563'}}>{timeAgo(violation.sms_sent_at)}</div>
+                <div style={{fontSize:11, color:'var(--text-faint)'}}>{timeAgo(violation.sms_sent_at)}</div>
               </div>
             </div>
           )}
@@ -2228,7 +2347,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                     <div className="job-lot-name">{lot?.name || 'Unknown Lot'}</div>
                     <div className="job-lot-addr">{lot?.address || ''}</div>
                     {v.sms_sent_at && (
-                      <div style={{display:'inline-flex', alignItems:'center', gap:4, marginTop:4, fontSize:10, fontWeight:600, color: v.sms_delivered ? '#4ade80' : '#fbbf24', background: v.sms_delivered ? 'rgba(74,222,128,.08)' : 'rgba(251,191,36,.08)', border:`1px solid ${v.sms_delivered ? 'rgba(74,222,128,.2)' : 'rgba(251,191,36,.2)'}`, padding:'2px 7px', borderRadius:4}}>
+                      <div style={{display:'inline-flex', alignItems:'center', gap:4, marginTop:4, fontSize:10, fontWeight:600, color: v.sms_delivered ? 'var(--green)' : 'var(--yellow)', background: v.sms_delivered ? 'rgba(74,222,128,.08)' : 'rgba(251,191,36,.08)', border:`1px solid ${v.sms_delivered ? 'rgba(74,222,128,.2)' : 'rgba(251,191,36,.2)'}`, padding:'2px 7px', borderRadius:4}}>
                         {v.sms_delivered ? '✓ SMS Delivered' : '○ SMS Sent'} · {timeAgo(v.sms_sent_at)}
                       </div>
                     )}
@@ -2241,7 +2360,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   )}
                 </div>
                 {v._snapshot_url && (
-                  <img src={v._snapshot_url} alt="" style={{width:'100%', borderRadius:8, marginTop:8, maxHeight:160, objectFit:'cover', background:'#080a0f'}} loading="lazy" />
+                  <img src={v._snapshot_url} alt="" style={{width:'100%', borderRadius:8, marginTop:8, maxHeight:160, objectFit:'cover', background:'var(--snapshot-bg)'}} loading="lazy" />
                 )}
                 <div className="job-details">
                   {v.plate_text ? (
@@ -2265,13 +2384,13 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                       <strong style={{textTransform:'capitalize'}}>{v.vehicle_color}</strong>
                     </span>
                   ) : (
-                    <span className="job-tag" style={{display:'flex', alignItems:'center', gap:4, color:'#4b5563'}}>
-                      <span style={{width:8, height:8, borderRadius:3, background:'repeating-conic-gradient(#4b5563 0% 25%, #374151 0% 50%) 50%/4px 4px', border:'1px solid rgba(255,255,255,.08)', flexShrink:0}} />
+                    <span className="job-tag" style={{display:'flex', alignItems:'center', gap:4, color:'var(--text-faint)'}}>
+                      <span style={{width:8, height:8, borderRadius:3, background:'var(--unknown-pattern)', border:'1px solid var(--unknown-border)', flexShrink:0}} />
                       <strong>Unknown</strong>
                     </span>
                   )}
                   {v.vehicle_type && v.vehicle_type !== 'car' && <span className="job-tag"><strong style={{textTransform:'capitalize'}}>{v.vehicle_type}</strong></span>}
-                  {v.vehicle_make && <span className="job-tag" style={{color:'#8b5cf6'}}><strong style={{textTransform:'capitalize'}}>{[v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</strong></span>}
+                  {v.vehicle_make && <span className="job-tag" style={{color:'var(--purple)'}}><strong style={{textTransform:'capitalize'}}>{[v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</strong></span>}
                   {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                   {v.space_number && <span className="job-tag">Space <strong>#{v.space_number}</strong></span>}
                   <span className="job-tag"><strong>{fmtTime(v.detected_at)}</strong></span>
@@ -2328,8 +2447,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                       <div className="job-lot-addr">{fmtDate(v.detected_at)} · {fmtTime(v.detected_at)}</div>
                     </div>
                     {v.our_revenue > 0 && (
-                      <div className="job-timer" style={{background:'#0a1a0a'}}>
-                        <div style={{fontSize:15, fontWeight:800, color:'#4ade80'}}>{fmtMoney(v.our_revenue)}</div>
+                      <div className="job-timer" style={{background:'var(--revenue-bg)'}}>
+                        <div style={{fontSize:15, fontWeight:800, color:'var(--green)'}}>{fmtMoney(v.our_revenue)}</div>
                         <div className="job-timer-label">earned</div>
                       </div>
                     )}
@@ -2693,7 +2812,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
             {feedLive ? 'LIVE' : feedStatus === 'offline' ? 'OFFLINE' : 'PAUSED'}
           </span>
           {lastFrameTime && (
-            <span style={{color:'#374151', fontSize:10, marginLeft:4}}>
+            <span style={{color:'var(--text-ghost)', fontSize:10, marginLeft:4}}>
               {lastFrameTime.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit'})}
             </span>
           )}
@@ -2719,7 +2838,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
             <span className="ze-toggle-label">Detections</span>
           </div>
           {detections.length > 0 && (
-            <span style={{fontSize:11, color:'#6b7280', fontWeight:600}}>
+            <span style={{fontSize:11, color:'var(--text-muted)', fontWeight:600}}>
               {vehicleCount}V · {personCount}P · {plateCount}LP
             </span>
           )}
@@ -2733,7 +2852,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
           {frameUrl ? (
             <img ref={imgRef} src={frameUrl} alt="Camera frame" draggable="false" />
           ) : (
-            <div style={{color:'#374151', fontSize:14}}>
+            <div style={{color:'var(--text-ghost)', fontSize:14}}>
               {feedStatus === 'loading' ? 'Loading frame…' : 'No frame available'}
             </div>
           )}
@@ -2878,7 +2997,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
                 <span className="ze-panel-label">Limit</span>
                 <input className="ze-panel-input" type="number" min="1" placeholder="Minutes"
                   value={selected.time_limit_minutes || ''} onChange={e => updateZoneProp(selectedIdx, 'time_limit_minutes', parseInt(e.target.value) || null)} />
-                <span style={{fontSize:12, color:'#6b7280'}}>min</span>
+                <span style={{fontSize:12, color:'var(--text-muted)'}}>min</span>
               </div>
             )}
             <div className="ze-panel-row" style={{marginTop:4}}>
@@ -2910,7 +3029,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
               </div>
             </div>
             {filteredDetections.length === 0 ? (
-              <div style={{padding:'12px 16px', fontSize:12, color:'#374151'}}>No {detectionTab} detected</div>
+              <div style={{padding:'12px 16px', fontSize:12, color:'var(--text-ghost)'}}>No {detectionTab} detected</div>
             ) : (
               filteredDetections.map(d => {
                 const isPerson = d.type === 'person' || d.type === 'pedestrian' || d.type === 'human';
@@ -2924,7 +3043,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
                         {isPerson ? (d.label || 'Person') : (
                           [d.color, d.vehicle_type, d.label].filter(Boolean).join(' ') || 'Vehicle'
                         )}
-                        {d.track_id && <span style={{fontSize:10, color:'#4b5563', marginLeft:4}}>#{d.track_id}</span>}
+                        {d.track_id && <span style={{fontSize:10, color:'var(--text-faint)', marginLeft:4}}>#{d.track_id}</span>}
                       </div>
                       <div className="ze-det-sub">
                         {d.zone_id ? `Zone ${d.zone_id}` : 'No zone'}
@@ -2982,8 +3101,8 @@ function AddCameraModal({ lotId, onClose, onAdded }) {
       <div className="viol-modal" style={{maxWidth:440, borderRadius:'20px 20px 0 0'}} onClick={e => e.stopPropagation()}>
         <div className="viol-modal-handle" />
         <div style={{padding:'20px 16px'}}>
-          <div style={{fontSize:18, fontWeight:800, color:'#f3f4f6', marginBottom:4}}>Add Camera</div>
-          <div style={{fontSize:13, color:'#4b5563', marginBottom:16}}>Connect a new camera to this lot</div>
+          <div style={{fontSize:18, fontWeight:800, color:'var(--text-primary)', marginBottom:4}}>Add Camera</div>
+          <div style={{fontSize:13, color:'var(--text-faint)', marginBottom:16}}>Connect a new camera to this lot</div>
           <form onSubmit={submit}>
             <label className="field-label">Camera Name *</label>
             <input className="field-input" value={name} onChange={e => setName(e.target.value)}
@@ -3063,7 +3182,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                   </div>
                   <div className="lot-num">
                     <div className="lot-num-val" style={{color: camsOn < camsTotal ? '#3b82f6' : '#4ade80'}}>
-                      {camsOn}<span style={{fontSize:14, color:'#4b5563'}}>/{camsTotal}</span>
+                      {camsOn}<span style={{fontSize:14, color:'var(--text-faint)'}}>/{camsTotal}</span>
                     </div>
                     <div className="lot-num-label">Cams online</div>
                   </div>
@@ -3179,7 +3298,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                             );
                           })()}
                           {snapVehicles === 0 && snapPeople === 0 && snapPlates === 0 && (
-                            <span className="cam-det-chip" style={{color:'#374151'}}>No detections</span>
+                            <span className="cam-det-chip" style={{color:'var(--text-ghost)'}}>No detections</span>
                           )}
                           {cam.zones && cam.zones.length > 0 && (
                             <span className="cam-det-chip">{cam.zones.length} zone{cam.zones.length > 1 ? 's' : ''}</span>
@@ -3198,10 +3317,10 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                         }}>
                           {cam.deployment_profile === 'lte_solar' ? 'LTE + Solar' : 'Wired'}
                         </span>
-                        <span className="cam-det-chip" style={{color:'#4b5563', fontSize:10}}>
+                        <span className="cam-det-chip" style={{color:'var(--text-faint)', fontSize:10}}>
                           {cam.snapshot_width || 640}x{cam.snapshot_height || 360}px
                         </span>
-                        <span className="cam-det-chip" style={{color:'#4b5563', fontSize:10}}>
+                        <span className="cam-det-chip" style={{color:'var(--text-faint)', fontSize:10}}>
                           Poll: {cam.poll_interval_sec || 30}s
                         </span>
                         {cam.deployment_profile === 'lte_solar' && cam.bandwidth_budget_mb && (
@@ -3245,7 +3364,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                       )}
 
                       {cam.last_heartbeat && (
-                        <div style={{fontSize:10, color:'#374151', marginTop:4}}>
+                        <div style={{fontSize:10, color:'var(--text-ghost)', marginTop:4}}>
                           Last heartbeat: {fmtTime(cam.last_heartbeat)}
                           {cam.channel !== undefined && ` · Ch ${cam.channel}`}
                         </div>
@@ -3257,7 +3376,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
             )}
 
             {camsExpanded && (!state?.cameras || state.cameras.length === 0) && (
-              <div style={{padding:'14px 14px', borderTop:'1px solid #1e2130', fontSize:13, color:'#4b5563'}}>
+              <div style={{padding:'14px 14px', borderTop:'1px solid var(--border)', fontSize:13, color:'var(--text-faint)'}}>
                 No cameras set up for this lot yet.
                 {ownerRole === 'owner' && (
                   <button style={{background:'none', border:'none', color:'#3b82f6', fontWeight:600, fontSize:13, cursor:'pointer', fontFamily:'inherit', marginLeft:6}}
@@ -3422,7 +3541,7 @@ function EarningsPage({ violations, lots, isOwner }) {
                   <span style={{width:8, height:8, borderRadius:'50%', background: colors[action] || '#6b7280', flexShrink:0}} />
                   <span style={{fontSize:15, fontWeight:700, color:'#e5e7eb', textTransform:'capitalize'}}>{action.replace(/_/g, ' ')}</span>
                 </div>
-                <div style={{fontSize:15, fontWeight:700, color:'#6b7280'}}>{count}×</div>
+                <div style={{fontSize:15, fontWeight:700, color:'var(--text-muted)'}}>{count}×</div>
               </div>
             );
           })}
@@ -3439,7 +3558,7 @@ function EarningsPage({ violations, lots, isOwner }) {
               <div key={item.lot_id} className="breakdown-row">
                 <div>
                   <div style={{fontSize:14, fontWeight:600, color:'#d1d5db'}}>{lot?.name || item.lot_id?.slice(0,8)}</div>
-                  <div style={{fontSize:12, color:'#4b5563'}}>{item.actions} action{item.actions !== 1 ? 's' : ''}</div>
+                  <div style={{fontSize:12, color:'var(--text-faint)'}}>{item.actions} action{item.actions !== 1 ? 's' : ''}</div>
                 </div>
                 <div className="breakdown-amt">{fmtMoney(item.our_revenue_cents)}</div>
               </div>
@@ -3543,7 +3662,7 @@ function OperatorActivityPage({ violations, lots }) {
       ) : (
         dateGroups.map(([dateLabel, items]) => (
           <div key={dateLabel}>
-            <div style={{fontSize:12, fontWeight:700, color:'#4b5563', marginBottom:8, marginTop:16, textTransform:'uppercase', letterSpacing:'.06em'}}>
+            <div style={{fontSize:12, fontWeight:700, color:'var(--text-faint)', marginBottom:8, marginTop:16, textTransform:'uppercase', letterSpacing:'.06em'}}>
               {dateLabel}
             </div>
             {items.map(v => {
@@ -3554,8 +3673,8 @@ function OperatorActivityPage({ violations, lots }) {
                   <div className="job-body" style={{padding:'12px 16px'}}>
                     <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8}}>
                       <div>
-                        <div style={{fontSize:14, fontWeight:700, color:'#f3f4f6'}}>{lot?.name || 'Unknown Lot'}</div>
-                        <div style={{fontSize:12, color:'#4b5563'}}>{fmtTime(v.resolved_at || v.detected_at)}</div>
+                        <div style={{fontSize:14, fontWeight:700, color:'var(--text-primary)'}}>{lot?.name || 'Unknown Lot'}</div>
+                        <div style={{fontSize:12, color:'var(--text-faint)'}}>{fmtTime(v.resolved_at || v.detected_at)}</div>
                       </div>
                       <span style={{padding:'4px 10px', borderRadius:20, fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'.04em', color:col, background:col + '15', border:`1px solid ${col}33`}}>
                         {(v.action_taken || 'handled').replace(/_/g, ' ')}
@@ -3573,12 +3692,12 @@ function OperatorActivityPage({ violations, lots }) {
                           {displayColor(v.vehicle_color) ? (
                             <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(255,255,255,.15)', flexShrink:0}} />
                           ) : (
-                            <span style={{width:8, height:8, borderRadius:3, background:'repeating-conic-gradient(#4b5563 0% 25%, #374151 0% 50%) 50%/4px 4px', border:'1px solid rgba(255,255,255,.08)', flexShrink:0}} />
+                            <span style={{width:8, height:8, borderRadius:3, background:'var(--unknown-pattern)', border:'1px solid var(--unknown-border)', flexShrink:0}} />
                           )}
                           <strong style={{textTransform:'capitalize'}}>{displayColor(v.vehicle_color) || 'Unknown'} {v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : ''}</strong>
                         </span>
                       )}
-                      {v.vehicle_make && <span className="job-tag" style={{color:'#8b5cf6'}}><strong style={{textTransform:'capitalize'}}>{[v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</strong></span>}
+                      {v.vehicle_make && <span className="job-tag" style={{color:'var(--purple)'}}><strong style={{textTransform:'capitalize'}}>{[v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</strong></span>}
                       {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                       <span className="time-ago">{timeAgo(v.resolved_at || v.detected_at)}</span>
                     </div>
@@ -3603,8 +3722,8 @@ function AccountPage({ user, onLogout }) {
         <div style={{width:64, height:64, borderRadius:16, background:'linear-gradient(135deg, #3b82f6, #2563eb)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22, fontWeight:800, color:'#fff'}}>
           {(user.contact_name || user.business_name || 'U').charAt(0).toUpperCase()}
         </div>
-        <div style={{fontSize:20, fontWeight:800, color:'#f3f4f6'}}>{user.contact_name || user.business_name}</div>
-        <div style={{fontSize:13, color:'#4b5563', marginTop:2}}>{user.email}</div>
+        <div style={{fontSize:20, fontWeight:800, color:'var(--text-primary)'}}>{user.contact_name || user.business_name}</div>
+        <div style={{fontSize:13, color:'var(--text-faint)', marginTop:2}}>{user.email}</div>
         <div style={{marginTop:6}}>
           <span style={{fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, textTransform:'uppercase', letterSpacing:'.06em',
             background: isOwner ? 'rgba(59,130,246,.12)' : 'rgba(139,92,246,.12)',
@@ -3647,14 +3766,14 @@ function AccountPage({ user, onLogout }) {
             <div className="settings-row-label">Auto-refresh</div>
             <div className="settings-row-desc">Data refreshes every 30 seconds</div>
           </div>
-          <div className="settings-row-value" style={{color:'#4ade80'}}>Active</div>
+          <div className="settings-row-value" style={{color:'var(--green)'}}>Active</div>
         </div>
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">SMS Notifications</div>
             <div className="settings-row-desc">Violation alerts sent via SMS</div>
           </div>
-          <div className="settings-row-value" style={{color:'#4ade80'}}>Enabled</div>
+          <div className="settings-row-value" style={{color:'var(--green)'}}>Enabled</div>
         </div>
         <div className="settings-row">
           <div className="settings-row-info">
