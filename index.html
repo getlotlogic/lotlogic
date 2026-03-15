@@ -1924,13 +1924,25 @@ function LoginPage({ onLogin }) {
 }
 
 // ── Jobs tab (current violations) ─────────────────────────────
-function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
+function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, deepLinkViolationId }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
   const [selectedViol, setSelectedViol] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [acting, setActing] = useState(null);
   const [successAction, setSuccessAction] = useState(null);
   const { addToast } = useToast();
+
+  // Auto-select violation from SMS deep link
+  useEffect(() => {
+    if (deepLinkViolationId && violations.length && !selectedViol) {
+      const match = violations.find(v => v.id === deepLinkViolationId);
+      if (match) {
+        setSelectedViol(match);
+        // Clear URL path so refresh doesn't re-trigger
+        window.history.replaceState(null, '', '/');
+      }
+    }
+  }, [deepLinkViolationId, violations, selectedViol]);
 
   // Active jobs = pending violations, oldest first (most urgent first)
   const active = violations
@@ -3632,6 +3644,12 @@ function App() {
       return parsed;
     } catch { return null; }
   });
+  // Parse deep link from SMS: /violations/{id} → open jobs tab and highlight
+  const [deepLinkViolationId] = useState(() => {
+    const path = window.location.pathname || '';
+    const match = path.match(/\/violations\/([0-9a-f-]{36})/i);
+    return match ? match[1] : null;
+  });
   const [tab, setTab] = useState('jobs');
   const [lots, setLots] = useState([]);
   const [lotStates, setLotStates] = useState({});
@@ -3756,7 +3774,7 @@ function App() {
       </div>
 
       <div className="page-content">
-        {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} />}
+        {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} />}
         {tab === 'lots' && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
         {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} />}
         {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
