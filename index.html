@@ -1557,6 +1557,45 @@ const db = {
     }
     return apiFetch(`/lots/${lotId}/state`);
   },
+  // Shared: attach snapshot URL + detections to violation rows.
+  // If the violation's own snapshot has no storage_url, fall back to
+  // the latest snapshot from the same camera that does.
+  async _enrichViolations(data) {
+    const viols = data.map(v => {
+      const snap = v.snapshots;
+      const nv = normalizeViolation(v);
+      if (snap) {
+        nv._snapshot_url = snap.storage_url || null;
+        nv._detections = snap.raw_detections?.detections || [];
+      }
+      delete nv.snapshots;
+      return nv;
+    });
+    // Find violations missing snapshot URLs and batch-fetch from their cameras
+    const missing = viols.filter(v => !v._snapshot_url && v.camera_id);
+    if (missing.length > 0 && supabase) {
+      const camIds = [...new Set(missing.map(v => v.camera_id))];
+      const camSnaps = {};
+      await Promise.all(camIds.map(async cid => {
+        const { data: snaps } = await supabase
+          .from('snapshots')
+          .select('storage_url, raw_detections')
+          .eq('camera_id', cid)
+          .not('storage_url', 'is', null)
+          .order('captured_at', { ascending: false })
+          .limit(1);
+        if (snaps?.[0]) camSnaps[cid] = snaps[0];
+      }));
+      missing.forEach(v => {
+        const fallback = camSnaps[v.camera_id];
+        if (fallback) {
+          v._snapshot_url = fallback.storage_url;
+          if (!v._detections?.length) v._detections = fallback.raw_detections?.detections || [];
+        }
+      });
+    }
+    return viols;
+  },
   async getViolations(lotId) {
     if (supabase) {
       const { data, error } = await supabase
@@ -1565,16 +1604,7 @@ const db = {
         .eq('lot_id', lotId)
         .order('detected_at', { ascending: false })
         .limit(200);
-      if (!error && data) return data.map(v => {
-        const snap = v.snapshots;
-        const nv = normalizeViolation(v);
-        if (snap) {
-          nv._snapshot_url = snap.storage_url || null;
-          nv._detections = snap.raw_detections?.detections || [];
-        }
-        delete nv.snapshots;
-        return nv;
-      });
+      if (!error && data) return this._enrichViolations(data);
     }
     return apiFetch(`/violations?lot_id=${lotId}&page_size=200`);
   },
@@ -1586,16 +1616,7 @@ const db = {
         .eq('partner_id', partnerId)
         .order('detected_at', { ascending: false })
         .limit(500);
-      if (!error && data) return data.map(v => {
-        const snap = v.snapshots;
-        const nv = normalizeViolation(v);
-        if (snap) {
-          nv._snapshot_url = snap.storage_url || null;
-          nv._detections = snap.raw_detections?.detections || [];
-        }
-        delete nv.snapshots;
-        return nv;
-      });
+      if (!error && data) return this._enrichViolations(data);
     }
     return [];
   },
@@ -2166,7 +2187,9 @@ function ImageZoom({ src, alt, onClose }) {
 // detections: array of { class, bbox: [x1,y1,x2,y2] (normalized 0-1), conf }
 function ViolationSnapshot({ src, detections, style, onClick, maxHeight, borderRadius }) {
   const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
   if (!src) return null;
+  if (failed) return null;
   const dets = (detections || []).filter(d => d.bbox && d.bbox.length === 4);
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   return (
@@ -2175,6 +2198,7 @@ function ViolationSnapshot({ src, detections, style, onClick, maxHeight, borderR
         <img
           src={src} alt="Violation snapshot" loading="lazy"
           onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
           onClick={onClick}
           style={{width:'100%', display: loaded ? 'block' : 'none', maxHeight: maxHeight || 'none', objectFit:'cover', cursor: onClick ? 'zoom-in' : 'default'}}
         />
@@ -2406,7 +2430,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     try {
       const extra = {};
       // Pass partner fee schedule for revenue calculation on boot/tow
-      if ((action === 'boot' || action === 'tow') && user) {
+      // Only set partner_id if user is actually a partner (not an owner)
+      if ((action === 'boot' || action === 'tow') && user && user._role === 'partner') {
         extra._partner = { id: user.id, boot_fee: user.boot_fee, tow_fee: user.tow_fee, revenue_share: user.revenue_share };
       }
       const result = await db.recordAction(violId, action, extra);
