@@ -1931,12 +1931,12 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
     .filter(v => v.status === 'pending')
     .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at));
 
-  // Recent = resolved in last 24h
-  const cutoff = Date.now() - 86400000;
+  // Recent = resolved today (calendar day)
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  const todayCutoff = todayStart.getTime();
   const recent = violations
-    .filter(v => v.status !== 'pending' && new Date(v.resolved_at || v.detected_at) > cutoff)
-    .sort((a, b) => new Date(b.resolved_at || 0) - new Date(a.resolved_at || 0))
-    .slice(0, 20);
+    .filter(v => v.status !== 'pending' && new Date(v.resolved_at || v.detected_at).getTime() >= todayCutoff)
+    .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
 
   // KPIs
   const avgWaitMins = active.length > 0
@@ -1983,6 +1983,12 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
   async function handleAction(violId, action) {
     setConfirm(null);
     setSelectedViol(null);
+    // Verify violation belongs to this user's lots before executing
+    const viol = violations.find(v => v.id === violId);
+    if (!viol || !lots.some(l => l.id === viol.lot_id)) {
+      addToast('Action denied: violation not in your lots', 'error');
+      return;
+    }
     setActing(violId);
     try {
       const result = await db.recordAction(violId, action);
@@ -3231,22 +3237,32 @@ function EarningsPage({ violations, lots, isOwner }) {
   // Compute stats from the already-filtered violations prop (scoped to this user's lots)
   const now = Date.now();
   const cutoffs = { week: now - 7 * 86400000, month: now - 30 * 86400000, all: 0 };
-  const resolved = violations.filter(v => {
-    if (!v.action_taken || v.status === 'pending') return false;
+  const periodViols = violations.filter(v => {
     const ts = new Date(v.resolved_at || v.detected_at).getTime();
     return ts >= cutoffs[period];
-  }).sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
+  });
+  const resolved = periodViols.filter(v => v.action_taken && v.status !== 'pending')
+    .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
 
   const totalOurs = resolved.reduce((s, v) => s + (v.our_revenue || 0), 0);
   const totalGross = resolved.reduce((s, v) => s + (v.gross_revenue || 0), 0);
-  const totalViolations = resolved.length;
-  const actionsExecuted = resolved.length;
+  const totalViolations = periodViols.length;
+  const actionsExecuted = resolved.filter(v => !['pending', 'plate_correction'].includes(v.action_taken)).length;
   const actionRate = totalViolations > 0 ? actionsExecuted / totalViolations : 0;
 
   // Action breakdown from local data
   const byAction = {};
   resolved.forEach(v => { if (v.action_taken && !['pending', 'plate_correction'].includes(v.action_taken)) byAction[v.action_taken] = (byAction[v.action_taken] || 0) + 1; });
   const actionEntries = Object.entries(byAction).filter(([k, v]) => v > 0 && k !== 'pending');
+
+  // Per-lot breakdown for owners
+  const byLot = {};
+  resolved.forEach(v => {
+    if (!byLot[v.lot_id]) byLot[v.lot_id] = { lot_id: v.lot_id, our_revenue_cents: 0, actions: 0 };
+    byLot[v.lot_id].our_revenue_cents += (v.our_revenue || 0);
+    byLot[v.lot_id].actions += 1;
+  });
+  const byLotEntries = Object.values(byLot).filter(e => e.actions > 0);
 
   // Daily earnings for bar chart (last 7 days)
   const dailyEarnings = [];
@@ -3347,10 +3363,10 @@ function EarningsPage({ violations, lots, isOwner }) {
       )}
 
       {/* Per-lot breakdown (owner only) */}
-      {isOwner && revSummary?.by_lot && revSummary.by_lot.length > 0 && (
+      {isOwner && byLotEntries.length > 0 && (
         <div className="earnings-breakdown" style={{marginBottom:16}}>
           <div className="breakdown-header">By Lot</div>
-          {revSummary.by_lot.map(item => {
+          {byLotEntries.map(item => {
             const lot = lotMap[item.lot_id];
             return (
               <div key={item.lot_id} className="breakdown-row">
@@ -3412,8 +3428,8 @@ function OperatorActivityPage({ violations, lots }) {
     .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
 
   // Stats
-  const today = Date.now() - 86400000;
-  const todayCount = completed.filter(v => new Date(v.resolved_at || v.detected_at) > today).length;
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  const todayCount = completed.filter(v => new Date(v.resolved_at || v.detected_at).getTime() >= todayStart.getTime()).length;
   const weekCount = completed.length;
 
   const actionColors = { boot: '#fbbf24', tow: '#f87171', dismissed: '#a78bfa', no_action: '#6b7280', already_gone: '#6b7280' };
@@ -3598,7 +3614,17 @@ function AccountPage({ user, onLogout }) {
 // ── Main App ──────────────────────────────────────────────────
 function App() {
   const [owner, setOwner] = useState(() => {
-    try { const s = localStorage.getItem('lotlogic_session'); return s ? JSON.parse(s) : null; } catch { return null; }
+    try {
+      const s = localStorage.getItem('lotlogic_session');
+      if (!s) return null;
+      const parsed = JSON.parse(s);
+      // Session expires after 7 days
+      if (parsed._ts && Date.now() - parsed._ts > 7 * 86400000) {
+        localStorage.removeItem('lotlogic_session');
+        return null;
+      }
+      return parsed;
+    } catch { return null; }
   });
   const [tab, setTab] = useState('jobs');
   const [lots, setLots] = useState([]);
@@ -3612,21 +3638,25 @@ function App() {
   const isOperator = owner?._role === 'partner';
 
   const realtimeRef = useRef(null);
+  const loadIdRef = useRef(0); // Guard against race conditions in concurrent loadData calls
 
   const loadData = useCallback(async (o, silent = false) => {
     if (!o) return;
+    const myId = ++loadIdRef.current; // Each call gets a unique ID
     if (!silent) setLoading(true);
     try {
       const filter = o._role === 'partner'
         ? { partner_id: o.id }
         : { owner_id: o.id };
       const lotsData = await db.getLots(filter);
+      if (loadIdRef.current !== myId) return; // Stale call, discard
       setLots(lotsData);
 
       const [states, violsArrays] = await Promise.all([
         Promise.all(lotsData.map(l => db.getLotState(l.id).then(s => [l.id, s]).catch(() => [l.id, null]))),
         Promise.all(lotsData.map(l => db.getViolations(l.id).catch(() => []))),
       ]);
+      if (loadIdRef.current !== myId) return; // Stale call, discard
 
       setLotStates(Object.fromEntries(states));
 
@@ -3643,17 +3673,19 @@ function App() {
   }, []);
 
   function login(o) {
-    setOwner(o);
-    try { localStorage.setItem('lotlogic_session', JSON.stringify(o)); } catch {}
-    loadData(o);
+    const session = { ...o, _ts: Date.now() };
+    setOwner(session);
+    try { localStorage.setItem('lotlogic_session', JSON.stringify(session)); } catch {}
+    loadData(session);
   }
 
   function logout() {
+    loadIdRef.current++; // Invalidate any in-flight loadData calls
     clearInterval(timerRef.current);
     if (realtimeRef.current) { supabase?.removeChannel(realtimeRef.current); realtimeRef.current = null; }
     setOwner(null); setLots([]); setLotStates({}); setViolations([]);
     setTab('jobs');
-    try { localStorage.removeItem('lotlogic_session'); } catch {}
+    try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
   }
 
   // Load data on mount if session was restored
