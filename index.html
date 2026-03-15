@@ -1762,8 +1762,9 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
   const violsWithColor = totalViols.filter(v => displayColor(v.vehicle_color));
   const colorDetRate = totalViols.length > 0 ? Math.round((violsWithColor.length / totalViols.length) * 100) : null;
   const violsWithType = totalViols.filter(v => v.vehicle_type && v.vehicle_type !== 'car');
+  // AI health: weight color detection higher since plates require Plate Recognizer API quota
   const aiHealthScore = totalViols.length > 0
-    ? Math.round(((plateReadRate || 0) * 0.5 + (colorDetRate || 0) * 0.3 + (violsWithType.length / totalViols.length * 100) * 0.2))
+    ? Math.round(((plateReadRate || 0) * 0.3 + (colorDetRate || 0) * 0.5 + (violsWithType.length / totalViols.length * 100) * 0.2))
     : null;
 
   const actionLabels = { boot: 'Boot', tow: 'Tow', dismissed: 'Dismiss', already_gone: 'Already Gone', no_action: 'No Action' };
@@ -1876,10 +1877,9 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
           <div>
             <div style={{fontSize:13, fontWeight:700, color:'#f59e0b', marginBottom:2}}>AI Detection Quality: {aiHealthScore}%</div>
             <div style={{fontSize:11, color:'#92400e', lineHeight:1.4}}>
-              {(plateReadRate || 0) < 30 && 'Plate reads are low — camera resolution may be too low (640px). '}
-              {(colorDetRate || 0) < 30 && 'Color detection is unreliable — YOLO nano model needs upgrading. '}
-              {violsWithType.length === 0 && 'No vehicle type differentiation — all classified as "car". '}
-              <span style={{color:'#b45309'}}>These require backend changes (model upgrade + camera resolution).</span>
+              {(plateReadRate || 0) < 30 && 'Plate reads unavailable — Plate Recognizer API quota exhausted (resets monthly). '}
+              {(colorDetRate || 0) < 30 && 'Color detection is low — may improve with higher resolution snapshots. '}
+              {violsWithType.length === 0 && 'Vehicle types show as "car" — finer classification (sedan/SUV/truck) requires active Plate Recognizer. '}
             </div>
           </div>
         </div>
