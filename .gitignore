@@ -1,0 +1,6 @@
+.env
+monitoring/.env
+monitoring/logs/
+monitoring/reports/
+__pycache__/
+*.pyc
