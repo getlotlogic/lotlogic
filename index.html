@@ -1425,13 +1425,6 @@ function normalizeViolation(v) {
   };
 }
 
-function normalizeSnapshotUrl(url) {
-  if (!url) return null;
-  if (url.startsWith('http')) return url;
-  // Relative path — build full Supabase Storage public URL
-  return `https://nzdkoouoaedbbccraoti.supabase.co/storage/v1/object/public/snapshots/${url.replace(/^\/+/, '')}`;
-}
-
 // ── Supabase data layer (with Rails API fallback) ─────────────
 // Real Supabase table names: lot_owners, enforcement_partners, lots, cameras,
 // violations, snapshots, camera_zones
@@ -1543,14 +1536,14 @@ const db = {
     if (supabase) {
       const { data, error } = await supabase
         .from('violations')
-        .select('*, snapshots:snapshot_id(url)')
+        .select('*, snapshots:snapshot_id(storage_url)')
         .eq('lot_id', lotId)
         .order('detected_at', { ascending: false })
         .limit(200);
       if (!error && data) return data.map(v => {
         const snap = v.snapshots;
         const nv = normalizeViolation(v);
-        if (snap) nv._snapshot_url = normalizeSnapshotUrl(snap.url);
+        if (snap) nv._snapshot_url = snap.storage_url || null;
         delete nv.snapshots;
         return nv;
       });
@@ -1561,14 +1554,14 @@ const db = {
     if (supabase) {
       const { data, error } = await supabase
         .from('violations')
-        .select('*, snapshots:snapshot_id(url)')
+        .select('*, snapshots:snapshot_id(storage_url)')
         .eq('partner_id', partnerId)
         .order('detected_at', { ascending: false })
         .limit(500);
       if (!error && data) return data.map(v => {
         const snap = v.snapshots;
         const nv = normalizeViolation(v);
-        if (snap) nv._snapshot_url = normalizeSnapshotUrl(snap.url);
+        if (snap) nv._snapshot_url = snap.storage_url || null;
         delete nv.snapshots;
         return nv;
       });
@@ -1615,28 +1608,13 @@ const db = {
     });
   },
   async getSnapshotUrl(snapshotId) {
-    // Try fetching the snapshot image as a blob with auth (most reliable)
-    try {
-      const r = await fetch(API + `/snapshots/${snapshotId}/image`, { headers: { 'X-API-Key': API_KEY } });
-      if (r.ok) {
-        const blob = await r.blob();
-        if (blob.size > 0) return { url: URL.createObjectURL(blob) };
-      }
-    } catch {}
-    // Fall back to URL from Supabase
     if (supabase) {
       const { data, error } = await supabase
         .from('snapshots')
-        .select('url')
+        .select('storage_url')
         .eq('id', snapshotId)
         .single();
-      if (!error && data?.url) {
-        // If it's a relative storage path, build the full public URL
-        if (data.url.startsWith('/') || !data.url.startsWith('http')) {
-          return { url: `https://nzdkoouoaedbbccraoti.supabase.co/storage/v1/object/public/snapshots/${data.url.replace(/^\/+/, '')}` };
-        }
-        return { url: data.url };
-      }
+      if (!error && data?.storage_url) return { url: data.storage_url };
     }
     return apiFetch(`/snapshots/${snapshotId}/url`);
   },
@@ -1880,7 +1858,6 @@ function ConfirmDialog({ title, body, confirmLabel, confirmColor, onConfirm, onC
 function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
   const [snapshotUrl, setSnapshotUrl] = useState(violation?._snapshot_url || null);
   const [imgLoading, setImgLoading] = useState(!violation?._snapshot_url);
-  const [triedBlob, setTriedBlob] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [manualPlate, setManualPlate] = useState('');
   const [savingPlate, setSavingPlate] = useState(false);
@@ -1892,15 +1869,6 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
       .then(data => { if (data?.url) setSnapshotUrl(data.url); else setImgLoading(false); })
       .catch(() => { setImgLoading(false); });
   }, [violation?.snapshot_id, snapshotUrl]);
-
-  // Fallback: if the direct URL fails to load, try fetching as blob with auth
-  const handleImgError = useCallback(() => {
-    if (triedBlob || !violation?.snapshot_id) { setImgLoading(false); setSnapshotUrl(null); return; }
-    setTriedBlob(true);
-    db.getSnapshotUrl(violation.snapshot_id)
-      .then(data => { if (data?.url) setSnapshotUrl(data.url); else { setImgLoading(false); setSnapshotUrl(null); } })
-      .catch(() => { setImgLoading(false); setSnapshotUrl(null); });
-  }, [violation?.snapshot_id, triedBlob]);
 
   if (!violation) return null;
   const timer = elapsed(violation.detected_at);
@@ -1914,7 +1882,7 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
           {snapshotUrl ? (
             <img className="viol-modal-img" src={snapshotUrl} alt="Violation snapshot"
               onLoad={() => setImgLoading(false)}
-              onError={handleImgError}
+              onError={() => { setImgLoading(false); setSnapshotUrl(null); }}
               style={{display: imgLoading ? 'none' : 'block', cursor:'zoom-in'}}
               onClick={() => setZoomed(true)} />
           ) : null}
@@ -2233,7 +2201,7 @@ function LoginPage({ onLogin }) {
 function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, deepLinkViolationId, user }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
   const [selectedViol, setSelectedViol] = useState(null);
-  const [confirm, setConfirm] = useState(null);
+
   const [acting, setActing] = useState(null);
   const actingRef = useRef(false); // Guard against double-tap race condition
 
@@ -2309,7 +2277,6 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     // Guard against double-tap: if already processing any action, bail out
     if (actingRef.current) return;
     actingRef.current = true;
-    setConfirm(null);
     setSelectedViol(null);
     // Verify violation belongs to this user's lots before executing
     const viol = violations.find(v => v.id === violId);
@@ -2340,15 +2307,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
 
   function requestAction(violId, action) {
     haptic(action === 'tow' ? 'heavy' : action === 'boot' ? 'medium' : 'light');
-    const bootFee = user?.boot_fee || 75;
-    const towFee = user?.tow_fee || 250;
-    if (action === 'tow') {
-      setConfirm({ violId, action, title: 'Confirm Tow', body: `This will record a tow for this vehicle. Tow fee: $${towFee}. Continue?`, color: '#ef4444' });
-    } else if (action === 'boot') {
-      setConfirm({ violId, action, title: 'Confirm Boot', body: `This will record a boot for this vehicle. Boot fee: $${bootFee}. Continue?`, color: '#fbbf24' });
-    } else {
-      handleAction(violId, action);
-    }
+    handleAction(violId, action);
   }
 
   const [search, setSearch] = useState('');
@@ -2631,18 +2590,6 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
           onClose={() => setSelectedViol(null)}
           onAction={(violId, action) => requestAction(violId, action)}
           isOwner={isOwner}
-        />
-      )}
-
-      {/* Confirm dialog */}
-      {confirm && (
-        <ConfirmDialog
-          title={confirm.title}
-          body={confirm.body}
-          confirmLabel={actionLabels[confirm.action]}
-          confirmColor={confirm.color}
-          onConfirm={() => handleAction(confirm.violId, confirm.action)}
-          onCancel={() => setConfirm(null)}
         />
       )}
 
