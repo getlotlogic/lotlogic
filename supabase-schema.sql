@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS lots (
   total_spaces INTEGER DEFAULT 0,
   lat DOUBLE PRECISION,
   lng DOUBLE PRECISION,
+  active BOOLEAN DEFAULT true,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -101,8 +102,8 @@ CREATE TABLE IF NOT EXISTS violations (
   zone_id TEXT,
   space_number TEXT,
   confidence DOUBLE PRECISION,
-  our_revenue INTEGER DEFAULT 0, -- cents
-  gross_revenue INTEGER DEFAULT 0, -- cents
+  our_revenue INTEGER DEFAULT 0, -- dollars (app multiplies by 100 for cents display)
+  gross_revenue INTEGER DEFAULT 0, -- dollars (app multiplies by 100 for cents display)
   sms_sent_at TIMESTAMPTZ,
   sms_delivered BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT now(),
@@ -157,6 +158,20 @@ ALTER TABLE lots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cameras ENABLE ROW LEVEL SECURITY;
 ALTER TABLE snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE violations ENABLE ROW LEVEL SECURITY;
+
+-- !! SECURITY WARNING !!
+-- These policies allow ANY anonymous user to read/write ALL data.
+-- This means any user with the Supabase anon key (exposed in client JS)
+-- can read every owner's violations, revenue, camera snapshots, etc.
+--
+-- TO FIX: Implement Supabase Auth, then replace these with scoped policies:
+--   - Owners see only lots WHERE owner_id = auth.uid()
+--   - Partners see only lots WHERE partner_id = auth.uid()
+--   - Violations/cameras/snapshots scoped through lot ownership chain
+--   - UPDATE on violations only allowed for lots the user owns/partners
+--
+-- Until then, the backend API (Rails) must enforce authorization on every
+-- request. The frontend also validates ownership before mutations.
 
 -- Allow public read for now (tighten later with Supabase Auth)
 CREATE POLICY "Public read owners" ON owners FOR SELECT USING (true);
