@@ -161,6 +161,7 @@ GROUP BY l.id, l.name;
 ALTER PUBLICATION supabase_realtime ADD TABLE violations;
 ALTER PUBLICATION supabase_realtime ADD TABLE cameras;
 ALTER PUBLICATION supabase_realtime ADD TABLE lots;
+ALTER PUBLICATION supabase_realtime ADD TABLE snapshots;
 
 -- ── Row Level Security (RLS) ─────────────────────────────────
 -- Enable RLS on all tables

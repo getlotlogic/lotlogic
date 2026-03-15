@@ -1532,7 +1532,7 @@ const db = {
           channel: cam.channel,
           active_violations: camViols,
           latest_snapshot: snap ? {
-            url: snap.storage_url || snap.url,
+            url: (snap.storage_url || snap.url) ? (snap.storage_url || snap.url) + (((snap.storage_url || snap.url).includes('?')) ? '&' : '?') + '_t=' + Date.now() : null,
             captured_at: snap.captured_at,
             vehicles_detected: snap.vehicles_detected || 0,
             people_detected: 0,
@@ -1810,6 +1810,14 @@ const db = {
         if (lotIds.includes(payload.new?.lot_id) || lotIds.includes(payload.old?.lot_id)) {
           callback(payload);
         }
+      })
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'snapshots',
+      }, payload => {
+        // New snapshot from any camera — trigger refresh so frame updates
+        callback(payload);
       })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
