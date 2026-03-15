@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS partners (
   company_name TEXT,
   phone TEXT,
   market_id TEXT,
+  boot_fee INTEGER DEFAULT 75,          -- dollars charged to vehicle owner for boot
+  tow_fee INTEGER DEFAULT 250,          -- dollars charged to vehicle owner for tow
+  revenue_share DOUBLE PRECISION DEFAULT 0.30, -- LotLogic's cut (0.30 = 30%)
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -86,6 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_captured ON snapshots(captured_at DESC)
 CREATE TABLE IF NOT EXISTS violations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   lot_id UUID REFERENCES lots(id) ON DELETE CASCADE,
+  partner_id UUID REFERENCES partners(id),
   camera_id UUID REFERENCES cameras(id),
   snapshot_id UUID REFERENCES snapshots(id),
   status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'resolved')),
@@ -111,26 +115,29 @@ CREATE TABLE IF NOT EXISTS violations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_violations_lot ON violations(lot_id);
+CREATE INDEX IF NOT EXISTS idx_violations_partner ON violations(partner_id);
 CREATE INDEX IF NOT EXISTS idx_violations_status ON violations(status);
 CREATE INDEX IF NOT EXISTS idx_violations_detected ON violations(detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_violations_plate ON violations(plate_text);
 
 -- ── Revenue summary view ─────────────────────────────────────
+-- Revenue is computed from partner fee schedule: gross = boot_fee or tow_fee,
+-- our_revenue = gross * partner.revenue_share (LotLogic's cut)
 CREATE OR REPLACE VIEW revenue_summary AS
 SELECT
-  lot_id,
+  v.lot_id,
   COUNT(*) AS total_violations,
-  COUNT(*) FILTER (WHERE action_taken IS NOT NULL AND action_taken != 'pending') AS actions_executed,
-  SUM(our_revenue) AS our_revenue_cents,
-  SUM(gross_revenue) AS gross_revenue_cents,
-  COUNT(*) FILTER (WHERE action_taken = 'boot') AS boots,
-  COUNT(*) FILTER (WHERE action_taken = 'tow') AS tows,
-  COUNT(*) FILTER (WHERE action_taken = 'dismissed') AS dismissed,
-  COUNT(*) FILTER (WHERE action_taken = 'already_gone') AS already_gone,
-  COUNT(*) FILTER (WHERE action_taken = 'no_action') AS no_action
-FROM violations
-WHERE status = 'resolved'
-GROUP BY lot_id;
+  COUNT(*) FILTER (WHERE v.action_taken IS NOT NULL AND v.action_taken != 'pending') AS actions_executed,
+  SUM(v.our_revenue) AS our_revenue_cents,
+  SUM(v.gross_revenue) AS gross_revenue_cents,
+  COUNT(*) FILTER (WHERE v.action_taken = 'boot') AS boots,
+  COUNT(*) FILTER (WHERE v.action_taken = 'tow') AS tows,
+  COUNT(*) FILTER (WHERE v.action_taken = 'dismissed') AS dismissed,
+  COUNT(*) FILTER (WHERE v.action_taken = 'already_gone') AS already_gone,
+  COUNT(*) FILTER (WHERE v.action_taken = 'no_action') AS no_action
+FROM violations v
+WHERE v.status = 'resolved'
+GROUP BY v.lot_id;
 
 -- ── Lot state view (live status) ─────────────────────────────
 CREATE OR REPLACE VIEW lot_state AS

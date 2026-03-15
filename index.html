@@ -1521,6 +1521,16 @@ const db = {
           updates.status = 'resolved';
           updates.resolved_at = new Date().toISOString();
         }
+        // Calculate revenue from partner fee schedule for boot/tow actions
+        if ((action === 'boot' || action === 'tow') && extra._partner) {
+          const p = extra._partner;
+          const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
+          const share = p.revenue_share != null ? p.revenue_share : 0.30;
+          updates.gross_revenue = grossFee;
+          updates.our_revenue = Math.round(grossFee * share);
+          updates.partner_id = p.id;
+          delete updates._partner;
+        }
         if (action === 'plate_correction') {
           const { error } = await supabase.from('violations').update({
             plate_text: extra.plate_text,
@@ -2082,7 +2092,7 @@ function LoginPage({ onLogin }) {
 }
 
 // ── Jobs tab (current violations) ─────────────────────────────
-function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, deepLinkViolationId }) {
+function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, deepLinkViolationId, user }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
   const [selectedViol, setSelectedViol] = useState(null);
   const [confirm, setConfirm] = useState(null);
@@ -2172,7 +2182,12 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     }
     setActing(violId);
     try {
-      const result = await db.recordAction(violId, action);
+      const extra = {};
+      // Pass partner fee schedule for revenue calculation on boot/tow
+      if ((action === 'boot' || action === 'tow') && user) {
+        extra._partner = { id: user.id, boot_fee: user.boot_fee, tow_fee: user.tow_fee, revenue_share: user.revenue_share };
+      }
+      const result = await db.recordAction(violId, action, extra);
       if (result && result.success !== false) {
         if (action === 'boot' || action === 'tow') {
           const viol = violations.find(v => v.id === violId);
@@ -2192,10 +2207,12 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
   }
 
   function requestAction(violId, action) {
+    const bootFee = user?.boot_fee || 75;
+    const towFee = user?.tow_fee || 250;
     if (action === 'tow') {
-      setConfirm({ violId, action, title: 'Confirm Tow', body: 'This will record a tow for this vehicle. The tow fee will be applied. Continue?', color: '#ef4444' });
+      setConfirm({ violId, action, title: 'Confirm Tow', body: `This will record a tow for this vehicle. Tow fee: $${towFee}. Continue?`, color: '#ef4444' });
     } else if (action === 'boot') {
-      setConfirm({ violId, action, title: 'Confirm Boot', body: 'This will record a boot for this vehicle. The boot fee will be applied. Continue?', color: '#fbbf24' });
+      setConfirm({ violId, action, title: 'Confirm Boot', body: `This will record a boot for this vehicle. Boot fee: $${bootFee}. Continue?`, color: '#fbbf24' });
     } else {
       handleAction(violId, action);
     }
@@ -3758,6 +3775,34 @@ function AccountPage({ user, onLogout }) {
         )}
       </div>
 
+      {/* Fee schedule — only for enforcement partners */}
+      {!isOwner && (
+        <div className="settings-section">
+          <div className="settings-section-title">Fee Schedule</div>
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">Boot Fee</div>
+              <div className="settings-row-desc">Charged to vehicle owner per boot</div>
+            </div>
+            <div className="settings-row-value" style={{color:'var(--green)'}}>${user.boot_fee || 75}</div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">Tow Fee</div>
+              <div className="settings-row-desc">Charged to vehicle owner per tow</div>
+            </div>
+            <div className="settings-row-value" style={{color:'var(--green)'}}>${user.tow_fee || 250}</div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">LotLogic Revenue Share</div>
+              <div className="settings-row-desc">Platform cut per enforcement action</div>
+            </div>
+            <div className="settings-row-value" style={{color:'var(--accent)'}}>{Math.round((user.revenue_share || 0.30) * 100)}%</div>
+          </div>
+        </div>
+      )}
+
       {/* App info */}
       <div className="settings-section">
         <div className="settings-section-title">App</div>
@@ -3786,7 +3831,7 @@ function AccountPage({ user, onLogout }) {
           <div className="settings-row-info">
             <div className="settings-row-label">Version</div>
           </div>
-          <div className="settings-row-value">3.0.0</div>
+          <div className="settings-row-value">3.1.0</div>
         </div>
       </div>
 
@@ -3956,7 +4001,7 @@ function App() {
       </div>
 
       <div className="page-content">
-        {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} />}
+        {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={owner} />}
         {tab === 'lots' && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
         {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} />}
         {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
