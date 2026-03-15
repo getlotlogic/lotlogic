@@ -643,34 +643,7 @@
     .confirm-cancel { background: var(--bg-inset); color: var(--text-muted); }
     .confirm-ok { color: #fff; }
 
-    /* ── Success overlay (boot/tow confirmation) ── */
-    .success-overlay {
-      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 260;
-      background: rgba(0,0,0,.75); backdrop-filter: blur(8px);
-      display: flex; align-items: center; justify-content: center; padding: 24px;
-      animation: successFadeIn .3s ease;
-    }
-    @keyframes successFadeIn { from { opacity: 0; } to { opacity: 1; } }
-    .success-box {
-      background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 20px; padding: 32px 28px;
-      max-width: 340px; width: 100%; text-align: center;
-      animation: successPop .4s cubic-bezier(.175,.885,.32,1.275);
-    }
-    @keyframes successPop { from { transform: scale(.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-    .success-icon {
-      width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 16px;
-      display: flex; align-items: center; justify-content: center; font-size: 32px;
-    }
-    .success-icon.boot { background: rgba(251,191,36,.15); }
-    .success-icon.tow { background: rgba(239,68,68,.15); }
-    .success-title { font-size: 20px; font-weight: 800; color: var(--text-primary); margin-bottom: 6px; }
-    .success-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.5; }
-    .success-done {
-      width: 100%; padding: 14px; border-radius: 12px; font-size: 15px; font-weight: 700;
-      cursor: pointer; font-family: inherit; border: none; background: #3b82f6; color: #fff;
-      transition: opacity .15s;
-    }
-    .success-done:active { opacity: .7; }
+
 
     /* ── Nav icons ── */
     .nav-icon { width: 20px; height: 20px; }
@@ -1452,6 +1425,13 @@ function normalizeViolation(v) {
   };
 }
 
+function normalizeSnapshotUrl(url) {
+  if (!url) return null;
+  if (url.startsWith('http')) return url;
+  // Relative path — build full Supabase Storage public URL
+  return `https://nzdkoouoaedbbccraoti.supabase.co/storage/v1/object/public/snapshots/${url.replace(/^\/+/, '')}`;
+}
+
 // ── Supabase data layer (with Rails API fallback) ─────────────
 // Real Supabase table names: lot_owners, enforcement_partners, lots, cameras,
 // violations, snapshots, camera_zones
@@ -1570,7 +1550,7 @@ const db = {
       if (!error && data) return data.map(v => {
         const snap = v.snapshots;
         const nv = normalizeViolation(v);
-        if (snap) nv._snapshot_url = snap.url;
+        if (snap) nv._snapshot_url = normalizeSnapshotUrl(snap.url);
         delete nv.snapshots;
         return nv;
       });
@@ -1588,7 +1568,7 @@ const db = {
       if (!error && data) return data.map(v => {
         const snap = v.snapshots;
         const nv = normalizeViolation(v);
-        if (snap) nv._snapshot_url = snap.url;
+        if (snap) nv._snapshot_url = normalizeSnapshotUrl(snap.url);
         delete nv.snapshots;
         return nv;
       });
@@ -1635,13 +1615,28 @@ const db = {
     });
   },
   async getSnapshotUrl(snapshotId) {
+    // Try fetching the snapshot image as a blob with auth (most reliable)
+    try {
+      const r = await fetch(API + `/snapshots/${snapshotId}/image`, { headers: { 'X-API-Key': API_KEY } });
+      if (r.ok) {
+        const blob = await r.blob();
+        if (blob.size > 0) return { url: URL.createObjectURL(blob) };
+      }
+    } catch {}
+    // Fall back to URL from Supabase
     if (supabase) {
       const { data, error } = await supabase
         .from('snapshots')
         .select('url')
         .eq('id', snapshotId)
         .single();
-      if (!error && data) return { url: data.url };
+      if (!error && data?.url) {
+        // If it's a relative storage path, build the full public URL
+        if (data.url.startsWith('/') || !data.url.startsWith('http')) {
+          return { url: `https://nzdkoouoaedbbccraoti.supabase.co/storage/v1/object/public/snapshots/${data.url.replace(/^\/+/, '')}` };
+        }
+        return { url: data.url };
+      }
     }
     return apiFetch(`/snapshots/${snapshotId}/url`);
   },
@@ -1885,6 +1880,7 @@ function ConfirmDialog({ title, body, confirmLabel, confirmColor, onConfirm, onC
 function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
   const [snapshotUrl, setSnapshotUrl] = useState(violation?._snapshot_url || null);
   const [imgLoading, setImgLoading] = useState(!violation?._snapshot_url);
+  const [triedBlob, setTriedBlob] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [manualPlate, setManualPlate] = useState('');
   const [savingPlate, setSavingPlate] = useState(false);
@@ -1893,9 +1889,18 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
   useEffect(() => {
     if (snapshotUrl || !violation?.snapshot_id) return;
     db.getSnapshotUrl(violation.snapshot_id)
-      .then(data => setSnapshotUrl(data.url))
+      .then(data => { if (data?.url) setSnapshotUrl(data.url); else setImgLoading(false); })
       .catch(() => { setImgLoading(false); });
   }, [violation?.snapshot_id, snapshotUrl]);
+
+  // Fallback: if the direct URL fails to load, try fetching as blob with auth
+  const handleImgError = useCallback(() => {
+    if (triedBlob || !violation?.snapshot_id) { setImgLoading(false); setSnapshotUrl(null); return; }
+    setTriedBlob(true);
+    db.getSnapshotUrl(violation.snapshot_id)
+      .then(data => { if (data?.url) setSnapshotUrl(data.url); else { setImgLoading(false); setSnapshotUrl(null); } })
+      .catch(() => { setImgLoading(false); setSnapshotUrl(null); });
+  }, [violation?.snapshot_id, triedBlob]);
 
   if (!violation) return null;
   const timer = elapsed(violation.detected_at);
@@ -1909,7 +1914,7 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
           {snapshotUrl ? (
             <img className="viol-modal-img" src={snapshotUrl} alt="Violation snapshot"
               onLoad={() => setImgLoading(false)}
-              onError={() => { setImgLoading(false); setSnapshotUrl(null); }}
+              onError={handleImgError}
               style={{display: imgLoading ? 'none' : 'block', cursor:'zoom-in'}}
               onClick={() => setZoomed(true)} />
           ) : null}
@@ -2231,7 +2236,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
   const [confirm, setConfirm] = useState(null);
   const [acting, setActing] = useState(null);
   const actingRef = useRef(false); // Guard against double-tap race condition
-  const [successAction, setSuccessAction] = useState(null);
+
   const { addToast } = useToast();
 
   // Auto-select violation from SMS deep link
@@ -2322,13 +2327,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       }
       const result = await db.recordAction(violId, action, extra);
       if (result && result.success !== false) {
-        if (action === 'boot' || action === 'tow') {
-          const viol = violations.find(v => v.id === violId);
-          const lotName = viol ? lotMap[viol.lot_id]?.name : null;
-          setSuccessAction({ action, lotName, plate: viol?.plate_text, zone: viol?.zone_id || viol?.space_number });
-        } else {
-          addToast(`${actionLabels[action] || action} recorded`, 'success');
-        }
+        addToast(`${actionLabels[action] || action} recorded`, 'success');
       }
       if (onAction) onAction();
     } catch (e) {
@@ -2511,7 +2510,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   )}
                 </div>
                 {v._snapshot_url && (
-                  <img src={v._snapshot_url} alt="" style={{width:'100%', borderRadius:8, marginTop:8, maxHeight:160, objectFit:'cover', background:'var(--snapshot-bg)'}} loading="lazy" />
+                  <img src={v._snapshot_url} alt="" style={{width:'100%', borderRadius:8, marginTop:8, maxHeight:160, objectFit:'cover', background:'var(--snapshot-bg)'}} loading="lazy"
+                    onError={e => { e.target.style.display = 'none'; }} />
                 )}
                 <div className="job-details">
                   {v.plate_text ? (
@@ -2646,25 +2646,6 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
         />
       )}
 
-      {successAction && (
-        <div className="success-overlay" onClick={() => setSuccessAction(null)}>
-          <div className="success-box" onClick={e => e.stopPropagation()}>
-            <div className={`success-icon ${successAction.action}`}>
-              {successAction.action === 'boot' ? '\uD83D\uDD12' : '\uD83D\uDE9A'}
-            </div>
-            <div className="success-title">
-              {successAction.action === 'boot' ? 'Vehicle Booted' : 'Vehicle Towed'}
-            </div>
-            <div className="success-sub">
-              {successAction.lotName && <>{successAction.lotName}<br/></>}
-              {successAction.zone && <>Zone/Space: {successAction.zone}<br/></>}
-              {successAction.plate && <>Plate: {successAction.plate}<br/></>}
-              Action recorded successfully.
-            </div>
-            <button className="success-done" onClick={() => setSuccessAction(null)}>Done</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
