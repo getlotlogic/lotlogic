@@ -1663,9 +1663,9 @@ const db = {
         if (action === 'boot' || action === 'tow') {
           try {
             // Fetch violation details for the log
-            const { data: viol } = await supabase.from('violations').select('lot_id, plate_text, vehicle_color, vehicle_type, vehicle_make, vehicle_model').eq('id', violId).single();
+            const { data: viol } = await supabase.from('violations').select('lot_id, plate_text, vehicle_color, vehicle_type').eq('id', violId).single();
             const lot_id = viol?.lot_id;
-            const vehicleParts = [viol?.vehicle_color, viol?.vehicle_make, viol?.vehicle_model].filter(Boolean);
+            const vehicleParts = [viol?.vehicle_color, viol?.vehicle_type].filter(Boolean);
             const vehicle_description = vehicleParts.length ? vehicleParts.join(' ') : (viol?.vehicle_type || null);
             // Determine who performed the action and fee split
             let logEntry = {
@@ -1777,7 +1777,9 @@ const db = {
     if (supabase) {
       // Delete existing zones for this camera, then insert new ones
       const { error: delErr } = await supabase.from('camera_zones').delete().eq('camera_id', cameraId);
-      if (!delErr && zones.length > 0) {
+      if (delErr) throw new Error('Failed to clear zones: ' + delErr.message);
+
+      if (zones.length > 0) {
         const rows = zones.map(z => ({
           camera_id: cameraId,
           zone_id: z.zone_id,
@@ -1787,10 +1789,25 @@ const db = {
           polygon: z.polygon,
         }));
         const { error: insErr } = await supabase.from('camera_zones').insert(rows);
-        if (!insErr) return { success: true };
-      } else if (!delErr) {
-        return { success: true };
+        if (insErr) throw new Error('Failed to insert zones: ' + insErr.message);
       }
+
+      // Sync to cameras.zones JSON column (backend detection uses this format)
+      // Convert {x,y} percentage objects to [[x,y]] normalized 0-1 arrays
+      const backendZones = zones.map((z, i) => ({
+        zone_id: z.zone_id,
+        violation_type: z.zone_type || 'no_parking',
+        max_minutes: z.time_limit_minutes || null,
+        space_number: i + 1,
+        polygon: (z.polygon || []).map(pt => {
+          const px = pt.x != null ? pt.x : (Array.isArray(pt) ? pt[0] * 100 : 0);
+          const py = pt.y != null ? pt.y : (Array.isArray(pt) ? pt[1] * 100 : 0);
+          return [Math.round(px / 100 * 10000) / 10000, Math.round(py / 100 * 10000) / 10000];
+        }),
+      }));
+      await supabase.from('cameras').update({ zones: backendZones }).eq('id', cameraId);
+
+      return { success: true };
     }
     return apiFetch(`/cameras/${cameraId}/zones`, {
       method: 'PATCH',
@@ -3930,90 +3947,35 @@ function EarningsPage({ violations, lots, isOwner, user }) {
   );
 }
 
-// ── Invoices page (owner only — action log, daily invoices, QuickBooks) ────
-function InvoicesPage({ user, lots }) {
-  const [actionLogs, setActionLogs] = React.useState([]);
-  const [invoices, setInvoices] = React.useState([]);
-  const [qbSettings, setQbSettings] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-  const [activeInvoice, setActiveInvoice] = React.useState(null);
-  const [lineItems, setLineItems] = React.useState([]);
-  const [subTab, setSubTab] = React.useState('log'); // log | invoices | quickbooks
+// ── Invoices page (owner only — action log from violations, QuickBooks coming soon) ────
+function InvoicesPage({ user, lots, violations: allViolations }) {
+  const [subTab, setSubTab] = React.useState('log'); // log | quickbooks
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
-
-  React.useEffect(() => {
-    loadInvoiceData();
-  }, []);
-
-  async function loadInvoiceData() {
-    if (!supabase) { setLoading(false); return; }
-    setLoading(true);
-    try {
-      const lotIds = lots.map(l => l.id);
-      // Load action logs for this owner's lots
-      const { data: logs } = await supabase.from('action_logs')
-        .select('*')
-        .in('lot_id', lotIds)
-        .order('performed_at', { ascending: false })
-        .limit(200);
-      setActionLogs(logs || []);
-
-      // Load invoices
-      const { data: invs } = await supabase.from('invoices')
-        .select('*')
-        .eq('owner_id', user.id)
-        .order('invoice_date', { ascending: false })
-        .limit(100);
-      setInvoices(invs || []);
-
-      // Load QB settings
-      const { data: qb } = await supabase.from('qb_settings')
-        .select('*')
-        .eq('owner_id', user.id)
-        .single();
-      if (qb) setQbSettings(qb);
-    } catch (e) {
-      console.error('Invoice data load error:', e);
-    }
-    setLoading(false);
-  }
-
-  async function viewInvoice(inv) {
-    setActiveInvoice(inv);
-    if (supabase) {
-      const { data } = await supabase.from('invoice_line_items')
-        .select('*')
-        .eq('invoice_id', inv.id)
-        .order('performed_at', { ascending: true });
-      setLineItems(data || []);
-    }
-  }
 
   function formatDate(d) {
     if (!d) return '—';
     return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
-
   function formatTime(d) {
     if (!d) return '';
     return new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   }
 
-  const statusColors = { draft: '#6b7280', sent: '#3b82f6', paid: '#4ade80', overdue: '#ef4444', void: '#6b7280' };
+  // Build action log from resolved violations (real data from violations table)
+  const actionLogs = (allViolations || [])
+    .filter(v => v.action_taken && v.action_taken !== 'pending' && v.action_taken !== 'plate_correction')
+    .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
 
-  if (loading) {
-    return React.createElement('div', { style: { textAlign: 'center', padding: 40, color: 'var(--text-muted)' } }, 'Loading invoice data...');
-  }
+  const totalRevenue = actionLogs.reduce((s, v) => s + (v.gross_revenue || 0), 0);
 
   // Sub-tab buttons
   const subTabs = React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
     [
       { id: 'log', label: 'Action Log' },
-      { id: 'invoices', label: 'Invoices' },
       { id: 'quickbooks', label: 'QuickBooks' },
     ].map(t => React.createElement('button', {
       key: t.id,
-      onClick: () => { setSubTab(t.id); setActiveInvoice(null); },
+      onClick: () => setSubTab(t.id),
       style: {
         padding: '8px 16px', borderRadius: 8, border: '1px solid',
         borderColor: subTab === t.id ? 'var(--accent)' : 'var(--border)',
@@ -4024,180 +3986,69 @@ function InvoicesPage({ user, lots }) {
     }, t.label))
   );
 
-  // ── Action Log sub-tab ──
+  // ── Action Log sub-tab (from violations) ──
   if (subTab === 'log') {
-    const uninvoicedCount = actionLogs.filter(l => !l.invoiced).length;
-    const totalRevenue = actionLogs.reduce((s, l) => s + (l.gross_fee || 0), 0);
     return React.createElement('div', { className: 'page-section' },
       React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Action Log'),
       React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 } },
-        `${actionLogs.length} actions recorded · ${uninvoicedCount} uninvoiced · $${totalRevenue.toLocaleString()} total`),
+        `${actionLogs.length} actions recorded · ${fmtMoney(totalRevenue)} total revenue`),
       subTabs,
       actionLogs.length === 0
         ? React.createElement('div', { style: { textAlign: 'center', padding: 40, color: 'var(--text-muted)' } },
             React.createElement('p', { style: { fontSize: 15, marginBottom: 8 } }, 'No actions recorded yet'),
             React.createElement('p', { style: { fontSize: 13 } }, 'Boot and tow actions will appear here automatically'))
         : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-            actionLogs.map(log => React.createElement('div', {
-              key: log.id,
+            actionLogs.slice(0, 100).map(v => React.createElement('div', {
+              key: v.id,
               style: {
                 background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 14,
-                borderLeft: `3px solid ${log.action_type === 'tow' ? '#ef4444' : '#fbbf24'}`,
+                borderLeft: `3px solid ${v.action_taken === 'tow' ? '#ef4444' : v.action_taken === 'boot' ? '#fbbf24' : '#6b7280'}`,
               }
             },
               React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
                 React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                  React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: log.action_type === 'tow' ? '#ef4444' : '#fbbf24', textTransform: 'uppercase' } }, log.action_type),
-                  React.createElement('span', { style: { fontSize: 13, color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 600 } }, log.plate_text || 'No plate'),
+                  React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: v.action_taken === 'tow' ? '#ef4444' : v.action_taken === 'boot' ? '#fbbf24' : '#a78bfa', textTransform: 'uppercase' } }, v.action_taken.replace(/_/g, ' ')),
+                  React.createElement('span', { style: { fontSize: 13, color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 600 } }, v.plate_text || 'No plate'),
                 ),
-                React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: 'var(--green)' } }, `$${log.gross_fee}`),
+                v.gross_revenue > 0 && React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: 'var(--green)' } }, fmtMoney(v.gross_revenue)),
               ),
               React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)' } },
-                React.createElement('span', null, `${lotMap[log.lot_id]?.name || 'Lot'} · ${log.performed_by}`),
-                React.createElement('span', null, `${formatDate(log.performed_at)} ${formatTime(log.performed_at)}`),
+                React.createElement('span', null, `${lotMap[v.lot_id]?.name || 'Lot'} · ${v.zone_id || ''}`),
+                React.createElement('span', null, `${formatDate(v.resolved_at || v.detected_at)} ${formatTime(v.resolved_at || v.detected_at)}`),
               ),
               React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 6, fontSize: 11 } },
-                log.vehicle_description && React.createElement('span', { style: { color: 'var(--text-muted)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, log.vehicle_description),
-                React.createElement('span', { style: { color: log.invoiced ? 'var(--green)' : 'var(--yellow)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, log.invoiced ? 'Invoiced' : 'Pending'),
+                v.vehicle_color && React.createElement('span', { style: { color: 'var(--text-muted)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, `${v.vehicle_color} ${v.vehicle_type || 'vehicle'}`),
+                React.createElement('span', { style: { color: v.paid ? 'var(--green)' : 'var(--yellow)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, v.paid ? 'Paid' : 'Unpaid'),
               ),
             ))
           )
     );
   }
 
-  // ── Invoices sub-tab ──
-  if (subTab === 'invoices') {
-    if (activeInvoice) {
-      const inv = activeInvoice;
-      return React.createElement('div', { className: 'page-section' },
-        React.createElement('button', {
-          onClick: () => setActiveInvoice(null),
-          style: { background: 'none', border: 'none', color: 'var(--accent)', fontSize: 13, cursor: 'pointer', marginBottom: 12, padding: 0 }
-        }, '\u2190 Back to invoices'),
-        React.createElement('div', { style: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 } },
-          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
-            React.createElement('div', null,
-              React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' } }, inv.invoice_number),
-              React.createElement('p', { style: { fontSize: 12, color: 'var(--text-muted)' } }, formatDate(inv.invoice_date)),
-            ),
-            React.createElement('span', { style: {
-              padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600,
-              background: `${statusColors[inv.status]}22`, color: statusColors[inv.status],
-              textTransform: 'uppercase',
-            } }, inv.status),
-          ),
-          React.createElement('div', { style: { fontSize: 24, fontWeight: 800, color: 'var(--green)', marginBottom: 16 } }, `$${(inv.total || 0).toLocaleString()}`),
-          inv.qb_invoice_id && React.createElement('p', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 } }, `QuickBooks ID: ${inv.qb_invoice_id}`),
-          React.createElement('h4', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Line Items'),
-          lineItems.length === 0
-            ? React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)' } }, 'No line items')
-            : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-                lineItems.map((li, i) => React.createElement('div', {
-                  key: li.id || i,
-                  style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }
-                },
-                  React.createElement('div', null,
-                    React.createElement('span', { style: { fontSize: 13, color: 'var(--text-primary)' } }, li.description),
-                    li.performed_at && React.createElement('span', { style: { fontSize: 11, color: 'var(--text-muted)', display: 'block' } }, `${formatDate(li.performed_at)} ${formatTime(li.performed_at)}`),
-                  ),
-                  React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' } }, `$${li.amount}`),
-                ))
-              ),
-        ),
-      );
-    }
-
-    return React.createElement('div', { className: 'page-section' },
-      React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Invoices'),
-      React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 } },
-        `${invoices.length} invoices · Generated daily from action log`),
-      subTabs,
-      invoices.length === 0
-        ? React.createElement('div', { style: { textAlign: 'center', padding: 40, color: 'var(--text-muted)' } },
-            React.createElement('p', { style: { fontSize: 15, marginBottom: 8 } }, 'No invoices yet'),
-            React.createElement('p', { style: { fontSize: 13 } }, 'Invoices are generated daily at 6 AM from your action log'))
-        : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-            invoices.map(inv => React.createElement('button', {
-              key: inv.id,
-              onClick: () => viewInvoice(inv),
-              style: {
-                background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 14,
-                cursor: 'pointer', textAlign: 'left', width: '100%',
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              }
-            },
-              React.createElement('div', null,
-                React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', display: 'block' } }, inv.invoice_number),
-                React.createElement('span', { style: { fontSize: 12, color: 'var(--text-muted)' } }, formatDate(inv.invoice_date)),
-              ),
-              React.createElement('div', { style: { textAlign: 'right' } },
-                React.createElement('span', { style: { fontSize: 16, fontWeight: 700, color: 'var(--green)', display: 'block' } }, `$${(inv.total || 0).toLocaleString()}`),
-                React.createElement('span', { style: {
-                  padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
-                  background: `${statusColors[inv.status]}22`, color: statusColors[inv.status],
-                  textTransform: 'uppercase',
-                } }, inv.status),
-              ),
-            ))
-          )
-    );
-  }
-
-  // ── QuickBooks sub-tab ──
+  // ── QuickBooks sub-tab (coming soon) ──
   if (subTab === 'quickbooks') {
     return React.createElement('div', { className: 'page-section' },
       React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'QuickBooks Integration'),
       React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 } },
-        'Connect your Intuit QuickBooks account to auto-sync invoices and deposits'),
+        'Auto-sync invoices and deposits with QuickBooks'),
       subTabs,
-      React.createElement('div', { style: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 } },
-        qbSettings
-          ? React.createElement('div', null,
-              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 } },
-                React.createElement('div', { style: { width: 10, height: 10, borderRadius: '50%', background: '#4ade80' } }),
-                React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--green)' } }, 'Connected'),
-              ),
-              React.createElement('div', { style: { fontSize: 13, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 8 } },
-                React.createElement('div', null, `Company ID: ${qbSettings.realm_id || '—'}`),
-                React.createElement('div', null, `Auto-sync: ${qbSettings.auto_sync ? 'Enabled' : 'Disabled'}`),
-                React.createElement('div', null, `Last synced: ${qbSettings.last_sync_at ? formatDate(qbSettings.last_sync_at) : 'Never'}`),
-              ),
-              React.createElement('button', {
-                onClick: () => { /* TODO: trigger manual sync */ },
-                style: {
-                  marginTop: 16, padding: '10px 20px', borderRadius: 8, border: 'none',
-                  background: 'var(--accent)', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
-                }
-              }, 'Sync Now'),
-            )
-          : React.createElement('div', { style: { textAlign: 'center', padding: 20 } },
-              React.createElement('div', { style: { fontSize: 40, marginBottom: 12 } }, '\uD83D\uDCDA'),
-              React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 } }, 'Connect QuickBooks'),
-              React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16, maxWidth: 300, margin: '0 auto 16px' } },
-                'Link your QuickBooks Online account to automatically create invoices and track deposits to your checking account.'),
-              React.createElement('div', { style: { fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', maxWidth: 320, margin: '0 auto 20px', lineHeight: 1.8 } },
-                React.createElement('div', null, '\u2713 Daily invoices auto-created in QuickBooks'),
-                React.createElement('div', null, '\u2713 Revenue deposited to your checking account'),
-                React.createElement('div', null, '\u2713 Boot & tow fees tracked per lot'),
-                React.createElement('div', null, '\u2713 Expense reports ready for tax season'),
-              ),
-              React.createElement('button', {
-                onClick: () => {
-                  // QuickBooks OAuth flow — will redirect to Intuit
-                  const QB_CLIENT_ID = 'YOUR_QB_CLIENT_ID';
-                  const REDIRECT_URI = encodeURIComponent(window.location.origin + '/qb-callback');
-                  const scope = encodeURIComponent('com.intuit.quickbooks.accounting');
-                  window.location.href = `https://appcenter.intuit.com/connect/oauth2?client_id=${QB_CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=${scope}&state=${user.id}`;
-                },
-                style: {
-                  padding: '12px 24px', borderRadius: 8, border: 'none',
-                  background: '#2CA01C', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer',
-                  display: 'inline-flex', alignItems: 'center', gap: 8,
-                }
-              }, 'Connect to QuickBooks'),
-              React.createElement('p', { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 12 } },
-                'You will be redirected to Intuit to authorize access'),
-            ),
+      React.createElement('div', { style: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, textAlign: 'center' } },
+        React.createElement('div', { style: { fontSize: 40, marginBottom: 12 } }, '\uD83D\uDCDA'),
+        React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 } }, 'QuickBooks — Coming Soon'),
+        React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', maxWidth: 300, margin: '0 auto 16px' } },
+          'QuickBooks integration is being set up. Once connected, invoices will auto-sync to your QuickBooks account.'),
+        React.createElement('div', { style: { fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', maxWidth: 320, margin: '0 auto 20px', lineHeight: 1.8 } },
+          React.createElement('div', null, '\u2713 Daily invoices auto-created in QuickBooks'),
+          React.createElement('div', null, '\u2713 Revenue deposited to your checking account'),
+          React.createElement('div', null, '\u2713 Boot & tow fees tracked per lot'),
+          React.createElement('div', null, '\u2713 Expense reports ready for tax season'),
+        ),
+        React.createElement('div', {
+          style: {
+            padding: '12px 24px', borderRadius: 8, display: 'inline-block',
+            background: 'rgba(107,114,128,.15)', color: 'var(--text-muted)', fontSize: 15, fontWeight: 700,
+          }
+        }, 'Coming Soon'),
       ),
     );
   }
@@ -4315,8 +4166,23 @@ function OperatorActivityPage({ violations, lots }) {
 }
 
 // ── Account / Settings page ────────────────────────────────────
-function AccountPage({ user, onLogout }) {
+function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) {
   const isOwner = user._role === 'owner';
+
+  function ToggleSwitch({ on, onChange }) {
+    return (
+      <div onClick={onChange} style={{
+        width: 44, height: 24, borderRadius: 12, cursor: 'pointer', transition: 'background .2s',
+        background: on ? '#4ade80' : 'rgba(107,114,128,.3)', position: 'relative', flexShrink: 0,
+      }}>
+        <div style={{
+          width: 20, height: 20, borderRadius: 10, background: '#fff', position: 'absolute', top: 2,
+          left: on ? 22 : 2, transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.3)',
+        }} />
+      </div>
+    );
+  }
+
   return (
     <div className="page-enter">
       {/* Profile card */}
@@ -4388,16 +4254,35 @@ function AccountPage({ user, onLogout }) {
         </div>
       )}
 
-      {/* App info */}
+      {/* App settings */}
       <div className="settings-section">
         <div className="settings-section-title">App</div>
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">Auto-refresh</div>
-            <div className="settings-row-desc">Data refreshes every 30 seconds</div>
+            <div className="settings-row-desc">
+              {autoRefresh ? `Data refreshes every ${refreshInterval / 1000}s` : 'Auto-refresh is paused'}
+            </div>
           </div>
-          <div className="settings-row-value" style={{color:'var(--green)'}}>Active</div>
+          <ToggleSwitch on={autoRefresh} onChange={() => setAutoRefresh(!autoRefresh)} />
         </div>
+        {autoRefresh && (
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">Refresh Interval</div>
+              <div className="settings-row-desc">How often to poll for updates</div>
+            </div>
+            <select value={refreshInterval} onChange={e => setRefreshInterval(Number(e.target.value))} style={{
+              background: 'var(--bg-inset)', color: 'var(--text-primary)', border: '1px solid var(--border)',
+              borderRadius: 8, padding: '4px 8px', fontSize: 13, fontWeight: 600,
+            }}>
+              <option value={10000}>10s</option>
+              <option value={15000}>15s</option>
+              <option value={30000}>30s</option>
+              <option value={60000}>60s</option>
+            </select>
+          </div>
+        )}
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">SMS Notifications</div>
@@ -4416,7 +4301,7 @@ function AccountPage({ user, onLogout }) {
           <div className="settings-row-info">
             <div className="settings-row-label">Version</div>
           </div>
-          <div className="settings-row-value">4.0.0</div>
+          <div className="settings-row-value">4.1.0</div>
         </div>
       </div>
 
@@ -4460,12 +4345,24 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(() => {
+    try { const v = localStorage.getItem('lotlogic_autorefresh'); return v !== 'false'; } catch { return true; }
+  });
+  const [refreshInterval, setRefreshInterval] = useState(() => {
+    try { return parseInt(localStorage.getItem('lotlogic_refresh_interval')) || 30000; } catch { return 30000; }
+  });
   const timerRef = useRef(null);
 
-  // Persist tab selection across refresh
+  // Persist settings across refresh
   useEffect(() => {
     try { localStorage.setItem('lotlogic_tab', tab); } catch {}
   }, [tab]);
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_autorefresh', String(autoRefresh)); } catch {}
+  }, [autoRefresh]);
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_refresh_interval', String(refreshInterval)); } catch {}
+  }, [refreshInterval]);
 
   const isOwner = owner?._role === 'owner';
   const isOperator = owner?._role === 'partner';
@@ -4571,6 +4468,7 @@ function App() {
   // Auto-refresh + session expiration check
   useEffect(() => {
     if (!owner) return;
+    if (!autoRefresh) { clearInterval(timerRef.current); return; }
     timerRef.current = setInterval(() => {
       // Check session expiration (7 days)
       if (owner._ts && Date.now() - owner._ts > 7 * 86400000) {
@@ -4579,9 +4477,9 @@ function App() {
         return;
       }
       if (navigator.onLine) loadData(owner, true);
-    }, 30000);
+    }, refreshInterval);
     return () => clearInterval(timerRef.current);
-  }, [owner, loadData]);
+  }, [owner, loadData, autoRefresh, refreshInterval]);
 
   // Subscribe to realtime violation changes
   useEffect(() => {
@@ -4670,9 +4568,9 @@ function App() {
           {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={owner} />}
           {tab === 'lots' && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
           {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} user={owner} />}
-          {tab === 'invoices' && isOwner && <InvoicesPage user={owner} lots={lots} />}
+          {tab === 'invoices' && isOwner && <InvoicesPage user={owner} lots={lots} violations={violations} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
-          {tab === 'account' && <AccountPage user={owner} onLogout={logout} />}
+          {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
       </main>
 
