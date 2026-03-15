@@ -3,11 +3,21 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"/>
-  <title>LotLogic Operator</title>
+  <title>LotLogic — AI Parking Enforcement</title>
+  <meta name="description" content="AI-powered parking lot enforcement dashboard. Manage violations, cameras, and earnings in real time." />
+  <meta name="theme-color" content="#0c0e14" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="LotLogic" />
+  <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22LotLogic%22%2C%22short_name%22%3A%22LotLogic%22%2C%22start_url%22%3A%22%2F%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230c0e14%22%2C%22theme_color%22%3A%22%233b82f6%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%253Csvg%2520xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%2520viewBox%3D%270%25200%2520192%2520192%27%253E%253Crect%2520width%3D%27192%27%2520height%3D%27192%27%2520rx%3D%2740%27%2520fill%3D%27%25232563eb%27%2F%253E%253Ctext%2520x%3D%2796%27%2520y%3D%27126%27%2520font-family%3D%27Inter%2Csans-serif%27%2520font-weight%3D%27800%27%2520font-size%3D%2780%27%2520fill%3D%27white%27%2520text-anchor%3D%27middle%27%253ELL%253C%2Ftext%253E%253C%2Fsvg%253E%22%2C%22sizes%22%3A%22192x192%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%7D%5D%7D" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='14' fill='white' text-anchor='middle'%3ELL%3C/text%3E%3C/svg%3E" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%232563eb'/%3E%3Ctext x='90' y='118' font-family='Inter,sans-serif' font-weight='800' font-size='72' fill='white' text-anchor='middle'%3ELL%3C/text%3E%3C/svg%3E" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1322,13 +1332,87 @@
     /* Trend colors */
     .theme-light .trend.up { color: #16a34a; }
     .theme-light .trend.down { color: #dc2626; }
+
+    /* ── Theme toggle ── */
+    .theme-toggle-btn {
+      width: 36px; height: 20px; border-radius: 10px; border: none; cursor: pointer;
+      position: relative; transition: background .3s; padding: 0; flex-shrink: 0;
+      background: var(--bg-inset); border: 1.5px solid var(--border);
+    }
+    .theme-toggle-btn::after {
+      content: ''; position: absolute; top: 2px; left: 2px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--accent); transition: transform .3s, background .3s;
+    }
+    .theme-toggle-btn.light::after { transform: translateX(16px); background: #f59e0b; }
+    .theme-toggle-btn .theme-icon {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      font-size: 9px; line-height: 1; pointer-events: none; z-index: 1;
+    }
+    .theme-toggle-btn .theme-icon.moon { left: 4px; }
+    .theme-toggle-btn .theme-icon.sun { right: 4px; }
+
+    /* ── Offline banner ── */
+    .offline-banner {
+      position: fixed; top: calc(58px + env(safe-area-inset-top)); left: 0; right: 0;
+      z-index: 100; text-align: center; padding: 8px 16px;
+      font-size: 12px; font-weight: 700;
+      background: rgba(239,68,68,.12); color: #f87171;
+      border-bottom: 1px solid rgba(239,68,68,.25);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      animation: slideDown .3s ease;
+    }
+    .reconnected-banner {
+      position: fixed; top: calc(58px + env(safe-area-inset-top)); left: 0; right: 0;
+      z-index: 100; text-align: center; padding: 8px 16px;
+      font-size: 12px; font-weight: 700;
+      background: rgba(74,222,128,.12); color: #4ade80;
+      border-bottom: 1px solid rgba(74,222,128,.25);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      animation: slideDown .3s ease;
+    }
+    @keyframes slideDown { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+    /* ── Pull to refresh ── */
+    .ptr-spinner {
+      text-align: center; padding: 12px 0; transition: all .3s ease;
+      overflow: hidden;
+    }
+    .ptr-spinner .spin { display: inline-block; margin-right: 6px; }
+
+    /* ── Tab page transition ── */
+    .page-slide { animation: pageSlide .25s ease both; }
+    @keyframes pageSlide { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* ── Focus visible (a11y) ── */
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    button:focus:not(:focus-visible) { outline: none; }
+
+    /* ── Skip link (a11y) ── */
+    .skip-link {
+      position: absolute; top: -100px; left: 16px; z-index: 9999;
+      background: var(--accent); color: #fff; padding: 8px 16px; border-radius: 8px;
+      font-size: 13px; font-weight: 700; text-decoration: none;
+      transition: top .2s;
+    }
+    .skip-link:focus { top: 8px; }
+
+    /* ── Last updated indicator ── */
+    .last-updated {
+      font-size: 10px; font-weight: 600; color: var(--text-ghost);
+      text-align: center; padding: 4px 0; margin-bottom: 8px;
+    }
   </style>
 </head>
 <body>
+<a href="#main-content" class="skip-link">Skip to content</a>
 <div id="root"></div>
 
 <script type="text/babel">
-const { useState, useEffect, useCallback, useRef } = React;
+const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
 
 // ── Supabase client ──────────────────────────────────────────
 const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
@@ -1644,6 +1728,55 @@ const db = {
     return channel;
   },
 };
+
+// ── Theme hook ────────────────────────────────────────────────
+function useTheme() {
+  const [theme, setTheme] = useState(() => localStorage.getItem('lotlogic_theme') || 'light');
+  useEffect(() => {
+    localStorage.setItem('lotlogic_theme', theme);
+    // Update meta theme-color for mobile browsers
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = theme === 'dark' ? '#0c0e14' : '#f8f9fb';
+  }, [theme]);
+  const toggle = useCallback(() => setTheme(t => t === 'dark' ? 'light' : 'dark'), []);
+  return { theme, toggle };
+}
+
+// ── Online/offline hook ──────────────────────────────────────
+function useOnlineStatus() {
+  const [online, setOnline] = useState(navigator.onLine);
+  const [reconnected, setReconnected] = useState(false);
+  useEffect(() => {
+    const goOnline = () => { setOnline(true); setReconnected(true); setTimeout(() => setReconnected(false), 3000); };
+    const goOffline = () => { setOnline(false); setReconnected(false); };
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
+  }, []);
+  return { online, reconnected };
+}
+
+// ── Haptic feedback ──────────────────────────────────────────
+function haptic(style = 'light') {
+  if (!navigator.vibrate) return;
+  if (style === 'heavy') navigator.vibrate(30);
+  else if (style === 'medium') navigator.vibrate(15);
+  else navigator.vibrate(8);
+}
+
+// ── Smarter date labels ──────────────────────────────────────
+function smartDate(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+  if (d >= today) return 'Today';
+  if (d >= yesterday) return 'Yesterday';
+  const diffDays = Math.floor((today - d) / 86400000);
+  if (diffDays < 7) return d.toLocaleDateString('en-US', { weekday: 'long' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
 // ── Time helpers ──────────────────────────────────────────────
 function elapsed(isoStr) {
@@ -2059,16 +2192,17 @@ function LoginPage({ onLogin }) {
   }
 
   return (
-    <div className="login-page">
+    <div className="login-page" role="main">
       <div className="login-box">
-        <div className="login-logo">
+        <div className="login-logo" aria-hidden="true">
           <div className="login-shield">LL</div>
           <div className="login-wordmark">Lot<span>Logic</span></div>
         </div>
         <div className="login-tagline">AI-powered parking enforcement — sign in to get started</div>
-        <form onSubmit={submit}>
-          <label className="field-label">Your email</label>
+        <form onSubmit={submit} aria-label="Sign in">
+          <label className="field-label" htmlFor="login-email">Your email</label>
           <input
+            id="login-email"
             className="field-input"
             type="email"
             placeholder="you@company.com"
@@ -2078,12 +2212,13 @@ function LoginPage({ onLogin }) {
             autoCorrect="off"
             required
             autoFocus
+            aria-required="true"
           />
-          <button className="login-btn" type="submit" disabled={loading}>
+          <button className="login-btn" type="submit" disabled={loading} aria-busy={loading}>
             {loading ? 'Signing in…' : 'Sign In →'}
           </button>
         </form>
-        {error && <div className="login-error">{error}</div>}
+        {error && <div className="login-error" role="alert">{error}</div>}
       </div>
     </div>
   );
@@ -2205,6 +2340,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
   }
 
   function requestAction(violId, action) {
+    haptic(action === 'tow' ? 'heavy' : action === 'boot' ? 'medium' : 'light');
     const bootFee = user?.boot_fee || 75;
     const towFee = user?.tow_fee || 250;
     if (action === 'tow') {
@@ -2412,17 +2548,17 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                 </div>
               </div>
               {/* Action buttons with fee amounts */}
-              <div className="job-actions-row">
-                <button className="action-btn boot" disabled={anyActing} onClick={() => requestAction(v.id, 'boot')}>
+              <div className="job-actions-row" role="group" aria-label="Enforcement actions">
+                <button className="action-btn boot" disabled={anyActing} onClick={() => requestAction(v.id, 'boot')} aria-label={`Boot vehicle for $${user?.boot_fee || 75}`}>
                   {isActing ? '…' : `Boot · $${user?.boot_fee || 75}`}
                 </button>
-                <button className="action-btn tow" disabled={anyActing} onClick={() => requestAction(v.id, 'tow')}>
+                <button className="action-btn tow" disabled={anyActing} onClick={() => requestAction(v.id, 'tow')} aria-label={`Tow vehicle for $${user?.tow_fee || 250}`}>
                   {isActing ? '…' : `Tow · $${user?.tow_fee || 250}`}
                 </button>
-                <button className="action-btn dismiss" disabled={anyActing} onClick={() => requestAction(v.id, 'dismissed')}>
+                <button className="action-btn dismiss" disabled={anyActing} onClick={() => requestAction(v.id, 'dismissed')} aria-label="Dismiss violation">
                   Dismiss
                 </button>
-                <button className="action-btn gone" disabled={anyActing} onClick={() => requestAction(v.id, 'already_gone')}>
+                <button className="action-btn gone" disabled={anyActing} onClick={() => requestAction(v.id, 'already_gone')} aria-label="Mark vehicle as already gone">
                   Gone
                 </button>
               </div>
@@ -2459,7 +2595,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   <div className="job-top">
                     <div>
                       <div className="job-lot-name" style={{fontSize:14}}>{lot?.name || 'Unknown Lot'}</div>
-                      <div className="job-lot-addr">{fmtDate(v.detected_at)} · {fmtTime(v.detected_at)}</div>
+                      <div className="job-lot-addr">{smartDate(v.detected_at)} · {fmtTime(v.detected_at)}</div>
                     </div>
                     {v.our_revenue > 0 && (
                       <div className="job-timer" style={{background:'var(--revenue-bg)'}}>
@@ -3573,7 +3709,7 @@ function EarningsPage({ violations, lots, isOwner, user }) {
               <div key={action} className="breakdown-row">
                 <div style={{display:'flex', alignItems:'center', gap:8}}>
                   <span style={{width:8, height:8, borderRadius:'50%', background: colors[action] || '#6b7280', flexShrink:0}} />
-                  <span style={{fontSize:15, fontWeight:700, color:'#e5e7eb', textTransform:'capitalize'}}>{action.replace(/_/g, ' ')}</span>
+                  <span style={{fontSize:15, fontWeight:700, color:'var(--text-primary)', textTransform:'capitalize'}}>{action.replace(/_/g, ' ')}</span>
                 </div>
                 <div style={{fontSize:15, fontWeight:700, color:'var(--text-muted)'}}>{count}×</div>
               </div>
@@ -3615,7 +3751,7 @@ function EarningsPage({ violations, lots, isOwner, user }) {
             return (
               <div key={v.id} className="breakdown-row">
                 <div className="breakdown-left">
-                  <div className="breakdown-date">{fmtDate(v.resolved_at || v.detected_at)} · {fmtTime(v.resolved_at || v.detected_at)}</div>
+                  <div className="breakdown-date">{smartDate(v.resolved_at || v.detected_at)} · {fmtTime(v.resolved_at || v.detected_at)}</div>
                   <div className="breakdown-lot">{lot?.name || '—'}</div>
                   {v.plate_text && (
                     <div className="breakdown-plate" style={{display:'flex', alignItems:'center', gap:4}}>
@@ -3654,10 +3790,10 @@ function OperatorActivityPage({ violations, lots }) {
 
   const actionColors = { boot: '#fbbf24', tow: '#f87171', dismissed: '#a78bfa', no_action: '#6b7280', already_gone: '#6b7280' };
 
-  // Group by date
+  // Group by date (using smart labels)
   const grouped = {};
   completed.forEach(v => {
-    const dateKey = fmtDate(v.resolved_at || v.detected_at);
+    const dateKey = smartDate(v.resolved_at || v.detected_at);
     if (!grouped[dateKey]) grouped[dateKey] = [];
     grouped[dateKey].push(v);
   });
@@ -3848,7 +3984,7 @@ function AccountPage({ user, onLogout }) {
           <div className="settings-row-info">
             <div className="settings-row-label">Version</div>
           </div>
-          <div className="settings-row-value">3.1.0</div>
+          <div className="settings-row-value">4.0.0</div>
         </div>
       </div>
 
@@ -3862,6 +3998,8 @@ function AccountPage({ user, onLogout }) {
 // ── Main App ──────────────────────────────────────────────────
 function App() {
   const { addToast } = useToast();
+  const { theme, toggle: toggleTheme } = useTheme();
+  const { online, reconnected } = useOnlineStatus();
   const [owner, setOwner] = useState(() => {
     try {
       const s = localStorage.getItem('lotlogic_session');
@@ -3887,6 +4025,7 @@ function App() {
   const [violations, setViolations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const timerRef = useRef(null);
 
   const isOwner = owner?._role === 'owner';
@@ -3946,8 +4085,49 @@ function App() {
     try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
   }
 
+  // Pull-to-refresh handler
+  async function handlePullRefresh() {
+    if (refreshing || !owner) return;
+    setRefreshing(true);
+    haptic('medium');
+    await loadData(owner, true);
+    setRefreshing(false);
+    haptic('light');
+  }
+
+  // Pull-to-refresh gesture
+  const touchStartY = useRef(0);
+  const pullDistance = useRef(0);
+  const [showPTR, setShowPTR] = useState(false);
+  useEffect(() => {
+    if (!owner) return;
+    const el = document.querySelector('.page-content');
+    if (!el) return;
+    function onTouchStart(e) { if (el.scrollTop <= 0) touchStartY.current = e.touches[0].clientY; else touchStartY.current = 0; }
+    function onTouchMove(e) {
+      if (!touchStartY.current) return;
+      pullDistance.current = e.touches[0].clientY - touchStartY.current;
+      if (pullDistance.current > 60 && el.scrollTop <= 0) setShowPTR(true);
+    }
+    function onTouchEnd() {
+      if (showPTR || pullDistance.current > 80) handlePullRefresh();
+      touchStartY.current = 0; pullDistance.current = 0; setShowPTR(false);
+    }
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: true });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+    };
+  });
+
   // Load data on mount if session was restored
   useEffect(() => { if (owner) loadData(owner); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Retry on reconnect
+  useEffect(() => { if (reconnected && owner) loadData(owner, true); }, [reconnected]);
 
   // Auto-refresh + session expiration check
   useEffect(() => {
@@ -3959,7 +4139,7 @@ function App() {
         logout();
         return;
       }
-      loadData(owner, true);
+      if (navigator.onLine) loadData(owner, true);
     }, 30000);
     return () => clearInterval(timerRef.current);
   }, [owner, loadData]);
@@ -3986,7 +4166,7 @@ function App() {
   // Operators: Jobs + Lots (assigned) + Activity + Earnings + Account
   // Owners: Jobs + Lots + Earnings + Account
   const navIcons = { jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, activity: NavIconActivity, account: NavIconAccount };
-  const tabs = isOwner ? [
+  const navTabs = isOwner ? [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
@@ -3999,44 +4179,80 @@ function App() {
     { id: 'account',  label: 'Account',  badge: 0 },
   ];
 
+  const lastRefreshLabel = lastRefresh ? (
+    Math.floor((Date.now() - lastRefresh) / 1000) < 10 ? 'Just now' :
+    Math.floor((Date.now() - lastRefresh) / 1000) < 60 ? `${Math.floor((Date.now() - lastRefresh) / 1000)}s ago` :
+    `${Math.floor((Date.now() - lastRefresh) / 60000)}m ago`
+  ) : null;
+
   return (
-    <div className="app theme-light">
-      <div className="header">
+    <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
+      {/* Offline / reconnected banners */}
+      {!online && <div className="offline-banner" role="alert">You're offline — data may be stale</div>}
+      {reconnected && online && <div className="reconnected-banner" role="status">Back online — refreshing data</div>}
+
+      <header className="header" role="banner">
         <div className="header-left">
-          <div className="header-shield">LL</div>
+          <div className="header-shield" aria-hidden="true">LL</div>
           <div className="header-wordmark">Lot<span>Logic</span></div>
         </div>
         <div className="header-right">
+          <button
+            className={`theme-toggle-btn ${theme === 'light' ? 'light' : ''}`}
+            onClick={() => { toggleTheme(); haptic('light'); }}
+            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          />
           {lastRefresh && (
-            <div className={`conn-indicator online`}>
-              <span className="conn-dot on" />
-              <span>{supabase ? 'Realtime' : 'Live'}</span>
+            <div className={`conn-indicator ${online ? 'online' : 'offline'}`} title={lastRefreshLabel ? `Updated ${lastRefreshLabel}` : ''}>
+              <span className={`conn-dot ${online ? 'on' : 'off'}`} />
+              <span>{online ? (supabase ? 'Live' : 'Online') : 'Offline'}</span>
             </div>
           )}
-          <div className="header-name">{owner.business_name || owner.contact_name}</div>
+          <div className="header-name" title={owner.business_name || owner.contact_name}>{owner.business_name || owner.contact_name}</div>
         </div>
-      </div>
+      </header>
 
-      <div className="page-content">
-        {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={owner} />}
-        {tab === 'lots' && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
-        {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} user={owner} />}
-        {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
-        {tab === 'account' && <AccountPage user={owner} onLogout={logout} />}
-      </div>
+      <main id="main-content" className="page-content" role="main">
+        {/* Pull to refresh indicator */}
+        {(showPTR || refreshing) && (
+          <div className="ptr-spinner" role="status" aria-label="Refreshing">
+            <span className="spin" />{refreshing ? 'Refreshing…' : 'Release to refresh'}
+          </div>
+        )}
+        {/* Last updated */}
+        {lastRefresh && !loading && (
+          <div className="last-updated" aria-live="polite">Updated {lastRefreshLabel}</div>
+        )}
 
-      <div className="bottom-nav">
-        {tabs.map(t => {
+        <div key={tab} className="page-slide">
+          {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={owner} />}
+          {tab === 'lots' && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
+          {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} user={owner} />}
+          {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
+          {tab === 'account' && <AccountPage user={owner} onLogout={logout} />}
+        </div>
+      </main>
+
+      <nav className="bottom-nav" role="navigation" aria-label="Main navigation">
+        {navTabs.map(t => {
           const Icon = navIcons[t.id];
           return (
-            <button key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
-              {t.badge > 0 && <span className="nav-badge">{t.badge}</span>}
+            <button key={t.id}
+              className={`nav-item ${tab === t.id ? 'active' : ''}`}
+              onClick={() => { setTab(t.id); haptic('light'); }}
+              aria-label={`${t.label}${t.badge > 0 ? `, ${t.badge} pending` : ''}`}
+              aria-current={tab === t.id ? 'page' : undefined}
+              role="tab"
+              aria-selected={tab === t.id}
+            >
+              {t.badge > 0 && <span className="nav-badge" aria-hidden="true">{t.badge}</span>}
               {Icon && <Icon />}
               <span className="nav-label">{t.label}</span>
             </button>
           );
         })}
-      </div>
+      </nav>
     </div>
   );
 }
