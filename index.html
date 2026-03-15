@@ -1205,7 +1205,7 @@ const db = {
       const { data, error } = await supabase
         .from('violations')
         .select('*')
-        .eq('status', 'resolved')
+        .neq('status', 'pending')
         .gte('resolved_at', since);
       if (!error && data) {
         // Revenue stored as dollars in DB
@@ -1227,17 +1227,8 @@ const db = {
     return apiFetch(`/violations/revenue?days=${days}`);
   },
   async addCamera(body) {
-    if (supabase) {
-      const { data, error } = await supabase.from('cameras').insert({
-        lot_id: body.lot_id,
-        name: body.name,
-        rtsp_url: body.rtsp_url || null,
-        channel: body.channel || 0,
-        active: true,
-        status: 'active',
-      }).select().single();
-      if (!error) return data;
-    }
+    // Cameras table has many required fields (ip_address, port, username, etc.)
+    // that vary by camera hardware — always go through the backend API
     return apiFetch('/cameras', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1657,16 +1648,16 @@ function LoginPage({ onLogin }) {
       // Find matching accounts — if duplicates exist, check which has lots assigned
       const ownerMatches = owners.filter(o => o.email?.toLowerCase() === needle);
       if (ownerMatches.length > 0) {
-        let ownerMatch = ownerMatches[ownerMatches.length - 1]; // default to last
-        if (ownerMatches.length > 1) {
-          // Pick the one that actually has lots
-          const lotsChecks = await Promise.all(ownerMatches.map(o =>
-            db.getLots({ owner_id: o.id }).then(l => l.length).catch(() => 0)
-          ));
-          const withLots = ownerMatches.findIndex((_, i) => lotsChecks[i] > 0);
-          if (withLots >= 0) ownerMatch = ownerMatches[withLots];
+        // Find which owner (if any) actually has lots assigned
+        const lotsChecks = await Promise.all(ownerMatches.map(o =>
+          db.getLots({ owner_id: o.id }).then(l => l.length).catch(() => 0)
+        ));
+        const withLotsIdx = ownerMatches.findIndex((_, i) => lotsChecks[i] > 0);
+        if (withLotsIdx >= 0) {
+          const ownerMatch = ownerMatches[withLotsIdx];
+          onLogin({ ...ownerMatch, _role: 'owner', business_name: ownerMatch.business_name || ownerMatch.contact_name }); return;
         }
-        onLogin({ ...ownerMatch, _role: 'owner', business_name: ownerMatch.business_name || ownerMatch.contact_name }); return;
+        // Owner exists but has no lots — fall through to check enforcement partners
       }
       const partnerMatches = partners.filter(p => p.email?.toLowerCase() === needle);
       if (partnerMatches.length > 0) {
