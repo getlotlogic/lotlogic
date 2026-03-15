@@ -1663,7 +1663,7 @@ function ImageZoom({ src, alt, onClose }) {
 
 // ── Login ─────────────────────────────────────────────────────
 function LoginPage({ onLogin }) {
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => localStorage.getItem('lotlogic_email') || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -1688,6 +1688,7 @@ function LoginPage({ onLogin }) {
         const withLotsIdx = ownerMatches.findIndex((_, i) => lotsChecks[i] > 0);
         if (withLotsIdx >= 0) {
           const ownerMatch = ownerMatches[withLotsIdx];
+          localStorage.setItem('lotlogic_email', email.trim());
           onLogin({ ...ownerMatch, _role: 'owner', business_name: ownerMatch.business_name || ownerMatch.contact_name }); return;
         }
         // Owner exists but has no lots — fall through to check enforcement partners
@@ -1702,6 +1703,7 @@ function LoginPage({ onLogin }) {
           const withLots = partnerMatches.findIndex((_, i) => lotsChecks[i] > 0);
           if (withLots >= 0) partnerMatch = partnerMatches[withLots];
         }
+        localStorage.setItem('lotlogic_email', email.trim());
         onLogin({ ...partnerMatch, _role: 'partner', business_name: partnerMatch.company_name }); return;
       }
       setError("No account found for that email. Contact your LotLogic rep if you think this is wrong.");
