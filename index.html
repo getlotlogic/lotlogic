@@ -1165,21 +1165,25 @@ const db = {
   },
   async recordAction(violId, action, extra = {}) {
     if (supabase) {
-      const updates = { action_taken: action, ...extra };
-      // Only non-plate-correction actions resolve the violation
-      if (action !== 'plate_correction') {
-        updates.status = 'resolved';
-        updates.resolved_at = new Date().toISOString();
-      }
-      if (action === 'plate_correction') {
-        // Just update plate text, keep pending
-        const { error } = await supabase.from('violations').update({
-          plate_text: extra.plate_text,
-        }).eq('id', violId);
-        if (!error) return { success: true };
-      } else {
-        const { error } = await supabase.from('violations').update(updates).eq('id', violId);
-        if (!error) return { success: true };
+      try {
+        const updates = { action_taken: action, ...extra };
+        if (action !== 'plate_correction') {
+          updates.status = 'resolved';
+          updates.resolved_at = new Date().toISOString();
+        }
+        if (action === 'plate_correction') {
+          const { error } = await supabase.from('violations').update({
+            plate_text: extra.plate_text,
+          }).eq('id', violId);
+          if (!error) return { success: true };
+          console.error('Supabase plate update error:', error);
+        } else {
+          const { error } = await supabase.from('violations').update(updates).eq('id', violId);
+          if (!error) return { success: true };
+          console.error('Supabase action update error:', error);
+        }
+      } catch (e) {
+        console.error('Supabase recordAction exception:', e);
       }
     }
     return apiFetch(`/violations/${violId}/action`, {
@@ -1772,14 +1776,18 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
 
   async function handleAction(violId, action) {
     setConfirm(null);
+    setSelectedViol(null);
     setActing(violId);
     try {
-      await db.recordAction(violId, action);
-      addToast(`${actionLabels[action] || action} recorded successfully`, 'success');
-      setSelectedViol(null);
+      const result = await db.recordAction(violId, action);
+      if (result && result.success !== false) {
+        addToast(`${actionLabels[action] || action} recorded`, 'success');
+      }
       if (onAction) onAction();
     } catch (e) {
-      addToast(`Failed to record action: ${e.message}`, 'error');
+      console.error('handleAction error:', e);
+      addToast(`Action failed: ${e.message || 'Unknown error'}`, 'error');
+      if (onAction) onAction(); // refresh to get current state
     } finally { setActing(null); }
   }
 
