@@ -352,17 +352,17 @@
     .job-timer-label { font-size: 9px; color: #374151; text-transform: uppercase; letter-spacing: .07em; margin-top: 3px; font-weight: 600; }
     .job-details { display: flex; flex-wrap: wrap; gap: 7px; }
     .job-tag {
-      background: #0c0e14;
-      border: 1px solid #1e2235;
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
       border-radius: 8px;
       padding: 5px 10px;
       font-size: 12px;
-      color: #6b7280;
+      color: var(--text-muted);
       display: flex;
       align-items: center;
       gap: 5px;
     }
-    .job-tag strong { color: #d1d5db; font-weight: 600; }
+    .job-tag strong { color: var(--text-primary); font-weight: 600; }
     .plate-tag {
       background: #fef3c7;
       color: #1c1009;
@@ -1115,11 +1115,9 @@
     .theme-light .settings-row-label,
     .theme-light .ze-title,
     .theme-light .ze-det-title,
-    .theme-light .job-tag strong,
     .theme-light .breakdown-date { color: #1a1a2e; }
 
     .theme-light .section-count,
-    .theme-light .job-tag,
     .theme-light .job-lot-addr,
     .theme-light .lot-addr,
     .theme-light .kpi-label,
