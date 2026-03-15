@@ -1574,25 +1574,29 @@ const db = {
     // Find violations missing snapshot URLs and batch-fetch from their cameras
     const missing = viols.filter(v => !v._snapshot_url && v.camera_id);
     if (missing.length > 0 && supabase) {
-      const camIds = [...new Set(missing.map(v => v.camera_id))];
-      const camSnaps = {};
-      await Promise.all(camIds.map(async cid => {
-        const { data: snaps } = await supabase
-          .from('snapshots')
-          .select('storage_url, raw_detections')
-          .eq('camera_id', cid)
-          .not('storage_url', 'is', null)
-          .order('captured_at', { ascending: false })
-          .limit(1);
-        if (snaps?.[0]) camSnaps[cid] = snaps[0];
-      }));
-      missing.forEach(v => {
-        const fallback = camSnaps[v.camera_id];
-        if (fallback) {
-          v._snapshot_url = fallback.storage_url;
-          if (!v._detections?.length) v._detections = fallback.raw_detections?.detections || [];
-        }
-      });
+      try {
+        const camIds = [...new Set(missing.map(v => v.camera_id))];
+        const camSnaps = {};
+        await Promise.all(camIds.map(async cid => {
+          const { data: snaps } = await supabase
+            .from('snapshots')
+            .select('storage_url, raw_detections')
+            .eq('camera_id', cid)
+            .not('storage_url', 'is', null)
+            .order('captured_at', { ascending: false })
+            .limit(1);
+          if (snaps?.[0]) camSnaps[cid] = snaps[0];
+        }));
+        missing.forEach(v => {
+          const fallback = camSnaps[v.camera_id];
+          if (fallback) {
+            v._snapshot_url = fallback.storage_url;
+            if (!v._detections?.length) v._detections = fallback.raw_detections?.detections || [];
+          }
+        });
+      } catch (e) {
+        console.error('Snapshot fallback failed:', e);
+      }
     }
     return viols;
   },
@@ -2195,15 +2199,24 @@ function ImageZoom({ src, alt, onClose }) {
 function ViolationSnapshot({ src, detections, style, onClick, maxHeight, borderRadius }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
-  if (!src) return null;
-  if (failed) return null;
+  // Timeout: if image hasn't loaded in 10s, treat as failed
+  useEffect(() => {
+    if (!src || loaded || failed) return;
+    const t = setTimeout(() => setFailed(true), 10000);
+    return () => clearTimeout(t);
+  }, [src, loaded, failed]);
+  if (!src || failed) return (
+    <div style={{width:'100%', aspectRatio:'16/7', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center', borderRadius: borderRadius || 8, ...(style || {})}}>
+      <span style={{color:'var(--text-ghost)', fontSize:12, fontWeight:500}}>No photo</span>
+    </div>
+  );
   const dets = (detections || []).filter(d => d.bbox && d.bbox.length === 4);
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   return (
     <div style={{borderRadius: borderRadius || 8, overflow:'hidden', background:'var(--snapshot-bg)', ...(style || {})}}>
       <div style={{position:'relative'}}>
         <img
-          src={src} alt="Violation snapshot" loading="lazy"
+          src={src} alt="Violation snapshot"
           onLoad={() => setLoaded(true)}
           onError={() => setFailed(true)}
           onClick={onClick}
@@ -2604,13 +2617,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                 </div>
               )}
               {/* Snapshot photo with AI bounding boxes — full width, prominent */}
-              {v._snapshot_url ? (
-                <ViolationSnapshot src={v._snapshot_url} detections={v._detections} maxHeight={220} borderRadius={0} onClick={() => setSelectedViol(v)} />
-              ) : (
-                <div style={{width:'100%', aspectRatio:'16/7', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center'}}>
-                  <span style={{color:'var(--text-ghost)', fontSize:12, fontWeight:500}}>No photo</span>
-                </div>
-              )}
+              <ViolationSnapshot src={v._snapshot_url} detections={v._detections} maxHeight={220} borderRadius={0} onClick={v._snapshot_url ? () => setSelectedViol(v) : undefined} />
               {/* Vehicle summary bar — quick-glance info for the tow operator */}
               <div className="vehicle-summary">
                 {v.plate_text ? (
