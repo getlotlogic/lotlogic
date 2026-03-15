@@ -1268,7 +1268,7 @@ const db = {
       const { data, error } = await q;
       if (!error && data) return data;
     }
-    const params = filter.owner_id ? `?owner_id=${filter.owner_id}` : filter.market_id ? `?market_id=${filter.market_id}` : '';
+    const params = filter.owner_id ? `?owner_id=${filter.owner_id}` : filter.partner_id ? `?partner_id=${filter.partner_id}` : filter.market_id ? `?market_id=${filter.market_id}` : '';
     return apiFetch(`/lots${params}`);
   },
   async getLotState(lotId) {
@@ -3224,20 +3224,11 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
 // ── Earnings tab ──────────────────────────────────────────────
 function EarningsPage({ violations, lots, isOwner }) {
   const [period, setPeriod] = useState('month');
-  const [revSummary, setRevSummary] = useState(null);
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
 
-  const periodDays = { week: 7, month: 30, all: 365 };
   const periodLabels = { week: 'This Week', month: 'This Month', all: 'All Time' };
 
-  // Fetch revenue summary from dedicated endpoint
-  useEffect(() => {
-    db.getRevenue(periodDays[period])
-      .then(data => setRevSummary(data))
-      .catch(() => setRevSummary(null));
-  }, [period]);
-
-  // Also compute from local violations as fallback for line items
+  // Compute stats from the already-filtered violations prop (scoped to this user's lots)
   const now = Date.now();
   const cutoffs = { week: now - 7 * 86400000, month: now - 30 * 86400000, all: 0 };
   const resolved = violations.filter(v => {
@@ -3246,15 +3237,15 @@ function EarningsPage({ violations, lots, isOwner }) {
     return ts >= cutoffs[period];
   }).sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
 
-  // Use server summary if available, else local computation
-  const totalOurs = revSummary ? revSummary.our_revenue_cents : resolved.reduce((s, v) => s + (v.our_revenue || 0), 0);
-  const totalGross = revSummary ? revSummary.gross_revenue_cents : resolved.reduce((s, v) => s + (v.gross_revenue || 0), 0);
-  const totalViolations = revSummary ? revSummary.total_violations : resolved.length;
-  const actionsExecuted = revSummary ? revSummary.actions_executed : resolved.length;
-  const actionRate = revSummary ? revSummary.action_rate : (totalViolations > 0 ? actionsExecuted / totalViolations : 0);
+  const totalOurs = resolved.reduce((s, v) => s + (v.our_revenue || 0), 0);
+  const totalGross = resolved.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+  const totalViolations = resolved.length;
+  const actionsExecuted = resolved.length;
+  const actionRate = totalViolations > 0 ? actionsExecuted / totalViolations : 0;
 
-  // Action breakdown from server
-  const byAction = revSummary?.by_action_type || {};
+  // Action breakdown from local data
+  const byAction = {};
+  resolved.forEach(v => { if (v.action_taken && !['pending', 'plate_correction'].includes(v.action_taken)) byAction[v.action_taken] = (byAction[v.action_taken] || 0) + 1; });
   const actionEntries = Object.entries(byAction).filter(([k, v]) => v > 0 && k !== 'pending');
 
   // Daily earnings for bar chart (last 7 days)
