@@ -2161,44 +2161,70 @@ function ImageZoom({ src, alt, onClose }) {
 
 // ── Violation snapshot with AI bounding boxes ────────────────
 // Renders a snapshot image with detection bounding boxes overlaid.
+// Each detection gets its own box + label tag on the image, plus
+// separate chip tags below the image for quick scanning.
 // detections: array of { class, bbox: [x1,y1,x2,y2] (normalized 0-1), conf }
 function ViolationSnapshot({ src, detections, style, onClick, maxHeight, borderRadius }) {
   const [loaded, setLoaded] = useState(false);
   if (!src) return null;
   const dets = (detections || []).filter(d => d.bbox && d.bbox.length === 4);
+  const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   return (
-    <div style={{position:'relative', overflow:'hidden', borderRadius: borderRadius || 8, background:'var(--snapshot-bg)', ...(style || {})}}>
-      <img
-        src={src} alt="Violation snapshot" loading="lazy"
-        onLoad={() => setLoaded(true)}
-        onClick={onClick}
-        style={{width:'100%', display: loaded ? 'block' : 'none', maxHeight: maxHeight || 'none', objectFit:'cover', cursor: onClick ? 'zoom-in' : 'default'}}
-      />
-      {!loaded && (
-        <div style={{width:'100%', aspectRatio:'16/9', display:'flex', alignItems:'center', justifyContent:'center'}}>
-          <div className="spin" style={{marginRight:8}} />
-          <span style={{color:'var(--text-ghost)', fontSize:12}}>Loading…</span>
-        </div>
-      )}
+    <div style={{borderRadius: borderRadius || 8, overflow:'hidden', background:'var(--snapshot-bg)', ...(style || {})}}>
+      <div style={{position:'relative'}}>
+        <img
+          src={src} alt="Violation snapshot" loading="lazy"
+          onLoad={() => setLoaded(true)}
+          onClick={onClick}
+          style={{width:'100%', display: loaded ? 'block' : 'none', maxHeight: maxHeight || 'none', objectFit:'cover', cursor: onClick ? 'zoom-in' : 'default'}}
+        />
+        {!loaded && (
+          <div style={{width:'100%', aspectRatio:'16/9', display:'flex', alignItems:'center', justifyContent:'center'}}>
+            <div className="spin" style={{marginRight:8}} />
+            <span style={{color:'var(--text-ghost)', fontSize:12}}>Loading…</span>
+          </div>
+        )}
+        {loaded && dets.length > 0 && (
+          <svg style={{position:'absolute', top:0, left:0, width:'100%', height:'100%', pointerEvents:'none'}} viewBox="0 0 100 100" preserveAspectRatio="none">
+            {dets.map((d, i) => {
+              const [x1, y1, x2, y2] = d.bbox;
+              const x = x1 * 100, y = y1 * 100, w = (x2 - x1) * 100, h = (y2 - y1) * 100;
+              const cls = (d.class || 'vehicle').toLowerCase();
+              const color = DET_COLORS[cls] || '#3b82f6';
+              const conf = d.conf != null ? Math.round(d.conf * 100) : null;
+              return (
+                <g key={i}>
+                  <rect x={x} y={y} width={w} height={h} fill={color} fillOpacity="0.08" stroke={color} strokeWidth="0.5" rx="0.3" ry="0.3" />
+                  <rect x={x} y={Math.max(0, y - 3)} width={Math.max(w * 0.55, 9)} height="3" fill={color} rx="0.3" ry="0.3" fillOpacity="0.9" />
+                  <text x={x + 0.6} y={Math.max(0, y - 3) + 2.2} fill="#fff" fontSize="2" fontWeight="800" fontFamily="Inter, sans-serif">
+                    {`#${i+1} ${cls}`}{conf != null ? ` ${conf}%` : ''}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        )}
+      </div>
+      {/* Detection tags — each detection as a separate chip below the image */}
       {loaded && dets.length > 0 && (
-        <svg style={{position:'absolute', top:0, left:0, width:'100%', height:'100%', pointerEvents:'none'}} viewBox="0 0 100 100" preserveAspectRatio="none">
+        <div style={{display:'flex', gap:4, padding:'6px 10px', flexWrap:'wrap', background:'var(--bg-inset)', borderTop:'1px solid var(--border-subtle)'}}>
           {dets.map((d, i) => {
-            const [x1, y1, x2, y2] = d.bbox;
-            const x = x1 * 100, y = y1 * 100, w = (x2 - x1) * 100, h = (y2 - y1) * 100;
-            const isVehicle = d.class !== 'person';
-            const color = isVehicle ? '#3b82f6' : '#f59e0b';
+            const cls = (d.class || 'vehicle').toLowerCase();
+            const color = DET_COLORS[cls] || '#3b82f6';
             const conf = d.conf != null ? Math.round(d.conf * 100) : null;
             return (
-              <g key={i}>
-                <rect x={x} y={y} width={w} height={h} fill="none" stroke={color} strokeWidth="0.4" rx="0.3" ry="0.3" strokeDasharray={isVehicle ? 'none' : '1 0.5'} />
-                <rect x={x} y={Math.max(0, y - 2.8)} width={Math.max(w * 0.6, 8)} height="2.8" fill={color} rx="0.3" ry="0.3" fillOpacity="0.85" />
-                <text x={x + 0.5} y={Math.max(0, y - 2.8) + 2} fill="#fff" fontSize="1.8" fontWeight="700" fontFamily="Inter, sans-serif">
-                  {d.class || 'vehicle'}{conf != null ? ` ${conf}%` : ''}
-                </text>
-              </g>
+              <span key={i} style={{
+                display:'inline-flex', alignItems:'center', gap:4,
+                fontSize:11, fontWeight:700, color: color,
+                background: `${color}15`, border: `1px solid ${color}30`,
+                borderRadius:5, padding:'3px 8px', whiteSpace:'nowrap',
+              }}>
+                <span style={{width:6, height:6, borderRadius:'50%', background:color, flexShrink:0}} />
+                #{i+1} {cls}{conf != null ? ` · ${conf}%` : ''}
+              </span>
             );
           })}
-        </svg>
+        </div>
       )}
     </div>
   );
@@ -2543,16 +2569,14 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               )}
               {/* Snapshot photo with AI bounding boxes — full width, prominent */}
               {v._snapshot_url ? (
-                <div style={{cursor:'pointer'}} onClick={() => setSelectedViol(v)}>
-                  <ViolationSnapshot src={v._snapshot_url} detections={v._detections} maxHeight={220} borderRadius={0} />
-                </div>
+                <ViolationSnapshot src={v._snapshot_url} detections={v._detections} maxHeight={220} borderRadius={0} onClick={() => setSelectedViol(v)} />
               ) : (
-                <div style={{width:'100%', aspectRatio:'16/7', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer'}} onClick={() => setSelectedViol(v)}>
+                <div style={{width:'100%', aspectRatio:'16/7', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center'}}>
                   <span style={{color:'var(--text-ghost)', fontSize:12, fontWeight:500}}>No photo</span>
                 </div>
               )}
               {/* Vehicle summary bar — quick-glance info for the tow operator */}
-              <div className="vehicle-summary" onClick={() => setSelectedViol(v)} style={{cursor:'pointer'}}>
+              <div className="vehicle-summary">
                 {v.plate_text ? (
                   <span className="vs-item" style={{fontFamily:'Courier New, monospace', letterSpacing:'.08em', fontWeight:800, color:'var(--text-primary)'}}>
                     {v.plate_text}
@@ -2578,7 +2602,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                 {v.space_number && <><span className="vs-divider" /><span className="vs-item" style={{color:'var(--text-muted)'}}>#{v.space_number}</span></>}
               </div>
               {/* Lot name + timer row */}
-              <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 16px', cursor:'pointer'}} onClick={() => setSelectedViol(v)}>
+              <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 16px'}}>
                 <div style={{flex:1, minWidth:0}}>
                   <div className="job-lot-name" style={{fontSize:14}}>{lot?.name || 'Unknown Lot'}</div>
                   <div className="job-lot-addr" style={{display:'flex', alignItems:'center', gap:6}}>
@@ -2640,7 +2664,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
             const actionColor = { boot: '#fbbf24', tow: '#f87171', dismissed: '#a78bfa', no_action: '#6b7280', already_gone: '#6b7280' };
             const col = actionColor[v.action_taken?.toLowerCase()] || '#9ca3af';
             return (
-              <div key={v.id} className="job-card" style={{cursor:'pointer'}} onClick={() => setSelectedViol(v)}>
+              <div key={v.id} className="job-card">
                 <div className="job-body">
                   <div className="job-top">
                     <div>
@@ -2674,15 +2698,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       )}
 
       {/* Violation detail modal */}
-      {selectedViol && (
-        <ViolationModal
-          violation={selectedViol}
-          lot={lotMap[selectedViol.lot_id]}
-          onClose={() => setSelectedViol(null)}
-          onAction={(violId, action) => requestAction(violId, action)}
-          isOwner={isOwner}
-        />
-      )}
+      {selectedViol && <ImageZoom src={selectedViol._snapshot_url} alt="Violation snapshot" onClose={() => setSelectedViol(null)} />}
 
     </div>
   );
