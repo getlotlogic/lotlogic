@@ -199,6 +199,208 @@ CREATE POLICY "Public update violations" ON violations FOR UPDATE USING (true);
 CREATE POLICY "Public insert cameras" ON cameras FOR INSERT WITH CHECK (true);
 CREATE POLICY "Public update cameras" ON cameras FOR UPDATE USING (true);
 
+-- ── Action Logs (every boot/tow is recorded here) ─────────────
+-- This is the audit trail for invoicing. Every enforcement action
+-- gets a line item so we can roll up daily invoices.
+CREATE TABLE IF NOT EXISTS action_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  violation_id UUID REFERENCES violations(id) ON DELETE SET NULL,
+  lot_id UUID REFERENCES lots(id) ON DELETE CASCADE,
+  owner_id UUID REFERENCES owners(id),
+  partner_id UUID REFERENCES partners(id),
+  action_type TEXT NOT NULL CHECK (action_type IN ('boot', 'tow')),
+  performed_by TEXT NOT NULL CHECK (performed_by IN ('owner', 'partner')),
+  performer_email TEXT,
+  plate_text TEXT,
+  vehicle_description TEXT,    -- e.g. "Red Toyota Camry"
+  gross_fee INTEGER NOT NULL,  -- dollars charged to vehicle owner
+  our_revenue INTEGER NOT NULL,-- LotLogic's cut in dollars
+  partner_payout INTEGER DEFAULT 0, -- partner's cut in dollars
+  owner_payout INTEGER DEFAULT 0,   -- lot owner's cut in dollars
+  invoiced BOOLEAN DEFAULT false,
+  invoice_id UUID,             -- set when included in an invoice
+  performed_at TIMESTAMPTZ DEFAULT now(),
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_action_logs_lot ON action_logs(lot_id);
+CREATE INDEX IF NOT EXISTS idx_action_logs_owner ON action_logs(owner_id);
+CREATE INDEX IF NOT EXISTS idx_action_logs_partner ON action_logs(partner_id);
+CREATE INDEX IF NOT EXISTS idx_action_logs_performed ON action_logs(performed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_action_logs_uninvoiced ON action_logs(invoiced) WHERE invoiced = false;
+
+-- ── Invoices (daily rollup sent to QuickBooks) ────────────────
+CREATE TABLE IF NOT EXISTS invoices (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  invoice_number TEXT UNIQUE NOT NULL,  -- e.g. "INV-2026-03-15-001"
+  invoice_date DATE NOT NULL,
+  due_date DATE,
+  -- Who is this invoice for?
+  bill_to_type TEXT NOT NULL CHECK (bill_to_type IN ('owner', 'partner')),
+  owner_id UUID REFERENCES owners(id),
+  partner_id UUID REFERENCES partners(id),
+  -- Totals
+  subtotal INTEGER NOT NULL DEFAULT 0,   -- dollars
+  tax INTEGER DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,      -- dollars
+  -- Status
+  status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'void')),
+  -- QuickBooks sync
+  qb_invoice_id TEXT,           -- QuickBooks invoice ID after sync
+  qb_synced_at TIMESTAMPTZ,
+  qb_sync_error TEXT,
+  -- Payment
+  paid_at TIMESTAMPTZ,
+  payment_method TEXT,
+  -- Metadata
+  period_start DATE,
+  period_end DATE,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoices_owner ON invoices(owner_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_partner ON invoices(partner_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(invoice_date DESC);
+CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
+
+-- ── Invoice Line Items ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS invoice_line_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  invoice_id UUID REFERENCES invoices(id) ON DELETE CASCADE,
+  action_log_id UUID REFERENCES action_logs(id),
+  description TEXT NOT NULL,  -- e.g. "Boot - ABC1234 at Main St Lot (3/15)"
+  quantity INTEGER DEFAULT 1,
+  unit_price INTEGER NOT NULL, -- dollars
+  amount INTEGER NOT NULL,     -- dollars (quantity * unit_price)
+  lot_name TEXT,
+  plate_text TEXT,
+  action_type TEXT,
+  performed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_line_items_invoice ON invoice_line_items(invoice_id);
+
+-- ── QuickBooks Integration Settings ───────────────────────────
+CREATE TABLE IF NOT EXISTS qb_settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id UUID REFERENCES owners(id) UNIQUE,
+  realm_id TEXT,               -- QuickBooks company ID
+  access_token TEXT,
+  refresh_token TEXT,
+  token_expires_at TIMESTAMPTZ,
+  income_account_id TEXT,      -- QB account to post revenue to
+  bank_account_id TEXT,        -- checking account for deposits
+  auto_sync BOOLEAN DEFAULT true,
+  last_sync_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- RLS for new tables
+ALTER TABLE action_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoice_line_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qb_settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public read action_logs" ON action_logs FOR SELECT USING (true);
+CREATE POLICY "Public insert action_logs" ON action_logs FOR INSERT WITH CHECK (true);
+CREATE POLICY "Public update action_logs" ON action_logs FOR UPDATE USING (true);
+CREATE POLICY "Public read invoices" ON invoices FOR SELECT USING (true);
+CREATE POLICY "Public insert invoices" ON invoices FOR INSERT WITH CHECK (true);
+CREATE POLICY "Public update invoices" ON invoices FOR UPDATE USING (true);
+CREATE POLICY "Public read invoice_line_items" ON invoice_line_items FOR SELECT USING (true);
+CREATE POLICY "Public insert invoice_line_items" ON invoice_line_items FOR INSERT WITH CHECK (true);
+CREATE POLICY "Public read qb_settings" ON qb_settings FOR SELECT USING (true);
+CREATE POLICY "Public insert qb_settings" ON qb_settings FOR INSERT WITH CHECK (true);
+CREATE POLICY "Public update qb_settings" ON qb_settings FOR UPDATE USING (true);
+
+-- Realtime for invoices
+ALTER PUBLICATION supabase_realtime ADD TABLE invoices;
+ALTER PUBLICATION supabase_realtime ADD TABLE action_logs;
+
+-- Invoice updated_at trigger
+CREATE TRIGGER invoices_updated_at
+  BEFORE UPDATE ON invoices
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER qb_settings_updated_at
+  BEFORE UPDATE ON qb_settings
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ── Daily Invoice Generation Function ─────────────────────────
+-- Call this via Supabase cron (pg_cron) or Edge Function daily
+CREATE OR REPLACE FUNCTION generate_daily_invoices(for_date DATE DEFAULT CURRENT_DATE - 1)
+RETURNS INTEGER AS $$
+DECLARE
+  inv_count INTEGER := 0;
+  rec RECORD;
+  inv_id UUID;
+  inv_num TEXT;
+  line RECORD;
+  inv_total INTEGER;
+BEGIN
+  -- Generate one invoice per owner for all uninvoiced actions on their lots
+  FOR rec IN
+    SELECT DISTINCT l.owner_id
+    FROM action_logs al
+    JOIN lots l ON l.id = al.lot_id
+    WHERE al.invoiced = false
+      AND al.performed_at::date = for_date
+      AND l.owner_id IS NOT NULL
+  LOOP
+    inv_id := gen_random_uuid();
+    inv_num := 'INV-' || to_char(for_date, 'YYYY-MM-DD') || '-' || LPAD((inv_count + 1)::text, 3, '0');
+    inv_total := 0;
+
+    -- Create the invoice
+    INSERT INTO invoices (id, invoice_number, invoice_date, due_date, bill_to_type, owner_id, subtotal, total, status, period_start, period_end)
+    VALUES (inv_id, inv_num, for_date, for_date + 30, 'owner', rec.owner_id, 0, 0, 'draft', for_date, for_date);
+
+    -- Create line items from action logs
+    FOR line IN
+      SELECT al.*, l.name AS lot_name
+      FROM action_logs al
+      JOIN lots l ON l.id = al.lot_id
+      WHERE al.invoiced = false
+        AND al.performed_at::date = for_date
+        AND l.owner_id = rec.owner_id
+      ORDER BY al.performed_at
+    LOOP
+      INSERT INTO invoice_line_items (invoice_id, action_log_id, description, unit_price, amount, lot_name, plate_text, action_type, performed_at)
+      VALUES (
+        inv_id,
+        line.id,
+        INITCAP(line.action_type) || ' - ' || COALESCE(line.plate_text, 'Unknown') || ' at ' || COALESCE(line.lot_name, 'Lot') || ' (' || to_char(line.performed_at, 'MM/DD') || ')',
+        line.gross_fee,
+        line.gross_fee,
+        line.lot_name,
+        line.plate_text,
+        line.action_type,
+        line.performed_at
+      );
+      inv_total := inv_total + line.gross_fee;
+
+      -- Mark action as invoiced
+      UPDATE action_logs SET invoiced = true, invoice_id = inv_id WHERE id = line.id;
+    END LOOP;
+
+    -- Update invoice totals
+    UPDATE invoices SET subtotal = inv_total, total = inv_total WHERE id = inv_id;
+    inv_count := inv_count + 1;
+  END LOOP;
+
+  RETURN inv_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ── Schedule daily invoice generation (requires pg_cron extension) ──
+-- Run this once in Supabase SQL editor after enabling pg_cron:
+-- SELECT cron.schedule('daily-invoices', '0 6 * * *', $$SELECT generate_daily_invoices()$$);
+
 -- ── Updated_at trigger ───────────────────────────────────────
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
