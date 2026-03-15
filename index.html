@@ -2859,8 +2859,8 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const imgRef = useRef(null);
 
   // Live feed state
-  const [feedLive, setFeedLive] = useState(false);
-  const [feedInterval, setFeedInterval] = useState(5000); // ms
+  const [feedLive, setFeedLive] = useState(true);
+  const [feedInterval, setFeedInterval] = useState(10000); // ms — poll every 10s for snapshot updates
   const [feedStatus, setFeedStatus] = useState('loading'); // loading | live | paused | offline
   const [lastFrameTime, setLastFrameTime] = useState(null);
   const feedTimerRef = useRef(null);
@@ -2875,6 +2875,9 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
 
   // Load a single frame + detections
   const loadFrame = useCallback(async (showError = true) => {
+    let frameLoaded = false;
+
+    // Try the direct /frame API first
     try {
       const r = await fetch(API + `/cameras/${cameraId}/frame`, { headers: { 'X-API-Key': API_KEY } });
       if (!r.ok) throw new Error(r.status);
@@ -2883,12 +2886,12 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       setFrameUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
       setLastFrameTime(new Date());
       setFeedStatus('live');
+      frameLoaded = true;
     } catch {
-      if (showError) setError('Could not load camera frame');
-      setFeedStatus('offline');
+      // /frame endpoint failed — will fall back to Supabase snapshot below
     }
 
-    // Also fetch latest snapshot metadata for detection data
+    // Fetch latest snapshot metadata for detection data (and as frame fallback)
     try {
       let snap;
       if (supabase) {
@@ -2897,6 +2900,21 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       } else {
         snap = await apiFetch(`/cameras/${cameraId}/latest-snapshot`);
       }
+
+      // If /frame failed, use the snapshot storage_url as the frame image
+      if (!frameLoaded && snap?.storage_url) {
+        const ts = snap.captured_at ? new Date(snap.captured_at).getTime() : Date.now();
+        setFrameUrl(snap.storage_url + '?t=' + ts);
+        setLastFrameTime(snap.captured_at ? new Date(snap.captured_at) : new Date());
+        setFeedStatus('live');
+        frameLoaded = true;
+      }
+
+      if (!frameLoaded) {
+        if (showError) setError('Could not load camera frame');
+        setFeedStatus('offline');
+      }
+
       setSnapshotMeta(snap);
       // Build detections from snapshot detections array
       const dets = [];
@@ -2931,7 +2949,11 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       }
       setDetections(dets);
     } catch {
-      // Snapshot endpoint may not exist yet — silent fail, keep any existing detections
+      // Snapshot fetch also failed
+      if (!frameLoaded) {
+        if (showError) setError('Could not load camera frame');
+        setFeedStatus('offline');
+      }
     }
   }, [cameraId]);
 
@@ -2939,6 +2961,17 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   useEffect(() => {
     loadFrame(true);
   }, [loadFrame]);
+
+  // Supabase realtime: auto-refresh when new snapshot arrives for this camera
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase.channel('ze-snapshots-' + cameraId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'snapshots', filter: 'camera_id=eq.' + cameraId }, () => {
+        loadFrame(false);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [cameraId, loadFrame]);
 
   // Live feed polling
   useEffect(() => {
