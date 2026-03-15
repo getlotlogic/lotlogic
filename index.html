@@ -1245,19 +1245,25 @@ function normalizeViolation(v) {
 // Real Supabase table names: lot_owners, enforcement_partners, lots, cameras,
 // violations, snapshots, camera_zones
 const db = {
-  async getOwners() {
+  async getOwners(email) {
     if (supabase) {
-      const { data, error } = await supabase.from('lot_owners').select('*');
+      let q = supabase.from('lot_owners').select('*');
+      if (email) q = q.eq('email', email.trim().toLowerCase());
+      const { data, error } = await q;
       if (!error && data) return data;
     }
-    return apiFetch('/owners');
+    const params = email ? `?email=${encodeURIComponent(email.trim().toLowerCase())}` : '';
+    return apiFetch(`/owners${params}`);
   },
-  async getPartners() {
+  async getPartners(email) {
     if (supabase) {
-      const { data, error } = await supabase.from('enforcement_partners').select('*');
+      let q = supabase.from('enforcement_partners').select('*');
+      if (email) q = q.eq('email', email.trim().toLowerCase());
+      const { data, error } = await q;
       if (!error && data) return data;
     }
-    return apiFetch('/partners');
+    const params = email ? `?email=${encodeURIComponent(email.trim().toLowerCase())}` : '';
+    return apiFetch(`/partners${params}`);
   },
   async getLots(filter = {}) {
     if (supabase) {
@@ -1849,8 +1855,8 @@ function LoginPage({ onLogin }) {
       const needle = email.trim().toLowerCase();
       // Check lot owners first, then enforcement partners
       const [owners, partners] = await Promise.all([
-        db.getOwners().catch(() => []),
-        db.getPartners().catch(() => []),
+        db.getOwners(needle).catch(() => []),
+        db.getPartners(needle).catch(() => []),
       ]);
       // Find matching accounts — if duplicates exist, check which has lots assigned
       const ownerMatches = owners.filter(o => o.email?.toLowerCase() === needle);
