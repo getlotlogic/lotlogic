@@ -7,6 +7,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -977,6 +978,30 @@
 
     /* ── Smooth page transitions ── */
     .page-enter { animation: cardIn .3s ease both; }
+
+    /* ── Supabase realtime pulse ── */
+    .conn-indicator.online .conn-dot.on {
+      animation: pulse-dot 2s ease infinite;
+    }
+
+    /* ── Enhanced card hover ── */
+    .job-card { transition: transform .15s ease, box-shadow .15s ease; }
+    .job-card:active { transform: scale(.99); }
+    .lot-card { transition: transform .15s ease, box-shadow .15s ease; }
+    .lot-card:active { transform: scale(.99); }
+
+    /* ── Improved scrollbar ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #1e2235; border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: #374151; }
+
+    /* ── Data source badge ── */
+    .data-source-badge {
+      font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+      text-transform: uppercase; letter-spacing: .06em;
+      background: rgba(74,222,128,.08); color: #4ade80; border: 1px solid rgba(74,222,128,.15);
+    }
   </style>
 </head>
 <body>
@@ -985,6 +1010,12 @@
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef } = React;
 
+// ── Supabase client ──────────────────────────────────────────
+const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_T8TvjHkzDM_LxvPQRwOieg_K77nC9ZY';
+const supabase = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+// ── Rails API fallback ───────────────────────────────────────
 const API = 'https://lotlogic-backend-production.up.railway.app';
 const API_KEY = 'UJn9mwti15jbhgRUnhw6-VOk3TAt1VJAK3VNCIdAHa8';
 
@@ -996,6 +1027,162 @@ async function apiFetch(path, options = {}) {
   if (!r.ok) throw new Error(r.status);
   return r.json();
 }
+
+// ── Supabase data layer (with Rails fallback) ────────────────
+const db = {
+  async getOwners() {
+    if (supabase) {
+      const { data, error } = await supabase.from('owners').select('*');
+      if (!error && data) return data;
+    }
+    return apiFetch('/owners');
+  },
+  async getPartners() {
+    if (supabase) {
+      const { data, error } = await supabase.from('partners').select('*');
+      if (!error && data) return data;
+    }
+    return apiFetch('/partners');
+  },
+  async getLots(filter = {}) {
+    if (supabase) {
+      let q = supabase.from('lots').select('*');
+      if (filter.owner_id) q = q.eq('owner_id', filter.owner_id);
+      if (filter.market_id) q = q.eq('market_id', filter.market_id);
+      const { data, error } = await q;
+      if (!error && data) return data;
+    }
+    const params = filter.owner_id ? `?owner_id=${filter.owner_id}` : filter.market_id ? `?market_id=${filter.market_id}` : '';
+    return apiFetch(`/lots${params}`);
+  },
+  async getLotState(lotId) {
+    if (supabase) {
+      const [violRes, camRes] = await Promise.all([
+        supabase.from('violations').select('id').eq('lot_id', lotId).eq('status', 'pending'),
+        supabase.from('cameras').select('*, snapshots:snapshots(id, url, captured_at, vehicles_detected, people_detected, plates_read, detections, plate_readings)').eq('lot_id', lotId).order('created_at', { foreignTable: 'snapshots', ascending: false }).limit(1, { foreignTable: 'snapshots' }),
+      ]);
+      if (!violRes.error && !camRes.error) {
+        const cameras = (camRes.data || []).map(c => ({
+          camera_id: c.id,
+          camera_name: c.name,
+          online: c.online,
+          zones: c.zones || [],
+          deployment_profile: c.deployment_profile,
+          snapshot_width: c.snapshot_width,
+          snapshot_height: c.snapshot_height,
+          poll_interval_sec: c.poll_interval_sec,
+          bandwidth_budget_mb: c.bandwidth_budget_mb,
+          bandwidth_used_mb: c.bandwidth_used_mb,
+          last_heartbeat: c.last_heartbeat,
+          channel: c.channel,
+          active_violations: 0,
+          latest_snapshot: c.snapshots?.[0] || null,
+        }));
+        return {
+          total_active_violations: violRes.data?.length || 0,
+          cameras_online: cameras.filter(c => c.online).length,
+          cameras_total: cameras.length,
+          cameras,
+        };
+      }
+    }
+    return apiFetch(`/lots/${lotId}/state`);
+  },
+  async getViolations(lotId) {
+    if (supabase) {
+      const { data, error } = await supabase.from('violations').select('*').eq('lot_id', lotId).order('detected_at', { ascending: false }).limit(200);
+      if (!error && data) return data;
+    }
+    return apiFetch(`/violations?lot_id=${lotId}&page_size=200`);
+  },
+  async recordAction(violId, action, extra = {}) {
+    if (supabase) {
+      const updates = {
+        status: 'resolved',
+        action_taken: action,
+        resolved_at: new Date().toISOString(),
+        ...extra,
+      };
+      // Set revenue based on action type
+      if (action === 'boot') updates.our_revenue = 15000; // $150
+      if (action === 'tow') updates.our_revenue = 25000; // $250
+      const { error } = await supabase.from('violations').update(updates).eq('id', violId);
+      if (!error) return { success: true };
+    }
+    return apiFetch(`/violations/${violId}/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...extra }),
+    });
+  },
+  async getSnapshotUrl(snapshotId) {
+    if (supabase) {
+      const { data, error } = await supabase.from('snapshots').select('url').eq('id', snapshotId).single();
+      if (!error && data) return data;
+    }
+    return apiFetch(`/snapshots/${snapshotId}/url`);
+  },
+  async getRevenue(days) {
+    if (supabase) {
+      const since = new Date(Date.now() - days * 86400000).toISOString();
+      const { data, error } = await supabase.from('violations').select('*').eq('status', 'resolved').gte('resolved_at', since);
+      if (!error && data) {
+        const totalOur = data.reduce((s, v) => s + (v.our_revenue || 0), 0);
+        const totalGross = data.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+        const actioned = data.filter(v => v.action_taken && v.action_taken !== 'pending');
+        const byAction = {};
+        actioned.forEach(v => { byAction[v.action_taken] = (byAction[v.action_taken] || 0) + 1; });
+        return {
+          our_revenue_cents: totalOur,
+          gross_revenue_cents: totalGross,
+          total_violations: data.length,
+          actions_executed: actioned.length,
+          action_rate: data.length > 0 ? actioned.length / data.length : 0,
+          by_action_type: byAction,
+        };
+      }
+    }
+    return apiFetch(`/violations/revenue?days=${days}`);
+  },
+  async addCamera(body) {
+    if (supabase) {
+      const { data, error } = await supabase.from('cameras').insert(body).select().single();
+      if (!error) return data;
+    }
+    return apiFetch('/cameras', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  },
+  async updateZones(cameraId, zones) {
+    if (supabase) {
+      const { error } = await supabase.from('cameras').update({ zones }).eq('id', cameraId);
+      if (!error) return { success: true };
+    }
+    return apiFetch(`/cameras/${cameraId}/zones`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ zones }),
+    });
+  },
+  // Realtime subscription for violations
+  subscribeViolations(lotIds, callback) {
+    if (!supabase) return null;
+    const channel = supabase.channel('violations-realtime')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'violations',
+      }, payload => {
+        if (lotIds.includes(payload.new?.lot_id) || lotIds.includes(payload.old?.lot_id)) {
+          callback(payload);
+        }
+      })
+      .subscribe();
+    return channel;
+  },
+};
 
 // ── Time helpers ──────────────────────────────────────────────
 function elapsed(isoStr) {
@@ -1111,7 +1298,7 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
 
   useEffect(() => {
     if (!violation?.snapshot_id) return;
-    apiFetch(`/snapshots/${violation.snapshot_id}/url`)
+    db.getSnapshotUrl(violation.snapshot_id)
       .then(data => setSnapshotUrl(data.url))
       .catch(() => {});
   }, [violation?.snapshot_id]);
@@ -1210,11 +1397,7 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
                         onClick={async () => {
                           setSavingPlate(true);
                           try {
-                            await apiFetch(`/violations/${violation.id}/action`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ action: 'plate_correction', plate_text: manualPlate.trim() }),
-                            });
+                            await db.recordAction(violation.id, 'plate_correction', { plate_text: manualPlate.trim(), status: 'pending' });
                             addToast('Plate saved', 'success');
                             if (onAction) onAction();
                           } catch {
@@ -1365,8 +1548,8 @@ function LoginPage({ onLogin }) {
       const needle = email.trim().toLowerCase();
       // Check lot owners first, then enforcement partners
       const [owners, partners] = await Promise.all([
-        apiFetch('/owners').catch(() => []),
-        apiFetch('/partners').catch(() => []),
+        db.getOwners().catch(() => []),
+        db.getPartners().catch(() => []),
       ]);
       // Find matching accounts — if duplicates exist, check which has lots assigned
       const ownerMatches = owners.filter(o => o.email?.toLowerCase() === needle);
@@ -1375,7 +1558,7 @@ function LoginPage({ onLogin }) {
         if (ownerMatches.length > 1) {
           // Check which owner actually has lots
           const lotsChecks = await Promise.all(ownerMatches.map(o =>
-            apiFetch(`/lots?owner_id=${o.id}`).then(l => l.length).catch(() => 0)
+            db.getLots({ owner_id: o.id }).then(l => l.length).catch(() => 0)
           ));
           const withLots = ownerMatches.findIndex((_, i) => lotsChecks[i] > 0);
           if (withLots >= 0) ownerMatch = ownerMatches[withLots];
@@ -1388,7 +1571,7 @@ function LoginPage({ onLogin }) {
         if (partnerMatches.length > 1) {
           // Check which partner actually has lots assigned
           const lotsChecks = await Promise.all(partnerMatches.map(p =>
-            apiFetch(`/lots?market_id=${p.market_id}`).then(lots =>
+            db.getLots({ market_id: p.market_id }).then(lots =>
               lots.filter(l => String(l.partner_id) === String(p.id)).length
             ).catch(() => 0)
           ));
@@ -1410,7 +1593,7 @@ function LoginPage({ onLogin }) {
           <div className="login-shield">LL</div>
           <div className="login-wordmark">Lot<span>Logic</span></div>
         </div>
-        <div className="login-tagline">Enforcement portal — sign in to get started</div>
+        <div className="login-tagline">AI-powered parking enforcement — sign in to get started</div>
         <form onSubmit={submit}>
           <label className="field-label">Your email</label>
           <input
@@ -1499,11 +1682,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner }) {
     setConfirm(null);
     setActing(violId);
     try {
-      await apiFetch(`/violations/${violId}/action`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      });
+      await db.recordAction(violId, action);
       addToast(`${actionLabels[action] || action} recorded successfully`, 'success');
       setSelectedViol(null);
       if (onAction) onAction();
@@ -1904,7 +2083,13 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
 
     // Also fetch latest snapshot metadata for detection data
     try {
-      const snap = await apiFetch(`/cameras/${cameraId}/latest-snapshot`);
+      let snap;
+      if (supabase) {
+        const { data } = await supabase.from('snapshots').select('*').eq('camera_id', cameraId).order('captured_at', { ascending: false }).limit(1).single();
+        snap = data;
+      } else {
+        snap = await apiFetch(`/cameras/${cameraId}/latest-snapshot`);
+      }
       setSnapshotMeta(snap);
       // Build detections from snapshot detections array
       const dets = [];
@@ -2074,11 +2259,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
     setSaving(true);
     setError('');
     try {
-      await apiFetch(`/cameras/${cameraId}/zones`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ zones }),
-      });
+      await db.updateZones(cameraId, zones);
       if (onSave) onSave(zones);
       onClose();
     } catch (e) {
@@ -2383,11 +2564,7 @@ function AddCameraModal({ lotId, onClose, onAdded }) {
       const body = { name: name.trim(), lot_id: lotId };
       if (rtspUrl.trim()) body.rtsp_url = rtspUrl.trim();
       if (channel.trim()) body.channel = parseInt(channel) || 0;
-      await apiFetch('/cameras', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      await db.addCamera(body);
       addToast(`Camera "${name.trim()}" added`, 'success');
       if (onAdded) onAdded();
       onClose();
@@ -2724,7 +2901,7 @@ function EarningsPage({ violations, lots, isOwner }) {
 
   // Fetch revenue summary from dedicated endpoint
   useEffect(() => {
-    apiFetch(`/violations/revenue?days=${periodDays[period]}`)
+    db.getRevenue(periodDays[period])
       .then(data => setRevSummary(data))
       .catch(() => setRevSummary(null));
   }, [period]);
@@ -3076,9 +3253,16 @@ function AccountPage({ user, onLogout }) {
         </div>
         <div className="settings-row">
           <div className="settings-row-info">
+            <div className="settings-row-label">Database</div>
+            <div className="settings-row-desc">Supabase realtime connection</div>
+          </div>
+          <div className="settings-row-value" style={{color: supabase ? '#4ade80' : '#fbbf24'}}>{supabase ? 'Connected' : 'Rails API'}</div>
+        </div>
+        <div className="settings-row">
+          <div className="settings-row-info">
             <div className="settings-row-label">Version</div>
           </div>
-          <div className="settings-row-value">2.4.0</div>
+          <div className="settings-row-value">3.0.0</div>
         </div>
       </div>
 
@@ -3103,22 +3287,24 @@ function App() {
   const isOwner = owner?._role === 'owner';
   const isOperator = owner?._role === 'partner';
 
+  const realtimeRef = useRef(null);
+
   const loadData = useCallback(async (o, silent = false) => {
     if (!o) return;
     if (!silent) setLoading(true);
     try {
-      const lotsUrl = o._role === 'partner'
-        ? `/lots?market_id=${o.market_id}`
-        : `/lots?owner_id=${o.id}`;
-      let lotsData = await apiFetch(lotsUrl);
+      const filter = o._role === 'partner'
+        ? { market_id: o.market_id }
+        : { owner_id: o.id };
+      let lotsData = await db.getLots(filter);
       if (o._role === 'partner') {
         lotsData = lotsData.filter(l => String(l.partner_id) === String(o.id));
       }
       setLots(lotsData);
 
       const [states, violsArrays] = await Promise.all([
-        Promise.all(lotsData.map(l => apiFetch(`/lots/${l.id}/state`).then(s => [l.id, s]).catch(() => [l.id, null]))),
-        Promise.all(lotsData.map(l => apiFetch(`/violations?lot_id=${l.id}&page_size=200`).catch(() => []))),
+        Promise.all(lotsData.map(l => db.getLotState(l.id).then(s => [l.id, s]).catch(() => [l.id, null]))),
+        Promise.all(lotsData.map(l => db.getViolations(l.id).catch(() => []))),
       ]);
 
       setLotStates(Object.fromEntries(states));
@@ -3142,15 +3328,29 @@ function App() {
 
   function logout() {
     clearInterval(timerRef.current);
+    if (realtimeRef.current) { supabase?.removeChannel(realtimeRef.current); realtimeRef.current = null; }
     setOwner(null); setLots([]); setLotStates({}); setViolations([]);
     setTab('jobs');
   }
 
+  // Auto-refresh + Supabase realtime
   useEffect(() => {
     if (!owner) return;
     timerRef.current = setInterval(() => loadData(owner, true), 30000);
     return () => clearInterval(timerRef.current);
   }, [owner, loadData]);
+
+  // Subscribe to realtime violation changes
+  useEffect(() => {
+    if (!owner || lots.length === 0) return;
+    const lotIds = lots.map(l => l.id);
+    const channel = db.subscribeViolations(lotIds, (payload) => {
+      // On any violation change, do a silent refresh
+      loadData(owner, true);
+    });
+    realtimeRef.current = channel;
+    return () => { if (channel) supabase?.removeChannel(channel); };
+  }, [owner, lots.length, loadData]);
 
   if (!owner) return <LoginPage onLogin={login} />;
 
@@ -3184,7 +3384,7 @@ function App() {
           {lastRefresh && (
             <div className={`conn-indicator online`}>
               <span className="conn-dot on" />
-              <span>Live</span>
+              <span>{supabase ? 'Realtime' : 'Live'}</span>
             </div>
           )}
           <div className="header-name">{owner.business_name || owner.contact_name}</div>
