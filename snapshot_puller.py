@@ -97,7 +97,10 @@ def supabase_patch(table, match_params, data):
 # ── Camera discovery ─────────────────────────────────────────────────────────
 
 def get_cameras(lot_id=None, camera_id=None):
-    params = {"active": "eq.true", "select": "id,name,lot_id,rtsp_url,channel,poll_interval_sec"}
+    params = {
+        "active": "eq.true",
+        "select": "id,name,lot_id,rtsp_url,http_snapshot_url,ip_address,port,channel,poll_interval_sec",
+    }
     if camera_id:
         params["id"] = f"eq.{camera_id}"
     elif lot_id:
@@ -117,11 +120,22 @@ class RTSPStream:
     def __init__(self, camera):
         self.camera = camera
         self.name = camera["name"]
-        self.rtsp_url = camera["rtsp_url"]
+        self.rtsp_url = self._build_rtsp_url(camera["rtsp_url"])
         self.cap = None
         self.failures = 0
         self.frames = 0
         self.connect()
+
+    @staticmethod
+    def _build_rtsp_url(rtsp_url):
+        """Inject credentials into RTSP URL if not already present."""
+        from urllib.parse import urlparse, quote
+        parsed = urlparse(rtsp_url)
+        if parsed.username:
+            return rtsp_url
+        user = os.getenv("CAMERA_USER", "admin")
+        password = os.getenv("CAMERA_PASS", "Na9HTk&C1234")
+        return f"rtsp://{quote(user)}:{quote(password)}@{parsed.hostname}:{parsed.port or 554}{parsed.path}"
 
     def connect(self):
         try:
@@ -178,12 +192,10 @@ class RTSPStream:
 
 class HTTPStream:
     """
-    Grab snapshots via HTTP — works from anywhere the camera is reachable.
+    Grab snapshots via Reolink HTTP API with token-based auth.
+    Works through Cloudflare Tunnel or direct LAN access.
 
-    Supports:
-      - Reolink HTTP API: http://<ip>/cgi-bin/api.cgi?cmd=Snap&channel=0&user=admin&password=xxx
-      - Generic MJPEG/JPEG snapshot URLs
-      - Any URL that returns image/jpeg
+    Flow: Login → get token → use token for Snap requests → auto-refresh.
     """
 
     def __init__(self, camera, http_url=None):
@@ -191,52 +203,83 @@ class HTTPStream:
         self.name = camera["name"]
         self.failures = 0
         self.frames = 0
+        self.token = None
+        self.token_expiry = 0
 
-        # Build HTTP snapshot URL from RTSP URL if not provided
+        # Determine the base URL (scheme + host)
         if http_url:
-            self.url = http_url
+            from urllib.parse import urlparse
+            parsed = urlparse(http_url)
+            self.base_url = f"{parsed.scheme}://{parsed.netloc}"
+        elif camera.get("ip_address") and "trycloudflare.com" in camera.get("ip_address", ""):
+            self.base_url = f"https://{camera['ip_address']}"
         else:
-            self.url = self._rtsp_to_http(camera["rtsp_url"], camera.get("channel", 0))
+            from urllib.parse import urlparse
+            parsed = urlparse(camera.get("rtsp_url", ""))
+            self.base_url = f"http://{parsed.hostname}"
 
-        log.info("[%s] HTTP mode: %s", self.name, self.url)
+        self.channel = camera.get("channel", 0)
+        self.user = os.getenv("CAMERA_USER", "admin")
+        self.password = os.getenv("CAMERA_PASS", "Na9HTk&C1234")
 
-    @staticmethod
-    def _rtsp_to_http(rtsp_url, channel=0):
-        """
-        Convert rtsp://user:pass@host:554/path to Reolink HTTP snapshot URL.
-        Reolink cameras expose: http://<host>/cgi-bin/api.cgi?cmd=Snap&channel=N
-        """
-        from urllib.parse import urlparse
-        parsed = urlparse(rtsp_url)
-        host = parsed.hostname
-        user = parsed.username or "admin"
-        password = parsed.password or ""
+        log.info("[%s] HTTP mode via %s", self.name, self.base_url)
+        self._login()
 
-        if password:
-            return f"http://{host}/cgi-bin/api.cgi?cmd=Snap&channel={channel}&rs=snap&user={user}&password={password}"
-        else:
-            # No auth embedded — try without (some cameras allow it on LAN)
-            return f"http://{host}/cgi-bin/api.cgi?cmd=Snap&channel={channel}&rs=snap"
+    def _login(self):
+        """Login to Reolink API and get a session token."""
+        url = f"{self.base_url}/cgi-bin/api.cgi?cmd=Login"
+        payload = [{"cmd": "Login", "param": {"User": {
+            "Version": "0", "userName": self.user, "password": self.password,
+        }}}]
+        try:
+            r = requests.post(url, json=payload, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            if data and data[0].get("code") == 0:
+                token_info = data[0]["value"]["Token"]
+                self.token = token_info["name"]
+                self.token_expiry = time.time() + token_info.get("leaseTime", 3600) - 60
+                log.info("[%s] Logged in (token expires in %ds)", self.name, token_info.get("leaseTime", 3600))
+            else:
+                error = data[0].get("error", {}).get("detail", "unknown") if data else "no response"
+                log.error("[%s] Login failed: %s", self.name, error)
+        except requests.exceptions.RequestException as e:
+            log.error("[%s] Login request failed: %s", self.name, e)
+
+    def _ensure_token(self):
+        """Refresh token if expired."""
+        if self.token is None or time.time() > self.token_expiry:
+            log.info("[%s] Token expired, re-logging in", self.name)
+            self._login()
 
     def grab_frame(self):
+        self._ensure_token()
+        if not self.token:
+            self.failures += 1
+            return None
+
+        url = f"{self.base_url}/cgi-bin/api.cgi?cmd=Snap&channel={self.channel}&rs=snap&token={self.token}"
         try:
-            r = requests.get(self.url, timeout=10, stream=True)
+            r = requests.get(url, timeout=10)
             r.raise_for_status()
+
+            # Check if we got JSON (error) instead of an image
             content_type = r.headers.get("content-type", "")
-            if "image" not in content_type and "octet" not in content_type:
-                log.warning("[%s] Unexpected content-type: %s", self.name, content_type)
+            if "json" in content_type or "text" in content_type:
+                # Token may have expired mid-session
+                log.warning("[%s] Got non-image response, refreshing token", self.name)
+                self.token = None
                 self.failures += 1
                 return None
 
             jpeg_bytes = r.content
             if len(jpeg_bytes) < 1000:
-                log.warning("[%s] Frame too small (%d bytes), likely an error", self.name, len(jpeg_bytes))
+                log.warning("[%s] Frame too small (%d bytes)", self.name, len(jpeg_bytes))
                 self.failures += 1
                 return None
 
             self.failures = 0
             self.frames += 1
-            # We don't know dimensions without decoding — pass 0,0
             return jpeg_bytes, 0, 0
 
         except requests.exceptions.RequestException as e:
