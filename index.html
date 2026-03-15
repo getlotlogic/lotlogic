@@ -1636,14 +1636,21 @@ const db = {
           status: 'resolved',
           resolved_at: new Date().toISOString(),
         };
-        // Calculate revenue from partner fee schedule for boot/tow
-        if ((action === 'boot' || action === 'tow') && extra._partner) {
-          const p = extra._partner;
-          const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
-          const share = p.revenue_share != null ? p.revenue_share : 0.30;
-          updates.gross_revenue = grossFee;
-          updates.our_revenue = Math.round(grossFee * share);
-          updates.partner_id = p.id;
+        // Calculate revenue from fee schedule for boot/tow
+        if (action === 'boot' || action === 'tow') {
+          if (extra._partner) {
+            const p = extra._partner;
+            const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
+            const share = p.revenue_share != null ? p.revenue_share : 0.30;
+            updates.gross_revenue = grossFee;
+            updates.our_revenue = Math.round(grossFee * share);
+            updates.partner_id = p.id;
+          } else if (extra._ownerFees) {
+            const f = extra._ownerFees;
+            const grossFee = action === 'boot' ? (f.boot_fee || 75) : (f.tow_fee || 250);
+            updates.gross_revenue = grossFee;
+            updates.our_revenue = grossFee; // Owner keeps 100%
+          }
         }
         const { error } = await supabase.from('violations').update(updates).eq('id', violId);
         if (error) throw new Error(error.message || 'Update failed');
@@ -2429,10 +2436,14 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     setActing(violId);
     try {
       const extra = {};
-      // Pass partner fee schedule for revenue calculation on boot/tow
-      // Only set partner_id if user is actually a partner (not an owner)
-      if ((action === 'boot' || action === 'tow') && user && user._role === 'partner') {
-        extra._partner = { id: user.id, boot_fee: user.boot_fee, tow_fee: user.tow_fee, revenue_share: user.revenue_share };
+      // Pass fee schedule for revenue calculation on boot/tow
+      if ((action === 'boot' || action === 'tow') && user) {
+        if (user._role === 'partner') {
+          extra._partner = { id: user.id, boot_fee: user.boot_fee, tow_fee: user.tow_fee, revenue_share: user.revenue_share };
+        } else {
+          // Owner acting directly — record gross revenue with 100% to LotLogic (no partner split)
+          extra._ownerFees = { boot_fee: 75, tow_fee: 250 };
+        }
       }
       const result = await db.recordAction(violId, action, extra);
       if (result && result.success !== false) {
