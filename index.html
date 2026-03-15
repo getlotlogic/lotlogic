@@ -2916,36 +2916,27 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       }
 
       setSnapshotMeta(snap);
-      // Build detections from snapshot detections array
+      // Build detections from raw_detections (actual DB schema: raw_detections.detections[].{bbox,conf,class})
       const dets = [];
-      if (snap?.detections) {
-        snap.detections.forEach((d, i) => {
-          dets.push({
-            id: d.id || `det_${i}`,
-            type: d.type || d.object_type || 'vehicle',
-            bbox: d.bbox || d.bounding_box || null,
-            plate_text: d.plate_text || d.license_plate || null,
-            color: d.color || d.vehicle_color || null,
-            vehicle_type: d.vehicle_type || null,
-            confidence: d.confidence != null ? parseFloat(d.confidence) : null,
-            label: d.label || d.class_name || null,
-            zone_id: d.zone_id || null,
-            track_id: d.track_id || null,
-          });
+      const rawDets = snap?.raw_detections?.detections || snap?.detections || [];
+      rawDets.forEach((d, i) => {
+        dets.push({
+          id: d.id || `det_${i}`,
+          type: d.class === 'person' ? 'person' : 'vehicle',
+          bbox: d.bbox || null,
+          plate_text: d.plate_text || null,
+          color: d.color || null,
+          vehicle_type: d.class || null,
+          confidence: d.conf != null ? parseFloat(d.conf) : (d.confidence != null ? parseFloat(d.confidence) : null),
+          label: d.class || d.label || null,
+          zone_id: d.zone_id || null,
+          track_id: d.track_id || null,
         });
-      }
-      // Also incorporate vehicles_detected / people_detected counts if detections array absent
+      });
+      // Fallback: use vehicles_detected count if no detection details
       if (dets.length === 0 && snap) {
-        const vc = snap.vehicles_detected || snap.vehicle_count || 0;
-        const pc = snap.people_detected || snap.person_count || snap.humans_detected || 0;
+        const vc = snap.vehicles_detected || 0;
         for (let i = 0; i < vc; i++) dets.push({ id: `v_${i}`, type: 'vehicle', bbox: null, plate_text: null, color: null, confidence: null, label: 'Vehicle' });
-        for (let i = 0; i < pc; i++) dets.push({ id: `p_${i}`, type: 'person', bbox: null, plate_text: null, color: null, confidence: null, label: 'Person' });
-        // Plate readings
-        if (snap.plate_readings) {
-          snap.plate_readings.forEach((pr, i) => {
-            dets.push({ id: `pl_${i}`, type: 'vehicle', bbox: pr.bbox || null, plate_text: pr.plate_text || pr.text, color: pr.vehicle_color || null, confidence: pr.confidence, label: 'Vehicle', vehicle_type: pr.vehicle_type || null });
-          });
-        }
       }
       setDetections(dets);
     } catch {
@@ -4460,7 +4451,9 @@ function App() {
     const match = path.match(/\/violations\/([0-9a-f-]{36})/i);
     return match ? match[1] : null;
   });
-  const [tab, setTab] = useState('jobs');
+  const [tab, setTab] = useState(() => {
+    try { return localStorage.getItem('lotlogic_tab') || 'jobs'; } catch { return 'jobs'; }
+  });
   const [lots, setLots] = useState([]);
   const [lotStates, setLotStates] = useState({});
   const [violations, setViolations] = useState([]);
@@ -4468,6 +4461,11 @@ function App() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const timerRef = useRef(null);
+
+  // Persist tab selection across refresh
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_tab', tab); } catch {}
+  }, [tab]);
 
   const isOwner = owner?._role === 'owner';
   const isOperator = owner?._role === 'partner';
@@ -4562,7 +4560,7 @@ function App() {
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
     };
-  });
+  }); // eslint-disable-line -- intentionally re-runs to capture latest handlePullRefresh/showPTR
 
   // Load data on mount if session was restored
   useEffect(() => { if (owner) loadData(owner); }, []); // eslint-disable-line react-hooks/exhaustive-deps
