@@ -70,15 +70,20 @@ CREATE INDEX IF NOT EXISTS idx_cameras_lot ON cameras(lot_id);
 
 -- ── Snapshots (camera captures) ──────────────────────────────
 CREATE TABLE IF NOT EXISTS snapshots (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id SERIAL PRIMARY KEY,
   camera_id UUID REFERENCES cameras(id) ON DELETE CASCADE,
-  url TEXT,
+  lot_id UUID REFERENCES lots(id) ON DELETE CASCADE,
   captured_at TIMESTAMPTZ DEFAULT now(),
+  storage_key TEXT,
+  storage_url TEXT,
+  width INTEGER,
+  height INTEGER,
+  size_bytes INTEGER,
+  trigger_type TEXT DEFAULT 'poll',
+  inference_ran BOOLEAN DEFAULT false,
+  inference_ms INTEGER,
   vehicles_detected INTEGER DEFAULT 0,
-  people_detected INTEGER DEFAULT 0,
-  plates_read INTEGER DEFAULT 0,
-  detections JSONB DEFAULT '[]'::jsonb,
-  plate_readings JSONB DEFAULT '[]'::jsonb,
+  raw_detections JSONB DEFAULT '{"count":0,"detections":[]}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 

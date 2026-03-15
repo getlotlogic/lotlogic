@@ -643,34 +643,7 @@
     .confirm-cancel { background: var(--bg-inset); color: var(--text-muted); }
     .confirm-ok { color: #fff; }
 
-    /* ── Success overlay (boot/tow confirmation) ── */
-    .success-overlay {
-      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 260;
-      background: rgba(0,0,0,.75); backdrop-filter: blur(8px);
-      display: flex; align-items: center; justify-content: center; padding: 24px;
-      animation: successFadeIn .3s ease;
-    }
-    @keyframes successFadeIn { from { opacity: 0; } to { opacity: 1; } }
-    .success-box {
-      background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 20px; padding: 32px 28px;
-      max-width: 340px; width: 100%; text-align: center;
-      animation: successPop .4s cubic-bezier(.175,.885,.32,1.275);
-    }
-    @keyframes successPop { from { transform: scale(.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-    .success-icon {
-      width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 16px;
-      display: flex; align-items: center; justify-content: center; font-size: 32px;
-    }
-    .success-icon.boot { background: rgba(251,191,36,.15); }
-    .success-icon.tow { background: rgba(239,68,68,.15); }
-    .success-title { font-size: 20px; font-weight: 800; color: var(--text-primary); margin-bottom: 6px; }
-    .success-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.5; }
-    .success-done {
-      width: 100%; padding: 14px; border-radius: 12px; font-size: 15px; font-weight: 700;
-      cursor: pointer; font-family: inherit; border: none; background: #3b82f6; color: #fff;
-      transition: opacity .15s;
-    }
-    .success-done:active { opacity: .7; }
+
 
     /* ── Nav icons ── */
     .nav-icon { width: 20px; height: 20px; }
@@ -1400,6 +1373,31 @@
     }
     .skip-link:focus { top: 8px; }
 
+    /* ── Violation snapshot with detections ── */
+    .viol-snap-wrap { position: relative; overflow: hidden; background: var(--snapshot-bg); }
+    .viol-snap-badge {
+      position: absolute; top: 6px; left: 6px; z-index: 1;
+      display: flex; align-items: center; gap: 4px;
+      background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
+      border-radius: 5px; padding: 3px 7px;
+      font-size: 9px; font-weight: 700; color: #fff;
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    .viol-snap-badge .ai-dot {
+      width: 5px; height: 5px; border-radius: 50%; background: #4ade80;
+      box-shadow: 0 0 4px rgba(74,222,128,.6);
+    }
+
+    /* ── Vehicle summary bar (tow operator) ── */
+    .vehicle-summary {
+      display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+      background: var(--bg-inset); border-top: 1px solid var(--border-subtle);
+      font-size: 13px; font-weight: 600; color: var(--text-secondary);
+      overflow-x: auto; white-space: nowrap;
+    }
+    .vehicle-summary .vs-divider { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; }
+    .vehicle-summary .vs-item { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+
     /* ── Last updated indicator ── */
     .last-updated {
       font-size: 10px; font-weight: 600; color: var(--text-ghost);
@@ -1534,7 +1532,7 @@ const db = {
           channel: cam.channel,
           active_violations: camViols,
           latest_snapshot: snap ? {
-            url: snap.url,
+            url: snap.storage_url || snap.url,
             captured_at: snap.captured_at,
             vehicles_detected: snap.vehicles_detected || 0,
             people_detected: 0,
@@ -1559,21 +1557,58 @@ const db = {
     }
     return apiFetch(`/lots/${lotId}/state`);
   },
+  // Shared: attach snapshot URL + detections to violation rows.
+  // If the violation's own snapshot has no storage_url, fall back to
+  // the latest snapshot from the same camera that does.
+  async _enrichViolations(data) {
+    const viols = data.map(v => {
+      const snap = v.snapshots;
+      const nv = normalizeViolation(v);
+      if (snap) {
+        nv._snapshot_url = snap.storage_url || null;
+        nv._detections = snap.raw_detections?.detections || [];
+      }
+      delete nv.snapshots;
+      return nv;
+    });
+    // Find violations missing snapshot URLs and batch-fetch from their cameras
+    const missing = viols.filter(v => !v._snapshot_url && v.camera_id);
+    if (missing.length > 0 && supabase) {
+      try {
+        const camIds = [...new Set(missing.map(v => v.camera_id))];
+        const camSnaps = {};
+        await Promise.all(camIds.map(async cid => {
+          const { data: snaps } = await supabase
+            .from('snapshots')
+            .select('storage_url, raw_detections')
+            .eq('camera_id', cid)
+            .not('storage_url', 'is', null)
+            .order('captured_at', { ascending: false })
+            .limit(1);
+          if (snaps?.[0]) camSnaps[cid] = snaps[0];
+        }));
+        missing.forEach(v => {
+          const fallback = camSnaps[v.camera_id];
+          if (fallback) {
+            v._snapshot_url = fallback.storage_url;
+            if (!v._detections?.length) v._detections = fallback.raw_detections?.detections || [];
+          }
+        });
+      } catch (e) {
+        console.error('Snapshot fallback failed:', e);
+      }
+    }
+    return viols;
+  },
   async getViolations(lotId) {
     if (supabase) {
       const { data, error } = await supabase
         .from('violations')
-        .select('*, snapshots:snapshot_id(url)')
+        .select('*, snapshots:snapshot_id(storage_url, raw_detections)')
         .eq('lot_id', lotId)
         .order('detected_at', { ascending: false })
         .limit(200);
-      if (!error && data) return data.map(v => {
-        const snap = v.snapshots;
-        const nv = normalizeViolation(v);
-        if (snap) nv._snapshot_url = snap.url;
-        delete nv.snapshots;
-        return nv;
-      });
+      if (!error && data) return this._enrichViolations(data);
     }
     return apiFetch(`/violations?lot_id=${lotId}&page_size=200`);
   },
@@ -1581,67 +1616,79 @@ const db = {
     if (supabase) {
       const { data, error } = await supabase
         .from('violations')
-        .select('*, snapshots:snapshot_id(url)')
+        .select('*, snapshots:snapshot_id(storage_url, raw_detections)')
         .eq('partner_id', partnerId)
         .order('detected_at', { ascending: false })
         .limit(500);
-      if (!error && data) return data.map(v => {
-        const snap = v.snapshots;
-        const nv = normalizeViolation(v);
-        if (snap) nv._snapshot_url = snap.url;
-        delete nv.snapshots;
-        return nv;
-      });
+      if (!error && data) return this._enrichViolations(data);
     }
     return [];
   },
   async recordAction(violId, action, extra = {}) {
     if (supabase) {
       try {
-        const updates = { action_taken: action, ...extra };
-        if (action !== 'plate_correction') {
-          updates.status = 'resolved';
-          updates.resolved_at = new Date().toISOString();
-        }
-        // Calculate revenue from partner fee schedule for boot/tow actions
-        if ((action === 'boot' || action === 'tow') && extra._partner) {
-          const p = extra._partner;
-          const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
-          const share = p.revenue_share != null ? p.revenue_share : 0.30;
-          updates.gross_revenue = grossFee;
-          updates.our_revenue = Math.round(grossFee * share);
-          updates.partner_id = p.id;
-          delete updates._partner;
-        }
         if (action === 'plate_correction') {
           const { error } = await supabase.from('violations').update({
             plate_text: extra.plate_text,
           }).eq('id', violId);
-          if (!error) return { success: true };
-          console.error('Supabase plate update error:', error);
-        } else {
-          const { error } = await supabase.from('violations').update(updates).eq('id', violId);
-          if (!error) return { success: true };
-          console.error('Supabase action update error:', error);
+          if (error) throw new Error(error.message || 'Plate update failed');
+          return { success: true };
         }
+        // Build clean update object — only real DB columns
+        const updates = {
+          action_taken: action,
+          status: 'resolved',
+          resolved_at: new Date().toISOString(),
+        };
+        // Calculate revenue from fee schedule for boot/tow
+        if (action === 'boot' || action === 'tow') {
+          if (extra._partner) {
+            const p = extra._partner;
+            const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
+            const share = p.revenue_share != null ? p.revenue_share : 0.30;
+            updates.gross_revenue = grossFee;
+            updates.our_revenue = Math.round(grossFee * share);
+            updates.partner_id = p.id;
+          } else if (extra._ownerFees) {
+            const f = extra._ownerFees;
+            const grossFee = action === 'boot' ? (f.boot_fee || 75) : (f.tow_fee || 250);
+            updates.gross_revenue = grossFee;
+            updates.our_revenue = grossFee; // Owner keeps 100%
+          }
+        }
+        const { error } = await supabase.from('violations').update(updates).eq('id', violId);
+        if (error) throw new Error(error.message || 'Update failed');
+        return { success: true };
       } catch (e) {
-        console.error('Supabase recordAction exception:', e);
+        console.error('Supabase recordAction error:', e);
+        // Try Rails API fallback
+        try {
+          const { _partner, ...cleanExtra } = extra;
+          return await apiFetch(`/violations/${violId}/action`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, ...cleanExtra }),
+          });
+        } catch (_) {
+          throw e; // Both failed — throw original Supabase error
+        }
       }
     }
+    const { _partner, ...cleanExtra } = extra;
     return apiFetch(`/violations/${violId}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, ...extra }),
+      body: JSON.stringify({ action, ...cleanExtra }),
     });
   },
   async getSnapshotUrl(snapshotId) {
     if (supabase) {
       const { data, error } = await supabase
         .from('snapshots')
-        .select('url')
+        .select('storage_url')
         .eq('id', snapshotId)
         .single();
-      if (!error && data) return { url: data.url };
+      if (!error && data?.storage_url) return { url: data.storage_url };
     }
     return apiFetch(`/snapshots/${snapshotId}/url`);
   },
@@ -1893,7 +1940,7 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
   useEffect(() => {
     if (snapshotUrl || !violation?.snapshot_id) return;
     db.getSnapshotUrl(violation.snapshot_id)
-      .then(data => setSnapshotUrl(data.url))
+      .then(data => { if (data?.url) setSnapshotUrl(data.url); else setImgLoading(false); })
       .catch(() => { setImgLoading(false); });
   }, [violation?.snapshot_id, snapshotUrl]);
 
@@ -1907,44 +1954,48 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
         <div className="viol-modal-handle" />
         <div style={{position:'relative'}}>
           {snapshotUrl ? (
-            <img className="viol-modal-img" src={snapshotUrl} alt="Violation snapshot"
-              onLoad={() => setImgLoading(false)}
-              onError={() => { setImgLoading(false); setSnapshotUrl(null); }}
-              style={{display: imgLoading ? 'none' : 'block', cursor:'zoom-in'}}
-              onClick={() => setZoomed(true)} />
-          ) : null}
-          {(imgLoading && violation.snapshot_id) && (
+            <ViolationSnapshot
+              src={snapshotUrl}
+              detections={violation._detections}
+              onClick={() => setZoomed(true)}
+              borderRadius={0}
+            />
+          ) : (imgLoading && violation.snapshot_id) ? (
             <div style={{width:'100%', aspectRatio:'16/9', background:'var(--snapshot-bg)', display:'flex', alignItems:'center', justifyContent:'center'}}>
               <div className="spin" style={{marginRight:8}} />
               <span style={{color:'var(--text-ghost)', fontSize:13}}>Loading snapshot</span>
             </div>
-          )}
-          {!violation.snapshot_id && (
+          ) : violation.snapshot_id ? (
+            <div style={{width:'100%', aspectRatio:'16/9', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
+              <span style={{color:'var(--text-faint)', fontSize:12, fontWeight:500}}>Photo failed to load</span>
+            </div>
+          ) : (
             <div style={{width:'100%', aspectRatio:'16/9', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-ghost)" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M3 16l4-4 4 4 4-4 5 5"/></svg>
               <span style={{color:'var(--text-faint)', fontSize:12, fontWeight:500}}>No photo available</span>
             </div>
           )}
-          {(!imgLoading && !snapshotUrl && violation.snapshot_id) && (
-            <div style={{width:'100%', aspectRatio:'16/9', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
-              <span style={{color:'var(--text-faint)', fontSize:12, fontWeight:500}}>Photo failed to load</span>
-            </div>
-          )}
-          {/* Detection confidence bar overlay */}
-          {snapshotUrl && !imgLoading && violation.confidence && (
+          {/* AI confidence + time overlays */}
+          {snapshotUrl && violation.confidence && (
             <div style={{position:'absolute', top:8, right:8, background:'rgba(0,0,0,.7)', backdropFilter:'blur(4px)', borderRadius:6, padding:'4px 8px', display:'flex', alignItems:'center', gap:6}}>
               <span style={{fontSize:10, fontWeight:700, color:'#fff'}}>AI</span>
               <div className="conf-bar" style={{width:50}}>
                 <div className="conf-bar-fill" style={{width: `${Math.round(parseFloat(violation.confidence) * 100)}%`, background: parseFloat(violation.confidence) > 0.8 ? '#4ade80' : parseFloat(violation.confidence) > 0.5 ? '#fbbf24' : '#ef4444'}} />
               </div>
-              <span style={{fontSize:10, fontWeight:700, color:'var(--text-ghost)'}}>{Math.round(parseFloat(violation.confidence) * 100)}%</span>
+              <span style={{fontSize:10, fontWeight:700, color:'rgba(255,255,255,.6)'}}>{Math.round(parseFloat(violation.confidence) * 100)}%</span>
             </div>
           )}
-          {/* Time ago badge */}
-          {snapshotUrl && !imgLoading && (
+          {snapshotUrl && (
             <div style={{position:'absolute', bottom:8, right:8}}>
               <span className="time-ago">{timeAgo(violation.detected_at)}</span>
+            </div>
+          )}
+          {/* Detection count badge */}
+          {snapshotUrl && violation._detections?.length > 0 && (
+            <div className="viol-snap-badge" style={{bottom:8, left:8, top:'auto'}}>
+              <span className="ai-dot" />
+              {violation._detections.length} detection{violation._detections.length !== 1 ? 's' : ''}
             </div>
           )}
         </div>
@@ -2140,6 +2191,89 @@ function ImageZoom({ src, alt, onClose }) {
   );
 }
 
+// ── Violation snapshot with AI bounding boxes ────────────────
+// Renders a snapshot image with detection bounding boxes overlaid.
+// Each detection gets its own box + label tag on the image, plus
+// separate chip tags below the image for quick scanning.
+// detections: array of { class, bbox: [x1,y1,x2,y2] (normalized 0-1), conf }
+function ViolationSnapshot({ src, detections, style, onClick, maxHeight, borderRadius }) {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  // Timeout: if image hasn't loaded in 10s, treat as failed
+  useEffect(() => {
+    if (!src || loaded || failed) return;
+    const t = setTimeout(() => setFailed(true), 10000);
+    return () => clearTimeout(t);
+  }, [src, loaded, failed]);
+  if (!src || failed) return (
+    <div style={{width:'100%', aspectRatio:'16/7', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center', borderRadius: borderRadius || 8, ...(style || {})}}>
+      <span style={{color:'var(--text-ghost)', fontSize:12, fontWeight:500}}>No photo</span>
+    </div>
+  );
+  const dets = (detections || []).filter(d => d.bbox && d.bbox.length === 4);
+  const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
+  return (
+    <div style={{borderRadius: borderRadius || 8, overflow:'hidden', background:'var(--snapshot-bg)', ...(style || {})}}>
+      <div style={{position:'relative'}}>
+        <img
+          src={src} alt="Violation snapshot"
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+          onClick={onClick}
+          style={{width:'100%', display: loaded ? 'block' : 'none', maxHeight: maxHeight || 'none', objectFit:'cover', cursor: onClick ? 'zoom-in' : 'default'}}
+        />
+        {!loaded && (
+          <div style={{width:'100%', aspectRatio:'16/9', display:'flex', alignItems:'center', justifyContent:'center'}}>
+            <div className="spin" style={{marginRight:8}} />
+            <span style={{color:'var(--text-ghost)', fontSize:12}}>Loading…</span>
+          </div>
+        )}
+        {loaded && dets.length > 0 && (
+          <svg style={{position:'absolute', top:0, left:0, width:'100%', height:'100%', pointerEvents:'none'}} viewBox="0 0 100 100" preserveAspectRatio="none">
+            {dets.map((d, i) => {
+              const [x1, y1, x2, y2] = d.bbox;
+              const x = x1 * 100, y = y1 * 100, w = (x2 - x1) * 100, h = (y2 - y1) * 100;
+              const cls = (d.class || 'vehicle').toLowerCase();
+              const color = DET_COLORS[cls] || '#3b82f6';
+              const conf = d.conf != null ? Math.round(d.conf * 100) : null;
+              return (
+                <g key={i}>
+                  <rect x={x} y={y} width={w} height={h} fill={color} fillOpacity="0.08" stroke={color} strokeWidth="0.5" rx="0.3" ry="0.3" />
+                  <rect x={x} y={Math.max(0, y - 3)} width={Math.max(w * 0.55, 9)} height="3" fill={color} rx="0.3" ry="0.3" fillOpacity="0.9" />
+                  <text x={x + 0.6} y={Math.max(0, y - 3) + 2.2} fill="#fff" fontSize="2" fontWeight="800" fontFamily="Inter, sans-serif">
+                    {`#${i+1} ${cls}`}{conf != null ? ` ${conf}%` : ''}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        )}
+      </div>
+      {/* Detection tags — each detection as a separate chip below the image */}
+      {loaded && dets.length > 0 && (
+        <div style={{display:'flex', gap:4, padding:'6px 10px', flexWrap:'wrap', background:'var(--bg-inset)', borderTop:'1px solid var(--border-subtle)'}}>
+          {dets.map((d, i) => {
+            const cls = (d.class || 'vehicle').toLowerCase();
+            const color = DET_COLORS[cls] || '#3b82f6';
+            const conf = d.conf != null ? Math.round(d.conf * 100) : null;
+            return (
+              <span key={i} style={{
+                display:'inline-flex', alignItems:'center', gap:4,
+                fontSize:11, fontWeight:700, color: color,
+                background: `${color}15`, border: `1px solid ${color}30`,
+                borderRadius:5, padding:'3px 8px', whiteSpace:'nowrap',
+              }}>
+                <span style={{width:6, height:6, borderRadius:'50%', background:color, flexShrink:0}} />
+                #{i+1} {cls}{conf != null ? ` · ${conf}%` : ''}
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Login ─────────────────────────────────────────────────────
 function LoginPage({ onLogin }) {
   const [email, setEmail] = useState(() => localStorage.getItem('lotlogic_email') || '');
@@ -2228,10 +2362,10 @@ function LoginPage({ onLogin }) {
 function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, deepLinkViolationId, user }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
   const [selectedViol, setSelectedViol] = useState(null);
-  const [confirm, setConfirm] = useState(null);
+
   const [acting, setActing] = useState(null);
   const actingRef = useRef(false); // Guard against double-tap race condition
-  const [successAction, setSuccessAction] = useState(null);
+
   const { addToast } = useToast();
 
   // Auto-select violation from SMS deep link
@@ -2304,7 +2438,6 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     // Guard against double-tap: if already processing any action, bail out
     if (actingRef.current) return;
     actingRef.current = true;
-    setConfirm(null);
     setSelectedViol(null);
     // Verify violation belongs to this user's lots before executing
     const viol = violations.find(v => v.id === violId);
@@ -2316,19 +2449,18 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     setActing(violId);
     try {
       const extra = {};
-      // Pass partner fee schedule for revenue calculation on boot/tow
+      // Pass fee schedule for revenue calculation on boot/tow
       if ((action === 'boot' || action === 'tow') && user) {
-        extra._partner = { id: user.id, boot_fee: user.boot_fee, tow_fee: user.tow_fee, revenue_share: user.revenue_share };
+        if (user._role === 'partner') {
+          extra._partner = { id: user.id, boot_fee: user.boot_fee, tow_fee: user.tow_fee, revenue_share: user.revenue_share };
+        } else {
+          // Owner acting directly — record gross revenue with 100% to LotLogic (no partner split)
+          extra._ownerFees = { boot_fee: 75, tow_fee: 250 };
+        }
       }
       const result = await db.recordAction(violId, action, extra);
       if (result && result.success !== false) {
-        if (action === 'boot' || action === 'tow') {
-          const viol = violations.find(v => v.id === violId);
-          const lotName = viol ? lotMap[viol.lot_id]?.name : null;
-          setSuccessAction({ action, lotName, plate: viol?.plate_text, zone: viol?.zone_id || viol?.space_number });
-        } else {
-          addToast(`${actionLabels[action] || action} recorded`, 'success');
-        }
+        addToast(`${actionLabels[action] || action} recorded`, 'success');
       }
       if (onAction) onAction();
     } catch (e) {
@@ -2341,15 +2473,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
 
   function requestAction(violId, action) {
     haptic(action === 'tow' ? 'heavy' : action === 'boot' ? 'medium' : 'light');
-    const bootFee = user?.boot_fee || 75;
-    const towFee = user?.tow_fee || 250;
-    if (action === 'tow') {
-      setConfirm({ violId, action, title: 'Confirm Tow', body: `This will record a tow for this vehicle. Tow fee: $${towFee}. Continue?`, color: '#ef4444' });
-    } else if (action === 'boot') {
-      setConfirm({ violId, action, title: 'Confirm Boot', body: `This will record a boot for this vehicle. Boot fee: $${bootFee}. Continue?`, color: '#fbbf24' });
-    } else {
-      handleAction(violId, action);
-    }
+    handleAction(violId, action);
   }
 
   const [search, setSearch] = useState('');
@@ -2492,84 +2616,77 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   Needs attention — waiting {timer.val} {timer.unit}
                 </div>
               )}
-              <div className="job-body" style={{cursor:'pointer'}} onClick={() => setSelectedViol(v)}>
-                <div className="job-top">
-                  <div style={{flex:1}}>
-                    <div className="job-lot-name">{lot?.name || 'Unknown Lot'}</div>
-                    <div className="job-lot-addr">{lot?.address || ''}</div>
+              {/* Snapshot photo with AI bounding boxes — full width, prominent */}
+              <ViolationSnapshot src={v._snapshot_url} detections={v._detections} maxHeight={220} borderRadius={0} onClick={v._snapshot_url ? () => setSelectedViol(v) : undefined} />
+              {/* Vehicle summary bar — quick-glance info for the tow operator */}
+              <div className="vehicle-summary">
+                {v.plate_text ? (
+                  <span className="vs-item" style={{fontFamily:'Courier New, monospace', letterSpacing:'.08em', fontWeight:800, color:'var(--text-primary)'}}>
+                    {v.plate_text}
+                  </span>
+                ) : (
+                  <span className="vs-item" style={{color:'var(--red)', fontSize:12}}>
+                    <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="2"/><line x1="4" y1="4" x2="12" y2="12" stroke="currentColor" strokeWidth="2"/></svg>
+                    No plate
+                  </span>
+                )}
+                <span className="vs-divider" />
+                <span className="vs-item">
+                  {displayColor(v.vehicle_color) ? (
+                    <>
+                      <span style={{width:10, height:10, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(128,128,128,.3)', flexShrink:0}} />
+                      <span style={{textTransform:'capitalize'}}>{[v.vehicle_color, v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : null, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</span>
+                    </>
+                  ) : (
+                    <span style={{color:'var(--text-muted)', textTransform:'capitalize'}}>{[v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : 'Vehicle', v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</span>
+                  )}
+                </span>
+                {v.zone_id && <><span className="vs-divider" /><span className="vs-item" style={{color:'var(--text-muted)'}}>Zone {v.zone_id}</span></>}
+                {v.space_number && <><span className="vs-divider" /><span className="vs-item" style={{color:'var(--text-muted)'}}>#{v.space_number}</span></>}
+              </div>
+              {/* Lot name + timer row */}
+              <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 16px'}}>
+                <div style={{flex:1, minWidth:0}}>
+                  <div className="job-lot-name" style={{fontSize:14}}>{lot?.name || 'Unknown Lot'}</div>
+                  <div className="job-lot-addr" style={{display:'flex', alignItems:'center', gap:6}}>
+                    {fmtTime(v.detected_at)} · {(v.violation_type || 'violation').replace(/_/g, ' ')}
                     {v.sms_sent_at && (
-                      <div style={{display:'inline-flex', alignItems:'center', gap:4, marginTop:4, fontSize:10, fontWeight:600, color: v.sms_delivered ? 'var(--green)' : 'var(--yellow)', background: v.sms_delivered ? 'rgba(74,222,128,.08)' : 'rgba(251,191,36,.08)', border:`1px solid ${v.sms_delivered ? 'rgba(74,222,128,.2)' : 'rgba(251,191,36,.2)'}`, padding:'2px 7px', borderRadius:4}}>
-                        {v.sms_delivered ? '✓ SMS Delivered' : '○ SMS Sent'} · {timeAgo(v.sms_sent_at)}
-                      </div>
+                      <span style={{fontSize:10, fontWeight:600, color: v.sms_delivered ? 'var(--green)' : 'var(--yellow)'}}>
+                        {v.sms_delivered ? '✓ SMS' : '○ SMS'}
+                      </span>
                     )}
                   </div>
-                  {timer && (
-                    <div className="job-timer">
-                      <div className={`job-timer-val ${timer.long ? 'long' : ''}`}>{timer.val}</div>
-                      <div className="job-timer-label">{timer.unit}</div>
-                    </div>
-                  )}
                 </div>
-                {v._snapshot_url && (
-                  <img src={v._snapshot_url} alt="" style={{width:'100%', borderRadius:8, marginTop:8, maxHeight:160, objectFit:'cover', background:'var(--snapshot-bg)'}} loading="lazy" />
+                {timer && (
+                  <div className="job-timer">
+                    <div className={`job-timer-val ${timer.long ? 'long' : ''}`}>{timer.val}</div>
+                    <div className="job-timer-label">{timer.unit}</div>
+                  </div>
                 )}
-                <div className="job-details">
-                  {v.plate_text ? (
-                    <span className="plate-tag" style={{display:'flex', alignItems:'center', gap:5}}>
-                      {v.plate_text}
-                      {v.confidence && (() => {
-                        const conf = Math.round(parseFloat(v.confidence) * 100);
-                        const confColor = conf >= 80 ? '#4ade80' : conf >= 50 ? '#fbbf24' : '#ef4444';
-                        return <span style={{fontSize:9, fontWeight:700, color:confColor, fontFamily:'Inter, sans-serif', letterSpacing:0}}>{conf}%</span>;
-                      })()}
-                    </span>
-                  ) : (
-                    <span className="plate-tag no-plate" style={{display:'flex', alignItems:'center', gap:4, background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.25)', color:'#f87171'}}>
-                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#f87171" strokeWidth="2"/><line x1="4" y1="4" x2="12" y2="12" stroke="#f87171" strokeWidth="2"/></svg>
-                      No plate
-                    </span>
-                  )}
-                  {displayColor(v.vehicle_color) ? (
-                    <span className="job-tag" style={{display:'flex', alignItems:'center', gap:4}}>
-                      <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(255,255,255,.15)', flexShrink:0}} />
-                      <strong style={{textTransform:'capitalize'}}>{v.vehicle_color}</strong>
-                    </span>
-                  ) : (
-                    <span className="job-tag" style={{display:'flex', alignItems:'center', gap:4, color:'var(--text-faint)'}}>
-                      <span style={{width:8, height:8, borderRadius:3, background:'var(--unknown-pattern)', border:'1px solid var(--unknown-border)', flexShrink:0}} />
-                      <strong>Unknown</strong>
-                    </span>
-                  )}
-                  {v.vehicle_type && v.vehicle_type !== 'car' && <span className="job-tag"><strong style={{textTransform:'capitalize'}}>{v.vehicle_type}</strong></span>}
-                  {v.vehicle_make && <span className="job-tag" style={{color:'var(--purple)'}}><strong style={{textTransform:'capitalize'}}>{[v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</strong></span>}
-                  {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
-                  {v.space_number && <span className="job-tag">Space <strong>#{v.space_number}</strong></span>}
-                  <span className="job-tag"><strong>{fmtTime(v.detected_at)}</strong></span>
-                </div>
               </div>
-              {/* Action buttons with fee amounts */}
-              <div className="job-actions-row" role="group" aria-label="Enforcement actions">
-                <button className="action-btn boot" disabled={anyActing} onClick={() => requestAction(v.id, 'boot')} aria-label={`Boot vehicle for $${user?.boot_fee || 75}`}>
+              {/* Primary actions — Boot and Tow get prominent placement */}
+              <div className="job-actions-row" role="group" aria-label="Enforcement actions" style={{gap:8, padding:'10px 12px'}}>
+                <button className="action-btn boot" disabled={anyActing} onClick={() => requestAction(v.id, 'boot')} aria-label={`Boot vehicle for $${user?.boot_fee || 75}`} style={{padding:'12px 6px', fontSize:13}}>
                   {isActing ? '…' : `Boot · $${user?.boot_fee || 75}`}
                 </button>
-                <button className="action-btn tow" disabled={anyActing} onClick={() => requestAction(v.id, 'tow')} aria-label={`Tow vehicle for $${user?.tow_fee || 250}`}>
+                <button className="action-btn tow" disabled={anyActing} onClick={() => requestAction(v.id, 'tow')} aria-label={`Tow vehicle for $${user?.tow_fee || 250}`} style={{padding:'12px 6px', fontSize:13}}>
                   {isActing ? '…' : `Tow · $${user?.tow_fee || 250}`}
                 </button>
-                <button className="action-btn dismiss" disabled={anyActing} onClick={() => requestAction(v.id, 'dismissed')} aria-label="Dismiss violation">
-                  Dismiss
-                </button>
-                <button className="action-btn gone" disabled={anyActing} onClick={() => requestAction(v.id, 'already_gone')} aria-label="Mark vehicle as already gone">
-                  Gone
-                </button>
               </div>
-              <div className="job-footer">
-                <span className={`job-type-tag ${typeClass}`}>
-                  {(v.violation_type || 'Violation').replace(/_/g, ' ')}
-                </span>
+              <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 12px 10px', gap:8}}>
+                <div style={{display:'flex', gap:6}}>
+                  <button className="action-btn dismiss" disabled={anyActing} onClick={() => requestAction(v.id, 'dismissed')} aria-label="Dismiss violation" style={{minWidth:60}}>
+                    Dismiss
+                  </button>
+                  <button className="action-btn gone" disabled={anyActing} onClick={() => requestAction(v.id, 'already_gone')} aria-label="Mark vehicle as already gone" style={{minWidth:60}}>
+                    Gone
+                  </button>
+                </div>
                 {lot?.address && (
-                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener" style={{fontSize:13, color:'#3b82f6', fontWeight:600, textDecoration:'none'}}
+                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener" style={{fontSize:12, color:'#3b82f6', fontWeight:600, textDecoration:'none', display:'flex', alignItems:'center', gap:3}}
                     onClick={e => e.stopPropagation()}>
-                    Directions →
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                    Directions
                   </a>
                 )}
               </div>
@@ -2590,7 +2707,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
             const actionColor = { boot: '#fbbf24', tow: '#f87171', dismissed: '#a78bfa', no_action: '#6b7280', already_gone: '#6b7280' };
             const col = actionColor[v.action_taken?.toLowerCase()] || '#9ca3af';
             return (
-              <div key={v.id} className="job-card" style={{cursor:'pointer'}} onClick={() => setSelectedViol(v)}>
+              <div key={v.id} className="job-card">
                 <div className="job-body">
                   <div className="job-top">
                     <div>
@@ -2624,47 +2741,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       )}
 
       {/* Violation detail modal */}
-      {selectedViol && (
-        <ViolationModal
-          violation={selectedViol}
-          lot={lotMap[selectedViol.lot_id]}
-          onClose={() => setSelectedViol(null)}
-          onAction={(violId, action) => requestAction(violId, action)}
-          isOwner={isOwner}
-        />
-      )}
+      {selectedViol && <ImageZoom src={selectedViol._snapshot_url} alt="Violation snapshot" onClose={() => setSelectedViol(null)} />}
 
-      {/* Confirm dialog */}
-      {confirm && (
-        <ConfirmDialog
-          title={confirm.title}
-          body={confirm.body}
-          confirmLabel={actionLabels[confirm.action]}
-          confirmColor={confirm.color}
-          onConfirm={() => handleAction(confirm.violId, confirm.action)}
-          onCancel={() => setConfirm(null)}
-        />
-      )}
-
-      {successAction && (
-        <div className="success-overlay" onClick={() => setSuccessAction(null)}>
-          <div className="success-box" onClick={e => e.stopPropagation()}>
-            <div className={`success-icon ${successAction.action}`}>
-              {successAction.action === 'boot' ? '\uD83D\uDD12' : '\uD83D\uDE9A'}
-            </div>
-            <div className="success-title">
-              {successAction.action === 'boot' ? 'Vehicle Booted' : 'Vehicle Towed'}
-            </div>
-            <div className="success-sub">
-              {successAction.lotName && <>{successAction.lotName}<br/></>}
-              {successAction.zone && <>Zone/Space: {successAction.zone}<br/></>}
-              {successAction.plate && <>Plate: {successAction.plate}<br/></>}
-              Action recorded successfully.
-            </div>
-            <button className="success-done" onClick={() => setSuccessAction(null)}>Done</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
