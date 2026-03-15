@@ -1520,7 +1520,7 @@ const db = {
         return {
           camera_id: cam.id,
           camera_name: cam.name,
-          online: cam.status === 'active' || cam.active === true,
+          online: (cam.status === 'active' || cam.active === true) && (!cam.last_heartbeat || (Date.now() - new Date(cam.last_heartbeat).getTime()) < 300000),
           zones,
           deployment_profile: cam.camera_type === 'lte_solar' ? 'lte_solar' : 'wired',
           snapshot_width: cam.snapshot_width || 640,
@@ -3552,6 +3552,8 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
               <div className="cam-sheet">
                 {state.cameras.map(cam => {
                   const snap = cam.latest_snapshot;
+                  const snapAge = snap?.captured_at ? (Date.now() - new Date(snap.captured_at).getTime()) / 1000 : Infinity;
+                  const snapStale = snapAge > 300; // 5 minutes
                   const snapVehicles = snap?.vehicles_detected || snap?.vehicle_count || 0;
                   const snapPeople = snap?.people_detected || snap?.person_count || snap?.humans_detected || 0;
                   const snapPlates = snap?.plates_read || snap?.plate_count || (snap?.plate_readings ? snap.plate_readings.length : 0);
@@ -3577,7 +3579,10 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                             </button>
                           )}
                           {snap && (
-                            <div className="cam-time">{fmtTime(snap.captured_at)}</div>
+                            <div className="cam-time" style={snapStale ? {color:'#fbbf24'} : undefined}>
+                              {snapStale ? smartDate(snap.captured_at) + ' ' : ''}{fmtTime(snap.captured_at)}
+                              {snapStale && <span style={{fontSize:9, marginLeft:4, color:'#ef4444'}}>(stale)</span>}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -3594,6 +3599,11 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                             <ZoneOverlay zones={cam.zones} />
                             {cam.active_violations > 0 && (
                               <div className="cam-viol-overlay">{cam.active_violations} open</div>
+                            )}
+                            {snapStale && (
+                              <div style={{position:'absolute', top:8, right:8, background:'rgba(239,68,68,.85)', color:'#fff', borderRadius:6, padding:'3px 8px', fontSize:10, fontWeight:700, backdropFilter:'blur(4px)'}}>
+                                {snapAge > 3600 ? `${Math.floor(snapAge/3600)}h ago` : `${Math.floor(snapAge/60)}m ago`}
+                              </div>
                             )}
                           </>
                         ) : (
