@@ -778,11 +778,11 @@
     }
     .ze-header {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
+      padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
     }
-    .ze-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+    .ze-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
     .ze-btn {
-      padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+      padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600;
       cursor: pointer; border: none; font-family: inherit; transition: opacity .15s;
     }
     .ze-btn:active { opacity: .7; }
@@ -798,62 +798,62 @@
     .ze-svg {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     }
-    .ze-poly { stroke-width: 2; fill-opacity: 0.2; cursor: pointer; }
-    .ze-poly.selected { stroke-dasharray: 6 3; fill-opacity: 0.3; stroke-width: 2.5; }
+    .ze-poly { stroke-width: 0.4; fill-opacity: 0.15; cursor: pointer; }
+    .ze-poly.selected { stroke-dasharray: 1.5 0.8; fill-opacity: 0.25; stroke-width: 0.5; }
     .ze-vertex {
-      r: 5; fill: #fff; stroke: #3b82f6; stroke-width: 2; cursor: grab;
+      r: 0.8; fill: #fff; stroke: #3b82f6; stroke-width: 0.3; cursor: grab;
     }
-    .ze-vertex:hover { r: 7; }
-    .ze-drawing-line { stroke: #3b82f6; stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; }
-    .ze-drawing-poly { fill: rgba(59,130,246,.15); stroke: #3b82f6; stroke-width: 1.5; }
+    .ze-vertex:hover { r: 1.1; }
+    .ze-drawing-line { stroke: #3b82f6; stroke-width: 0.3; stroke-dasharray: 1 0.8; fill: none; }
+    .ze-drawing-poly { fill: rgba(59,130,246,.1); stroke: #3b82f6; stroke-width: 0.3; }
 
     .ze-toolbar {
-      display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border-subtle);
+      display: flex; gap: 6px; padding: 5px 12px; border-top: 1px solid var(--border-subtle);
       background: var(--bg-card); flex-shrink: 0; flex-wrap: wrap; align-items: center;
     }
     .ze-zone-list {
-      display: flex; gap: 6px; flex-wrap: wrap; flex: 1;
+      display: flex; gap: 4px; flex-wrap: wrap; flex: 1;
     }
     .ze-zone-chip {
-      padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+      padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
       cursor: pointer; border: 1.5px solid transparent; transition: all .15s;
     }
     .ze-zone-chip.active { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.25); }
 
     .ze-panel {
-      padding: 12px 16px; border-top: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
+      padding: 6px 12px; border-top: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
     }
-    .ze-panel-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .ze-panel-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
     .ze-panel-row:last-child { margin-bottom: 0; }
-    .ze-panel-label { font-size: 11px; font-weight: 600; color: var(--text-muted); min-width: 50px; text-transform: uppercase; letter-spacing: .05em; }
+    .ze-panel-label { font-size: 10px; font-weight: 600; color: var(--text-muted); min-width: 40px; text-transform: uppercase; letter-spacing: .05em; }
     .ze-panel-input {
-      flex: 1; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px;
-      padding: 6px 10px; font-size: 13px; color: var(--text-secondary); outline: none; font-family: inherit;
+      flex: 1; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 4px;
+      padding: 4px 8px; font-size: 11px; color: var(--text-secondary); outline: none; font-family: inherit;
     }
     .ze-panel-input:focus { border-color: var(--accent); }
     .ze-panel-select {
-      flex: 1; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px;
-      padding: 6px 10px; font-size: 13px; color: var(--text-secondary); outline: none; font-family: inherit;
+      flex: 1; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 4px;
+      padding: 4px 8px; font-size: 11px; color: var(--text-secondary); outline: none; font-family: inherit;
       appearance: none; -webkit-appearance: none;
     }
     .ze-panel-select:focus { border-color: var(--accent); }
-    .ze-status { font-size: 12px; color: var(--text-faint); padding: 4px 0; }
-    .ze-hint { font-size: 11px; color: var(--text-ghost); text-align: center; padding: 8px; }
+    .ze-status { font-size: 10px; color: var(--text-faint); padding: 2px 0; }
+    .ze-hint { font-size: 10px; color: var(--text-ghost); text-align: center; padding: 4px; }
 
     /* ── Live feed controls ── */
     .ze-feed-controls {
-      display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border-subtle);
+      display: flex; gap: 6px; padding: 4px 12px; border-bottom: 1px solid var(--border-subtle);
       background: var(--bg-card); flex-shrink: 0; align-items: center; flex-wrap: wrap;
     }
     .ze-feed-status {
-      display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+      display: flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600;
     }
-    .ze-feed-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .ze-feed-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
     .ze-feed-dot.live { background: #4ade80; box-shadow: 0 0 8px rgba(74,222,128,.5); animation: pulse-dot 2s infinite; }
     .ze-feed-dot.paused { background: #fbbf24; }
     .ze-feed-dot.offline { background: #ef4444; }
     .ze-refresh-btn {
-      padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600;
+      padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
       cursor: pointer; border: 1px solid var(--border); background: var(--bg-inset); color: var(--text-muted);
       font-family: inherit; transition: all .15s;
     }
@@ -861,29 +861,29 @@
     .ze-refresh-btn:active { opacity: .7; }
     .ze-refresh-btn:disabled { opacity: .4; cursor: not-allowed; }
     .ze-interval-select {
-      background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px;
-      padding: 5px 8px; font-size: 11px; color: var(--text-muted); font-family: inherit;
+      background: var(--bg-inset); border: 1px solid var(--border); border-radius: 4px;
+      padding: 3px 6px; font-size: 10px; color: var(--text-muted); font-family: inherit;
       outline: none; appearance: none; -webkit-appearance: none; cursor: pointer;
     }
 
     /* ── Detection overlays on canvas ── */
-    .ze-detection-bbox { fill: none; stroke-width: 0.5; rx: 0.3; ry: 0.3; }
+    .ze-detection-bbox { fill: none; stroke-width: 0.25; rx: 0.2; ry: 0.2; }
     .ze-detection-bbox.vehicle { stroke: #3b82f6; }
     .ze-detection-bbox.person { stroke: #f59e0b; }
     .ze-detection-label {
-      font-size: 2px; font-weight: 700; pointer-events: none;
+      font-size: 1.4px; font-weight: 700; pointer-events: none;
     }
     .ze-detection-label-bg {
-      rx: 0.3; ry: 0.3;
+      rx: 0.2; ry: 0.2;
     }
 
     /* ── Detection sidebar panel ── */
     .ze-detections-panel {
       border-top: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
-      max-height: 220px; overflow-y: auto;
+      max-height: 120px; overflow-y: auto;
     }
     .ze-det-header {
-      padding: 8px 16px; font-size: 11px; font-weight: 700; color: var(--text-muted);
+      padding: 4px 12px; font-size: 10px; font-weight: 700; color: var(--text-muted);
       text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid var(--bg-inset);
       display: flex; align-items: center; justify-content: space-between;
       position: sticky; top: 0; background: var(--bg-card); z-index: 1;
@@ -3298,7 +3298,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       if (newPoints.length >= 3) {
         const first = newPoints[0];
         const dist = Math.sqrt((pt.x - first.x) ** 2 + (pt.y - first.y) ** 2);
-        if (dist < 3) { finishDrawing(); return; }
+        if (dist < 2) { finishDrawing(); return; }
       }
       setNewPoints(prev => [...prev, pt]);
     } else {
@@ -3475,12 +3475,12 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
                     onClick={e => { e.stopPropagation(); setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}
                   />
                   <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
-                    style={{fontSize:'3px', fill:'#fff', fontWeight:700, pointerEvents:'none'}}>
+                    style={{fontSize:'1.8px', fill:'#fff', fontWeight:700, pointerEvents:'none', textShadow:'0 0 1px rgba(0,0,0,.6)'}}>
                     {z.label}
                   </text>
                   {isSelected && z.polygon.map((p, pi) => (
-                    <circle key={pi} className="ze-vertex" cx={p.x} cy={p.y} r={1.2}
-                      style={{fill:'#fff', stroke:color, strokeWidth:0.5, cursor:'grab'}}
+                    <circle key={pi} className="ze-vertex" cx={p.x} cy={p.y} r={0.8}
+                      style={{fill:'#fff', stroke:color, strokeWidth:0.3, cursor:'grab'}}
                       onMouseDown={e => handleVertexDrag(e, i, pi)}
                       onTouchStart={e => { e.preventDefault(); handleVertexDrag(e.touches[0], i, pi); }}
                       onClick={e => e.stopPropagation()}
@@ -3509,28 +3509,28 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
                     x={bx} y={by} width={bw} height={bh} />
                   {/* Label background */}
                   <rect className="ze-detection-label-bg"
-                    x={bx} y={by - 2.8} width={Math.max(labelText.length * 1.1 + confText.length * 1.1, 6)} height={2.6}
+                    x={bx} y={by - 1.8} width={Math.max(labelText.length * 0.8 + confText.length * 0.8, 4)} height={1.6}
                     fill={strokeColor} opacity={0.85} />
                   <text className="ze-detection-label"
-                    x={bx + 0.4} y={by - 0.8}
+                    x={bx + 0.3} y={by - 0.7}
                     fill="#fff" dominantBaseline="central">
                     {labelText}{confText}
                   </text>
                   {/* Plate badge overlay */}
                   {d.plate_text && (
                     <>
-                      <rect x={bx} y={by + bh + 0.3} width={d.plate_text.length * 1.3 + 1} height={2.4}
-                        fill="#fef3c7" stroke="#fbbf24" strokeWidth={0.2} rx={0.3} />
-                      <text x={bx + 0.5} y={by + bh + 1.8} fill="#1c1009"
-                        style={{fontSize:'1.8px', fontWeight:800, fontFamily:'Courier New, monospace', letterSpacing:'0.1em'}}>
+                      <rect x={bx} y={by + bh + 0.2} width={d.plate_text.length * 0.9 + 0.6} height={1.6}
+                        fill="#fef3c7" stroke="#fbbf24" strokeWidth={0.15} rx={0.2} />
+                      <text x={bx + 0.3} y={by + bh + 1.2} fill="#1c1009"
+                        style={{fontSize:'1.2px', fontWeight:800, fontFamily:'Courier New, monospace', letterSpacing:'0.05em'}}>
                         {d.plate_text}
                       </text>
                     </>
                   )}
                   {/* Color swatch dot */}
                   {d.color && (
-                    <circle cx={bx + bw - 1.2} cy={by + 1.2} r={1}
-                      fill={colorHex(d.color)} stroke="rgba(255,255,255,.5)" strokeWidth={0.3} />
+                    <circle cx={bx + bw - 0.8} cy={by + 0.8} r={0.6}
+                      fill={colorHex(d.color)} stroke="rgba(255,255,255,.5)" strokeWidth={0.15} />
                   )}
                 </g>
               );
@@ -3542,8 +3542,8 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
                 <polygon className="ze-drawing-poly"
                   points={newPoints.map(p => `${p.x},${p.y}`).join(' ')} />
                 {newPoints.map((p, i) => (
-                  <circle key={i} cx={p.x} cy={p.y} r={1}
-                    style={{fill: i === 0 ? '#3b82f6' : '#fff', stroke:'#3b82f6', strokeWidth:0.4}} />
+                  <circle key={i} cx={p.x} cy={p.y} r={0.7}
+                    style={{fill: i === 0 ? '#3b82f6' : '#fff', stroke:'#3b82f6', strokeWidth:0.25}} />
                 ))}
               </g>
             )}
