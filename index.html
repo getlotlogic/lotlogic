@@ -1815,6 +1815,20 @@ const db = {
       body: JSON.stringify({ zones }),
     });
   },
+  // Fetch unique enforcement partners linked to a set of lots
+  async getPartnersForLots(lots) {
+    const partnerIds = [...new Set(lots.map(l => l.partner_id).filter(Boolean))];
+    if (partnerIds.length === 0) return [];
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('enforcement_partners')
+        .select('*')
+        .in('id', partnerIds)
+        .eq('active', true);
+      if (!error && data) return data;
+    }
+    return [];
+  },
   // Realtime subscription for violations
   subscribeViolations(lotIds, callback, onError) {
     if (!supabase) { if (onError) onError('Realtime not available'); return null; }
@@ -2239,6 +2253,9 @@ function NavIconAccount() {
 }
 function NavIconActivity() {
   return <div className="nav-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>;
+}
+function NavIconOverview() {
+  return <div className="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></div>;
 }
 
 // ── Search icon SVG ──────────────────────────────────────────
@@ -4197,6 +4214,176 @@ function OperatorActivityPage({ violations, lots }) {
   );
 }
 
+// ── Owner Overview page — per-operator stats + "View as" ──────
+function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
+  const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
+
+  // Map partner_id → lots assigned
+  const partnerLots = {};
+  lots.forEach(l => {
+    if (l.partner_id) {
+      if (!partnerLots[l.partner_id]) partnerLots[l.partner_id] = [];
+      partnerLots[l.partner_id].push(l);
+    }
+  });
+
+  // Global KPIs
+  const pending = violations.filter(v => v.status === 'pending').length;
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  const todayResolved = violations.filter(v => v.status !== 'pending' && new Date(v.resolved_at || v.detected_at) >= todayStart).length;
+  const totalGross = violations.filter(v => v.status !== 'pending').reduce((s, v) => s + (v.gross_revenue || 0), 0);
+  const totalOurs = violations.filter(v => v.status !== 'pending').reduce((s, v) => s + (v.our_revenue || 0), 0);
+
+  // Camera stats
+  const allCams = Object.values(lotStates).flatMap(s => s?.cameras || []);
+  const camsOnline = allCams.filter(c => c.online).length;
+  const camsTotal = allCams.length;
+
+  // Per-operator stats
+  const operatorStats = partners.map(p => {
+    const pLots = partnerLots[p.id] || [];
+    const pLotIds = pLots.map(l => l.id);
+    const pViols = violations.filter(v => pLotIds.includes(v.lot_id));
+    const pPending = pViols.filter(v => v.status === 'pending').length;
+    const pResolved = pViols.filter(v => v.status !== 'pending');
+    const pTodayResolved = pResolved.filter(v => new Date(v.resolved_at || v.detected_at) >= todayStart).length;
+    const pGross = pResolved.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+    const pOurs = pResolved.reduce((s, v) => s + (v.our_revenue || 0), 0);
+    const pPartnerPay = pGross - pOurs;
+    const booted = pResolved.filter(v => v.action_taken === 'boot').length;
+    const towed = pResolved.filter(v => v.action_taken === 'tow').length;
+    const dismissed = pResolved.filter(v => v.action_taken === 'dismissed' || v.action_taken === 'already_gone' || v.action_taken === 'no_action').length;
+    // Avg response time (detected → resolved) in minutes
+    const responseTimes = pResolved.filter(v => v.detected_at && v.resolved_at).map(v => (new Date(v.resolved_at) - new Date(v.detected_at)) / 60000);
+    const avgResponse = responseTimes.length > 0 ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : null;
+
+    return { partner: p, lots: pLots, pending: pPending, todayResolved: pTodayResolved, totalResolved: pResolved.length, gross: pGross, ours: pOurs, partnerPay: pPartnerPay, booted, towed, dismissed, avgResponse };
+  });
+
+  return (
+    <div className="page-enter">
+      <div className="section-header">
+        <div className="section-title">Overview</div>
+        <div className="section-count">{lots.length} lot{lots.length !== 1 ? 's' : ''} · {partners.length} operator{partners.length !== 1 ? 's' : ''}</div>
+      </div>
+
+      {/* Global KPIs */}
+      <div className="kpi-bar" style={{marginBottom:16}}>
+        <div className="kpi-card">
+          <div className="kpi-val red">{pending}</div>
+          <div className="kpi-label">Pending</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val green">{todayResolved}</div>
+          <div className="kpi-label">Resolved Today</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val blue">{camsOnline}/{camsTotal}</div>
+          <div className="kpi-label">Cameras</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val green">{fmtMoney(totalOurs)}</div>
+          <div className="kpi-label">Revenue</div>
+        </div>
+      </div>
+
+      {/* Per-operator cards */}
+      <div className="section-header" style={{marginTop:20}}>
+        <div className="section-title">Operators</div>
+      </div>
+
+      {operatorStats.length === 0 ? (
+        <div className="empty-state">
+          <div style={{width:48, height:48, borderRadius:12, background:'rgba(59,130,246,.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22}}>👥</div>
+          <div className="empty-title">No operators assigned</div>
+          <div className="empty-body">Enforcement partners linked to your lots will appear here</div>
+        </div>
+      ) : operatorStats.map(os => (
+        <div key={os.partner.id} className="card-animated" style={{
+          background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:14,
+          marginBottom:12, overflow:'hidden',
+        }}>
+          {/* Operator header */}
+          <div style={{padding:'14px 16px 10px', display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
+            <div>
+              <div style={{fontSize:16, fontWeight:800, color:'var(--text-primary)'}}>{os.partner.company_name || os.partner.contact_name}</div>
+              <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2}}>{os.partner.email} · {os.lots.length} lot{os.lots.length !== 1 ? 's' : ''}</div>
+            </div>
+            <button onClick={() => onViewAs(os.partner)} style={{
+              background:'rgba(59,130,246,.1)', color:'#3b82f6', border:'1px solid rgba(59,130,246,.25)',
+              borderRadius:8, padding:'6px 12px', fontSize:12, fontWeight:700, cursor:'pointer',
+              whiteSpace:'nowrap',
+            }}>
+              View as Operator
+            </button>
+          </div>
+
+          {/* Operator KPIs */}
+          <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:1, background:'var(--border)'}}>
+            <div style={{background:'var(--bg-card)', padding:'10px 8px', textAlign:'center'}}>
+              <div style={{fontSize:18, fontWeight:800, color:'var(--red)'}}>{os.pending}</div>
+              <div style={{fontSize:10, fontWeight:600, color:'var(--text-faint)', textTransform:'uppercase', letterSpacing:'.04em'}}>Pending</div>
+            </div>
+            <div style={{background:'var(--bg-card)', padding:'10px 8px', textAlign:'center'}}>
+              <div style={{fontSize:18, fontWeight:800, color:'var(--green)'}}>{os.todayResolved}</div>
+              <div style={{fontSize:10, fontWeight:600, color:'var(--text-faint)', textTransform:'uppercase', letterSpacing:'.04em'}}>Today</div>
+            </div>
+            <div style={{background:'var(--bg-card)', padding:'10px 8px', textAlign:'center'}}>
+              <div style={{fontSize:18, fontWeight:800, color:'var(--text-primary)'}}>{os.totalResolved}</div>
+              <div style={{fontSize:10, fontWeight:600, color:'var(--text-faint)', textTransform:'uppercase', letterSpacing:'.04em'}}>All Time</div>
+            </div>
+            <div style={{background:'var(--bg-card)', padding:'10px 8px', textAlign:'center'}}>
+              <div style={{fontSize:18, fontWeight:800, color:'var(--green)'}}>{fmtMoney(os.partnerPay)}</div>
+              <div style={{fontSize:10, fontWeight:600, color:'var(--text-faint)', textTransform:'uppercase', letterSpacing:'.04em'}}>Paid Out</div>
+            </div>
+          </div>
+
+          {/* Action breakdown + fees */}
+          <div style={{padding:'10px 16px 14px', display:'flex', flexWrap:'wrap', gap:8, alignItems:'center'}}>
+            {os.booted > 0 && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700, color:'#fbbf24', background:'rgba(251,191,36,.1)', border:'1px solid rgba(251,191,36,.2)'}}>Boot ×{os.booted}</span>}
+            {os.towed > 0 && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700, color:'#f87171', background:'rgba(248,113,113,.1)', border:'1px solid rgba(248,113,113,.2)'}}>Tow ×{os.towed}</span>}
+            {os.dismissed > 0 && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700, color:'#a78bfa', background:'rgba(167,139,250,.1)', border:'1px solid rgba(167,139,250,.2)'}}>Dismissed ×{os.dismissed}</span>}
+            {os.avgResponse != null && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:600, color:'var(--text-muted)', background:'var(--bg-inset)', border:'1px solid var(--border)'}}>Avg {os.avgResponse < 60 ? `${os.avgResponse}m` : `${Math.round(os.avgResponse / 60)}h`} response</span>}
+            <span style={{marginLeft:'auto', fontSize:11, color:'var(--text-faint)'}}>
+              Boot ${os.partner.boot_fee || 75} · Tow ${os.partner.tow_fee || 150} · {Math.round((os.partner.revenue_share || 0.3) * 100)}% share
+            </span>
+          </div>
+        </div>
+      ))}
+
+      {/* Revenue split summary */}
+      {totalGross > 0 && (
+        <div className="earnings-breakdown" style={{marginTop:8, marginBottom:16}}>
+          <div className="breakdown-header">Revenue Split (All Time)</div>
+          <div className="breakdown-row">
+            <div style={{display:'flex', alignItems:'center', gap:8}}>
+              <span style={{width:8, height:8, borderRadius:'50%', background:'var(--green)', flexShrink:0}} />
+              <span style={{fontSize:15, fontWeight:700, color:'var(--text-primary)'}}>Gross Revenue</span>
+            </div>
+            <div style={{fontSize:15, fontWeight:700, color:'var(--green)'}}>{fmtMoney(totalGross)}</div>
+          </div>
+          <div className="breakdown-row">
+            <div style={{display:'flex', alignItems:'center', gap:8}}>
+              <span style={{width:8, height:8, borderRadius:'50%', background:'var(--accent)', flexShrink:0}} />
+              <span style={{fontSize:15, fontWeight:700, color:'var(--text-primary)'}}>LotLogic Cut</span>
+            </div>
+            <div style={{fontSize:15, fontWeight:700, color:'var(--accent)'}}>{fmtMoney(totalOurs)}</div>
+          </div>
+          {operatorStats.map(os => os.partnerPay > 0 && (
+            <div key={os.partner.id} className="breakdown-row">
+              <div style={{display:'flex', alignItems:'center', gap:8}}>
+                <span style={{width:8, height:8, borderRadius:'50%', background:'#a78bfa', flexShrink:0}} />
+                <span style={{fontSize:15, fontWeight:700, color:'var(--text-primary)'}}>{os.partner.company_name || os.partner.contact_name}</span>
+              </div>
+              <div style={{fontSize:15, fontWeight:700, color:'#a78bfa'}}>{fmtMoney(os.partnerPay)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Account / Settings page ────────────────────────────────────
 function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) {
   const isOwner = user._role === 'owner';
@@ -4333,7 +4520,7 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
           <div className="settings-row-info">
             <div className="settings-row-label">Version</div>
           </div>
-          <div className="settings-row-value">4.1.0</div>
+          <div className="settings-row-value">4.2.0</div>
         </div>
       </div>
 
@@ -4374,6 +4561,8 @@ function App() {
   const [lots, setLots] = useState([]);
   const [lotStates, setLotStates] = useState({});
   const [violations, setViolations] = useState([]);
+  const [partners, setPartners] = useState([]);
+  const [viewAs, setViewAs] = useState(null); // null = owner view, partner object = operator impersonation
   const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -4396,8 +4585,17 @@ function App() {
     try { localStorage.setItem('lotlogic_refresh_interval', String(refreshInterval)); } catch {}
   }, [refreshInterval]);
 
-  const isOwner = owner?._role === 'owner';
-  const isOperator = owner?._role === 'partner';
+  const isOwner = owner?._role === 'owner' && !viewAs;
+  const isOperator = owner?._role === 'partner' || !!viewAs;
+
+  // When viewing as operator, filter lots/violations to that partner's lots
+  const effectiveUser = viewAs ? { ...viewAs, _role: 'partner' } : owner;
+  const viewAsLotIds = viewAs ? lots.filter(l => l.partner_id === viewAs.id).map(l => l.id) : null;
+  const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
+  const effectiveViolations = viewAsLotIds ? violations.filter(v => viewAsLotIds.includes(v.lot_id)) : violations;
+  const effectiveLotStates = viewAsLotIds
+    ? Object.fromEntries(Object.entries(lotStates).filter(([id]) => viewAsLotIds.includes(id)))
+    : lotStates;
 
   const realtimeRef = useRef(null);
   const loadIdRef = useRef(0); // Guard against race conditions in concurrent loadData calls
@@ -4413,6 +4611,11 @@ function App() {
       const lotsData = await db.getLots(filter);
       if (loadIdRef.current !== myId) return; // Stale call, discard
       setLots(lotsData);
+
+      // Fetch enforcement partners for owner's lots
+      if (o._role === 'owner') {
+        db.getPartnersForLots(lotsData).then(p => setPartners(p)).catch(() => {});
+      }
 
       const [states, violsArrays] = await Promise.all([
         Promise.all(lotsData.map(l => db.getLotState(l.id).then(s => [l.id, s]).catch(() => [l.id, null]))),
@@ -4448,7 +4651,7 @@ function App() {
     loadIdRef.current++; // Invalidate any in-flight loadData calls
     clearInterval(timerRef.current);
     if (realtimeRef.current) { supabase?.removeChannel(realtimeRef.current); realtimeRef.current = null; }
-    setOwner(null); setLots([]); setLotStates({}); setViolations([]);
+    setOwner(null); setLots([]); setLotStates({}); setViolations([]); setPartners([]); setViewAs(null);
     setTab('jobs');
     try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
   }
@@ -4529,18 +4732,30 @@ function App() {
 
   if (!owner) return <LoginPage onLogin={login} />;
 
-  const pending = violations.filter(v => v.status === 'pending').length;
+  const pending = effectiveViolations.filter(v => v.status === 'pending').length;
+
+  // Handle "View as Operator" from Overview page
+  function handleViewAs(partner) {
+    setViewAs(partner);
+    setTab('jobs');
+    haptic('medium');
+  }
+  function exitViewAs() {
+    setViewAs(null);
+    setTab('overview');
+    haptic('light');
+  }
 
   // Role-based navigation:
-  // Operators: Jobs + Lots (assigned) + Activity + Earnings + Account
-  // Owners: Jobs + Lots + Earnings + Account
+  // Owner:    Overview + Jobs + Lots + Earnings + Invoices + Account
+  // Operator (or viewing-as): Jobs + Lots + Activity + Earnings + Account
   const NavIconInvoices = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('path', {d:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'}), React.createElement('polyline', {points:'14 2 14 8 20 8'}), React.createElement('line', {x1:'8',y1:'13',x2:'16',y2:'13'}), React.createElement('line', {x1:'8',y1:'17',x2:'12',y2:'17'}));
-  const navIcons = { jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount };
+  const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount };
   const navTabs = isOwner ? [
+    { id: 'overview', label: 'Overview', badge: 0 },
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
-    { id: 'invoices', label: 'Invoices', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
@@ -4585,6 +4800,26 @@ function App() {
       </header>
 
       <main id="main-content" className="page-content" role="main">
+        {/* "Viewing as operator" banner */}
+        {viewAs && (
+          <div style={{
+            background:'linear-gradient(90deg, rgba(167,139,250,.15), rgba(59,130,246,.1))',
+            border:'1px solid rgba(167,139,250,.3)', borderRadius:10, margin:'0 0 12px',
+            padding:'10px 14px', display:'flex', alignItems:'center', justifyContent:'space-between',
+          }}>
+            <div>
+              <div style={{fontSize:12, fontWeight:700, color:'#a78bfa', textTransform:'uppercase', letterSpacing:'.05em'}}>Viewing as Operator</div>
+              <div style={{fontSize:14, fontWeight:800, color:'var(--text-primary)', marginTop:2}}>{viewAs.company_name || viewAs.contact_name}</div>
+            </div>
+            <button onClick={exitViewAs} style={{
+              background:'rgba(255,255,255,.1)', color:'var(--text-primary)', border:'1px solid var(--border)',
+              borderRadius:8, padding:'6px 14px', fontSize:12, fontWeight:700, cursor:'pointer',
+            }}>
+              Exit
+            </button>
+          </div>
+        )}
+
         {/* Pull to refresh indicator */}
         {(showPTR || refreshing) && (
           <div className="ptr-spinner" role="status" aria-label="Refreshing">
@@ -4596,12 +4831,13 @@ function App() {
           <div className="last-updated" aria-live="polite">Updated {lastRefreshLabel}</div>
         )}
 
-        <div key={tab} className="page-slide">
-          {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={owner} />}
-          {tab === 'lots' && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
-          {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} user={owner} />}
+        <div key={tab + (viewAs?.id || '')} className="page-slide">
+          {tab === 'overview' && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
+          {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} />}
+          {tab === 'lots' && <LotsPage lots={effectiveLots} lotStates={effectiveLotStates} loading={loading} ownerRole={effectiveUser._role} onZonesSaved={() => loadData(owner, true)} />}
+          {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} />}
           {tab === 'invoices' && isOwner && <InvoicesPage user={owner} lots={lots} violations={violations} />}
-          {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
+          {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
       </main>
