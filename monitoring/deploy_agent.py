@@ -210,14 +210,16 @@ def validate_html_js(html_content: str) -> dict:
     if brackets != 0:
         issues.append(f"brackets imbalance: {brackets:+d}")
 
-    return {
+    result = {
         "valid": len(issues) == 0,
         "braces": braces,
         "parens": parens,
         "brackets": brackets,
-        "issues": issues,
         "script_length": len(code),
     }
+    if issues:
+        result["issues"] = issues
+    return result
 
 
 def validate_dockerfile() -> dict:
@@ -433,11 +435,11 @@ def run_check(config: AgentConfig) -> dict:
     nginx_val = validate_nginx_conf()
 
     if not js_val["valid"]:
-        logger.warning("JS validation issues: %s", js_val["issues"])
+        logger.warning("JS validation issues: %s", js_val.get("issues", []))
     if not docker_val["valid"]:
-        logger.warning("Dockerfile issues: %s", docker_val["issues"])
+        logger.warning("Dockerfile issues: %s", docker_val.get("issues", []))
     if not nginx_val["valid"]:
-        logger.warning("nginx.conf issues: %s", nginx_val["issues"])
+        logger.warning("nginx.conf issues: %s", nginx_val.get("issues", []))
 
     return {
         "probe": result,
