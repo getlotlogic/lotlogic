@@ -794,8 +794,8 @@
       flex: 1; overflow: hidden; cursor: crosshair;
       display: flex; align-items: center; justify-content: center; background: var(--snapshot-bg);
     }
-    .ze-img-wrap { position: relative; max-width: 100%; max-height: 100%; }
-    .ze-img-wrap img { display: block; width: 100%; height: 100%; user-select: none; -webkit-user-drag: none; }
+    .ze-img-wrap { position: relative; display: inline-block; max-width: 100%; max-height: 100%; }
+    .ze-img-wrap img { display: block; max-width: 100%; max-height: 100%; user-select: none; -webkit-user-drag: none; }
     .ze-svg {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     }
@@ -3122,13 +3122,16 @@ function displayColor(name) {
 // ── Zone editor (full-screen draw/edit/delete/save + live feed + detections) ──
 function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const [frameUrl, setFrameUrl] = useState(null);
+  // Normalize polygon points to 0-100 range (DB stores 0-1, editor uses 0-100)
   const [zones, setZones] = useState(() => (existingZones || []).map(z => ({
     ...z,
-    polygon: (z.polygon || []).map(p =>
-      Array.isArray(p) ? { x: p[0] * 100, y: p[1] * 100 }
-      : (p.x != null && p.x <= 1.01 && p.y <= 1.01) ? { x: p.x * 100, y: p.y * 100 }
-      : { x: p.x, y: p.y }
-    ),
+    polygon: (z.polygon || []).map(p => {
+      const x = Array.isArray(p) ? p[0] : (p.x ?? 0);
+      const y = Array.isArray(p) ? p[1] : (p.y ?? 0);
+      // If values are in 0-1 range, scale up to 0-100
+      const scale = (x <= 1 && y <= 1) ? 100 : 1;
+      return { x: x * scale, y: y * scale };
+    }),
   })));
   const [selectedIdx, setSelectedIdx] = useState(null);
   const [drawing, setDrawing] = useState(true);
@@ -3137,10 +3140,8 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
   const [dragIdx, setDragIdx] = useState(null);
-  const [imgRatio, setImgRatio] = useState(null);
   const svgRef = useRef(null);
   const imgRef = useRef(null);
-  const wrapRef = useRef(null);
 
   // Live feed state — persisted to localStorage
   const [feedLive, setFeedLive] = useState(() => {
@@ -3299,12 +3300,15 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const plateCount = detections.filter(d => !!d.plate_text).length;
 
   function svgPoint(e) {
-    const wrap = wrapRef.current;
-    if (!wrap) return null;
-    const rect = wrap.getBoundingClientRect();
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const svgPt = pt.matrixTransform(svg.getScreenCTM().inverse());
     return {
-      x: Math.round(((e.clientX - rect.left) / rect.width) * 10000) / 100,
-      y: Math.round(((e.clientY - rect.top) / rect.height) * 10000) / 100,
+      x: Math.round(svgPt.x * 100) / 100,
+      y: Math.round(svgPt.y * 100) / 100,
     };
   }
 
@@ -3474,11 +3478,10 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
 
         <div className="ze-canvas-wrap">
           {frameUrl ? (
-            <div ref={wrapRef} className="ze-img-wrap" style={imgRatio ? {aspectRatio: imgRatio} : undefined}
-              onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
-              <img ref={imgRef} src={frameUrl} alt="Camera frame" draggable="false"
-                onLoad={e => setImgRatio(e.target.naturalWidth + '/' + e.target.naturalHeight)} />
-              <svg ref={svgRef} className="ze-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <div className="ze-img-wrap">
+              <img ref={imgRef} src={frameUrl} alt="Camera frame" draggable="false" />
+              <svg ref={svgRef} className="ze-svg" viewBox="0 0 100 100" preserveAspectRatio="none"
+                onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
             {/* Existing zones */}
             {zones.map((z, i) => {
               const pts = z.polygon.map(p => `${p.x},${p.y}`).join(' ');
