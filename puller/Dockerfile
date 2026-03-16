@@ -7,4 +7,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY *.py .
 
-CMD ["python", "-u", "snapshot_puller.py", "--http"]
+CMD ["python", "-u", "async_puller.py"]
