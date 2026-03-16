@@ -665,8 +665,17 @@
     .zone-overlay-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
     .zone-poly { stroke-width: 1.5; fill-opacity: 0.18; }
     .zone-poly.no_parking { fill: #ef4444; stroke: #ef4444; }
+    .zone-poly.unauthorized { fill: #3b82f6; stroke: #3b82f6; }
     .zone-poly.time_limited { fill: #8b5cf6; stroke: #8b5cf6; }
     .zone-poly.handicap_only { fill: #eab308; stroke: #eab308; }
+    .zone-poly.fire_lane { fill: #f97316; stroke: #f97316; }
+    .zone-poly.reserved { fill: #06b6d4; stroke: #06b6d4; }
+    .zone-poly.permit_only { fill: #10b981; stroke: #10b981; }
+    .zone-poly.loading_zone { fill: #64748b; stroke: #64748b; }
+    .zone-poly.double_parked { fill: #ec4899; stroke: #ec4899; }
+    .zone-poly.blocking { fill: #f43f5e; stroke: #f43f5e; }
+    .zone-poly.expired_meter { fill: #a855f7; stroke: #a855f7; }
+    .zone-poly.abandoned { fill: #78716c; stroke: #78716c; }
     .zone-label-text { font-size: 8px; font-weight: 700; fill: #fff; pointer-events: none; }
 
     /* ── Zone editor (full-screen) ── */
@@ -2920,7 +2929,12 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const [detectionTab, setDetectionTab] = useState(() => localStorage.getItem('lotlogic_ze_detectiontab') || 'all');
   const [snapshotMeta, setSnapshotMeta] = useState(null); // latest snapshot metadata
 
-  const ZONE_COLORS = { no_parking: '#ef4444', time_limited: '#8b5cf6', handicap_only: '#eab308' };
+  const ZONE_COLORS = {
+    no_parking: '#ef4444', unauthorized: '#3b82f6', time_limited: '#8b5cf6',
+    handicap_only: '#eab308', fire_lane: '#f97316', reserved: '#06b6d4',
+    permit_only: '#10b981', loading_zone: '#64748b', double_parked: '#ec4899',
+    blocking: '#f43f5e', expired_meter: '#a855f7', abandoned: '#78716c',
+  };
 
   // Load a single frame + detections
   const loadFrame = useCallback(async (showError = true) => {
@@ -3352,8 +3366,17 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
               <select className="ze-panel-select" value={selected.zone_type || 'no_parking'}
                 onChange={e => updateZoneProp(selectedIdx, 'zone_type', e.target.value)}>
                 <option value="no_parking">No Parking</option>
+                <option value="unauthorized">Unauthorized Vehicle</option>
                 <option value="time_limited">Time Limited</option>
                 <option value="handicap_only">Handicap Only</option>
+                <option value="fire_lane">Fire Lane</option>
+                <option value="reserved">Reserved Spot</option>
+                <option value="permit_only">Permit Only</option>
+                <option value="loading_zone">Loading Zone</option>
+                <option value="double_parked">Double Parked</option>
+                <option value="blocking">Blocking / Obstructing</option>
+                <option value="expired_meter">Expired Meter</option>
+                <option value="abandoned">Abandoned Vehicle</option>
               </select>
             </div>
             {selected.zone_type === 'time_limited' && (
