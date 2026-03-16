@@ -645,6 +645,99 @@
 
 
 
+    /* ── Permits modal ── */
+    .permits-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100;
+      background: rgba(0,0,0,.7); backdrop-filter: blur(8px);
+      display: flex; align-items: flex-end; justify-content: center;
+      animation: fadeIn .2s ease;
+    }
+    .permits-sheet {
+      background: var(--bg-card); border-radius: 20px 20px 0 0; width: 100%; max-width: 640px;
+      max-height: 90vh; overflow-y: auto; animation: slideUp .3s ease;
+      border: 1px solid var(--border); border-bottom: none;
+    }
+    .permits-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px; border-bottom: 1px solid var(--border-subtle); position: sticky; top: 0;
+      background: var(--bg-card); z-index: 1;
+    }
+    .permits-title { font-size: 18px; font-weight: 800; color: var(--text-primary); }
+    .permit-card {
+      padding: 12px 16px; border-bottom: 1px solid var(--bg-inset);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .permit-card:last-child { border-bottom: none; }
+    .permit-plate {
+      background: #fef3c7; color: #1c1009; border-radius: 6px; padding: 4px 10px;
+      font-size: 14px; font-weight: 800; font-family: 'Courier New', monospace;
+      letter-spacing: .1em; border: 1.5px solid #fbbf24;
+    }
+    .permit-type-badge {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+      padding: 3px 8px; border-radius: 20px;
+    }
+    .permit-type-badge.whitelist { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid rgba(74,222,128,.2); }
+    .permit-type-badge.monthly { background: rgba(59,130,246,.12); color: #60a5fa; border: 1px solid rgba(59,130,246,.2); }
+    .permit-type-badge.temporary { background: rgba(251,191,36,.12); color: #fbbf24; border: 1px solid rgba(251,191,36,.2); }
+    .permit-type-badge.employee { background: rgba(167,139,250,.12); color: #a78bfa; border: 1px solid rgba(167,139,250,.2); }
+    .permit-add-form {
+      padding: 16px; border-top: 1px solid var(--border-subtle);
+      background: var(--bg-inset);
+    }
+    .permit-form-row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .permit-form-row .field-input { flex: 1; padding: 10px 12px; font-size: 14px; border-radius: 10px; }
+    .permit-form-row select {
+      background: var(--bg-card); border: 1.5px solid var(--border); border-radius: 10px;
+      padding: 10px 12px; font-size: 14px; color: var(--text-secondary); font-family: inherit;
+    }
+
+    /* ── Analytics ── */
+    .analytics-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.06);
+    }
+    .analytics-card-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--text-muted); margin-bottom: 12px;
+    }
+    .heatmap-grid {
+      display: grid; grid-template-columns: 30px repeat(24, 1fr); gap: 1px; font-size: 8px;
+    }
+    .heatmap-cell {
+      aspect-ratio: 1; border-radius: 2px; min-width: 0;
+    }
+    .heatmap-label { display: flex; align-items: center; justify-content: flex-end; padding-right: 4px; color: var(--text-faint); font-weight: 600; }
+    .heatmap-hour { display: flex; align-items: center; justify-content: center; color: var(--text-ghost); font-weight: 600; }
+    .utilization-bar-row {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    }
+    .utilization-bar-label { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 32px; }
+    .utilization-bar-track {
+      flex: 1; height: 20px; background: var(--bg-inset); border-radius: 6px; overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .utilization-bar-fill { height: 100%; border-radius: 5px; transition: width .5s ease; }
+    .utilization-bar-val { font-size: 11px; font-weight: 700; color: var(--text-secondary); min-width: 36px; text-align: right; }
+    .projection-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 0; border-bottom: 1px solid var(--bg-inset);
+    }
+    .projection-row:last-child { border-bottom: none; }
+    .projection-label { font-size: 13px; color: var(--text-muted); font-weight: 500; }
+    .projection-val { font-size: 18px; font-weight: 800; color: var(--text-primary); }
+    .projection-val.green { color: var(--green); }
+    .projection-val.blue { color: var(--accent); }
+    .projection-trend { font-size: 11px; font-weight: 600; margin-left: 6px; }
+    .projection-trend.up { color: var(--green); }
+    .projection-trend.down { color: var(--red); }
+
+    /* ── Navigate button on job cards ── */
+    .action-btn.navigate {
+      background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.4); color: #10b981;
+    }
+    .action-btn.navigate:hover:not(:disabled) { background: rgba(16,185,129,.2); }
+
     /* ── Nav icons ── */
     .nav-icon { width: 20px; height: 20px; }
     .nav-icon svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -1838,6 +1931,132 @@ const db = {
     }
     return [];
   },
+  // ── Permits ────────────────────────────────────────────────
+  async getPermits(lotId) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('permitted_vehicles')
+        .select('*')
+        .eq('lot_id', lotId)
+        .eq('active', true)
+        .order('created_at', { ascending: false });
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async addPermit(permit) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('permitted_vehicles')
+        .insert(permit)
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+    throw new Error('Supabase not available');
+  },
+  async deletePermit(permitId) {
+    if (supabase) {
+      const { error } = await supabase
+        .from('permitted_vehicles')
+        .update({ active: false })
+        .eq('id', permitId);
+      if (error) throw new Error(error.message);
+      return { success: true };
+    }
+    throw new Error('Supabase not available');
+  },
+
+  // ── Analytics ─────────────────────────────────────────────
+  async getHourlyStats(lotIds) {
+    if (supabase) {
+      // Get violations from last 90 days grouped by hour
+      const since = new Date(Date.now() - 90 * 86400000).toISOString();
+      const { data, error } = await supabase
+        .from('violations')
+        .select('lot_id, detected_at, action_taken, gross_revenue')
+        .in('lot_id', lotIds)
+        .gte('detected_at', since);
+      if (!error && data) {
+        // Build heatmap: day_of_week x hour_of_day → count
+        const heatmap = {};
+        data.forEach(v => {
+          const d = new Date(v.detected_at);
+          const dow = d.getDay(); // 0=Sun
+          const hour = d.getHours();
+          const key = `${dow}-${hour}`;
+          heatmap[key] = (heatmap[key] || 0) + 1;
+        });
+        return { heatmap, total: data.length };
+      }
+    }
+    return { heatmap: {}, total: 0 };
+  },
+  async getUtilization(lotIds) {
+    if (supabase) {
+      // Get snapshot vehicle counts from last 7 days
+      const since = new Date(Date.now() - 7 * 86400000).toISOString();
+      const { data, error } = await supabase
+        .from('snapshots')
+        .select('lot_id, captured_at, vehicles_detected')
+        .in('lot_id', lotIds)
+        .gte('captured_at', since)
+        .order('captured_at', { ascending: false })
+        .limit(5000);
+      if (!error && data) {
+        // Group by hour of day → avg vehicles
+        const byHour = {};
+        data.forEach(s => {
+          const hour = new Date(s.captured_at).getHours();
+          if (!byHour[hour]) byHour[hour] = { sum: 0, count: 0 };
+          byHour[hour].sum += (s.vehicles_detected || 0);
+          byHour[hour].count++;
+        });
+        const hourly = {};
+        Object.keys(byHour).forEach(h => {
+          hourly[h] = Math.round(byHour[h].sum / byHour[h].count * 10) / 10;
+        });
+        return { hourly, totalSnapshots: data.length };
+      }
+    }
+    return { hourly: {}, totalSnapshots: 0 };
+  },
+  async getRevenueProjection(lotIds) {
+    if (supabase) {
+      // Get last 30 days of revenue data for projection
+      const since30 = new Date(Date.now() - 30 * 86400000).toISOString();
+      const since7 = new Date(Date.now() - 7 * 86400000).toISOString();
+      const [res30, res7] = await Promise.all([
+        supabase.from('violations').select('gross_revenue, our_revenue, detected_at, action_taken')
+          .in('lot_id', lotIds).gte('resolved_at', since30).neq('status', 'pending'),
+        supabase.from('violations').select('gross_revenue, our_revenue, detected_at, action_taken')
+          .in('lot_id', lotIds).gte('resolved_at', since7).neq('status', 'pending'),
+      ]);
+      const d30 = res30.data || [];
+      const d7 = res7.data || [];
+      const rev30 = d30.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+      const rev7 = d7.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+      const dailyAvg30 = d30.length > 0 ? rev30 / 30 : 0;
+      const dailyAvg7 = d7.length > 0 ? rev7 / 7 : 0;
+      const viols30 = d30.length;
+      const viols7 = d7.length;
+      const dailyViols30 = viols30 / 30;
+      const dailyViols7 = viols7 / 7;
+      return {
+        monthlyProjection: Math.round(dailyAvg7 * 30),
+        weeklyAvg: Math.round(rev7),
+        dailyAvg: Math.round(dailyAvg7),
+        trend: dailyAvg7 > dailyAvg30 ? 'up' : dailyAvg7 < dailyAvg30 ? 'down' : 'flat',
+        trendPct: dailyAvg30 > 0 ? Math.round(((dailyAvg7 - dailyAvg30) / dailyAvg30) * 100) : 0,
+        violationsPerDay: Math.round(dailyViols7 * 10) / 10,
+        violTrend: dailyViols7 > dailyViols30 ? 'up' : dailyViols7 < dailyViols30 ? 'down' : 'flat',
+        violTrendPct: dailyViols30 > 0 ? Math.round(((dailyViols7 - dailyViols30) / dailyViols30) * 100) : 0,
+      };
+    }
+    return { monthlyProjection: 0, weeklyAvg: 0, dailyAvg: 0, trend: 'flat', trendPct: 0, violationsPerDay: 0, violTrend: 'flat', violTrendPct: 0 };
+  },
+
   // Realtime subscription for violations
   subscribeViolations(lotIds, callback, onError) {
     if (!supabase) { if (onError) onError('Realtime not available'); return null; }
@@ -2781,10 +3000,11 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   </button>
                 </div>
                 {lot?.address && (
-                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener" style={{fontSize:12, color:'#3b82f6', fontWeight:600, textDecoration:'none', display:'flex', alignItems:'center', gap:3}}
-                    onClick={e => e.stopPropagation()}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                    Directions
+                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener"
+                    className="action-btn navigate" style={{textDecoration:'none', display:'flex', alignItems:'center', justifyContent:'center', gap:4, minWidth:90, padding:'8px 12px'}}
+                    onClick={e => { e.stopPropagation(); haptic('medium'); }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                    Navigate
                   </a>
                 )}
               </div>
@@ -3511,11 +3731,135 @@ function AddCameraModal({ lotId, onClose, onAdded }) {
   );
 }
 
+// ── Permits modal ──────────────────────────────────────────────
+function PermitsModal({ lotId, lotName, onClose }) {
+  const [permits, setPermits] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [plate, setPlate] = useState('');
+  const [permitType, setPermitType] = useState('whitelist');
+  const [holderName, setHolderName] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+  const [saving, setSaving] = useState(false);
+  const { addToast } = useToast();
+
+  useEffect(() => {
+    db.getPermits(lotId).then(data => { setPermits(data); setLoading(false); }).catch(() => setLoading(false));
+  }, [lotId]);
+
+  async function addPermit(e) {
+    e.preventDefault();
+    const cleanPlate = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!cleanPlate || cleanPlate.length < 2) { addToast('Enter a valid plate number', 'error'); return; }
+    if (permits.some(p => p.plate_text === cleanPlate)) { addToast('Plate already permitted', 'error'); return; }
+    setSaving(true);
+    try {
+      const permit = {
+        lot_id: lotId,
+        plate_text: cleanPlate,
+        permit_type: permitType,
+        holder_name: holderName.trim() || null,
+        expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+      };
+      const saved = await db.addPermit(permit);
+      setPermits(prev => [saved, ...prev]);
+      setPlate(''); setHolderName(''); setExpiresAt('');
+      addToast(`${cleanPlate} added to permits`, 'success');
+    } catch (err) {
+      addToast('Failed to add permit: ' + err.message, 'error');
+    } finally { setSaving(false); }
+  }
+
+  async function removePermit(permitId, plateText) {
+    try {
+      await db.deletePermit(permitId);
+      setPermits(prev => prev.filter(p => p.id !== permitId));
+      addToast(`${plateText} removed`, 'info');
+    } catch (err) {
+      addToast('Failed to remove: ' + err.message, 'error');
+    }
+  }
+
+  const expired = p => p.expires_at && new Date(p.expires_at) < new Date();
+
+  return (
+    <div className="permits-overlay" onClick={onClose}>
+      <div className="permits-sheet" onClick={e => e.stopPropagation()}>
+        <div className="permits-header">
+          <div>
+            <div className="permits-title">Permitted Vehicles</div>
+            <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2}}>{lotName} — {permits.length} permit{permits.length !== 1 ? 's' : ''}</div>
+          </div>
+          <button onClick={onClose} style={{background:'var(--bg-inset)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 14px', fontSize:12, fontWeight:700, color:'var(--text-muted)', cursor:'pointer', fontFamily:'inherit'}}>Close</button>
+        </div>
+
+        {/* Add permit form */}
+        <form className="permit-add-form" onSubmit={addPermit}>
+          <div className="permit-form-row">
+            <input className="field-input" value={plate} onChange={e => setPlate(e.target.value)}
+              placeholder="Plate number" style={{textTransform:'uppercase', fontFamily:"'Courier New', monospace", fontWeight:700, letterSpacing:'.08em'}} autoFocus />
+            <select value={permitType} onChange={e => setPermitType(e.target.value)}>
+              <option value="whitelist">Whitelist</option>
+              <option value="monthly">Monthly</option>
+              <option value="temporary">Temporary</option>
+              <option value="employee">Employee</option>
+            </select>
+          </div>
+          <div className="permit-form-row">
+            <input className="field-input" value={holderName} onChange={e => setHolderName(e.target.value)}
+              placeholder="Name (optional)" />
+            {permitType !== 'whitelist' && (
+              <input className="field-input" type="date" value={expiresAt} onChange={e => setExpiresAt(e.target.value)}
+                placeholder="Expires" style={{maxWidth:160}} />
+            )}
+          </div>
+          <button className="login-btn" type="submit" disabled={saving} style={{marginTop:8}}>
+            {saving ? 'Adding…' : 'Add Permit'}
+          </button>
+        </form>
+
+        {/* Permit list */}
+        {loading ? (
+          <div className="loader"><span className="spin" /> Loading permits…</div>
+        ) : permits.length === 0 ? (
+          <div className="empty-state" style={{padding:'32px 20px'}}>
+            <div className="empty-title">No permits yet</div>
+            <div className="empty-body">Add plate numbers above to whitelist vehicles at this lot</div>
+          </div>
+        ) : (
+          <div>
+            {permits.map(p => (
+              <div key={p.id} className="permit-card" style={expired(p) ? {opacity:.5} : undefined}>
+                <div style={{display:'flex', alignItems:'center', gap:10}}>
+                  <span className="permit-plate">{p.plate_text}</span>
+                  <div>
+                    <span className={`permit-type-badge ${p.permit_type}`}>{p.permit_type}</span>
+                    {p.holder_name && <div style={{fontSize:12, color:'var(--text-muted)', marginTop:2}}>{p.holder_name}</div>}
+                    {p.expires_at && (
+                      <div style={{fontSize:10, color: expired(p) ? '#ef4444' : 'var(--text-faint)', marginTop:2}}>
+                        {expired(p) ? 'Expired' : 'Expires'}: {new Date(p.expires_at).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button onClick={() => removePermit(p.id, p.plate_text)}
+                  style={{background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, padding:'5px 10px', fontSize:11, fontWeight:700, color:'#ef4444', cursor:'pointer', fontFamily:'inherit'}}>
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Lots tab ──────────────────────────────────────────────────
 function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   const [expandedCams, setExpandedCams] = useState({});
   const [editingZones, setEditingZones] = useState(null);
   const [addingCamera, setAddingCamera] = useState(null); // lot id
+  const [managingPermits, setManagingPermits] = useState(null); // {lotId, lotName}
   const { addToast } = useToast();
 
   if (loading && lots.length === 0) {
@@ -3601,7 +3945,12 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
               </button>
               {ownerRole === 'owner' && (
                 <button className="lot-action-btn primary" onClick={() => setAddingCamera(lot.id)}>
-                  + Add Camera
+                  + Camera
+                </button>
+              )}
+              {ownerRole === 'owner' && (
+                <button className="lot-action-btn primary" onClick={() => setManagingPermits({lotId: lot.id, lotName: lot.name})}>
+                  Permits
                 </button>
               )}
               <button className="lot-action-btn">
@@ -3804,6 +4153,15 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
           lotId={addingCamera}
           onClose={() => setAddingCamera(null)}
           onAdded={() => { if (onZonesSaved) onZonesSaved(); }}
+        />
+      )}
+
+      {/* Permits modal */}
+      {managingPermits && (
+        <PermitsModal
+          lotId={managingPermits.lotId}
+          lotName={managingPermits.lotName}
+          onClose={() => setManagingPermits(null)}
         />
       )}
     </div>
@@ -4554,6 +4912,196 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
   );
 }
 
+// ── Analytics tab ──────────────────────────────────────────────
+function AnalyticsPage({ lots, violations, isOwner }) {
+  const [hourlyData, setHourlyData] = useState(null);
+  const [utilData, setUtilData] = useState(null);
+  const [projData, setProjData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedLot, setSelectedLot] = useState('all');
+
+  const lotIds = lots.map(l => l.id);
+  const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
+
+  useEffect(() => {
+    if (lotIds.length === 0) return;
+    setLoading(true);
+    const ids = selectedLot === 'all' ? lotIds : [selectedLot];
+    Promise.all([
+      db.getHourlyStats(ids),
+      db.getUtilization(ids),
+      db.getRevenueProjection(ids),
+    ]).then(([h, u, p]) => {
+      setHourlyData(h);
+      setUtilData(u);
+      setProjData(p);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [lots.length, selectedLot]);
+
+  if (loading) return <div className="page-enter"><SkeletonKPIs /><SkeletonCards count={3} /></div>;
+
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const maxHeat = hourlyData ? Math.max(...Object.values(hourlyData.heatmap), 1) : 1;
+
+  // Get total spaces for utilization percentage
+  const filteredLots = selectedLot === 'all' ? lots : lots.filter(l => l.id === selectedLot);
+  const totalSpaces = filteredLots.reduce((s, l) => s + (l.total_spaces || 0), 0);
+
+  return (
+    <div className="page-enter">
+      <div className="section-header">
+        <div className="section-title">Analytics</div>
+        {lots.length > 1 && (
+          <select value={selectedLot} onChange={e => setSelectedLot(e.target.value)}
+            style={{background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:8, padding:'5px 10px', fontSize:12, fontWeight:600, color:'var(--text-secondary)', fontFamily:'inherit'}}>
+            <option value="all">All Lots</option>
+            {lots.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        )}
+      </div>
+
+      {/* Revenue Projections */}
+      {projData && (
+        <div className="analytics-card">
+          <div className="analytics-card-title">Revenue Projections</div>
+          <div className="projection-row">
+            <div className="projection-label">Monthly projection</div>
+            <div>
+              <span className="projection-val green">${projData.monthlyProjection.toLocaleString()}</span>
+              {projData.trendPct !== 0 && (
+                <span className={`projection-trend ${projData.trend}`}>
+                  {projData.trend === 'up' ? '+' : ''}{projData.trendPct}%
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="projection-row">
+            <div className="projection-label">Daily average</div>
+            <div>
+              <span className="projection-val blue">${projData.dailyAvg.toLocaleString()}</span>
+            </div>
+          </div>
+          <div className="projection-row">
+            <div className="projection-label">Last 7 days total</div>
+            <div>
+              <span className="projection-val">${projData.weeklyAvg.toLocaleString()}</span>
+            </div>
+          </div>
+          <div className="projection-row">
+            <div className="projection-label">Violations per day</div>
+            <div>
+              <span className="projection-val">{projData.violationsPerDay}</span>
+              {projData.violTrendPct !== 0 && (
+                <span className={`projection-trend ${projData.violTrend}`}>
+                  {projData.violTrend === 'up' ? '+' : ''}{projData.violTrendPct}%
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Peak Violation Hours Heatmap */}
+      {hourlyData && (
+        <div className="analytics-card">
+          <div className="analytics-card-title">Peak Violation Hours (Last 90 Days)</div>
+          <div style={{overflowX:'auto', paddingBottom:4}}>
+            <div className="heatmap-grid" style={{minWidth:360}}>
+              {/* Hour labels */}
+              <div />
+              {Array.from({length: 24}, (_, h) => (
+                <div key={`h${h}`} className="heatmap-hour">{h % 3 === 0 ? `${h}` : ''}</div>
+              ))}
+              {/* Days */}
+              {dayNames.map((day, dow) => (
+                <React.Fragment key={day}>
+                  <div className="heatmap-label">{day}</div>
+                  {Array.from({length: 24}, (_, hour) => {
+                    const count = hourlyData.heatmap[`${dow}-${hour}`] || 0;
+                    const intensity = count / maxHeat;
+                    const bg = count === 0
+                      ? 'var(--bg-inset)'
+                      : `rgba(239, 68, 68, ${0.15 + intensity * 0.85})`;
+                    return (
+                      <div key={`${dow}-${hour}`} className="heatmap-cell"
+                        style={{background: bg}}
+                        title={`${day} ${hour}:00 — ${count} violation${count !== 1 ? 's' : ''}`}
+                      />
+                    );
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+          <div style={{display:'flex', alignItems:'center', gap:6, marginTop:8, justifyContent:'flex-end'}}>
+            <span style={{fontSize:10, color:'var(--text-faint)'}}>Low</span>
+            {[0.15, 0.35, 0.55, 0.75, 1].map((v, i) => (
+              <div key={i} style={{width:12, height:12, borderRadius:2, background:`rgba(239,68,68,${v})`}} />
+            ))}
+            <span style={{fontSize:10, color:'var(--text-faint)'}}>High</span>
+          </div>
+        </div>
+      )}
+
+      {/* Lot Utilization */}
+      {utilData && totalSpaces > 0 && (
+        <div className="analytics-card">
+          <div className="analytics-card-title">Avg. Vehicles by Hour (Last 7 Days)</div>
+          {Array.from({length: 24}, (_, hour) => {
+            const avg = utilData.hourly[hour] || 0;
+            const pct = Math.min((avg / totalSpaces) * 100, 100);
+            const color = pct > 80 ? '#ef4444' : pct > 50 ? '#fbbf24' : '#4ade80';
+            return (
+              <div key={hour} className="utilization-bar-row">
+                <div className="utilization-bar-label">{hour.toString().padStart(2, '0')}:00</div>
+                <div className="utilization-bar-track">
+                  <div className="utilization-bar-fill" style={{width: `${pct}%`, background: color}} />
+                </div>
+                <div className="utilization-bar-val">{avg.toFixed(1)}</div>
+              </div>
+            );
+          }).filter((_, hour) => {
+            // Only show hours 6am-11pm to reduce clutter
+            return hour >= 6 && hour <= 23;
+          })}
+          <div style={{fontSize:11, color:'var(--text-faint)', marginTop:8, textAlign:'center'}}>
+            {totalSpaces} total spaces across {filteredLots.length} lot{filteredLots.length !== 1 ? 's' : ''}
+          </div>
+        </div>
+      )}
+
+      {utilData && totalSpaces === 0 && (
+        <div className="analytics-card">
+          <div className="analytics-card-title">Lot Utilization</div>
+          <div style={{padding:'16px 0', textAlign:'center', color:'var(--text-faint)', fontSize:13}}>
+            Set total spaces on your lots to see utilization percentages
+          </div>
+        </div>
+      )}
+
+      {/* Quick stats */}
+      <div className="analytics-card">
+        <div className="analytics-card-title">Quick Stats</div>
+        <div className="kpi-bar">
+          <div className="kpi-card">
+            <div className="kpi-val blue">{hourlyData?.total || 0}</div>
+            <div className="kpi-label">Violations (90d)</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-val green">{lots.length}</div>
+            <div className="kpi-label">Active Lots</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-val">{utilData?.totalSnapshots || 0}</div>
+            <div className="kpi-label">Snapshots (7d)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────
 function App() {
   const { addToast } = useToast();
@@ -4773,12 +5321,13 @@ function App() {
   // Owner:    Overview + Jobs + Lots + Earnings + Invoices + Account
   // Operator (or viewing-as): Jobs + Lots + Activity + Earnings + Account
   const NavIconInvoices = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('path', {d:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'}), React.createElement('polyline', {points:'14 2 14 8 20 8'}), React.createElement('line', {x1:'8',y1:'13',x2:'16',y2:'13'}), React.createElement('line', {x1:'8',y1:'17',x2:'12',y2:'17'}));
-  const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount };
+  const NavIconAnalytics = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('line', {x1:'18',y1:'20',x2:'18',y2:'10'}), React.createElement('line', {x1:'12',y1:'20',x2:'12',y2:'4'}), React.createElement('line', {x1:'6',y1:'20',x2:'6',y2:'14'}));
+  const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics };
   const navTabs = isOwner ? [
     { id: 'overview', label: 'Overview', badge: 0 },
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
-    { id: 'earnings', label: 'Earnings', badge: 0 },
+    { id: 'analytics',label: 'Analytics',badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
@@ -4859,6 +5408,7 @@ function App() {
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} />}
           {tab === 'lots' && <LotsPage lots={effectiveLots} lotStates={effectiveLotStates} loading={loading} ownerRole={effectiveUser._role} onZonesSaved={() => loadData(owner, true)} />}
           {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} />}
+          {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} isOwner={isOwner} />}
           {tab === 'invoices' && isOwner && <InvoicesPage user={owner} lots={lots} violations={violations} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}

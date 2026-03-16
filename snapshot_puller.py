@@ -44,12 +44,13 @@ import requests
 # ── Config ───────────────────────────────────────────────────────────────────
 
 API_URL = os.getenv("LOTLOGIC_API_URL", "https://lotlogic-backend-production.up.railway.app")
-API_KEY = os.getenv("LOTLOGIC_API_KEY", "UJn9mwti15jbhgRUnhw6-VOk3TAt1VJAK3VNCIdAHa8")
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nzdkoouoaedbbccraoti.supabase.co")
-SUPABASE_KEY = os.getenv(
-    "SUPABASE_KEY",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzEzODY5NCwiZXhwIjoyMDg4NzE0Njk0fQ.e0mFejhADSSvoInPRw1fLd0iOl08bwZGbrDm8hlqXJs",
-)
+API_KEY = os.getenv("LOTLOGIC_API_KEY")
+if not API_KEY:
+    raise RuntimeError("LOTLOGIC_API_KEY environment variable is required")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
 CAMERA_HTTP_URL = os.getenv("CAMERA_HTTP_URL", "")
 
 logging.basicConfig(
@@ -134,7 +135,9 @@ class RTSPStream:
         if parsed.username:
             return rtsp_url
         user = os.getenv("CAMERA_USER", "admin")
-        password = os.getenv("CAMERA_PASS", "Na9HTk&C1234")
+        password = os.getenv("CAMERA_PASS")
+        if not password:
+            raise RuntimeError("CAMERA_PASS environment variable is required for RTSP cameras")
         return f"rtsp://{quote(user)}:{quote(password)}@{parsed.hostname}:{parsed.port or 554}{parsed.path}"
 
     def connect(self):
