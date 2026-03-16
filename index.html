@@ -1520,7 +1520,7 @@ const db = {
         return {
           camera_id: cam.id,
           camera_name: cam.name,
-          online: cam.status === 'active' || cam.active === true,
+          online: (cam.status === 'active' || cam.active === true) && (!cam.last_heartbeat || (Date.now() - new Date(cam.last_heartbeat).getTime()) < 300000),
           zones,
           deployment_profile: cam.camera_type === 'lte_solar' ? 'lte_solar' : 'wired',
           snapshot_width: cam.snapshot_width || 640,
@@ -1532,7 +1532,7 @@ const db = {
           channel: cam.channel,
           active_violations: camViols,
           latest_snapshot: snap ? {
-            url: snap.storage_url || snap.url,
+            url: (snap.storage_url || snap.url) ? (snap.storage_url || snap.url) + (((snap.storage_url || snap.url).includes('?')) ? '&' : '?') + '_t=' + Date.now() : null,
             captured_at: snap.captured_at,
             vehicles_detected: snap.vehicles_detected || 0,
             people_detected: 0,
@@ -1658,6 +1658,51 @@ const db = {
         }
         const { error } = await supabase.from('violations').update(updates).eq('id', violId);
         if (error) throw new Error(error.message || 'Update failed');
+
+        // Log boot/tow actions for invoicing
+        if (action === 'boot' || action === 'tow') {
+          try {
+            // Fetch violation details for the log
+            const { data: viol } = await supabase.from('violations').select('lot_id, plate_text, vehicle_color, vehicle_type').eq('id', violId).single();
+            const lot_id = viol?.lot_id;
+            const vehicleParts = [viol?.vehicle_color, viol?.vehicle_type].filter(Boolean);
+            const vehicle_description = vehicleParts.length ? vehicleParts.join(' ') : (viol?.vehicle_type || null);
+            // Determine who performed the action and fee split
+            let logEntry = {
+              violation_id: violId,
+              lot_id,
+              action_type: action,
+              plate_text: viol?.plate_text || null,
+              vehicle_description,
+              performed_at: updates.resolved_at,
+            };
+            if (extra._partner) {
+              const p = extra._partner;
+              const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
+              const share = p.revenue_share != null ? p.revenue_share : 0.30;
+              logEntry.partner_id = p.id;
+              logEntry.performed_by = 'partner';
+              logEntry.performer_email = extra._performerEmail || null;
+              logEntry.gross_fee = grossFee;
+              logEntry.our_revenue = Math.round(grossFee * share);
+              logEntry.partner_payout = grossFee - logEntry.our_revenue;
+              logEntry.owner_payout = 0;
+            } else if (extra._ownerFees) {
+              logEntry.owner_id = extra._ownerId || null;
+              logEntry.performed_by = 'owner';
+              logEntry.performer_email = extra._performerEmail || null;
+              const grossFee = action === 'boot' ? (extra._ownerFees.boot_fee || 75) : (extra._ownerFees.tow_fee || 250);
+              logEntry.gross_fee = grossFee;
+              logEntry.our_revenue = grossFee;
+              logEntry.partner_payout = 0;
+              logEntry.owner_payout = grossFee;
+            }
+            await supabase.from('action_logs').insert(logEntry);
+          } catch (logErr) {
+            console.warn('Action logged to violations but action_log insert failed:', logErr);
+          }
+        }
+
         return { success: true };
       } catch (e) {
         console.error('Supabase recordAction error:', e);
@@ -1732,7 +1777,9 @@ const db = {
     if (supabase) {
       // Delete existing zones for this camera, then insert new ones
       const { error: delErr } = await supabase.from('camera_zones').delete().eq('camera_id', cameraId);
-      if (!delErr && zones.length > 0) {
+      if (delErr) throw new Error('Failed to clear zones: ' + delErr.message);
+
+      if (zones.length > 0) {
         const rows = zones.map(z => ({
           camera_id: cameraId,
           zone_id: z.zone_id,
@@ -1742,10 +1789,25 @@ const db = {
           polygon: z.polygon,
         }));
         const { error: insErr } = await supabase.from('camera_zones').insert(rows);
-        if (!insErr) return { success: true };
-      } else if (!delErr) {
-        return { success: true };
+        if (insErr) throw new Error('Failed to insert zones: ' + insErr.message);
       }
+
+      // Sync to cameras.zones JSON column (backend detection uses this format)
+      // Convert {x,y} percentage objects to [[x,y]] normalized 0-1 arrays
+      const backendZones = zones.map((z, i) => ({
+        zone_id: z.zone_id,
+        violation_type: z.zone_type || 'no_parking',
+        max_minutes: z.time_limit_minutes || null,
+        space_number: i + 1,
+        polygon: (z.polygon || []).map(pt => {
+          const px = pt.x != null ? pt.x : (Array.isArray(pt) ? pt[0] * 100 : 0);
+          const py = pt.y != null ? pt.y : (Array.isArray(pt) ? pt[1] * 100 : 0);
+          return [Math.round(px / 100 * 10000) / 10000, Math.round(py / 100 * 10000) / 10000];
+        }),
+      }));
+      await supabase.from('cameras').update({ zones: backendZones }).eq('id', cameraId);
+
+      return { success: true };
     }
     return apiFetch(`/cameras/${cameraId}/zones`, {
       method: 'PATCH',
@@ -1765,6 +1827,14 @@ const db = {
         if (lotIds.includes(payload.new?.lot_id) || lotIds.includes(payload.old?.lot_id)) {
           callback(payload);
         }
+      })
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'snapshots',
+      }, payload => {
+        // New snapshot from any camera — trigger refresh so frame updates
+        callback(payload);
       })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -2451,11 +2521,13 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       const extra = {};
       // Pass fee schedule for revenue calculation on boot/tow
       if ((action === 'boot' || action === 'tow') && user) {
+        extra._performerEmail = user.email;
         if (user._role === 'partner') {
           extra._partner = { id: user.id, boot_fee: user.boot_fee, tow_fee: user.tow_fee, revenue_share: user.revenue_share };
         } else {
           // Owner acting directly — record gross revenue with 100% to LotLogic (no partner split)
           extra._ownerFees = { boot_fee: 75, tow_fee: 250 };
+          extra._ownerId = user.id;
         }
       }
       const result = await db.recordAction(violId, action, extra);
@@ -2803,87 +2875,133 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const svgRef = useRef(null);
   const imgRef = useRef(null);
 
-  // Live feed state
-  const [feedLive, setFeedLive] = useState(false);
-  const [feedInterval, setFeedInterval] = useState(5000); // ms
+  // Live feed state — persisted to localStorage
+  const [feedLive, setFeedLive] = useState(() => {
+    const saved = localStorage.getItem('lotlogic_ze_feedlive');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [feedInterval, setFeedInterval] = useState(() => {
+    const saved = localStorage.getItem('lotlogic_ze_feedinterval');
+    return saved ? Number(saved) : 10000;
+  });
   const [feedStatus, setFeedStatus] = useState('loading'); // loading | live | paused | offline
   const [lastFrameTime, setLastFrameTime] = useState(null);
   const feedTimerRef = useRef(null);
 
-  // Detection state
-  const [detections, setDetections] = useState([]); // array of { type, bbox, plate_text, color, confidence, label, id }
-  const [showDetections, setShowDetections] = useState(true);
-  const [detectionTab, setDetectionTab] = useState('all'); // all | vehicles | people | plates
+  // Persist feed settings
+  useEffect(() => { localStorage.setItem('lotlogic_ze_feedlive', String(feedLive)); }, [feedLive]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_feedinterval', String(feedInterval)); }, [feedInterval]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_showdetections', String(showDetections)); }, [showDetections]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_detectiontab', detectionTab); }, [detectionTab]);
+
+  // Detection state — persisted to localStorage
+  const [detections, setDetections] = useState([]);
+  const [showDetections, setShowDetections] = useState(() => {
+    const saved = localStorage.getItem('lotlogic_ze_showdetections');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [detectionTab, setDetectionTab] = useState(() => localStorage.getItem('lotlogic_ze_detectiontab') || 'all');
   const [snapshotMeta, setSnapshotMeta] = useState(null); // latest snapshot metadata
 
   const ZONE_COLORS = { no_parking: '#ef4444', time_limited: '#8b5cf6', handicap_only: '#eab308' };
 
   // Load a single frame + detections
   const loadFrame = useCallback(async (showError = true) => {
+    let frameLoaded = false;
+    let snap = null;
+
+    // 1. Fetch latest snapshot from Supabase (primary source for both frame + detections)
     try {
-      const r = await fetch(API + `/cameras/${cameraId}/frame`, { headers: { 'X-API-Key': API_KEY } });
-      if (!r.ok) throw new Error(r.status);
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      setFrameUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
-      setLastFrameTime(new Date());
-      setFeedStatus('live');
+      if (supabase) {
+        const { data, error } = await supabase.from('snapshots').select('*').eq('camera_id', cameraId).order('captured_at', { ascending: false }).limit(1);
+        if (!error && data && data.length > 0) {
+          snap = data[0];
+        }
+      } else {
+        try { snap = await apiFetch(`/cameras/${cameraId}/latest-snapshot`); } catch {}
+      }
     } catch {
-      if (showError) setError('Could not load camera frame');
-      setFeedStatus('offline');
+      // Supabase query failed
     }
 
-    // Also fetch latest snapshot metadata for detection data
-    try {
-      let snap;
-      if (supabase) {
-        const { data } = await supabase.from('snapshots').select('*').eq('camera_id', cameraId).order('captured_at', { ascending: false }).limit(1).single();
-        snap = data;
-      } else {
-        snap = await apiFetch(`/cameras/${cameraId}/latest-snapshot`);
-      }
-      setSnapshotMeta(snap);
-      // Build detections from snapshot detections array
-      const dets = [];
-      if (snap?.detections) {
-        snap.detections.forEach((d, i) => {
-          dets.push({
-            id: d.id || `det_${i}`,
-            type: d.type || d.object_type || 'vehicle',
-            bbox: d.bbox || d.bounding_box || null,
-            plate_text: d.plate_text || d.license_plate || null,
-            color: d.color || d.vehicle_color || null,
-            vehicle_type: d.vehicle_type || null,
-            confidence: d.confidence != null ? parseFloat(d.confidence) : null,
-            label: d.label || d.class_name || null,
-            zone_id: d.zone_id || null,
-            track_id: d.track_id || null,
-          });
-        });
-      }
-      // Also incorporate vehicles_detected / people_detected counts if detections array absent
-      if (dets.length === 0 && snap) {
-        const vc = snap.vehicles_detected || snap.vehicle_count || 0;
-        const pc = snap.people_detected || snap.person_count || snap.humans_detected || 0;
-        for (let i = 0; i < vc; i++) dets.push({ id: `v_${i}`, type: 'vehicle', bbox: null, plate_text: null, color: null, confidence: null, label: 'Vehicle' });
-        for (let i = 0; i < pc; i++) dets.push({ id: `p_${i}`, type: 'person', bbox: null, plate_text: null, color: null, confidence: null, label: 'Person' });
-        // Plate readings
-        if (snap.plate_readings) {
-          snap.plate_readings.forEach((pr, i) => {
-            dets.push({ id: `pl_${i}`, type: 'vehicle', bbox: pr.bbox || null, plate_text: pr.plate_text || pr.text, color: pr.vehicle_color || null, confidence: pr.confidence, label: 'Vehicle', vehicle_type: pr.vehicle_type || null });
-          });
-        }
-      }
-      setDetections(dets);
-    } catch {
-      // Snapshot endpoint may not exist yet — silent fail, keep any existing detections
+    // 2. Use snapshot storage_url as frame
+    if (snap?.storage_url) {
+      const ts = snap.captured_at ? new Date(snap.captured_at).getTime() : Date.now();
+      setFrameUrl(snap.storage_url + '?t=' + ts);
+      setLastFrameTime(snap.captured_at ? new Date(snap.captured_at) : new Date());
+      setFeedStatus('live');
+      frameLoaded = true;
     }
+
+    // 3. Fallback: try loading /frame endpoint as img src (bypasses CORS unlike fetch)
+    if (!frameLoaded) {
+      try {
+        const frameImgUrl = API + `/cameras/${cameraId}/frame?api_key=${API_KEY}&_t=${Date.now()}`;
+        const testImg = new Image();
+        const loaded = await new Promise((resolve) => {
+          testImg.onload = () => resolve(true);
+          testImg.onerror = () => resolve(false);
+          testImg.src = frameImgUrl;
+          setTimeout(() => resolve(false), 8000);
+        });
+        if (loaded && testImg.naturalWidth > 0) {
+          setFrameUrl(frameImgUrl);
+          setLastFrameTime(new Date());
+          setFeedStatus('live');
+          frameLoaded = true;
+        }
+      } catch {
+        // /frame img load also failed
+      }
+    }
+
+    if (!frameLoaded) {
+      if (showError) setError('Could not load camera frame');
+      setFeedStatus('offline');
+    } else {
+      setError('');
+    }
+
+    // Build detections from snapshot metadata
+    setSnapshotMeta(snap);
+    const dets = [];
+    const rawDets = snap?.raw_detections?.detections || snap?.detections || [];
+    rawDets.forEach((d, i) => {
+      dets.push({
+        id: d.id || `det_${i}`,
+        type: d.class === 'person' ? 'person' : 'vehicle',
+        bbox: d.bbox || null,
+        plate_text: d.plate_text || null,
+        color: d.color || null,
+        vehicle_type: d.class || null,
+        confidence: d.conf != null ? parseFloat(d.conf) : (d.confidence != null ? parseFloat(d.confidence) : null),
+        label: d.class || d.label || null,
+        zone_id: d.zone_id || null,
+        track_id: d.track_id || null,
+      });
+    });
+    if (dets.length === 0 && snap) {
+      const vc = snap.vehicles_detected || 0;
+      for (let i = 0; i < vc; i++) dets.push({ id: `v_${i}`, type: 'vehicle', bbox: null, plate_text: null, color: null, confidence: null, label: 'Vehicle' });
+    }
+    setDetections(dets);
   }, [cameraId]);
 
   // Initial frame load
   useEffect(() => {
     loadFrame(true);
   }, [loadFrame]);
+
+  // Supabase realtime: auto-refresh when new snapshot arrives for this camera
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase.channel('ze-snapshots-' + cameraId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'snapshots', filter: 'camera_id=eq.' + cameraId }, () => {
+        loadFrame(false);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [cameraId, loadFrame]);
 
   // Live feed polling
   useEffect(() => {
@@ -3456,6 +3574,8 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
               <div className="cam-sheet">
                 {state.cameras.map(cam => {
                   const snap = cam.latest_snapshot;
+                  const snapAge = snap?.captured_at ? (Date.now() - new Date(snap.captured_at).getTime()) / 1000 : Infinity;
+                  const snapStale = snapAge > 300; // 5 minutes
                   const snapVehicles = snap?.vehicles_detected || snap?.vehicle_count || 0;
                   const snapPeople = snap?.people_detected || snap?.person_count || snap?.humans_detected || 0;
                   const snapPlates = snap?.plates_read || snap?.plate_count || (snap?.plate_readings ? snap.plate_readings.length : 0);
@@ -3481,7 +3601,10 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                             </button>
                           )}
                           {snap && (
-                            <div className="cam-time">{fmtTime(snap.captured_at)}</div>
+                            <div className="cam-time" style={snapStale ? {color:'#fbbf24'} : undefined}>
+                              {snapStale ? smartDate(snap.captured_at) + ' ' : ''}{fmtTime(snap.captured_at)}
+                              {snapStale && <span style={{fontSize:9, marginLeft:4, color:'#ef4444'}}>(stale)</span>}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -3498,6 +3621,11 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                             <ZoneOverlay zones={cam.zones} />
                             {cam.active_violations > 0 && (
                               <div className="cam-viol-overlay">{cam.active_violations} open</div>
+                            )}
+                            {snapStale && (
+                              <div style={{position:'absolute', top:8, right:8, background:'rgba(239,68,68,.85)', color:'#fff', borderRadius:6, padding:'3px 8px', fontSize:10, fontWeight:700, backdropFilter:'blur(4px)'}}>
+                                {snapAge > 3600 ? `${Math.floor(snapAge/3600)}h ago` : `${Math.floor(snapAge/60)}m ago`}
+                              </div>
                             )}
                           </>
                         ) : (
@@ -3851,6 +3979,115 @@ function EarningsPage({ violations, lots, isOwner, user }) {
   );
 }
 
+// ── Invoices page (owner only — action log from violations, QuickBooks coming soon) ────
+function InvoicesPage({ user, lots, violations: allViolations }) {
+  const [subTab, setSubTab] = React.useState('log'); // log | quickbooks
+  const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
+
+  function formatDate(d) {
+    if (!d) return '—';
+    return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  function formatTime(d) {
+    if (!d) return '';
+    return new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+
+  // Build action log from resolved violations (real data from violations table)
+  const actionLogs = (allViolations || [])
+    .filter(v => v.action_taken && v.action_taken !== 'pending' && v.action_taken !== 'plate_correction')
+    .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
+
+  const totalRevenue = actionLogs.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+
+  // Sub-tab buttons
+  const subTabs = React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
+    [
+      { id: 'log', label: 'Action Log' },
+      { id: 'quickbooks', label: 'QuickBooks' },
+    ].map(t => React.createElement('button', {
+      key: t.id,
+      onClick: () => setSubTab(t.id),
+      style: {
+        padding: '8px 16px', borderRadius: 8, border: '1px solid',
+        borderColor: subTab === t.id ? 'var(--accent)' : 'var(--border)',
+        background: subTab === t.id ? 'rgba(59,130,246,.15)' : 'transparent',
+        color: subTab === t.id ? 'var(--accent)' : 'var(--text-muted)',
+        fontSize: 13, fontWeight: 600, cursor: 'pointer',
+      }
+    }, t.label))
+  );
+
+  // ── Action Log sub-tab (from violations) ──
+  if (subTab === 'log') {
+    return React.createElement('div', { className: 'page-section' },
+      React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Action Log'),
+      React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 } },
+        `${actionLogs.length} actions recorded · ${fmtMoney(totalRevenue)} total revenue`),
+      subTabs,
+      actionLogs.length === 0
+        ? React.createElement('div', { style: { textAlign: 'center', padding: 40, color: 'var(--text-muted)' } },
+            React.createElement('p', { style: { fontSize: 15, marginBottom: 8 } }, 'No actions recorded yet'),
+            React.createElement('p', { style: { fontSize: 13 } }, 'Boot and tow actions will appear here automatically'))
+        : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            actionLogs.slice(0, 100).map(v => React.createElement('div', {
+              key: v.id,
+              style: {
+                background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 14,
+                borderLeft: `3px solid ${v.action_taken === 'tow' ? '#ef4444' : v.action_taken === 'boot' ? '#fbbf24' : '#6b7280'}`,
+              }
+            },
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                  React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: v.action_taken === 'tow' ? '#ef4444' : v.action_taken === 'boot' ? '#fbbf24' : '#a78bfa', textTransform: 'uppercase' } }, v.action_taken.replace(/_/g, ' ')),
+                  React.createElement('span', { style: { fontSize: 13, color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 600 } }, v.plate_text || 'No plate'),
+                ),
+                v.gross_revenue > 0 && React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: 'var(--green)' } }, fmtMoney(v.gross_revenue)),
+              ),
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)' } },
+                React.createElement('span', null, `${lotMap[v.lot_id]?.name || 'Lot'} · ${v.zone_id || ''}`),
+                React.createElement('span', null, `${formatDate(v.resolved_at || v.detected_at)} ${formatTime(v.resolved_at || v.detected_at)}`),
+              ),
+              React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 6, fontSize: 11 } },
+                v.vehicle_color && React.createElement('span', { style: { color: 'var(--text-muted)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, `${v.vehicle_color} ${v.vehicle_type || 'vehicle'}`),
+                React.createElement('span', { style: { color: v.paid ? 'var(--green)' : 'var(--yellow)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, v.paid ? 'Paid' : 'Unpaid'),
+              ),
+            ))
+          )
+    );
+  }
+
+  // ── QuickBooks sub-tab (coming soon) ──
+  if (subTab === 'quickbooks') {
+    return React.createElement('div', { className: 'page-section' },
+      React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'QuickBooks Integration'),
+      React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 } },
+        'Auto-sync invoices and deposits with QuickBooks'),
+      subTabs,
+      React.createElement('div', { style: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, textAlign: 'center' } },
+        React.createElement('div', { style: { fontSize: 40, marginBottom: 12 } }, '\uD83D\uDCDA'),
+        React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 } }, 'QuickBooks — Coming Soon'),
+        React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', maxWidth: 300, margin: '0 auto 16px' } },
+          'QuickBooks integration is being set up. Once connected, invoices will auto-sync to your QuickBooks account.'),
+        React.createElement('div', { style: { fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', maxWidth: 320, margin: '0 auto 20px', lineHeight: 1.8 } },
+          React.createElement('div', null, '\u2713 Daily invoices auto-created in QuickBooks'),
+          React.createElement('div', null, '\u2713 Revenue deposited to your checking account'),
+          React.createElement('div', null, '\u2713 Boot & tow fees tracked per lot'),
+          React.createElement('div', null, '\u2713 Expense reports ready for tax season'),
+        ),
+        React.createElement('div', {
+          style: {
+            padding: '12px 24px', borderRadius: 8, display: 'inline-block',
+            background: 'rgba(107,114,128,.15)', color: 'var(--text-muted)', fontSize: 15, fontWeight: 700,
+          }
+        }, 'Coming Soon'),
+      ),
+    );
+  }
+
+  return null;
+}
+
 // ── Operator Activity page (no revenue, just job history) ────
 function OperatorActivityPage({ violations, lots }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
@@ -3961,8 +4198,23 @@ function OperatorActivityPage({ violations, lots }) {
 }
 
 // ── Account / Settings page ────────────────────────────────────
-function AccountPage({ user, onLogout }) {
+function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) {
   const isOwner = user._role === 'owner';
+
+  function ToggleSwitch({ on, onChange }) {
+    return (
+      <div onClick={onChange} style={{
+        width: 44, height: 24, borderRadius: 12, cursor: 'pointer', transition: 'background .2s',
+        background: on ? '#4ade80' : 'rgba(107,114,128,.3)', position: 'relative', flexShrink: 0,
+      }}>
+        <div style={{
+          width: 20, height: 20, borderRadius: 10, background: '#fff', position: 'absolute', top: 2,
+          left: on ? 22 : 2, transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.3)',
+        }} />
+      </div>
+    );
+  }
+
   return (
     <div className="page-enter">
       {/* Profile card */}
@@ -4034,16 +4286,35 @@ function AccountPage({ user, onLogout }) {
         </div>
       )}
 
-      {/* App info */}
+      {/* App settings */}
       <div className="settings-section">
         <div className="settings-section-title">App</div>
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">Auto-refresh</div>
-            <div className="settings-row-desc">Data refreshes every 30 seconds</div>
+            <div className="settings-row-desc">
+              {autoRefresh ? `Data refreshes every ${refreshInterval / 1000}s` : 'Auto-refresh is paused'}
+            </div>
           </div>
-          <div className="settings-row-value" style={{color:'var(--green)'}}>Active</div>
+          <ToggleSwitch on={autoRefresh} onChange={() => setAutoRefresh(!autoRefresh)} />
         </div>
+        {autoRefresh && (
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">Refresh Interval</div>
+              <div className="settings-row-desc">How often to poll for updates</div>
+            </div>
+            <select value={refreshInterval} onChange={e => setRefreshInterval(Number(e.target.value))} style={{
+              background: 'var(--bg-inset)', color: 'var(--text-primary)', border: '1px solid var(--border)',
+              borderRadius: 8, padding: '4px 8px', fontSize: 13, fontWeight: 600,
+            }}>
+              <option value={10000}>10s</option>
+              <option value={15000}>15s</option>
+              <option value={30000}>30s</option>
+              <option value={60000}>60s</option>
+            </select>
+          </div>
+        )}
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">SMS Notifications</div>
@@ -4062,7 +4333,7 @@ function AccountPage({ user, onLogout }) {
           <div className="settings-row-info">
             <div className="settings-row-label">Version</div>
           </div>
-          <div className="settings-row-value">4.0.0</div>
+          <div className="settings-row-value">4.1.0</div>
         </div>
       </div>
 
@@ -4097,14 +4368,33 @@ function App() {
     const match = path.match(/\/violations\/([0-9a-f-]{36})/i);
     return match ? match[1] : null;
   });
-  const [tab, setTab] = useState('jobs');
+  const [tab, setTab] = useState(() => {
+    try { return localStorage.getItem('lotlogic_tab') || 'jobs'; } catch { return 'jobs'; }
+  });
   const [lots, setLots] = useState([]);
   const [lotStates, setLotStates] = useState({});
   const [violations, setViolations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(() => {
+    try { const v = localStorage.getItem('lotlogic_autorefresh'); return v !== 'false'; } catch { return true; }
+  });
+  const [refreshInterval, setRefreshInterval] = useState(() => {
+    try { return parseInt(localStorage.getItem('lotlogic_refresh_interval')) || 30000; } catch { return 30000; }
+  });
   const timerRef = useRef(null);
+
+  // Persist settings across refresh
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_tab', tab); } catch {}
+  }, [tab]);
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_autorefresh', String(autoRefresh)); } catch {}
+  }, [autoRefresh]);
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_refresh_interval', String(refreshInterval)); } catch {}
+  }, [refreshInterval]);
 
   const isOwner = owner?._role === 'owner';
   const isOperator = owner?._role === 'partner';
@@ -4199,7 +4489,7 @@ function App() {
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
     };
-  });
+  }); // eslint-disable-line -- intentionally re-runs to capture latest handlePullRefresh/showPTR
 
   // Load data on mount if session was restored
   useEffect(() => { if (owner) loadData(owner); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -4210,6 +4500,7 @@ function App() {
   // Auto-refresh + session expiration check
   useEffect(() => {
     if (!owner) return;
+    if (!autoRefresh) { clearInterval(timerRef.current); return; }
     timerRef.current = setInterval(() => {
       // Check session expiration (7 days)
       if (owner._ts && Date.now() - owner._ts > 7 * 86400000) {
@@ -4218,9 +4509,9 @@ function App() {
         return;
       }
       if (navigator.onLine) loadData(owner, true);
-    }, 30000);
+    }, refreshInterval);
     return () => clearInterval(timerRef.current);
-  }, [owner, loadData]);
+  }, [owner, loadData, autoRefresh, refreshInterval]);
 
   // Subscribe to realtime violation changes
   useEffect(() => {
@@ -4243,11 +4534,13 @@ function App() {
   // Role-based navigation:
   // Operators: Jobs + Lots (assigned) + Activity + Earnings + Account
   // Owners: Jobs + Lots + Earnings + Account
-  const navIcons = { jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, activity: NavIconActivity, account: NavIconAccount };
+  const NavIconInvoices = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('path', {d:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'}), React.createElement('polyline', {points:'14 2 14 8 20 8'}), React.createElement('line', {x1:'8',y1:'13',x2:'16',y2:'13'}), React.createElement('line', {x1:'8',y1:'17',x2:'12',y2:'17'}));
+  const navIcons = { jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount };
   const navTabs = isOwner ? [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
+    { id: 'invoices', label: 'Invoices', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
@@ -4307,8 +4600,9 @@ function App() {
           {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={owner} />}
           {tab === 'lots' && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
           {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} user={owner} />}
+          {tab === 'invoices' && isOwner && <InvoicesPage user={owner} lots={lots} violations={violations} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
-          {tab === 'account' && <AccountPage user={owner} onLogout={logout} />}
+          {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
       </main>
 
