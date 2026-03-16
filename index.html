@@ -1372,6 +1372,8 @@
     .theme-light .action-btn.dismiss:hover:not(:disabled) { background: rgba(124,58,237,.12); }
     .theme-light .action-btn.gone { background: rgba(107,114,128,.06); border-color: rgba(107,114,128,.3); color: #6b7280; }
     .theme-light .action-btn.gone:hover:not(:disabled) { background: rgba(107,114,128,.12); }
+    .theme-light .action-btn.navigate { background: rgba(16,185,129,.06); border-color: rgba(16,185,129,.3); color: #059669; }
+    .theme-light .action-btn.navigate:hover:not(:disabled) { background: rgba(16,185,129,.12); }
 
     /* Timer / badge colors on light theme */
     .theme-light .job-timer-val { color: #2563eb; }
@@ -4913,7 +4915,7 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
 }
 
 // ── Analytics tab ──────────────────────────────────────────────
-function AnalyticsPage({ lots, violations, isOwner }) {
+function AnalyticsPage({ lots, violations, isOwner, onNavigate }) {
   const [hourlyData, setHourlyData] = useState(null);
   const [utilData, setUtilData] = useState(null);
   const [projData, setProjData] = useState(null);
@@ -5098,6 +5100,21 @@ function AnalyticsPage({ lots, violations, isOwner }) {
           </div>
         </div>
       </div>
+
+      {/* Link to operator overview */}
+      {isOwner && onNavigate && (
+        <button onClick={() => onNavigate('overview')} style={{
+          width:'100%', background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:12,
+          padding:'14px 16px', display:'flex', alignItems:'center', justifyContent:'space-between',
+          cursor:'pointer', fontFamily:'inherit', marginTop:4,
+        }}>
+          <div style={{textAlign:'left'}}>
+            <div style={{fontSize:14, fontWeight:700, color:'var(--text-primary)'}}>Operator Overview</div>
+            <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2}}>View per-operator stats and impersonate partners</div>
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      )}
     </div>
   );
 }
@@ -5324,10 +5341,10 @@ function App() {
   const NavIconAnalytics = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('line', {x1:'18',y1:'20',x2:'18',y2:'10'}), React.createElement('line', {x1:'12',y1:'20',x2:'12',y2:'4'}), React.createElement('line', {x1:'6',y1:'20',x2:'6',y2:'14'}));
   const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics };
   const navTabs = isOwner ? [
-    { id: 'overview', label: 'Overview', badge: 0 },
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'analytics',label: 'Analytics',badge: 0 },
+    { id: 'earnings', label: 'Earnings', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
@@ -5408,7 +5425,7 @@ function App() {
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} />}
           {tab === 'lots' && <LotsPage lots={effectiveLots} lotStates={effectiveLotStates} loading={loading} ownerRole={effectiveUser._role} onZonesSaved={() => loadData(owner, true)} />}
           {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} />}
-          {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} isOwner={isOwner} />}
+          {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} isOwner={isOwner} onNavigate={setTab} />}
           {tab === 'invoices' && isOwner && <InvoicesPage user={owner} lots={lots} violations={violations} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
