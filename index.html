@@ -789,12 +789,13 @@
     .ze-btn-primary { background: #3b82f6; color: #fff; }
     .ze-btn-danger { background: rgba(239,68,68,.15); color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
     .ze-btn-ghost { background: var(--bg-inset); color: var(--text-muted); }
-    .ze-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .ze-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     .ze-canvas-wrap {
       flex: 1; position: relative; overflow: hidden; cursor: crosshair;
       display: flex; align-items: center; justify-content: center; background: var(--snapshot-bg);
     }
-    .ze-canvas-wrap img { max-width: 100%; max-height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
+    .ze-canvas-wrap .ze-img-wrap { position: relative; max-width: 100%; max-height: 100%; line-height: 0; }
+    .ze-canvas-wrap img { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
     .ze-svg {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     }
@@ -806,6 +807,14 @@
     .ze-vertex:hover { r: 1.1; }
     .ze-drawing-line { stroke: #3b82f6; stroke-width: 0.3; stroke-dasharray: 1 0.8; fill: none; }
     .ze-drawing-poly { fill: rgba(59,130,246,.1); stroke: #3b82f6; stroke-width: 0.3; }
+    .ze-floating-save {
+      position: absolute; bottom: 80px; right: 20px; z-index: 20;
+      background: #22c55e; color: #fff; border: none; border-radius: 8px;
+      padding: 10px 20px; font-size: 14px; font-weight: 700; cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0,0,0,.3); transition: all .15s;
+    }
+    .ze-floating-save:hover { background: #16a34a; transform: scale(1.03); }
+    .ze-floating-save:disabled { opacity: .5; cursor: not-allowed; transform: none; }
 
     .ze-toolbar {
       display: flex; gap: 6px; padding: 5px 12px; border-top: 1px solid var(--border-subtle);
@@ -3115,7 +3124,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const [frameUrl, setFrameUrl] = useState(null);
   const [zones, setZones] = useState(() => (existingZones || []).map(z => ({...z})));
   const [selectedIdx, setSelectedIdx] = useState(null);
-  const [drawing, setDrawing] = useState(false);
+  const [drawing, setDrawing] = useState(true);
   const [newPoints, setNewPoints] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -3295,13 +3304,20 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
     if (!pt) return;
 
     if (drawing) {
-      if (newPoints.length >= 3) {
+      const updated = [...newPoints, pt];
+      if (updated.length >= 4) {
+        // Auto-complete after 4 points
+        finishDrawing(updated);
+        return;
+      }
+      if (updated.length >= 3) {
         const first = newPoints[0];
         const dist = Math.sqrt((pt.x - first.x) ** 2 + (pt.y - first.y) ** 2);
-        if (dist < 2) { finishDrawing(); return; }
+        if (dist < 2) { finishDrawing(updated.slice(0, -1)); return; }
       }
-      setNewPoints(prev => [...prev, pt]);
+      setNewPoints(updated);
     } else {
+      // Click on empty area while not drawing — start drawing
       setSelectedIdx(null);
     }
   }
@@ -3309,23 +3325,25 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   function handleDoubleClick(e) {
     e.preventDefault();
     if (drawing && newPoints.length >= 3) {
-      finishDrawing();
+      finishDrawing(newPoints);
     }
   }
 
-  function finishDrawing() {
+  function finishDrawing(pts) {
+    const points = pts || newPoints;
     const id = 'zone_' + (zones.length + 1) + '_' + Date.now().toString(36);
     const newZone = {
       zone_id: id,
       label: 'Z' + (zones.length + 1),
       zone_type: 'no_parking',
       time_limit_minutes: null,
-      polygon: [...newPoints],
+      polygon: [...points],
     };
     setZones(prev => [...prev, newZone]);
-    setSelectedIdx(zones.length);
-    setDrawing(false);
+    setSelectedIdx(null);
+    // Rapid-fire: immediately ready for next zone
     setNewPoints([]);
+    setDrawing(true);
   }
 
   function handleVertexDrag(e, zoneIdx, pointIdx) {
@@ -3397,10 +3415,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       <div className="ze-header">
         <div className="ze-title">{cameraName} — Zone Editor</div>
         <div style={{display:'flex', gap:8}}>
-          <button className="ze-btn ze-btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="ze-btn ze-btn-primary" onClick={save} disabled={saving}>
-            {saving ? 'Saving…' : 'Save Zones'}
-          </button>
+          <button className="ze-btn ze-btn-ghost" onClick={onClose}>Close</button>
         </div>
       </div>
 
@@ -3448,15 +3463,10 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       <div className="ze-body">
         {error && <div style={{padding:'8px 16px', background:'rgba(220,38,38,.1)', color:'#fca5a5', fontSize:13}}>{error}</div>}
 
-        <div className="ze-canvas-wrap" onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
+        <div className="ze-canvas-wrap">
           {frameUrl ? (
+            <div className="ze-img-wrap" onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
             <img ref={imgRef} src={frameUrl} alt="Camera frame" draggable="false" />
-          ) : (
-            <div style={{color:'var(--text-ghost)', fontSize:14}}>
-              {feedStatus === 'loading' ? 'Loading frame…' : 'No frame available'}
-            </div>
-          )}
-
           <svg ref={svgRef} className="ze-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
             {/* Existing zones */}
             {zones.map((z, i) => {
@@ -3548,75 +3558,96 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
               </g>
             )}
           </svg>
+          </div>
+          ) : (
+            <div style={{color:'var(--text-ghost)', fontSize:14}}>
+              {feedStatus === 'loading' ? 'Loading frame…' : 'No frame available'}
+            </div>
+          )}
         </div>
 
         {/* Drawing hint */}
         {drawing && (
           <div className="ze-hint">
-            Click to place points. {newPoints.length >= 3 ? 'Double-click or click first point to close the polygon.' : `Need ${3 - newPoints.length} more point${3 - newPoints.length > 1 ? 's' : ''}.`}
+            Click 4 corners of a parking space. {newPoints.length > 0 ? `${newPoints.length}/4 points placed` : 'Click to start.'}
           </div>
         )}
 
-        {/* Toolbar: zone chips + new zone button */}
-        <div className="ze-toolbar">
-          <div className="ze-zone-list">
-            {zones.map((z, i) => (
-              <span key={z.zone_id}
-                className={`ze-zone-chip ${i === selectedIdx ? 'active' : ''}`}
-                style={{background: (ZONE_COLORS[z.zone_type] || '#ef4444') + '22', color: ZONE_COLORS[z.zone_type] || '#ef4444'}}
-                onClick={() => { setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}>
-                {z.label || z.zone_id}
-              </span>
-            ))}
-          </div>
-          <button className="ze-btn ze-btn-primary" style={{padding:'6px 14px', fontSize:12}}
-            onClick={() => { setDrawing(true); setSelectedIdx(null); setNewPoints([]); }}
-            disabled={drawing}>
-            + New Zone
+        {/* Floating Save button */}
+        {zones.length > 0 && (
+          <button className="ze-floating-save" onClick={save} disabled={saving}>
+            {saving ? 'Saving…' : `Save All (${zones.length})`}
           </button>
-        </div>
-
-        {/* Properties panel for selected zone */}
-        {selected && !drawing && (
-          <div className="ze-panel">
-            <div className="ze-panel-row">
-              <span className="ze-panel-label">Label</span>
-              <input className="ze-panel-input" value={selected.label || ''} onChange={e => updateZoneProp(selectedIdx, 'label', e.target.value)} />
-            </div>
-            <div className="ze-panel-row">
-              <span className="ze-panel-label">Type</span>
-              <select className="ze-panel-select" value={selected.zone_type || 'no_parking'}
-                onChange={e => updateZoneProp(selectedIdx, 'zone_type', e.target.value)}>
-                <option value="no_parking">No Parking</option>
-                <option value="unauthorized">Unauthorized Vehicle</option>
-                <option value="time_limited">Time Limited</option>
-                <option value="handicap_only">Handicap Only</option>
-                <option value="fire_lane">Fire Lane</option>
-                <option value="reserved">Reserved Spot</option>
-                <option value="permit_only">Permit Only</option>
-                <option value="loading_zone">Loading Zone</option>
-                <option value="double_parked">Double Parked</option>
-                <option value="blocking">Blocking / Obstructing</option>
-                <option value="expired_meter">Expired Meter</option>
-                <option value="abandoned">Abandoned Vehicle</option>
-              </select>
-            </div>
-            {selected.zone_type === 'time_limited' && (
-              <div className="ze-panel-row">
-                <span className="ze-panel-label">Limit</span>
-                <input className="ze-panel-input" type="number" min="1" placeholder="Minutes"
-                  value={selected.time_limit_minutes || ''} onChange={e => updateZoneProp(selectedIdx, 'time_limit_minutes', parseInt(e.target.value) || null)} />
-                <span style={{fontSize:12, color:'var(--text-muted)'}}>min</span>
-              </div>
-            )}
-            <div className="ze-panel-row" style={{marginTop:4}}>
-              <span className="ze-panel-label">{selected.polygon.length} pts</span>
-              <button className="ze-btn ze-btn-danger" style={{padding:'5px 12px', fontSize:12}} onClick={() => deleteZone(selectedIdx)}>
-                Delete Zone
-              </button>
-            </div>
-          </div>
         )}
+
+        {/* Zone list with inline config */}
+        <div className="ze-toolbar" style={{flexDirection:'column', gap:0, padding:0}}>
+          <div style={{display:'flex', alignItems:'center', padding:'5px 12px', borderBottom: zones.length > 0 ? '1px solid var(--border-subtle)' : 'none'}}>
+            <span style={{fontSize:11, fontWeight:700, color:'var(--text-muted)', flex:1}}>
+              {zones.length} zone{zones.length !== 1 ? 's' : ''}
+            </span>
+            <button className="ze-btn ze-btn-primary" style={{padding:'4px 12px', fontSize:11}}
+              onClick={() => { setDrawing(true); setSelectedIdx(null); setNewPoints([]); }}>
+              {drawing ? 'Drawing…' : '+ New Zone'}
+            </button>
+            {drawing && (
+              <button className="ze-btn ze-btn-ghost" style={{padding:'4px 10px', fontSize:11, marginLeft:4}}
+                onClick={() => { setDrawing(false); setNewPoints([]); }}>
+                Stop
+              </button>
+            )}
+          </div>
+          {zones.map((z, i) => {
+            const color = ZONE_COLORS[z.zone_type] || '#ef4444';
+            const isExpanded = i === selectedIdx;
+            return (
+              <div key={z.zone_id} style={{borderBottom:'1px solid var(--border-subtle)'}}>
+                <div className="ze-zone-row" onClick={() => { setSelectedIdx(isExpanded ? null : i); setDrawing(false); setNewPoints([]); }}
+                  style={{display:'flex', alignItems:'center', gap:8, padding:'5px 12px', cursor:'pointer',
+                    background: isExpanded ? 'rgba(59,130,246,.08)' : 'transparent'}}>
+                  <span style={{width:8, height:8, borderRadius:'50%', background:color, flexShrink:0}} />
+                  <span style={{fontSize:12, fontWeight:600, flex:1, color:'var(--text-main)'}}>{z.label || z.zone_id}</span>
+                  <span style={{fontSize:10, color:'var(--text-ghost)'}}>{z.polygon.length} pts</span>
+                  <span style={{fontSize:10, color:'var(--text-ghost)', transform: isExpanded ? 'rotate(180deg)' : 'none', transition:'transform .15s'}}>▼</span>
+                </div>
+                {isExpanded && (
+                  <div style={{padding:'4px 12px 8px 28px', display:'flex', flexDirection:'column', gap:4}}>
+                    <div style={{display:'flex', gap:6, alignItems:'center'}}>
+                      <input className="ze-panel-input" style={{flex:1, fontSize:11}} value={z.label || ''} placeholder="Label"
+                        onChange={e => updateZoneProp(i, 'label', e.target.value)} onClick={e => e.stopPropagation()} />
+                      <select className="ze-panel-select" style={{flex:2, fontSize:11}} value={z.zone_type || 'no_parking'}
+                        onChange={e => updateZoneProp(i, 'zone_type', e.target.value)} onClick={e => e.stopPropagation()}>
+                        <option value="no_parking">No Parking</option>
+                        <option value="unauthorized">Unauthorized</option>
+                        <option value="time_limited">Time Limited</option>
+                        <option value="handicap_only">Handicap Only</option>
+                        <option value="fire_lane">Fire Lane</option>
+                        <option value="reserved">Reserved</option>
+                        <option value="permit_only">Permit Only</option>
+                        <option value="loading_zone">Loading Zone</option>
+                        <option value="double_parked">Double Parked</option>
+                        <option value="blocking">Blocking</option>
+                        <option value="expired_meter">Expired Meter</option>
+                        <option value="abandoned">Abandoned</option>
+                      </select>
+                    </div>
+                    {z.zone_type === 'time_limited' && (
+                      <div style={{display:'flex', gap:6, alignItems:'center'}}>
+                        <input className="ze-panel-input" style={{width:60, fontSize:11}} type="number" min="1" placeholder="Min"
+                          value={z.time_limit_minutes || ''} onChange={e => updateZoneProp(i, 'time_limit_minutes', parseInt(e.target.value) || null)} onClick={e => e.stopPropagation()} />
+                        <span style={{fontSize:10, color:'var(--text-ghost)'}}>minutes</span>
+                      </div>
+                    )}
+                    <button className="ze-btn ze-btn-danger" style={{padding:'3px 10px', fontSize:10, alignSelf:'flex-start'}}
+                      onClick={e => { e.stopPropagation(); deleteZone(i); }}>
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
 
         {/* Detections panel */}
         {showDetections && detections.length > 0 && !drawing && (
