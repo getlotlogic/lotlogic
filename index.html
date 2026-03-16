@@ -2908,76 +2908,83 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   // Load a single frame + detections
   const loadFrame = useCallback(async (showError = true) => {
     let frameLoaded = false;
+    let snap = null;
 
-    // Try the direct /frame API first
+    // 1. Fetch latest snapshot from Supabase (primary source for both frame + detections)
     try {
-      const r = await fetch(API + `/cameras/${cameraId}/frame`, { headers: { 'X-API-Key': API_KEY } });
-      if (!r.ok) throw new Error(r.status);
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      setFrameUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
-      setLastFrameTime(new Date());
+      if (supabase) {
+        const { data, error } = await supabase.from('snapshots').select('*').eq('camera_id', cameraId).order('captured_at', { ascending: false }).limit(1);
+        if (!error && data && data.length > 0) {
+          snap = data[0];
+        }
+      } else {
+        try { snap = await apiFetch(`/cameras/${cameraId}/latest-snapshot`); } catch {}
+      }
+    } catch {
+      // Supabase query failed
+    }
+
+    // 2. Use snapshot storage_url as frame
+    if (snap?.storage_url) {
+      const ts = snap.captured_at ? new Date(snap.captured_at).getTime() : Date.now();
+      setFrameUrl(snap.storage_url + '?t=' + ts);
+      setLastFrameTime(snap.captured_at ? new Date(snap.captured_at) : new Date());
       setFeedStatus('live');
       frameLoaded = true;
-    } catch {
-      // /frame endpoint failed — will fall back to Supabase snapshot below
     }
 
-    // Fetch latest snapshot metadata for detection data (and as frame fallback)
-    try {
-      let snap;
-      if (supabase) {
-        const { data } = await supabase.from('snapshots').select('*').eq('camera_id', cameraId).order('captured_at', { ascending: false }).limit(1).single();
-        snap = data;
-      } else {
-        snap = await apiFetch(`/cameras/${cameraId}/latest-snapshot`);
-      }
-
-      // If /frame failed, use the snapshot storage_url as the frame image
-      if (!frameLoaded && snap?.storage_url) {
-        const ts = snap.captured_at ? new Date(snap.captured_at).getTime() : Date.now();
-        setFrameUrl(snap.storage_url + '?t=' + ts);
-        setLastFrameTime(snap.captured_at ? new Date(snap.captured_at) : new Date());
-        setFeedStatus('live');
-        frameLoaded = true;
-      }
-
-      if (!frameLoaded) {
-        if (showError) setError('Could not load camera frame');
-        setFeedStatus('offline');
-      }
-
-      setSnapshotMeta(snap);
-      // Build detections from raw_detections (actual DB schema: raw_detections.detections[].{bbox,conf,class})
-      const dets = [];
-      const rawDets = snap?.raw_detections?.detections || snap?.detections || [];
-      rawDets.forEach((d, i) => {
-        dets.push({
-          id: d.id || `det_${i}`,
-          type: d.class === 'person' ? 'person' : 'vehicle',
-          bbox: d.bbox || null,
-          plate_text: d.plate_text || null,
-          color: d.color || null,
-          vehicle_type: d.class || null,
-          confidence: d.conf != null ? parseFloat(d.conf) : (d.confidence != null ? parseFloat(d.confidence) : null),
-          label: d.class || d.label || null,
-          zone_id: d.zone_id || null,
-          track_id: d.track_id || null,
+    // 3. Fallback: try loading /frame endpoint as img src (bypasses CORS unlike fetch)
+    if (!frameLoaded) {
+      try {
+        const frameImgUrl = API + `/cameras/${cameraId}/frame?api_key=${API_KEY}&_t=${Date.now()}`;
+        const testImg = new Image();
+        const loaded = await new Promise((resolve) => {
+          testImg.onload = () => resolve(true);
+          testImg.onerror = () => resolve(false);
+          testImg.src = frameImgUrl;
+          setTimeout(() => resolve(false), 8000);
         });
-      });
-      // Fallback: use vehicles_detected count if no detection details
-      if (dets.length === 0 && snap) {
-        const vc = snap.vehicles_detected || 0;
-        for (let i = 0; i < vc; i++) dets.push({ id: `v_${i}`, type: 'vehicle', bbox: null, plate_text: null, color: null, confidence: null, label: 'Vehicle' });
-      }
-      setDetections(dets);
-    } catch {
-      // Snapshot fetch also failed
-      if (!frameLoaded) {
-        if (showError) setError('Could not load camera frame');
-        setFeedStatus('offline');
+        if (loaded && testImg.naturalWidth > 0) {
+          setFrameUrl(frameImgUrl);
+          setLastFrameTime(new Date());
+          setFeedStatus('live');
+          frameLoaded = true;
+        }
+      } catch {
+        // /frame img load also failed
       }
     }
+
+    if (!frameLoaded) {
+      if (showError) setError('Could not load camera frame');
+      setFeedStatus('offline');
+    } else {
+      setError('');
+    }
+
+    // Build detections from snapshot metadata
+    setSnapshotMeta(snap);
+    const dets = [];
+    const rawDets = snap?.raw_detections?.detections || snap?.detections || [];
+    rawDets.forEach((d, i) => {
+      dets.push({
+        id: d.id || `det_${i}`,
+        type: d.class === 'person' ? 'person' : 'vehicle',
+        bbox: d.bbox || null,
+        plate_text: d.plate_text || null,
+        color: d.color || null,
+        vehicle_type: d.class || null,
+        confidence: d.conf != null ? parseFloat(d.conf) : (d.confidence != null ? parseFloat(d.confidence) : null),
+        label: d.class || d.label || null,
+        zone_id: d.zone_id || null,
+        track_id: d.track_id || null,
+      });
+    });
+    if (dets.length === 0 && snap) {
+      const vc = snap.vehicles_detected || 0;
+      for (let i = 0; i < vc; i++) dets.push({ id: `v_${i}`, type: 'vehicle', bbox: null, plate_text: null, color: null, confidence: null, label: 'Vehicle' });
+    }
+    setDetections(dets);
   }, [cameraId]);
 
   // Initial frame load
