@@ -3302,10 +3302,12 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   function svgPoint(e) {
     const svg = svgRef.current;
     if (!svg) return null;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
     const pt = svg.createSVGPoint();
     pt.x = e.clientX;
     pt.y = e.clientY;
-    const svgPt = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const svgPt = pt.matrixTransform(ctm.inverse());
     return {
       x: Math.round(svgPt.x * 100) / 100,
       y: Math.round(svgPt.y * 100) / 100,
