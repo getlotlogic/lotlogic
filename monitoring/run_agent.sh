@@ -8,6 +8,9 @@
 #   ./run_agent.sh report       # Full improvement report
 #   ./run_agent.sh install      # Install dependencies
 #   ./run_agent.sh cron         # Install cron jobs
+#   ./run_agent.sh deploy-check # Single deploy health check
+#   ./run_agent.sh deploy-watch # Continuous deploy watchdog + auto-fix
+#   ./run_agent.sh deploy-diag  # Diagnose deploy failure
 #
 set -euo pipefail
 
@@ -59,6 +62,20 @@ case "${1:-once}" in
         echo ""
         echo "View cron jobs: crontab -l"
         echo "View logs: tail -f $DIR/logs/cron.log"
+        ;;
+
+    deploy-check)
+        python3 deploy_agent.py --check
+        ;;
+
+    deploy-watch)
+        echo "Starting deploy watchdog (auto-fix enabled)..."
+        echo "Press Ctrl+C to stop."
+        python3 deploy_agent.py --watch
+        ;;
+
+    deploy-diag)
+        python3 deploy_agent.py --diagnose
         ;;
 
     once|*)

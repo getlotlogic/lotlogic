@@ -125,6 +125,73 @@ CREATE INDEX IF NOT EXISTS idx_violations_status ON violations(status);
 CREATE INDEX IF NOT EXISTS idx_violations_detected ON violations(detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_violations_plate ON violations(plate_text);
 
+-- ── Permitted Vehicles (whitelist + time-limited permits) ────
+-- Lot owners manage which plates are allowed to park.
+-- Two modes:
+--   1. Whitelist: plate_text + no expires_at = always allowed
+--   2. Time-limited permit: plate_text + expires_at = allowed until date
+CREATE TABLE IF NOT EXISTS permitted_vehicles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lot_id UUID REFERENCES lots(id) ON DELETE CASCADE NOT NULL,
+  plate_text TEXT NOT NULL,
+  vehicle_description TEXT,      -- e.g. "Blue Honda Civic"
+  permit_type TEXT DEFAULT 'whitelist' CHECK (permit_type IN ('whitelist', 'monthly', 'temporary', 'employee')),
+  holder_name TEXT,              -- who owns the vehicle
+  holder_contact TEXT,           -- phone or email
+  issued_at TIMESTAMPTZ DEFAULT now(),
+  expires_at TIMESTAMPTZ,        -- NULL = never expires (permanent whitelist)
+  active BOOLEAN DEFAULT true,
+  notes TEXT,
+  created_by UUID,               -- owner who added this
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_permits_lot ON permitted_vehicles(lot_id);
+CREATE INDEX IF NOT EXISTS idx_permits_plate ON permitted_vehicles(plate_text);
+CREATE INDEX IF NOT EXISTS idx_permits_active ON permitted_vehicles(lot_id, active) WHERE active = true;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_permits_lot_plate ON permitted_vehicles(lot_id, plate_text) WHERE active = true;
+
+ALTER TABLE permitted_vehicles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public read permitted_vehicles" ON permitted_vehicles FOR SELECT USING (true);
+CREATE POLICY "Public insert permitted_vehicles" ON permitted_vehicles FOR INSERT WITH CHECK (true);
+CREATE POLICY "Public update permitted_vehicles" ON permitted_vehicles FOR UPDATE USING (true);
+CREATE POLICY "Public delete permitted_vehicles" ON permitted_vehicles FOR DELETE USING (true);
+
+ALTER PUBLICATION supabase_realtime ADD TABLE permitted_vehicles;
+
+CREATE TRIGGER permitted_vehicles_updated_at
+  BEFORE UPDATE ON permitted_vehicles
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ── Hourly Violation Stats (for analytics) ──────────────────
+-- Materialized view that aggregates violations by hour-of-day per lot.
+-- Refresh periodically via pg_cron or on-demand.
+CREATE OR REPLACE VIEW violation_hourly_stats AS
+SELECT
+  v.lot_id,
+  EXTRACT(DOW FROM v.detected_at) AS day_of_week,   -- 0=Sun, 6=Sat
+  EXTRACT(HOUR FROM v.detected_at) AS hour_of_day,   -- 0-23
+  COUNT(*) AS violation_count,
+  COUNT(*) FILTER (WHERE v.action_taken IN ('boot', 'tow')) AS enforced_count,
+  SUM(v.gross_revenue) AS gross_revenue
+FROM violations v
+WHERE v.detected_at > now() - INTERVAL '90 days'
+GROUP BY v.lot_id, EXTRACT(DOW FROM v.detected_at), EXTRACT(HOUR FROM v.detected_at);
+
+-- ── Lot Utilization View (vehicles seen per hour) ────────────
+-- Counts total vehicles detected per hour per lot from snapshots.
+CREATE OR REPLACE VIEW lot_utilization AS
+SELECT
+  s.lot_id,
+  DATE_TRUNC('hour', s.captured_at) AS hour_bucket,
+  AVG(s.vehicles_detected) AS avg_vehicles,
+  MAX(s.vehicles_detected) AS max_vehicles,
+  COUNT(*) AS snapshot_count
+FROM snapshots s
+WHERE s.captured_at > now() - INTERVAL '30 days'
+GROUP BY s.lot_id, DATE_TRUNC('hour', s.captured_at);
+
 -- ── Revenue summary view ─────────────────────────────────────
 -- Revenue is computed from partner fee schedule: gross = boot_fee or tow_fee,
 -- our_revenue = gross * partner.revenue_share (LotLogic's cut)
