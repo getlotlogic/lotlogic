@@ -1627,7 +1627,6 @@ const db = {
           time_limit_minutes: z.time_limit_minutes,
           polygon: z.polygon,
         }));
-        if (zones.length > 0) console.log('[db.getLotState] loaded zones from camera_zones:', JSON.stringify(zones[0].polygon));
         const camViols = pendingViols.filter(v => v.camera_id === cam.id).length;
         return {
           camera_id: cam.id,
@@ -3121,11 +3120,14 @@ function displayColor(name) {
 // ── Zone editor (full-screen draw/edit/delete/save + live feed + detections) ──
 function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const [frameUrl, setFrameUrl] = useState(null);
-  const [zones, setZones] = useState(() => {
-    const loaded = (existingZones || []).map(z => ({...z}));
-    console.log('[ZoneEditor] loaded zones:', JSON.stringify(loaded.map(z => ({ id: z.zone_id, polygon: z.polygon }))));
-    return loaded;
-  });
+  const [zones, setZones] = useState(() => (existingZones || []).map(z => ({
+    ...z,
+    polygon: (z.polygon || []).map(p =>
+      Array.isArray(p) ? { x: p[0] * 100, y: p[1] * 100 }
+      : (p.x != null && p.x <= 1 && p.y <= 1) ? { x: p.x * 100, y: p.y * 100 }
+      : { x: p.x, y: p.y }
+    ),
+  })));
   const [selectedIdx, setSelectedIdx] = useState(null);
   const [drawing, setDrawing] = useState(true);
   const [newPoints, setNewPoints] = useState([]);
@@ -3399,14 +3401,16 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
     });
   }
 
+  const [saved, setSaved] = useState(false);
   async function save() {
     setSaving(true);
     setError('');
+    setSaved(false);
     try {
-      console.log('[ZoneEditor] saving zones:', JSON.stringify(zones.map(z => ({ id: z.zone_id, polygon: z.polygon }))));
       await db.updateZones(cameraId, zones);
       if (onSave) onSave(zones);
-      onClose();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
     } catch (e) {
       setError('Failed to save zones: ' + e.message);
     } finally { setSaving(false); }
@@ -3578,8 +3582,9 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
 
         {/* Floating Save button */}
         {zones.length > 0 && (
-          <button className="ze-floating-save" onClick={save} disabled={saving}>
-            {saving ? 'Saving…' : `Save All (${zones.length})`}
+          <button className="ze-floating-save" onClick={save} disabled={saving}
+            style={saved ? {background:'#16a34a'} : undefined}>
+            {saving ? 'Saving…' : saved ? 'Saved!' : `Save All (${zones.length})`}
           </button>
         )}
 
