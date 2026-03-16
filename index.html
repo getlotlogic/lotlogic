@@ -2875,17 +2875,32 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const svgRef = useRef(null);
   const imgRef = useRef(null);
 
-  // Live feed state
-  const [feedLive, setFeedLive] = useState(true);
-  const [feedInterval, setFeedInterval] = useState(10000); // ms — poll every 10s for snapshot updates
+  // Live feed state — persisted to localStorage
+  const [feedLive, setFeedLive] = useState(() => {
+    const saved = localStorage.getItem('lotlogic_ze_feedlive');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [feedInterval, setFeedInterval] = useState(() => {
+    const saved = localStorage.getItem('lotlogic_ze_feedinterval');
+    return saved ? Number(saved) : 10000;
+  });
   const [feedStatus, setFeedStatus] = useState('loading'); // loading | live | paused | offline
   const [lastFrameTime, setLastFrameTime] = useState(null);
   const feedTimerRef = useRef(null);
 
-  // Detection state
-  const [detections, setDetections] = useState([]); // array of { type, bbox, plate_text, color, confidence, label, id }
-  const [showDetections, setShowDetections] = useState(true);
-  const [detectionTab, setDetectionTab] = useState('all'); // all | vehicles | people | plates
+  // Persist feed settings
+  useEffect(() => { localStorage.setItem('lotlogic_ze_feedlive', String(feedLive)); }, [feedLive]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_feedinterval', String(feedInterval)); }, [feedInterval]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_showdetections', String(showDetections)); }, [showDetections]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_detectiontab', detectionTab); }, [detectionTab]);
+
+  // Detection state — persisted to localStorage
+  const [detections, setDetections] = useState([]);
+  const [showDetections, setShowDetections] = useState(() => {
+    const saved = localStorage.getItem('lotlogic_ze_showdetections');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [detectionTab, setDetectionTab] = useState(() => localStorage.getItem('lotlogic_ze_detectiontab') || 'all');
   const [snapshotMeta, setSnapshotMeta] = useState(null); // latest snapshot metadata
 
   const ZONE_COLORS = { no_parking: '#ef4444', time_limited: '#8b5cf6', handicap_only: '#eab308' };
