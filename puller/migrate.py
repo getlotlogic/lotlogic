@@ -24,6 +24,16 @@ def main():
 
     migrations = [
         "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS deployment_profile text DEFAULT 'cloud'",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS jpeg_quality integer DEFAULT 85",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS resolution_width integer DEFAULT 1920",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS resolution_height integer DEFAULT 1080",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS codec text DEFAULT 'h264'",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS fps integer DEFAULT 15",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS night_mode boolean DEFAULT false",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS motion_sensitivity integer DEFAULT 50",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS connection_timeout integer DEFAULT 10",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS retry_interval integer DEFAULT 30",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS max_retries integer DEFAULT 3",
     ]
 
     for sql in migrations:
