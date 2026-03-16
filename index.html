@@ -769,7 +769,7 @@
     .zone-poly.blocking { fill: #f43f5e; stroke: #f43f5e; }
     .zone-poly.expired_meter { fill: #a855f7; stroke: #a855f7; }
     .zone-poly.abandoned { fill: #78716c; stroke: #78716c; }
-    .zone-label-text { font-size: 3px; font-weight: 600; fill: rgba(255,255,255,.85); pointer-events: none; }
+    .zone-label-text { font-size: 3px; font-weight: 600; fill: #fff; fill-opacity: 0.85; pointer-events: none; }
 
     /* ── Zone editor (full-screen) ── */
     .zone-editor-overlay {
@@ -3156,20 +3156,20 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const [lastFrameTime, setLastFrameTime] = useState(null);
   const feedTimerRef = useRef(null);
 
-  // Persist feed settings
-  useEffect(() => { localStorage.setItem('lotlogic_ze_feedlive', String(feedLive)); }, [feedLive]);
-  useEffect(() => { localStorage.setItem('lotlogic_ze_feedinterval', String(feedInterval)); }, [feedInterval]);
-  useEffect(() => { localStorage.setItem('lotlogic_ze_showdetections', String(showDetections)); }, [showDetections]);
-  useEffect(() => { localStorage.setItem('lotlogic_ze_detectiontab', detectionTab); }, [detectionTab]);
-
-  // Detection state — persisted to localStorage
+  // Detection state
   const [detections, setDetections] = useState([]);
   const [showDetections, setShowDetections] = useState(() => {
     const saved = localStorage.getItem('lotlogic_ze_showdetections');
     return saved !== null ? saved === 'true' : true;
   });
   const [detectionTab, setDetectionTab] = useState(() => localStorage.getItem('lotlogic_ze_detectiontab') || 'all');
-  const [snapshotMeta, setSnapshotMeta] = useState(null); // latest snapshot metadata
+  const [snapshotMeta, setSnapshotMeta] = useState(null);
+
+  // Persist settings to localStorage
+  useEffect(() => { localStorage.setItem('lotlogic_ze_feedlive', String(feedLive)); }, [feedLive]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_feedinterval', String(feedInterval)); }, [feedInterval]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_showdetections', String(showDetections)); }, [showDetections]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_detectiontab', detectionTab); }, [detectionTab]);
 
   const ZONE_COLORS = {
     no_parking: '#ef4444', unauthorized: '#3b82f6', time_limited: '#8b5cf6',
@@ -3501,7 +3501,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
                     onClick={e => { e.stopPropagation(); setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}
                   />
                   <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
-                    style={{fontSize:'1.1px', fill:'rgba(255,255,255,.85)', fontWeight:600, pointerEvents:'none'}}>
+                    style={{fontSize:'1.1px', fill:'#fff', fillOpacity:0.85, fontWeight:600, pointerEvents:'none'}}>
                     {z.label}
                   </text>
                   {isSelected && z.polygon.map((p, pi) => (
