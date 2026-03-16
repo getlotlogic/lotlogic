@@ -34,6 +34,8 @@ def main():
         "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS connection_timeout integer DEFAULT 10",
         "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS retry_interval integer DEFAULT 30",
         "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS max_retries integer DEFAULT 3",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS bandwidth_budget_mb real",
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS bandwidth_used_mb integer DEFAULT 0",
     ]
 
     for sql in migrations:
