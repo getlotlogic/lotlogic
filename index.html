@@ -1840,6 +1840,33 @@ const db = {
       body: JSON.stringify({ action, ...cleanExtra }),
     });
   },
+  async deleteViolation(violId) {
+    if (supabase) {
+      // Also clean up related action_logs
+      await supabase.from('action_logs').delete().eq('violation_id', violId);
+      const { error } = await supabase.from('violations').delete().eq('id', violId);
+      if (error) throw new Error(error.message || 'Delete failed');
+      return { success: true };
+    }
+    return apiFetch(`/violations/${violId}`, { method: 'DELETE' });
+  },
+  async updateViolation(violId, updates) {
+    if (supabase) {
+      // Only allow safe fields to be updated
+      const allowed = ['plate_text', 'vehicle_color', 'vehicle_type', 'vehicle_make', 'vehicle_model',
+        'violation_type', 'zone_id', 'space_number', 'status', 'action_taken', 'gross_revenue', 'our_revenue'];
+      const clean = {};
+      for (const k of allowed) { if (updates[k] !== undefined) clean[k] = updates[k]; }
+      const { error } = await supabase.from('violations').update(clean).eq('id', violId);
+      if (error) throw new Error(error.message || 'Update failed');
+      return { success: true };
+    }
+    return apiFetch(`/violations/${violId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+  },
   async getSnapshotUrl(snapshotId) {
     if (supabase) {
       const { data, error } = await supabase
@@ -2689,11 +2716,24 @@ function LoginPage({ onLogin }) {
 function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, deepLinkViolationId, user }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
   const [selectedViol, setSelectedViol] = useState(null);
+  const [editingViol, setEditingViol] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   const [acting, setActing] = useState(null);
   const actingRef = useRef(false); // Guard against double-tap race condition
 
   const { addToast } = useToast();
+
+  async function handleDelete(violId) {
+    try {
+      await db.deleteViolation(violId);
+      addToast('Job deleted', 'success');
+      setConfirmDelete(null);
+      if (onAction) onAction();
+    } catch (e) {
+      addToast('Delete failed: ' + (e.message || 'Unknown error'), 'error');
+    }
+  }
 
   // Auto-select violation from SMS deep link
   useEffect(() => {
@@ -3010,6 +3050,16 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   <button className="action-btn gone" disabled={anyActing} onClick={() => requestAction(v.id, 'already_gone')} aria-label="Mark vehicle as already gone" style={{minWidth:60}}>
                     Gone
                   </button>
+                  {isOwner && (
+                    <button className="action-btn" onClick={() => setEditingViol(v)} style={{minWidth:44, background:'rgba(59,130,246,.1)', color:'#3b82f6', border:'1px solid rgba(59,130,246,.2)'}}>
+                      Edit
+                    </button>
+                  )}
+                  {isOwner && (
+                    <button className="action-btn" onClick={() => setConfirmDelete(v.id)} style={{minWidth:44, background:'rgba(239,68,68,.1)', color:'#ef4444', border:'1px solid rgba(239,68,68,.2)'}}>
+                      Delete
+                    </button>
+                  )}
                 </div>
                 {lot?.address && (
                   <a href={mapsLink(lot.address)} target="_blank" rel="noopener"
@@ -3062,6 +3112,12 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                     )}
                     {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                     <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'handled').replace(/_/g, ' ')}</strong></span>
+                    {isOwner && (
+                      <span className="job-tag" style={{cursor:'pointer', color:'#3b82f6'}} onClick={() => setEditingViol(v)}>Edit</span>
+                    )}
+                    {isOwner && (
+                      <span className="job-tag" style={{cursor:'pointer', color:'#ef4444'}} onClick={() => setConfirmDelete(v.id)}>Delete</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3073,6 +3129,192 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       {/* Violation detail modal */}
       {selectedViol && <ImageZoom src={selectedViol._snapshot_url} alt="Violation snapshot" onClose={() => setSelectedViol(null)} />}
 
+      {/* Owner: confirm delete dialog */}
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete Job"
+          body="This will permanently remove this violation record and any associated action logs. This cannot be undone."
+          confirmLabel="Delete"
+          confirmColor="#ef4444"
+          onConfirm={() => handleDelete(confirmDelete)}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      )}
+
+      {/* Owner: edit violation modal */}
+      {editingViol && (
+        <EditViolationModal
+          violation={editingViol}
+          lot={lotMap[editingViol.lot_id]}
+          onClose={() => setEditingViol(null)}
+          onSaved={() => { setEditingViol(null); if (onAction) onAction(); }}
+        />
+      )}
+
+    </div>
+  );
+}
+
+// ── Owner edit violation modal ────────────────────────────────
+function EditViolationModal({ violation, lot, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    plate_text: violation.plate_text || '',
+    vehicle_color: violation.vehicle_color || '',
+    vehicle_type: violation.vehicle_type || '',
+    vehicle_make: violation.vehicle_make || '',
+    vehicle_model: violation.vehicle_model || '',
+    violation_type: violation.violation_type || 'unauthorized',
+    zone_id: violation.zone_id || '',
+    space_number: violation.space_number || '',
+    status: violation.status || 'pending',
+    action_taken: violation.action_taken || '',
+    gross_revenue: violation.gross_revenue || 0,
+    our_revenue: violation.our_revenue || 0,
+  });
+  const [saving, setSaving] = useState(false);
+  const { addToast } = useToast();
+
+  function set(key, val) { setForm(prev => ({ ...prev, [key]: val })); }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const updates = {};
+      // Only send changed fields
+      if (form.plate_text !== (violation.plate_text || '')) updates.plate_text = form.plate_text || null;
+      if (form.vehicle_color !== (violation.vehicle_color || '')) updates.vehicle_color = form.vehicle_color || null;
+      if (form.vehicle_type !== (violation.vehicle_type || '')) updates.vehicle_type = form.vehicle_type || null;
+      if (form.vehicle_make !== (violation.vehicle_make || '')) updates.vehicle_make = form.vehicle_make || null;
+      if (form.vehicle_model !== (violation.vehicle_model || '')) updates.vehicle_model = form.vehicle_model || null;
+      if (form.violation_type !== (violation.violation_type || '')) updates.violation_type = form.violation_type;
+      if (form.zone_id !== (violation.zone_id || '')) updates.zone_id = form.zone_id || null;
+      if (form.space_number !== (violation.space_number || '')) updates.space_number = form.space_number || null;
+      if (form.status !== (violation.status || '')) updates.status = form.status;
+      if (form.action_taken !== (violation.action_taken || '')) updates.action_taken = form.action_taken || null;
+      if (Number(form.gross_revenue) !== (violation.gross_revenue || 0)) updates.gross_revenue = Number(form.gross_revenue) || 0;
+      if (Number(form.our_revenue) !== (violation.our_revenue || 0)) updates.our_revenue = Number(form.our_revenue) || 0;
+
+      if (Object.keys(updates).length === 0) { onClose(); return; }
+      await db.updateViolation(violation.id, updates);
+      addToast('Violation updated', 'success');
+      onSaved();
+    } catch (e) {
+      addToast('Update failed: ' + (e.message || 'Unknown error'), 'error');
+    } finally { setSaving(false); }
+  }
+
+  const fieldStyle = {
+    background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:8, padding:'8px 10px',
+    fontSize:13, color:'var(--text-secondary)', outline:'none', fontFamily:'inherit', width:'100%',
+  };
+  const labelStyle = { fontSize:10, fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:4 };
+  const rowStyle = { display:'flex', gap:8, marginBottom:10 };
+
+  return (
+    <div className="viol-modal-overlay" onClick={onClose}>
+      <div className="viol-modal" style={{maxWidth:480}} onClick={e => e.stopPropagation()}>
+        <div className="viol-modal-handle" />
+        <div style={{padding:'16px'}}>
+          <div style={{fontSize:16, fontWeight:800, color:'var(--text-primary)', marginBottom:4}}>Edit Violation</div>
+          <div style={{fontSize:12, color:'var(--text-faint)', marginBottom:14}}>{lot?.name || 'Unknown Lot'} · {violation.id?.slice(0,8)}</div>
+
+          <div style={rowStyle}>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>License Plate</div>
+              <input style={{...fieldStyle, fontFamily:'Courier New, monospace', letterSpacing:'.1em'}} value={form.plate_text}
+                onChange={e => set('plate_text', e.target.value.toUpperCase())} placeholder="ABC1234" />
+            </div>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Vehicle Color</div>
+              <input style={fieldStyle} value={form.vehicle_color} onChange={e => set('vehicle_color', e.target.value)} placeholder="e.g. white" />
+            </div>
+          </div>
+
+          <div style={rowStyle}>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Vehicle Type</div>
+              <input style={fieldStyle} value={form.vehicle_type} onChange={e => set('vehicle_type', e.target.value)} placeholder="car, truck, suv" />
+            </div>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Make</div>
+              <input style={fieldStyle} value={form.vehicle_make} onChange={e => set('vehicle_make', e.target.value)} placeholder="Toyota" />
+            </div>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Model</div>
+              <input style={fieldStyle} value={form.vehicle_model} onChange={e => set('vehicle_model', e.target.value)} placeholder="Camry" />
+            </div>
+          </div>
+
+          <div style={rowStyle}>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Violation Type</div>
+              <select style={fieldStyle} value={form.violation_type} onChange={e => set('violation_type', e.target.value)}>
+                <option value="unauthorized">Unauthorized</option>
+                <option value="overtime">Overtime</option>
+                <option value="no_parking">No Parking</option>
+                <option value="handicap">Handicap</option>
+                <option value="fire_lane">Fire Lane</option>
+                <option value="double_parked">Double Parked</option>
+                <option value="expired_meter">Expired Meter</option>
+                <option value="abandoned">Abandoned</option>
+              </select>
+            </div>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Zone</div>
+              <input style={fieldStyle} value={form.zone_id} onChange={e => set('zone_id', e.target.value)} placeholder="Zone ID" />
+            </div>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Space #</div>
+              <input style={fieldStyle} value={form.space_number} onChange={e => set('space_number', e.target.value)} placeholder="e.g. A12" />
+            </div>
+          </div>
+
+          <div style={rowStyle}>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Status</div>
+              <select style={fieldStyle} value={form.status} onChange={e => set('status', e.target.value)}>
+                <option value="pending">Pending</option>
+                <option value="resolved">Resolved</option>
+              </select>
+            </div>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Action Taken</div>
+              <select style={fieldStyle} value={form.action_taken} onChange={e => set('action_taken', e.target.value)}>
+                <option value="">None</option>
+                <option value="boot">Boot</option>
+                <option value="tow">Tow</option>
+                <option value="dismissed">Dismissed</option>
+                <option value="already_gone">Already Gone</option>
+                <option value="no_action">No Action</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={rowStyle}>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Gross Revenue ($)</div>
+              <input style={fieldStyle} type="number" min="0" step="1" value={form.gross_revenue}
+                onChange={e => set('gross_revenue', e.target.value)} />
+            </div>
+            <div style={{flex:1}}>
+              <div style={labelStyle}>Our Revenue ($)</div>
+              <input style={fieldStyle} type="number" min="0" step="1" value={form.our_revenue}
+                onChange={e => set('our_revenue', e.target.value)} />
+            </div>
+          </div>
+
+          <div style={{display:'flex', gap:8, marginTop:6}}>
+            <button onClick={onClose} style={{flex:1, padding:'10px', borderRadius:10, fontSize:13, fontWeight:700, cursor:'pointer',
+              fontFamily:'inherit', border:'1px solid var(--border)', background:'var(--bg-card)', color:'var(--text-muted)'}}>
+              Cancel
+            </button>
+            <button onClick={save} disabled={saving} style={{flex:1, padding:'10px', borderRadius:10, fontSize:13, fontWeight:700,
+              cursor:'pointer', fontFamily:'inherit', border:'none', background:'#3b82f6', color:'#fff'}}>
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
