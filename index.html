@@ -2648,18 +2648,41 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
   const initialTime = violation.detected_at ? new Date(violation.detected_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '';
 
   return (
-    <div className="snap-zoom-overlay" onClick={onClose} style={{flexDirection:'column', gap:16, padding:'40px 20px'}}>
-      <div onClick={e => e.stopPropagation()} style={{width:'100%', maxWidth:1000}}>
+    <div onClick={onClose} style={{
+      position:'fixed', top:0, left:0, width:'100vw', height:'100vh', zIndex:300,
+      background:'rgba(0,0,0,.92)', backdropFilter:'blur(12px)',
+      display:'flex', alignItems:'center', justifyContent:'center',
+      animation:'fadeIn .2s ease', cursor:'zoom-out',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width:'calc(100% - 32px)', maxWidth:900, maxHeight:'calc(100vh - 40px)',
+        overflow:'auto', cursor:'default',
+      }}>
+        {/* Header */}
         <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12}}>
-          <div style={{fontSize:16, fontWeight:700, color:'#fff'}}>
-            Violation Proof
-            <span style={{fontSize:12, fontWeight:500, color:'rgba(255,255,255,.5)', marginLeft:8}}>
-              {violation.zone_id ? `Zone ${violation.zone_id}` : ''}
-            </span>
+          <div>
+            <div style={{fontSize:16, fontWeight:700, color:'#fff'}}>
+              Violation Proof
+            </div>
+            <div style={{fontSize:12, color:'rgba(255,255,255,.45)', marginTop:2, display:'flex', gap:8, flexWrap:'wrap'}}>
+              {violation.zone_id && <span>Zone {violation.zone_id}</span>}
+              {violation.plate_text && <span style={{fontFamily:'Courier New, monospace', fontWeight:700, color:'rgba(255,255,255,.8)'}}>{violation.plate_text}</span>}
+              {violation.vehicle_color && (
+                <span style={{display:'flex', alignItems:'center', gap:4}}>
+                  <span style={{width:7, height:7, borderRadius:3, background:colorHex(violation.vehicle_color)}} />
+                  {violation.vehicle_color} {violation.vehicle_type || 'car'}
+                </span>
+              )}
+              <span>{(violation.violation_type || 'unauthorized').replace(/_/g, ' ')}</span>
+            </div>
           </div>
-          <button className="snap-zoom-close" onClick={onClose} style={{position:'static'}}>✕</button>
+          <button onClick={onClose} style={{
+            width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,.1)', border:'none',
+            color:'#fff', fontSize:18, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+          }}>✕</button>
         </div>
-        <div style={{display:'flex', gap:12}}>
+        {/* Photos — stack vertically on mobile, side-by-side on wide screens */}
+        <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:12}}>
           <ProofImage
             src={violation._snapshot_url}
             label="Detection"
@@ -2672,23 +2695,6 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
             detection={latestSnapshotUrl ? null : det}
             timestamp="Live"
           />
-        </div>
-        {/* Vehicle info bar */}
-        <div style={{marginTop:10, display:'flex', gap:8, flexWrap:'wrap'}}>
-          {violation.plate_text && (
-            <span style={{background:'rgba(255,255,255,.1)', color:'#fff', borderRadius:5, padding:'4px 10px', fontSize:12, fontWeight:700, fontFamily:'Courier New, monospace'}}>
-              {violation.plate_text}
-            </span>
-          )}
-          {violation.vehicle_color && (
-            <span style={{background:'rgba(255,255,255,.08)', color:'rgba(255,255,255,.7)', borderRadius:5, padding:'4px 10px', fontSize:12, display:'flex', alignItems:'center', gap:4}}>
-              <span style={{width:8, height:8, borderRadius:3, background:colorHex(violation.vehicle_color)}} />
-              {violation.vehicle_color} {violation.vehicle_type || 'car'}
-            </span>
-          )}
-          <span style={{background:'rgba(255,255,255,.08)', color:'rgba(255,255,255,.7)', borderRadius:5, padding:'4px 10px', fontSize:12}}>
-            {(violation.violation_type || 'unauthorized').replace(/_/g, ' ')}
-          </span>
         </div>
       </div>
     </div>
