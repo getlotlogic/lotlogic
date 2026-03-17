@@ -791,13 +791,10 @@
     .ze-btn-ghost { background: var(--bg-inset); color: var(--text-muted); }
     .ze-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
     .ze-canvas-wrap {
-      flex: 1; position: relative; overflow: hidden; cursor: crosshair;
-      display: flex; align-items: center; justify-content: center; background: var(--snapshot-bg);
+      flex: 1; position: relative; overflow: hidden; cursor: crosshair; background: var(--snapshot-bg);
     }
-    .ze-canvas-wrap img { max-width: 100%; max-height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
-    .ze-svg {
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-    }
+    .ze-canvas-wrap img { position: absolute; display: block; user-select: none; -webkit-user-drag: none; }
+    .ze-svg { position: absolute; }
     .ze-poly { stroke-width: 0.4; fill-opacity: 0.15; cursor: pointer; }
     .ze-poly.selected { stroke-dasharray: 1.5 0.8; fill-opacity: 0.25; stroke-width: 0.5; }
     .ze-vertex {
@@ -1760,6 +1757,11 @@ const db = {
             updates.our_revenue = grossFee; // Owner keeps 100%
           }
         }
+        // Dismissed / already gone / no action = zero revenue (action-rate only)
+        if (action === 'dismissed' || action === 'already_gone' || action === 'no_action') {
+          updates.gross_revenue = 0;
+          updates.our_revenue = 0;
+        }
         const { error } = await supabase.from('violations').update(updates).eq('id', violId);
         if (error) throw new Error(error.message || 'Update failed');
 
@@ -1968,6 +1970,15 @@ const db = {
       return { success: true };
     }
     throw new Error('Supabase not available');
+  },
+
+  async deleteViolation(violId) {
+    if (supabase) {
+      const { error } = await supabase.from('violations').delete().eq('id', violId);
+      if (error) throw new Error(error.message);
+      return { success: true };
+    }
+    return apiFetch(`/violations/${violId}`, { method: 'DELETE' });
   },
 
   // ── Analytics ─────────────────────────────────────────────
@@ -2243,12 +2254,14 @@ function ConfirmDialog({ title, body, confirmLabel, confirmColor, onConfirm, onC
 }
 
 // ── Violation detail modal ────────────────────────────────────
-function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
+function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }) {
   const [snapshotUrl, setSnapshotUrl] = useState(violation?._snapshot_url || null);
   const [imgLoading, setImgLoading] = useState(!violation?._snapshot_url);
   const [zoomed, setZoomed] = useState(false);
   const [manualPlate, setManualPlate] = useState('');
   const [savingPlate, setSavingPlate] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { addToast } = useToast();
 
   useEffect(() => {
@@ -2459,6 +2472,55 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
               <button className="action-btn tow" onClick={() => onAction(violation.id, 'tow')}>Tow</button>
               <button className="action-btn dismiss" onClick={() => onAction(violation.id, 'dismissed')}>Dismiss</button>
               <button className="action-btn gone" onClick={() => onAction(violation.id, 'already_gone')}>Gone</button>
+            </div>
+          )}
+
+          {/* Owner delete button */}
+          {isOwner && onDelete && (
+            <div style={{marginTop:8, paddingTop:8, borderTop:'1px solid var(--border)'}}>
+              {!confirmDelete ? (
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  style={{
+                    width:'100%', padding:'10px', background:'transparent', border:'1px solid rgba(239,68,68,.3)',
+                    borderRadius:8, color:'#ef4444', fontSize:13, fontWeight:600, cursor:'pointer',
+                    display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                  Delete Job
+                </button>
+              ) : (
+                <div style={{display:'flex', gap:8}}>
+                  <button
+                    onClick={async () => {
+                      setDeleting(true);
+                      try {
+                        await onDelete(violation.id);
+                        addToast('Job deleted', 'success');
+                        onClose();
+                      } catch (err) {
+                        addToast('Failed to delete: ' + (err.message || 'Unknown error'), 'error');
+                        setDeleting(false);
+                        setConfirmDelete(false);
+                      }
+                    }}
+                    disabled={deleting}
+                    style={{
+                      flex:1, padding:'10px', background:'rgba(239,68,68,.15)', border:'1px solid rgba(239,68,68,.4)',
+                      borderRadius:8, color:'#ef4444', fontSize:13, fontWeight:700, cursor: deleting ? 'wait' : 'pointer',
+                    }}
+                  >{deleting ? 'Deleting...' : 'Confirm Delete'}</button>
+                  <button
+                    onClick={() => setConfirmDelete(false)}
+                    disabled={deleting}
+                    style={{
+                      flex:1, padding:'10px', background:'var(--bg-inset)', border:'1px solid var(--border)',
+                      borderRadius:8, color:'var(--text-muted)', fontSize:13, fontWeight:600, cursor:'pointer',
+                    }}
+                  >Cancel</button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2928,7 +2990,32 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
           const typeClass = v.violation_type?.toLowerCase().includes('unauthorized')
             ? 'unauthorized' : v.violation_type?.toLowerCase().includes('overtime') ? 'overtime' : 'default';
           return (
-            <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''}`}>
+            <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''}`} style={{position:'relative'}}>
+              {/* Owner delete X */}
+              {isOwner && (
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (!confirm('Delete this job permanently?')) return;
+                    try {
+                      await db.deleteViolation(v.id);
+                      addToast('Job deleted', 'success');
+                      if (onAction) onAction();
+                    } catch (err) {
+                      addToast('Failed to delete: ' + (err.message || 'Unknown error'), 'error');
+                    }
+                  }}
+                  style={{
+                    position:'absolute', top:8, right:8, zIndex:5, width:28, height:28, borderRadius:'50%',
+                    background:'rgba(0,0,0,.5)', backdropFilter:'blur(4px)', border:'none', cursor:'pointer',
+                    display:'flex', alignItems:'center', justifyContent:'center', padding:0,
+                  }}
+                  aria-label="Delete job"
+                  title="Delete job"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              )}
               {urgent && (
                 <div className="job-urgent-bar">
                   <span style={{display:'inline-block', width:6, height:6, borderRadius:'50%', background:'#fff', animation:'pulse-dot 1.5s infinite'}} />
@@ -3027,7 +3114,32 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
             const actionColor = { boot: '#fbbf24', tow: '#f87171', dismissed: '#a78bfa', no_action: '#6b7280', already_gone: '#6b7280' };
             const col = actionColor[v.action_taken?.toLowerCase()] || '#9ca3af';
             return (
-              <div key={v.id} className="job-card">
+              <div key={v.id} className="job-card" style={{position:'relative'}}>
+                {/* Owner delete X */}
+                {isOwner && (
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!confirm('Delete this job permanently?')) return;
+                      try {
+                        await db.deleteViolation(v.id);
+                        addToast('Job deleted', 'success');
+                        if (onAction) onAction();
+                      } catch (err) {
+                        addToast('Failed to delete: ' + (err.message || 'Unknown error'), 'error');
+                      }
+                    }}
+                    style={{
+                      position:'absolute', top:8, right:8, zIndex:5, width:28, height:28, borderRadius:'50%',
+                      background:'rgba(0,0,0,.5)', backdropFilter:'blur(4px)', border:'none', cursor:'pointer',
+                      display:'flex', alignItems:'center', justifyContent:'center', padding:0,
+                    }}
+                    aria-label="Delete job"
+                    title="Delete job"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                )}
                 <div className="job-body">
                   <div className="job-top">
                     <div>
@@ -3122,6 +3234,29 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const [dragIdx, setDragIdx] = useState(null);
   const svgRef = useRef(null);
   const imgRef = useRef(null);
+  const wrapRef = useRef(null);
+
+  // LOCKED layout: calculated ONCE on first image load, then never changes.
+  // No ResizeObserver, no recalculation on frame refresh. The image and SVG
+  // stay at the exact same pixel position until the editor is closed.
+  const layoutRef = useRef(null);
+  const [layout, setLayout] = useState(null);
+  const syncLayout = useCallback(() => {
+    // Once layout is locked, never recalculate — everything stays put
+    if (layoutRef.current) return;
+    const img = imgRef.current;
+    const wrap = wrapRef.current;
+    if (!img || !wrap || !img.naturalWidth || !img.naturalHeight) return;
+    const wW = wrap.clientWidth;
+    const wH = wrap.clientHeight;
+    if (!wW || !wH) return;
+    const scale = Math.min(wW / img.naturalWidth, wH / img.naturalHeight);
+    const rW = Math.round(img.naturalWidth * scale);
+    const rH = Math.round(img.naturalHeight * scale);
+    const l = { left: Math.round((wW - rW) / 2), top: Math.round((wH - rH) / 2), width: rW, height: rH };
+    layoutRef.current = l;
+    setLayout(l);
+  }, []);
 
   // Live feed state — persisted to localStorage
   const [feedLive, setFeedLive] = useState(() => {
@@ -3152,7 +3287,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const [snapshotMeta, setSnapshotMeta] = useState(null); // latest snapshot metadata
 
   const ZONE_COLORS = {
-    no_parking: '#ef4444', unauthorized: '#3b82f6', time_limited: '#8b5cf6',
+    no_parking: '#3b82f6', unauthorized: '#3b82f6', time_limited: '#8b5cf6',
     handicap_only: '#eab308', fire_lane: '#f97316', reserved: '#06b6d4',
     permit_only: '#10b981', loading_zone: '#64748b', double_parked: '#ec4899',
     blocking: '#f43f5e', expired_meter: '#a855f7', abandoned: '#78716c',
@@ -3280,12 +3415,12 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const plateCount = detections.filter(d => !!d.plate_text).length;
 
   function svgPoint(e) {
-    const svg = svgRef.current;
-    if (!svg) return null;
-    const rect = svg.getBoundingClientRect();
+    const wrap = wrapRef.current;
+    if (!wrap || !layout) return null;
+    const wr = wrap.getBoundingClientRect();
     return {
-      x: Math.round(((e.clientX - rect.left) / rect.width) * 10000) / 100,
-      y: Math.round(((e.clientY - rect.top) / rect.height) * 10000) / 100,
+      x: Math.max(0, Math.min(100, Math.round(((e.clientX - wr.left - layout.left) / layout.width) * 10000) / 100)),
+      y: Math.max(0, Math.min(100, Math.round(((e.clientY - wr.top - layout.top) / layout.height) * 10000) / 100)),
     };
   }
 
@@ -3395,7 +3530,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   return (
     <div className="zone-editor-overlay">
       <div className="ze-header">
-        <div className="ze-title">{cameraName} — Zone Editor</div>
+        <div className="ze-title">{cameraName} — Zone Editor <span style={{fontSize:9, color:'var(--text-ghost)', marginLeft:6}}>v3-locked</span></div>
         <div style={{display:'flex', gap:8}}>
           <button className="ze-btn ze-btn-ghost" onClick={onClose}>Cancel</button>
           <button className="ze-btn ze-btn-primary" onClick={save} disabled={saving}>
@@ -3448,106 +3583,67 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       <div className="ze-body">
         {error && <div style={{padding:'8px 16px', background:'rgba(220,38,38,.1)', color:'#fca5a5', fontSize:13}}>{error}</div>}
 
-        <div className="ze-canvas-wrap" onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
+        <div ref={wrapRef} className="ze-canvas-wrap" onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
           {frameUrl ? (
-            <img ref={imgRef} src={frameUrl} alt="Camera frame" draggable="false" />
+            <>
+              <img ref={imgRef} src={frameUrl} alt="Camera frame" draggable="false"
+                onLoad={syncLayout}
+                style={layout ? {left:layout.left, top:layout.top, width:layout.width, height:layout.height} : {opacity:0}}
+              />
+              {layout && (
+                <svg ref={svgRef} className="ze-svg" viewBox="0 0 100 100" preserveAspectRatio="none"
+                  style={{left:layout.left, top:layout.top, width:layout.width, height:layout.height}}>
+                  {/* Existing zones */}
+                  {zones.map((z, i) => {
+                    const pts = z.polygon.map(p => `${p.x},${p.y}`).join(' ');
+                    const color = ZONE_COLORS[z.zone_type] || '#3b82f6';
+                    const isSelected = i === selectedIdx;
+                    const cx = z.polygon.reduce((s, p) => s + p.x, 0) / z.polygon.length;
+                    const cy = z.polygon.reduce((s, p) => s + p.y, 0) / z.polygon.length;
+                    return (
+                      <g key={z.zone_id}>
+                        <polygon
+                          className={`ze-poly ${isSelected ? 'selected' : ''}`}
+                          points={pts}
+                          fill={color}
+                          stroke={color}
+                          onClick={e => { e.stopPropagation(); setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}
+                        />
+                        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
+                          style={{fontSize:'1.8px', fill:'#fff', fontWeight:700, pointerEvents:'none', textShadow:'0 0 1px rgba(0,0,0,.6)'}}>
+                          {z.label}
+                        </text>
+                        {isSelected && z.polygon.map((p, pi) => (
+                          <circle key={pi} className="ze-vertex" cx={p.x} cy={p.y} r={0.8}
+                            style={{fill:'#fff', stroke:color, strokeWidth:0.3, cursor:'grab'}}
+                            onMouseDown={e => handleVertexDrag(e, i, pi)}
+                            onTouchStart={e => { e.preventDefault(); handleVertexDrag(e.touches[0], i, pi); }}
+                            onClick={e => e.stopPropagation()}
+                          />
+                        ))}
+                      </g>
+                    );
+                  })}
+
+                  {/* Drawing in progress */}
+                  {drawing && newPoints.length > 0 && (
+                    <g>
+                      <polygon className="ze-drawing-poly"
+                        points={newPoints.map(p => `${p.x},${p.y}`).join(' ')} />
+                      {newPoints.map((p, i) => (
+                        <circle key={i} cx={p.x} cy={p.y} r={0.7}
+                          style={{fill: i === 0 ? '#3b82f6' : '#fff', stroke:'#3b82f6', strokeWidth:0.25}} />
+                      ))}
+                    </g>
+                  )}
+                </svg>
+              )}
+            </>
           ) : (
-            <div style={{color:'var(--text-ghost)', fontSize:14}}>
+            <div style={{position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)', color:'var(--text-ghost)', fontSize:14}}>
               {feedStatus === 'loading' ? 'Loading frame…' : 'No frame available'}
             </div>
           )}
-
-          <svg ref={svgRef} className="ze-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-            {/* Existing zones */}
-            {zones.map((z, i) => {
-              const pts = z.polygon.map(p => `${p.x},${p.y}`).join(' ');
-              const color = ZONE_COLORS[z.zone_type] || '#ef4444';
-              const isSelected = i === selectedIdx;
-              const cx = z.polygon.reduce((s, p) => s + p.x, 0) / z.polygon.length;
-              const cy = z.polygon.reduce((s, p) => s + p.y, 0) / z.polygon.length;
-              return (
-                <g key={z.zone_id}>
-                  <polygon
-                    className={`ze-poly ${isSelected ? 'selected' : ''}`}
-                    points={pts}
-                    fill={color}
-                    stroke={color}
-                    onClick={e => { e.stopPropagation(); setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}
-                  />
-                  <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
-                    style={{fontSize:'1.8px', fill:'#fff', fontWeight:700, pointerEvents:'none', textShadow:'0 0 1px rgba(0,0,0,.6)'}}>
-                    {z.label}
-                  </text>
-                  {isSelected && z.polygon.map((p, pi) => (
-                    <circle key={pi} className="ze-vertex" cx={p.x} cy={p.y} r={0.8}
-                      style={{fill:'#fff', stroke:color, strokeWidth:0.3, cursor:'grab'}}
-                      onMouseDown={e => handleVertexDrag(e, i, pi)}
-                      onTouchStart={e => { e.preventDefault(); handleVertexDrag(e.touches[0], i, pi); }}
-                      onClick={e => e.stopPropagation()}
-                    />
-                  ))}
-                </g>
-              );
-            })}
-
-            {/* Detection bounding boxes */}
-            {showDetections && detections.map(d => {
-              if (!d.bbox) return null;
-              const isPerson = d.type === 'person' || d.type === 'pedestrian' || d.type === 'human';
-              const bx = d.bbox.x ?? d.bbox.left ?? 0;
-              const by = d.bbox.y ?? d.bbox.top ?? 0;
-              const bw = d.bbox.w ?? d.bbox.width ?? 10;
-              const bh = d.bbox.h ?? d.bbox.height ?? 10;
-              const strokeColor = isPerson ? '#f59e0b' : '#3b82f6';
-              const labelText = d.plate_text
-                ? d.plate_text
-                : (d.color ? d.color + ' ' : '') + (d.label || d.type || '');
-              const confText = d.confidence != null ? ` ${Math.round(d.confidence * 100)}%` : '';
-              return (
-                <g key={d.id}>
-                  <rect className={`ze-detection-bbox ${isPerson ? 'person' : 'vehicle'}`}
-                    x={bx} y={by} width={bw} height={bh} />
-                  {/* Label background */}
-                  <rect className="ze-detection-label-bg"
-                    x={bx} y={by - 1.8} width={Math.max(labelText.length * 0.8 + confText.length * 0.8, 4)} height={1.6}
-                    fill={strokeColor} opacity={0.85} />
-                  <text className="ze-detection-label"
-                    x={bx + 0.3} y={by - 0.7}
-                    fill="#fff" dominantBaseline="central">
-                    {labelText}{confText}
-                  </text>
-                  {/* Plate badge overlay */}
-                  {d.plate_text && (
-                    <>
-                      <rect x={bx} y={by + bh + 0.2} width={d.plate_text.length * 0.9 + 0.6} height={1.6}
-                        fill="#fef3c7" stroke="#fbbf24" strokeWidth={0.15} rx={0.2} />
-                      <text x={bx + 0.3} y={by + bh + 1.2} fill="#1c1009"
-                        style={{fontSize:'1.2px', fontWeight:800, fontFamily:'Courier New, monospace', letterSpacing:'0.05em'}}>
-                        {d.plate_text}
-                      </text>
-                    </>
-                  )}
-                  {/* Color swatch dot */}
-                  {d.color && (
-                    <circle cx={bx + bw - 0.8} cy={by + 0.8} r={0.6}
-                      fill={colorHex(d.color)} stroke="rgba(255,255,255,.5)" strokeWidth={0.15} />
-                  )}
-                </g>
-              );
-            })}
-
-            {/* Drawing in progress */}
-            {drawing && newPoints.length > 0 && (
-              <g>
-                <polygon className="ze-drawing-poly"
-                  points={newPoints.map(p => `${p.x},${p.y}`).join(' ')} />
-                {newPoints.map((p, i) => (
-                  <circle key={i} cx={p.x} cy={p.y} r={0.7}
-                    style={{fill: i === 0 ? '#3b82f6' : '#fff', stroke:'#3b82f6', strokeWidth:0.25}} />
-                ))}
-              </g>
-            )}
-          </svg>
         </div>
 
         {/* Drawing hint */}
