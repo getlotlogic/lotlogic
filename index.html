@@ -457,7 +457,7 @@
     .cam-name { font-size: 12px; font-weight: 600; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
     .cam-time { font-size: 11px; color: var(--text-faint); }
     .cam-img-wrap { border-radius: 10px; overflow: hidden; background: var(--snapshot-bg); aspect-ratio: 16/9; position: relative; }
-    .cam-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .cam-img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .cam-offline { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-ghost); font-size: 13px; }
     .cam-viol-overlay {
       position: absolute;
@@ -3181,21 +3181,54 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
 
 // ── Zone overlay (read-only, shown on camera snapshots) ──────
 function ZoneOverlay({ zones }) {
+  const selfRef = useRef(null);
+  const [pos, setPos] = useState(null);
+
+  useEffect(() => {
+    function calc() {
+      const el = selfRef.current;
+      if (!el) return;
+      const wrap = el.parentElement;
+      const img = wrap?.querySelector('img');
+      if (!img || !wrap || !img.naturalWidth || !img.naturalHeight) return;
+      const wW = wrap.clientWidth, wH = wrap.clientHeight;
+      const scale = Math.min(wW / img.naturalWidth, wH / img.naturalHeight);
+      const rW = img.naturalWidth * scale, rH = img.naturalHeight * scale;
+      setPos({ left: (wW - rW) / 2, top: (wH - rH) / 2, width: rW, height: rH });
+    }
+    // Run on mount and when image loads
+    calc();
+    const el = selfRef.current;
+    const img = el?.parentElement?.querySelector('img');
+    if (img) {
+      img.addEventListener('load', calc);
+      // If already loaded, recalc
+      if (img.complete) setTimeout(calc, 0);
+    }
+    window.addEventListener('resize', calc);
+    return () => { if (img) img.removeEventListener('load', calc); window.removeEventListener('resize', calc); };
+  }, [zones]);
+
   if (!zones || zones.length === 0) return null;
   return (
-    <svg className="zone-overlay-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-      {zones.map(z => {
-        const pts = (z.polygon || []).map(p => `${p.x},${p.y}`).join(' ');
-        const cx = (z.polygon || []).reduce((s, p) => s + p.x, 0) / (z.polygon?.length || 1);
-        const cy = (z.polygon || []).reduce((s, p) => s + p.y, 0) / (z.polygon?.length || 1);
-        return (
-          <g key={z.zone_id}>
-            <polygon className={`zone-poly ${z.zone_type || 'no_parking'}`} points={pts} />
-            {z.label && <text className="zone-label-text" x={cx} y={cy} textAnchor="middle" dominantBaseline="central">{z.label}</text>}
-          </g>
-        );
-      })}
-    </svg>
+    <span ref={selfRef} style={{position:'absolute', top:0, left:0, width:'100%', height:'100%', pointerEvents:'none'}}>
+      {pos && (
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+          style={{position:'absolute', left:pos.left, top:pos.top, width:pos.width, height:pos.height, pointerEvents:'none'}}>
+          {zones.map(z => {
+            const pts = (z.polygon || []).map(p => `${p.x},${p.y}`).join(' ');
+            const cx = (z.polygon || []).reduce((s, p) => s + p.x, 0) / (z.polygon?.length || 1);
+            const cy = (z.polygon || []).reduce((s, p) => s + p.y, 0) / (z.polygon?.length || 1);
+            return (
+              <g key={z.zone_id}>
+                <polygon className={`zone-poly ${z.zone_type || 'no_parking'}`} points={pts} />
+                {z.label && <text className="zone-label-text" x={cx} y={cy} textAnchor="middle" dominantBaseline="central">{z.label}</text>}
+              </g>
+            );
+          })}
+        </svg>
+      )}
+    </span>
   );
 }
 
