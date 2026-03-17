@@ -100,7 +100,7 @@ def supabase_patch(table, match_params, data):
 def get_cameras(lot_id=None, camera_id=None):
     params = {
         "active": "eq.true",
-        "select": "id,name,lot_id,rtsp_url,http_snapshot_url,ip_address,port,channel,poll_interval_sec",
+        "select": "id,name,lot_id,rtsp_url,http_snapshot_url,ip_address,port,channel,poll_interval_sec,zones",
     }
     if camera_id:
         params["id"] = f"eq.{camera_id}"
@@ -301,12 +301,16 @@ def send_to_backend(camera, jpeg_bytes, captured_at):
     """POST frame to /snapshots/ingest for inference + violation detection."""
     url = f"{API_URL}/snapshots/ingest"
     files = {"image": ("frame.jpg", io.BytesIO(jpeg_bytes), "image/jpeg")}
+    import json as _json
     data = {
         "camera_id": camera["id"],
         "lot_id": camera["lot_id"],
         "captured_at": captured_at.isoformat(),
         "trigger_type": "poll",
     }
+    # Send zone polygons so backend only creates violations for vehicles inside zones
+    if camera.get("zones"):
+        data["zones"] = _json.dumps(camera["zones"])
     headers = {"X-Api-Key": API_KEY}
 
     try:

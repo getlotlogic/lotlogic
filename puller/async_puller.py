@@ -111,7 +111,7 @@ async def supabase_patch(session: aiohttp.ClientSession, table: str, match_param
 async def get_cameras(session: aiohttp.ClientSession, lot_id: str = None, camera_id: str = None):
     params = {
         "active": "eq.true",
-        "select": "id,name,lot_id,rtsp_url,http_snapshot_url,ip_address,port,channel,poll_interval_sec,deployment_profile,bandwidth_budget_mb,bandwidth_used_mb",
+        "select": "id,name,lot_id,rtsp_url,http_snapshot_url,ip_address,port,channel,poll_interval_sec,deployment_profile,bandwidth_budget_mb,bandwidth_used_mb,zones",
     }
     if camera_id:
         params["id"] = f"eq.{camera_id}"
@@ -136,6 +136,7 @@ class CameraTask:
         self.deployment_profile = camera.get("deployment_profile", "wired")
         self.bandwidth_budget_mb = camera.get("bandwidth_budget_mb")
         self.bandwidth_used_mb = camera.get("bandwidth_used_mb", 0)
+        self.zones = camera.get("zones") or []  # Zone polygons for detection filtering
 
         # Polling interval: env override > DB config > 30s default
         if DEFAULT_POLL_INTERVAL > 0:
@@ -325,6 +326,10 @@ class CameraTask:
                 form.add_field("lot_id", self.lot_id)
                 form.add_field("captured_at", captured_at.isoformat())
                 form.add_field("trigger_type", "poll")
+                # Send zone polygons so backend only creates violations for vehicles inside zones
+                if self.zones:
+                    import json
+                    form.add_field("zones", json.dumps(self.zones))
 
                 async with self.session.post(url, headers=headers, data=form,
                                              timeout=aiohttp.ClientTimeout(total=INGEST_TIMEOUT)) as r:
