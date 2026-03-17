@@ -457,7 +457,7 @@
     .cam-name { font-size: 12px; font-weight: 600; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
     .cam-time { font-size: 11px; color: var(--text-faint); }
     .cam-img-wrap { border-radius: 10px; overflow: hidden; background: var(--snapshot-bg); aspect-ratio: 16/9; position: relative; }
-    .cam-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .cam-img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .cam-offline { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-ghost); font-size: 13px; }
     .cam-viol-overlay {
       position: absolute;
@@ -645,6 +645,99 @@
 
 
 
+    /* ── Permits modal ── */
+    .permits-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100;
+      background: rgba(0,0,0,.7); backdrop-filter: blur(8px);
+      display: flex; align-items: flex-end; justify-content: center;
+      animation: fadeIn .2s ease;
+    }
+    .permits-sheet {
+      background: var(--bg-card); border-radius: 20px 20px 0 0; width: 100%; max-width: 640px;
+      max-height: 90vh; overflow-y: auto; animation: slideUp .3s ease;
+      border: 1px solid var(--border); border-bottom: none;
+    }
+    .permits-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px; border-bottom: 1px solid var(--border-subtle); position: sticky; top: 0;
+      background: var(--bg-card); z-index: 1;
+    }
+    .permits-title { font-size: 18px; font-weight: 800; color: var(--text-primary); }
+    .permit-card {
+      padding: 12px 16px; border-bottom: 1px solid var(--bg-inset);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .permit-card:last-child { border-bottom: none; }
+    .permit-plate {
+      background: #fef3c7; color: #1c1009; border-radius: 6px; padding: 4px 10px;
+      font-size: 14px; font-weight: 800; font-family: 'Courier New', monospace;
+      letter-spacing: .1em; border: 1.5px solid #fbbf24;
+    }
+    .permit-type-badge {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+      padding: 3px 8px; border-radius: 20px;
+    }
+    .permit-type-badge.whitelist { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid rgba(74,222,128,.2); }
+    .permit-type-badge.monthly { background: rgba(59,130,246,.12); color: #60a5fa; border: 1px solid rgba(59,130,246,.2); }
+    .permit-type-badge.temporary { background: rgba(251,191,36,.12); color: #fbbf24; border: 1px solid rgba(251,191,36,.2); }
+    .permit-type-badge.employee { background: rgba(167,139,250,.12); color: #a78bfa; border: 1px solid rgba(167,139,250,.2); }
+    .permit-add-form {
+      padding: 16px; border-top: 1px solid var(--border-subtle);
+      background: var(--bg-inset);
+    }
+    .permit-form-row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .permit-form-row .field-input { flex: 1; padding: 10px 12px; font-size: 14px; border-radius: 10px; }
+    .permit-form-row select {
+      background: var(--bg-card); border: 1.5px solid var(--border); border-radius: 10px;
+      padding: 10px 12px; font-size: 14px; color: var(--text-secondary); font-family: inherit;
+    }
+
+    /* ── Analytics ── */
+    .analytics-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.06);
+    }
+    .analytics-card-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--text-muted); margin-bottom: 12px;
+    }
+    .heatmap-grid {
+      display: grid; grid-template-columns: 30px repeat(24, 1fr); gap: 1px; font-size: 8px;
+    }
+    .heatmap-cell {
+      aspect-ratio: 1; border-radius: 2px; min-width: 0;
+    }
+    .heatmap-label { display: flex; align-items: center; justify-content: flex-end; padding-right: 4px; color: var(--text-faint); font-weight: 600; }
+    .heatmap-hour { display: flex; align-items: center; justify-content: center; color: var(--text-ghost); font-weight: 600; }
+    .utilization-bar-row {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    }
+    .utilization-bar-label { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 32px; }
+    .utilization-bar-track {
+      flex: 1; height: 20px; background: var(--bg-inset); border-radius: 6px; overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .utilization-bar-fill { height: 100%; border-radius: 5px; transition: width .5s ease; }
+    .utilization-bar-val { font-size: 11px; font-weight: 700; color: var(--text-secondary); min-width: 36px; text-align: right; }
+    .projection-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 0; border-bottom: 1px solid var(--bg-inset);
+    }
+    .projection-row:last-child { border-bottom: none; }
+    .projection-label { font-size: 13px; color: var(--text-muted); font-weight: 500; }
+    .projection-val { font-size: 18px; font-weight: 800; color: var(--text-primary); }
+    .projection-val.green { color: var(--green); }
+    .projection-val.blue { color: var(--accent); }
+    .projection-trend { font-size: 11px; font-weight: 600; margin-left: 6px; }
+    .projection-trend.up { color: var(--green); }
+    .projection-trend.down { color: var(--red); }
+
+    /* ── Navigate button on job cards ── */
+    .action-btn.navigate {
+      background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.4); color: #10b981;
+    }
+    .action-btn.navigate:hover:not(:disabled) { background: rgba(16,185,129,.2); }
+
     /* ── Nav icons ── */
     .nav-icon { width: 20px; height: 20px; }
     .nav-icon svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -663,11 +756,20 @@
     /* ── Zone overlay (read-only on snapshots) ── */
     .cam-img-wrap { position: relative; }
     .zone-overlay-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-    .zone-poly { stroke-width: 1.5; fill-opacity: 0.18; }
+    .zone-poly { stroke-width: 0.4; fill-opacity: 0.08; }
     .zone-poly.no_parking { fill: #ef4444; stroke: #ef4444; }
+    .zone-poly.unauthorized { fill: #3b82f6; stroke: #3b82f6; }
     .zone-poly.time_limited { fill: #8b5cf6; stroke: #8b5cf6; }
     .zone-poly.handicap_only { fill: #eab308; stroke: #eab308; }
-    .zone-label-text { font-size: 8px; font-weight: 700; fill: #fff; pointer-events: none; }
+    .zone-poly.fire_lane { fill: #f97316; stroke: #f97316; }
+    .zone-poly.reserved { fill: #06b6d4; stroke: #06b6d4; }
+    .zone-poly.permit_only { fill: #10b981; stroke: #10b981; }
+    .zone-poly.loading_zone { fill: #64748b; stroke: #64748b; }
+    .zone-poly.double_parked { fill: #ec4899; stroke: #ec4899; }
+    .zone-poly.blocking { fill: #f43f5e; stroke: #f43f5e; }
+    .zone-poly.expired_meter { fill: #a855f7; stroke: #a855f7; }
+    .zone-poly.abandoned { fill: #78716c; stroke: #78716c; }
+    .zone-label-text { font-size: 2.5px; font-weight: 600; fill: rgba(255,255,255,0.7); pointer-events: none; text-shadow: 0 0 1px rgba(0,0,0,0.5); }
 
     /* ── Zone editor (full-screen) ── */
     .zone-editor-overlay {
@@ -676,11 +778,11 @@
     }
     .ze-header {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
+      padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
     }
-    .ze-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+    .ze-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
     .ze-btn {
-      padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+      padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600;
       cursor: pointer; border: none; font-family: inherit; transition: opacity .15s;
     }
     .ze-btn:active { opacity: .7; }
@@ -689,69 +791,66 @@
     .ze-btn-ghost { background: var(--bg-inset); color: var(--text-muted); }
     .ze-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
     .ze-canvas-wrap {
-      flex: 1; position: relative; overflow: hidden; cursor: crosshair;
-      display: flex; align-items: center; justify-content: center; background: var(--snapshot-bg);
+      flex: 1; position: relative; overflow: hidden; cursor: crosshair; background: var(--snapshot-bg);
     }
-    .ze-canvas-wrap img { max-width: 100%; max-height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
-    .ze-svg {
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-    }
-    .ze-poly { stroke-width: 2; fill-opacity: 0.2; cursor: pointer; }
-    .ze-poly.selected { stroke-dasharray: 6 3; fill-opacity: 0.3; stroke-width: 2.5; }
+    .ze-canvas-wrap img { position: absolute; display: block; user-select: none; -webkit-user-drag: none; }
+    .ze-svg { position: absolute; }
+    .ze-poly { stroke-width: 0.4; fill-opacity: 0.15; cursor: pointer; }
+    .ze-poly.selected { stroke-dasharray: 1.5 0.8; fill-opacity: 0.25; stroke-width: 0.5; }
     .ze-vertex {
-      r: 5; fill: #fff; stroke: #3b82f6; stroke-width: 2; cursor: grab;
+      r: 0.8; fill: #fff; stroke: #3b82f6; stroke-width: 0.3; cursor: grab;
     }
-    .ze-vertex:hover { r: 7; }
-    .ze-drawing-line { stroke: #3b82f6; stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; }
-    .ze-drawing-poly { fill: rgba(59,130,246,.15); stroke: #3b82f6; stroke-width: 1.5; }
+    .ze-vertex:hover { r: 1.1; }
+    .ze-drawing-line { stroke: #3b82f6; stroke-width: 0.3; stroke-dasharray: 1 0.8; fill: none; }
+    .ze-drawing-poly { fill: rgba(59,130,246,.1); stroke: #3b82f6; stroke-width: 0.3; }
 
     .ze-toolbar {
-      display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border-subtle);
+      display: flex; gap: 6px; padding: 5px 12px; border-top: 1px solid var(--border-subtle);
       background: var(--bg-card); flex-shrink: 0; flex-wrap: wrap; align-items: center;
     }
     .ze-zone-list {
-      display: flex; gap: 6px; flex-wrap: wrap; flex: 1;
+      display: flex; gap: 4px; flex-wrap: wrap; flex: 1;
     }
     .ze-zone-chip {
-      padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+      padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
       cursor: pointer; border: 1.5px solid transparent; transition: all .15s;
     }
     .ze-zone-chip.active { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.25); }
 
     .ze-panel {
-      padding: 12px 16px; border-top: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
+      padding: 6px 12px; border-top: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
     }
-    .ze-panel-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .ze-panel-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
     .ze-panel-row:last-child { margin-bottom: 0; }
-    .ze-panel-label { font-size: 11px; font-weight: 600; color: var(--text-muted); min-width: 50px; text-transform: uppercase; letter-spacing: .05em; }
+    .ze-panel-label { font-size: 10px; font-weight: 600; color: var(--text-muted); min-width: 40px; text-transform: uppercase; letter-spacing: .05em; }
     .ze-panel-input {
-      flex: 1; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px;
-      padding: 6px 10px; font-size: 13px; color: var(--text-secondary); outline: none; font-family: inherit;
+      flex: 1; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 4px;
+      padding: 4px 8px; font-size: 11px; color: var(--text-secondary); outline: none; font-family: inherit;
     }
     .ze-panel-input:focus { border-color: var(--accent); }
     .ze-panel-select {
-      flex: 1; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px;
-      padding: 6px 10px; font-size: 13px; color: var(--text-secondary); outline: none; font-family: inherit;
+      flex: 1; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 4px;
+      padding: 4px 8px; font-size: 11px; color: var(--text-secondary); outline: none; font-family: inherit;
       appearance: none; -webkit-appearance: none;
     }
     .ze-panel-select:focus { border-color: var(--accent); }
-    .ze-status { font-size: 12px; color: var(--text-faint); padding: 4px 0; }
-    .ze-hint { font-size: 11px; color: var(--text-ghost); text-align: center; padding: 8px; }
+    .ze-status { font-size: 10px; color: var(--text-faint); padding: 2px 0; }
+    .ze-hint { font-size: 10px; color: var(--text-ghost); text-align: center; padding: 4px; }
 
     /* ── Live feed controls ── */
     .ze-feed-controls {
-      display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border-subtle);
+      display: flex; gap: 6px; padding: 4px 12px; border-bottom: 1px solid var(--border-subtle);
       background: var(--bg-card); flex-shrink: 0; align-items: center; flex-wrap: wrap;
     }
     .ze-feed-status {
-      display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+      display: flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600;
     }
-    .ze-feed-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .ze-feed-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
     .ze-feed-dot.live { background: #4ade80; box-shadow: 0 0 8px rgba(74,222,128,.5); animation: pulse-dot 2s infinite; }
     .ze-feed-dot.paused { background: #fbbf24; }
     .ze-feed-dot.offline { background: #ef4444; }
     .ze-refresh-btn {
-      padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600;
+      padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
       cursor: pointer; border: 1px solid var(--border); background: var(--bg-inset); color: var(--text-muted);
       font-family: inherit; transition: all .15s;
     }
@@ -759,29 +858,29 @@
     .ze-refresh-btn:active { opacity: .7; }
     .ze-refresh-btn:disabled { opacity: .4; cursor: not-allowed; }
     .ze-interval-select {
-      background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px;
-      padding: 5px 8px; font-size: 11px; color: var(--text-muted); font-family: inherit;
+      background: var(--bg-inset); border: 1px solid var(--border); border-radius: 4px;
+      padding: 3px 6px; font-size: 10px; color: var(--text-muted); font-family: inherit;
       outline: none; appearance: none; -webkit-appearance: none; cursor: pointer;
     }
 
     /* ── Detection overlays on canvas ── */
-    .ze-detection-bbox { fill: none; stroke-width: 0.5; rx: 0.3; ry: 0.3; }
+    .ze-detection-bbox { fill: none; stroke-width: 0.25; rx: 0.2; ry: 0.2; }
     .ze-detection-bbox.vehicle { stroke: #3b82f6; }
     .ze-detection-bbox.person { stroke: #f59e0b; }
     .ze-detection-label {
-      font-size: 2px; font-weight: 700; pointer-events: none;
+      font-size: 1.4px; font-weight: 700; pointer-events: none;
     }
     .ze-detection-label-bg {
-      rx: 0.3; ry: 0.3;
+      rx: 0.2; ry: 0.2;
     }
 
     /* ── Detection sidebar panel ── */
     .ze-detections-panel {
       border-top: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
-      max-height: 220px; overflow-y: auto;
+      max-height: 120px; overflow-y: auto;
     }
     .ze-det-header {
-      padding: 8px 16px; font-size: 11px; font-weight: 700; color: var(--text-muted);
+      padding: 4px 12px; font-size: 10px; font-weight: 700; color: var(--text-muted);
       text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid var(--bg-inset);
       display: flex; align-items: center; justify-content: space-between;
       position: sticky; top: 0; background: var(--bg-card); z-index: 1;
@@ -1270,6 +1369,8 @@
     .theme-light .action-btn.dismiss:hover:not(:disabled) { background: rgba(124,58,237,.12); }
     .theme-light .action-btn.gone { background: rgba(107,114,128,.06); border-color: rgba(107,114,128,.3); color: #6b7280; }
     .theme-light .action-btn.gone:hover:not(:disabled) { background: rgba(107,114,128,.12); }
+    .theme-light .action-btn.navigate { background: rgba(16,185,129,.06); border-color: rgba(16,185,129,.3); color: #059669; }
+    .theme-light .action-btn.navigate:hover:not(:disabled) { background: rgba(16,185,129,.12); }
 
     /* Timer / badge colors on light theme */
     .theme-light .job-timer-val { color: #2563eb; }
@@ -1520,7 +1621,7 @@ const db = {
         return {
           camera_id: cam.id,
           camera_name: cam.name,
-          online: cam.status === 'active' || cam.active === true,
+          online: (cam.status === 'active' || cam.active === true) && (!cam.last_heartbeat || (Date.now() - new Date(cam.last_heartbeat).getTime()) < 300000),
           zones,
           deployment_profile: cam.camera_type === 'lte_solar' ? 'lte_solar' : 'wired',
           snapshot_width: cam.snapshot_width || 640,
@@ -1532,7 +1633,7 @@ const db = {
           channel: cam.channel,
           active_violations: camViols,
           latest_snapshot: snap ? {
-            url: snap.storage_url || snap.url,
+            url: (snap.storage_url || snap.url) ? (snap.storage_url || snap.url) + (((snap.storage_url || snap.url).includes('?')) ? '&' : '?') + '_t=' + Date.now() : null,
             captured_at: snap.captured_at,
             vehicles_detected: snap.vehicles_detected || 0,
             people_detected: 0,
@@ -1656,8 +1757,74 @@ const db = {
             updates.our_revenue = grossFee; // Owner keeps 100%
           }
         }
+        // Dismissed / already gone / no action = zero revenue (action-rate only)
+        // Also clear zone_id so the backend won't dedup-match this resolved
+        // violation against new detections in the same zone.
+        // Fetch camera_id + zone_id BEFORE update (dismiss clears zone_id)
+        const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
+        const _preCameraId = _vPre?.camera_id;
+        const _preZoneId = _vPre?.zone_id;
+
+        if (action === 'dismissed' || action === 'already_gone' || action === 'no_action') {
+          updates.gross_revenue = 0;
+          updates.our_revenue = 0;
+          updates.zone_id = null;
+        }
         const { error } = await supabase.from('violations').update(updates).eq('id', violId);
         if (error) throw new Error(error.message || 'Update failed');
+
+        // Reset zone_occupancy so the next scan can fire a new violation
+        if (_preCameraId && _preZoneId) {
+          await supabase.from('zone_occupancy')
+            .update({ violation_triggered: false })
+            .eq('camera_id', _preCameraId)
+            .eq('zone_id', _preZoneId);
+        }
+
+        // Log boot/tow actions for invoicing
+        if (action === 'boot' || action === 'tow') {
+          try {
+            // Fetch violation details for the log
+            const { data: viol } = await supabase.from('violations').select('lot_id, plate_text, vehicle_color, vehicle_type').eq('id', violId).single();
+            const lot_id = viol?.lot_id;
+            const vehicleParts = [viol?.vehicle_color, viol?.vehicle_type].filter(Boolean);
+            const vehicle_description = vehicleParts.length ? vehicleParts.join(' ') : (viol?.vehicle_type || null);
+            // Determine who performed the action and fee split
+            let logEntry = {
+              violation_id: violId,
+              lot_id,
+              action_type: action,
+              plate_text: viol?.plate_text || null,
+              vehicle_description,
+              performed_at: updates.resolved_at,
+            };
+            if (extra._partner) {
+              const p = extra._partner;
+              const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
+              const share = p.revenue_share != null ? p.revenue_share : 0.30;
+              logEntry.partner_id = p.id;
+              logEntry.performed_by = 'partner';
+              logEntry.performer_email = extra._performerEmail || null;
+              logEntry.gross_fee = grossFee;
+              logEntry.our_revenue = Math.round(grossFee * share);
+              logEntry.partner_payout = grossFee - logEntry.our_revenue;
+              logEntry.owner_payout = 0;
+            } else if (extra._ownerFees) {
+              logEntry.owner_id = extra._ownerId || null;
+              logEntry.performed_by = 'owner';
+              logEntry.performer_email = extra._performerEmail || null;
+              const grossFee = action === 'boot' ? (extra._ownerFees.boot_fee || 75) : (extra._ownerFees.tow_fee || 250);
+              logEntry.gross_fee = grossFee;
+              logEntry.our_revenue = grossFee;
+              logEntry.partner_payout = 0;
+              logEntry.owner_payout = grossFee;
+            }
+            await supabase.from('action_logs').insert(logEntry);
+          } catch (logErr) {
+            console.warn('Action logged to violations but action_log insert failed:', logErr);
+          }
+        }
+
         return { success: true };
       } catch (e) {
         console.error('Supabase recordAction error:', e);
@@ -1732,7 +1899,9 @@ const db = {
     if (supabase) {
       // Delete existing zones for this camera, then insert new ones
       const { error: delErr } = await supabase.from('camera_zones').delete().eq('camera_id', cameraId);
-      if (!delErr && zones.length > 0) {
+      if (delErr) throw new Error('Failed to clear zones: ' + delErr.message);
+
+      if (zones.length > 0) {
         const rows = zones.map(z => ({
           camera_id: cameraId,
           zone_id: z.zone_id,
@@ -1742,10 +1911,25 @@ const db = {
           polygon: z.polygon,
         }));
         const { error: insErr } = await supabase.from('camera_zones').insert(rows);
-        if (!insErr) return { success: true };
-      } else if (!delErr) {
-        return { success: true };
+        if (insErr) throw new Error('Failed to insert zones: ' + insErr.message);
       }
+
+      // Sync to cameras.zones JSON column (backend detection uses this format)
+      // Convert {x,y} percentage objects to [[x,y]] normalized 0-1 arrays
+      const backendZones = zones.map((z, i) => ({
+        zone_id: z.zone_id,
+        violation_type: z.zone_type || 'no_parking',
+        max_minutes: z.time_limit_minutes || null,
+        space_number: i + 1,
+        polygon: (z.polygon || []).map(pt => {
+          const px = pt.x != null ? pt.x : (Array.isArray(pt) ? pt[0] * 100 : 0);
+          const py = pt.y != null ? pt.y : (Array.isArray(pt) ? pt[1] * 100 : 0);
+          return [Math.round(px / 100 * 10000) / 10000, Math.round(py / 100 * 10000) / 10000];
+        }),
+      }));
+      await supabase.from('cameras').update({ zones: backendZones }).eq('id', cameraId);
+
+      return { success: true };
     }
     return apiFetch(`/cameras/${cameraId}/zones`, {
       method: 'PATCH',
@@ -1753,6 +1937,164 @@ const db = {
       body: JSON.stringify({ zones }),
     });
   },
+  // Fetch unique enforcement partners linked to a set of lots
+  async getPartnersForLots(lots) {
+    const partnerIds = [...new Set(lots.map(l => l.partner_id).filter(Boolean))];
+    if (partnerIds.length === 0) return [];
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('enforcement_partners')
+        .select('*')
+        .in('id', partnerIds)
+        .eq('active', true);
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  // ── Permits ────────────────────────────────────────────────
+  async getPermits(lotId) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('permitted_vehicles')
+        .select('*')
+        .eq('lot_id', lotId)
+        .eq('active', true)
+        .order('created_at', { ascending: false });
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async addPermit(permit) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('permitted_vehicles')
+        .insert(permit)
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+    throw new Error('Supabase not available');
+  },
+  async deletePermit(permitId) {
+    if (supabase) {
+      const { error } = await supabase
+        .from('permitted_vehicles')
+        .update({ active: false })
+        .eq('id', permitId);
+      if (error) throw new Error(error.message);
+      return { success: true };
+    }
+    throw new Error('Supabase not available');
+  },
+
+  async deleteViolation(violId) {
+    if (supabase) {
+      // Fetch camera_id + zone_id before deleting so we can reset occupancy
+      const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
+      const { error } = await supabase.from('violations').delete().eq('id', violId);
+      if (error) throw new Error(error.message);
+      // Reset zone_occupancy so the next scan can fire a new violation
+      if (_vPre?.camera_id && _vPre?.zone_id) {
+        await supabase.from('zone_occupancy')
+          .update({ violation_triggered: false })
+          .eq('camera_id', _vPre.camera_id)
+          .eq('zone_id', _vPre.zone_id);
+      }
+      return { success: true };
+    }
+    return apiFetch(`/violations/${violId}`, { method: 'DELETE' });
+  },
+
+  // ── Analytics ─────────────────────────────────────────────
+  async getHourlyStats(lotIds) {
+    if (supabase) {
+      // Get violations from last 90 days grouped by hour
+      const since = new Date(Date.now() - 90 * 86400000).toISOString();
+      const { data, error } = await supabase
+        .from('violations')
+        .select('lot_id, detected_at, action_taken, gross_revenue')
+        .in('lot_id', lotIds)
+        .gte('detected_at', since);
+      if (!error && data) {
+        // Build heatmap: day_of_week x hour_of_day → count
+        const heatmap = {};
+        data.forEach(v => {
+          const d = new Date(v.detected_at);
+          const dow = d.getDay(); // 0=Sun
+          const hour = d.getHours();
+          const key = `${dow}-${hour}`;
+          heatmap[key] = (heatmap[key] || 0) + 1;
+        });
+        return { heatmap, total: data.length };
+      }
+    }
+    return { heatmap: {}, total: 0 };
+  },
+  async getUtilization(lotIds) {
+    if (supabase) {
+      // Get snapshot vehicle counts from last 7 days
+      const since = new Date(Date.now() - 7 * 86400000).toISOString();
+      const { data, error } = await supabase
+        .from('snapshots')
+        .select('lot_id, captured_at, vehicles_detected')
+        .in('lot_id', lotIds)
+        .gte('captured_at', since)
+        .order('captured_at', { ascending: false })
+        .limit(5000);
+      if (!error && data) {
+        // Group by hour of day → avg vehicles
+        const byHour = {};
+        data.forEach(s => {
+          const hour = new Date(s.captured_at).getHours();
+          if (!byHour[hour]) byHour[hour] = { sum: 0, count: 0 };
+          byHour[hour].sum += (s.vehicles_detected || 0);
+          byHour[hour].count++;
+        });
+        const hourly = {};
+        Object.keys(byHour).forEach(h => {
+          hourly[h] = Math.round(byHour[h].sum / byHour[h].count * 10) / 10;
+        });
+        return { hourly, totalSnapshots: data.length };
+      }
+    }
+    return { hourly: {}, totalSnapshots: 0 };
+  },
+  async getRevenueProjection(lotIds) {
+    if (supabase) {
+      // Get last 30 days of revenue data for projection
+      const since30 = new Date(Date.now() - 30 * 86400000).toISOString();
+      const since7 = new Date(Date.now() - 7 * 86400000).toISOString();
+      const [res30, res7] = await Promise.all([
+        supabase.from('violations').select('gross_revenue, our_revenue, detected_at, action_taken')
+          .in('lot_id', lotIds).gte('resolved_at', since30).neq('status', 'pending'),
+        supabase.from('violations').select('gross_revenue, our_revenue, detected_at, action_taken')
+          .in('lot_id', lotIds).gte('resolved_at', since7).neq('status', 'pending'),
+      ]);
+      const d30 = res30.data || [];
+      const d7 = res7.data || [];
+      const rev30 = d30.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+      const rev7 = d7.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+      const dailyAvg30 = d30.length > 0 ? rev30 / 30 : 0;
+      const dailyAvg7 = d7.length > 0 ? rev7 / 7 : 0;
+      const viols30 = d30.length;
+      const viols7 = d7.length;
+      const dailyViols30 = viols30 / 30;
+      const dailyViols7 = viols7 / 7;
+      return {
+        monthlyProjection: Math.round(dailyAvg7 * 30),
+        weeklyAvg: Math.round(rev7),
+        dailyAvg: Math.round(dailyAvg7),
+        trend: dailyAvg7 > dailyAvg30 ? 'up' : dailyAvg7 < dailyAvg30 ? 'down' : 'flat',
+        trendPct: dailyAvg30 > 0 ? Math.round(((dailyAvg7 - dailyAvg30) / dailyAvg30) * 100) : 0,
+        violationsPerDay: Math.round(dailyViols7 * 10) / 10,
+        violTrend: dailyViols7 > dailyViols30 ? 'up' : dailyViols7 < dailyViols30 ? 'down' : 'flat',
+        violTrendPct: dailyViols30 > 0 ? Math.round(((dailyViols7 - dailyViols30) / dailyViols30) * 100) : 0,
+      };
+    }
+    return { monthlyProjection: 0, weeklyAvg: 0, dailyAvg: 0, trend: 'flat', trendPct: 0, violationsPerDay: 0, violTrend: 'flat', violTrendPct: 0 };
+  },
+
   // Realtime subscription for violations
   subscribeViolations(lotIds, callback, onError) {
     if (!supabase) { if (onError) onError('Realtime not available'); return null; }
@@ -1765,6 +2107,14 @@ const db = {
         if (lotIds.includes(payload.new?.lot_id) || lotIds.includes(payload.old?.lot_id)) {
           callback(payload);
         }
+      })
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'snapshots',
+      }, payload => {
+        // New snapshot from any camera — trigger refresh so frame updates
+        callback(payload);
       })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -1929,12 +2279,14 @@ function ConfirmDialog({ title, body, confirmLabel, confirmColor, onConfirm, onC
 }
 
 // ── Violation detail modal ────────────────────────────────────
-function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
+function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }) {
   const [snapshotUrl, setSnapshotUrl] = useState(violation?._snapshot_url || null);
   const [imgLoading, setImgLoading] = useState(!violation?._snapshot_url);
   const [zoomed, setZoomed] = useState(false);
   const [manualPlate, setManualPlate] = useState('');
   const [savingPlate, setSavingPlate] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { addToast } = useToast();
 
   useEffect(() => {
@@ -2147,6 +2499,34 @@ function ViolationModal({ violation, lot, onClose, onAction, isOwner }) {
               <button className="action-btn gone" onClick={() => onAction(violation.id, 'already_gone')}>Gone</button>
             </div>
           )}
+
+          {/* Owner delete button */}
+          {isOwner && onDelete && (
+            <div style={{marginTop:8, paddingTop:8, borderTop:'1px solid var(--border)'}}>
+              <button
+                onClick={async () => {
+                  setDeleting(true);
+                  try {
+                    await onDelete(violation.id);
+                    addToast('Job deleted', 'success');
+                    onClose();
+                  } catch (err) {
+                    addToast('Failed to delete: ' + (err.message || 'Unknown error'), 'error');
+                    setDeleting(false);
+                  }
+                }}
+                disabled={deleting}
+                style={{
+                  width:'100%', padding:'10px', background:'transparent', border:'1px solid rgba(239,68,68,.3)',
+                  borderRadius:8, color:'#ef4444', fontSize:13, fontWeight:600, cursor: deleting ? 'wait' : 'pointer',
+                  display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                {deleting ? 'Deleting...' : 'Delete Job'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
       {zoomed && <ImageZoom src={snapshotUrl} alt="Violation snapshot" onClose={() => setZoomed(false)} />}
@@ -2170,6 +2550,9 @@ function NavIconAccount() {
 function NavIconActivity() {
   return <div className="nav-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>;
 }
+function NavIconOverview() {
+  return <div className="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></div>;
+}
 
 // ── Search icon SVG ──────────────────────────────────────────
 function SearchIcon() {
@@ -2191,33 +2574,208 @@ function ImageZoom({ src, alt, onClose }) {
   );
 }
 
-// ── Violation snapshot with AI bounding boxes ────────────────
-// Renders a snapshot image with detection bounding boxes overlaid.
-// Each detection gets its own box + label tag on the image, plus
-// separate chip tags below the image for quick scanning.
-// detections: array of { class, bbox: [x1,y1,x2,y2] (normalized 0-1), conf }
-function ViolationSnapshot({ src, detections, style, onClick, maxHeight, borderRadius }) {
+// ── Violation Proof Modal — side-by-side initial + current snapshots ──
+function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, onClose }) {
+  if (!violation) return null;
+  const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
+  const det = matchedDetection;
+
+  function ProofImage({ src, label, detection, timestamp }) {
+    const imgRef = useRef(null);
+    const wrapRef = useRef(null);
+    const [loaded, setLoaded] = useState(false);
+    const [coverPos, setCoverPos] = useState(null);
+
+    const calcCover = useCallback(() => {
+      const img = imgRef.current;
+      const wrap = wrapRef.current;
+      if (!img || !wrap || !img.naturalWidth) return;
+      const cW = wrap.clientWidth, cH = wrap.clientHeight;
+      const nW = img.naturalWidth, nH = img.naturalHeight;
+      const scale = Math.max(cW / nW, cH / nH);
+      const rW = nW * scale, rH = nH * scale;
+      setCoverPos({ offX: (cW - rW) / 2, offY: (cH - rH) / 2, rW, rH });
+    }, []);
+
+    const det = detection;
+    const cls = det ? (det.class || 'vehicle').toLowerCase() : 'car';
+    const color = DET_COLORS[cls] || '#3b82f6';
+
+    return (
+      <div style={{flex:1, minWidth:0}}>
+        <div style={{fontSize:11, fontWeight:700, color:'var(--text-muted)', marginBottom:6, textTransform:'uppercase', letterSpacing:'.05em'}}>
+          {label}
+          {timestamp && <span style={{fontWeight:500, color:'var(--text-faint)', marginLeft:6, textTransform:'none', letterSpacing:0}}>{timestamp}</span>}
+        </div>
+        <div ref={wrapRef} style={{position:'relative', borderRadius:8, overflow:'hidden', background:'var(--snapshot-bg)', aspectRatio:'16/9'}}>
+          {src ? (
+            <>
+              <img ref={imgRef} src={src} alt={label}
+                onLoad={() => { setLoaded(true); setTimeout(calcCover, 0); }}
+                style={{width:'100%', height:'100%', objectFit:'cover', display: loaded ? 'block' : 'none'}}
+              />
+              {!loaded && (
+                <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  <div className="spin" style={{marginRight:8}} />
+                  <span style={{color:'var(--text-ghost)', fontSize:12}}>Loading…</span>
+                </div>
+              )}
+              {loaded && det && coverPos && (() => {
+                const [x1, y1, x2, y2] = det.bbox;
+                const px = coverPos.offX + x1 * coverPos.rW;
+                const py = coverPos.offY + y1 * coverPos.rH;
+                const pw = (x2 - x1) * coverPos.rW;
+                const ph = (y2 - y1) * coverPos.rH;
+                return (
+                  <div style={{
+                    position:'absolute', left:px, top:py, width:pw, height:ph,
+                    border:`2px solid ${color}`, borderRadius:3,
+                    pointerEvents:'none', boxSizing:'border-box',
+                  }} />
+                );
+              })()}
+            </>
+          ) : (
+            <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center'}}>
+              <span style={{color:'var(--text-ghost)', fontSize:12}}>No snapshot</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const initialTime = violation.detected_at ? new Date(violation.detected_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '';
+
+  return (
+    <div onClick={onClose} style={{
+      position:'fixed', top:0, left:0, width:'100vw', height:'100vh', zIndex:300,
+      background:'rgba(0,0,0,.92)', backdropFilter:'blur(12px)',
+      display:'flex', alignItems:'center', justifyContent:'center',
+      animation:'fadeIn .2s ease', cursor:'zoom-out',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width:'calc(100% - 32px)', maxWidth:900, maxHeight:'calc(100vh - 40px)',
+        overflow:'auto', cursor:'default',
+      }}>
+        {/* Header */}
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12}}>
+          <div>
+            <div style={{fontSize:16, fontWeight:700, color:'#fff'}}>
+              Violation Proof
+            </div>
+            <div style={{fontSize:12, color:'rgba(255,255,255,.45)', marginTop:2, display:'flex', gap:8, flexWrap:'wrap'}}>
+              {violation.zone_id && <span>Zone {violation.zone_id}</span>}
+              {violation.plate_text && <span style={{fontFamily:'Courier New, monospace', fontWeight:700, color:'rgba(255,255,255,.8)'}}>{violation.plate_text}</span>}
+              {violation.vehicle_color && (
+                <span style={{display:'flex', alignItems:'center', gap:4}}>
+                  <span style={{width:7, height:7, borderRadius:3, background:colorHex(violation.vehicle_color)}} />
+                  {violation.vehicle_color} {violation.vehicle_type || 'car'}
+                </span>
+              )}
+              <span>{(violation.violation_type || 'unauthorized').replace(/_/g, ' ')}</span>
+            </div>
+          </div>
+          <button onClick={onClose} style={{
+            width:36, height:36, borderRadius:'50%', background:'rgba(255,255,255,.1)', border:'none',
+            color:'#fff', fontSize:18, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+          }}>✕</button>
+        </div>
+        {/* Photos — stack vertically on mobile, side-by-side on wide screens */}
+        <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:12}}>
+          <ProofImage
+            src={violation._snapshot_url}
+            label="Detection"
+            detection={det}
+            timestamp={initialTime}
+          />
+          <ProofImage
+            src={latestSnapshotUrl || violation._snapshot_url}
+            label="Current"
+            detection={latestSnapshotUrl ? null : det}
+            timestamp="Live"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Helper: point-in-polygon test (ray casting) ─────────────
+function pointInPolygon(px, py, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// ── Match a violation to its specific detection ──────────────
+// Uses zone polygon to find which detection's center falls inside the zone.
+// Returns the single matched detection or null.
+function matchViolationDetection(detections, zoneId, cameraZones) {
+  if (!detections?.length || !zoneId || !cameraZones?.length) return null;
+  const zone = cameraZones.find(z => z.zone_id === zoneId);
+  if (!zone?.polygon?.length) return null;
+  const dets = detections.filter(d => d.bbox && d.bbox.length === 4);
+  for (const d of dets) {
+    const [x1, y1, x2, y2] = d.bbox;
+    const cx = ((x1 + x2) / 2) * 100;
+    const cy = ((y1 + y2) / 2) * 100;
+    if (pointInPolygon(cx, cy, zone.polygon)) return d;
+  }
+  return null;
+}
+
+// ── Violation snapshot with AI bounding box ───────────────────
+// Renders a snapshot image with a single bounding box around the
+// violating vehicle only. Computes object-fit:cover offset so the
+// box aligns perfectly with the actual image pixels.
+function ViolationSnapshot({ src, detections, matchedDetection, style, onClick, maxHeight, borderRadius }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
-  // Timeout: if image hasn't loaded in 10s, treat as failed
+  const imgRef = useRef(null);
+  const wrapRef = useRef(null);
+  const [coverPos, setCoverPos] = useState(null);
+
+  // Compute object-fit:cover offset so SVG bbox aligns with image
+  const calcCover = useCallback(() => {
+    const img = imgRef.current;
+    const wrap = wrapRef.current;
+    if (!img || !wrap || !img.naturalWidth || !img.naturalHeight) return;
+    const cW = wrap.clientWidth, cH = wrap.clientHeight;
+    const nW = img.naturalWidth, nH = img.naturalHeight;
+    // object-fit:cover scales to fill, then centers the overflow
+    const scale = Math.max(cW / nW, cH / nH);
+    const rW = nW * scale, rH = nH * scale;
+    const offX = (cW - rW) / 2, offY = (cH - rH) / 2;
+    setCoverPos({ offX, offY, rW, rH });
+  }, []);
+
   useEffect(() => {
     if (!src || loaded || failed) return;
     const t = setTimeout(() => setFailed(true), 10000);
     return () => clearTimeout(t);
   }, [src, loaded, failed]);
+
   if (!src || failed) return (
     <div style={{width:'100%', aspectRatio:'16/7', background:'var(--bg-inset)', display:'flex', alignItems:'center', justifyContent:'center', borderRadius: borderRadius || 8, ...(style || {})}}>
       <span style={{color:'var(--text-ghost)', fontSize:12, fontWeight:500}}>No photo</span>
     </div>
   );
-  const dets = (detections || []).filter(d => d.bbox && d.bbox.length === 4);
+  const singleDet = matchedDetection && matchedDetection.bbox?.length === 4 ? matchedDetection : null;
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   return (
     <div style={{borderRadius: borderRadius || 8, overflow:'hidden', background:'var(--snapshot-bg)', ...(style || {})}}>
-      <div style={{position:'relative'}}>
+      <div ref={wrapRef} style={{position:'relative'}}>
         <img
+          ref={imgRef}
           src={src} alt="Violation snapshot"
-          onLoad={() => setLoaded(true)}
+          onLoad={() => { setLoaded(true); setTimeout(calcCover, 0); }}
           onError={() => setFailed(true)}
           onClick={onClick}
           style={{width:'100%', display: loaded ? 'block' : 'none', maxHeight: maxHeight || 'none', objectFit:'cover', cursor: onClick ? 'zoom-in' : 'default'}}
@@ -2228,48 +2786,24 @@ function ViolationSnapshot({ src, detections, style, onClick, maxHeight, borderR
             <span style={{color:'var(--text-ghost)', fontSize:12}}>Loading…</span>
           </div>
         )}
-        {loaded && dets.length > 0 && (
-          <svg style={{position:'absolute', top:0, left:0, width:'100%', height:'100%', pointerEvents:'none'}} viewBox="0 0 100 100" preserveAspectRatio="none">
-            {dets.map((d, i) => {
-              const [x1, y1, x2, y2] = d.bbox;
-              const x = x1 * 100, y = y1 * 100, w = (x2 - x1) * 100, h = (y2 - y1) * 100;
-              const cls = (d.class || 'vehicle').toLowerCase();
-              const color = DET_COLORS[cls] || '#3b82f6';
-              const conf = d.conf != null ? Math.round(d.conf * 100) : null;
-              return (
-                <g key={i}>
-                  <rect x={x} y={y} width={w} height={h} fill={color} fillOpacity="0.08" stroke={color} strokeWidth="0.5" rx="0.3" ry="0.3" />
-                  <rect x={x} y={Math.max(0, y - 3)} width={Math.max(w * 0.55, 9)} height="3" fill={color} rx="0.3" ry="0.3" fillOpacity="0.9" />
-                  <text x={x + 0.6} y={Math.max(0, y - 3) + 2.2} fill="#fff" fontSize="2" fontWeight="800" fontFamily="Inter, sans-serif">
-                    {`#${i+1} ${cls}`}{conf != null ? ` ${conf}%` : ''}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-        )}
+        {loaded && singleDet && coverPos && (() => {
+          const [x1, y1, x2, y2] = singleDet.bbox;
+          const cls = (singleDet.class || 'vehicle').toLowerCase();
+          const color = DET_COLORS[cls] || '#3b82f6';
+          // Convert normalized bbox (0-1) to pixel positions within the scaled image
+          const px = coverPos.offX + x1 * coverPos.rW;
+          const py = coverPos.offY + y1 * coverPos.rH;
+          const pw = (x2 - x1) * coverPos.rW;
+          const ph = (y2 - y1) * coverPos.rH;
+          return (
+            <div style={{
+              position:'absolute', left:px, top:py, width:pw, height:ph,
+              border:`2px solid ${color}`, borderRadius:3,
+              pointerEvents:'none', boxSizing:'border-box',
+            }} />
+          );
+        })()}
       </div>
-      {/* Detection tags — each detection as a separate chip below the image */}
-      {loaded && dets.length > 0 && (
-        <div style={{display:'flex', gap:4, padding:'6px 10px', flexWrap:'wrap', background:'var(--bg-inset)', borderTop:'1px solid var(--border-subtle)'}}>
-          {dets.map((d, i) => {
-            const cls = (d.class || 'vehicle').toLowerCase();
-            const color = DET_COLORS[cls] || '#3b82f6';
-            const conf = d.conf != null ? Math.round(d.conf * 100) : null;
-            return (
-              <span key={i} style={{
-                display:'inline-flex', alignItems:'center', gap:4,
-                fontSize:11, fontWeight:700, color: color,
-                background: `${color}15`, border: `1px solid ${color}30`,
-                borderRadius:5, padding:'3px 8px', whiteSpace:'nowrap',
-              }}>
-                <span style={{width:6, height:6, borderRadius:'50%', background:color, flexShrink:0}} />
-                #{i+1} {cls}{conf != null ? ` · ${conf}%` : ''}
-              </span>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
@@ -2399,8 +2933,15 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
   const todayResolved = recent.length;
   const todayRevenue = recent.reduce((s, v) => s + (v.our_revenue || 0), 0);
 
-  // Live detection counts from lot states
+  // Build camera_id → zones lookup for matching detections to violations
   const allCams = Object.values(lotStates).flatMap(s => s?.cameras || []);
+  const camZonesMap = useMemo(() => {
+    const m = {};
+    allCams.forEach(c => { if (c.zones?.length) m[c.camera_id] = c.zones; });
+    return m;
+  }, [lotStates]);
+
+  // Live detection counts from lot states
   const liveVehicles = allCams.reduce((s, c) => s + (c.latest_snapshot?.vehicles_detected || c.latest_snapshot?.vehicle_count || 0), 0);
   const livePeople = allCams.reduce((s, c) => s + (c.latest_snapshot?.people_detected || c.latest_snapshot?.person_count || c.latest_snapshot?.humans_detected || 0), 0);
   const livePlates = allCams.reduce((s, c) => {
@@ -2451,11 +2992,13 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       const extra = {};
       // Pass fee schedule for revenue calculation on boot/tow
       if ((action === 'boot' || action === 'tow') && user) {
+        extra._performerEmail = user.email;
         if (user._role === 'partner') {
           extra._partner = { id: user.id, boot_fee: user.boot_fee, tow_fee: user.tow_fee, revenue_share: user.revenue_share };
         } else {
           // Owner acting directly — record gross revenue with 100% to LotLogic (no partner split)
           extra._ownerFees = { boot_fee: 75, tow_fee: 250 };
+          extra._ownerId = user.id;
         }
       }
       const result = await db.recordAction(violId, action, extra);
@@ -2609,15 +3152,39 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
           const typeClass = v.violation_type?.toLowerCase().includes('unauthorized')
             ? 'unauthorized' : v.violation_type?.toLowerCase().includes('overtime') ? 'overtime' : 'default';
           return (
-            <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''}`}>
+            <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''}`} style={{position:'relative'}}>
+              {/* Owner delete X */}
+              {isOwner && (
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      await db.deleteViolation(v.id);
+                      addToast('Job deleted', 'success');
+                      if (onAction) onAction();
+                    } catch (err) {
+                      addToast('Failed to delete: ' + (err.message || 'Unknown error'), 'error');
+                    }
+                  }}
+                  style={{
+                    position:'absolute', top:8, right:8, zIndex:5, width:28, height:28, borderRadius:'50%',
+                    background:'rgba(0,0,0,.5)', backdropFilter:'blur(4px)', border:'none', cursor:'pointer',
+                    display:'flex', alignItems:'center', justifyContent:'center', padding:0,
+                  }}
+                  aria-label="Delete job"
+                  title="Delete job"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              )}
               {urgent && (
                 <div className="job-urgent-bar">
                   <span style={{display:'inline-block', width:6, height:6, borderRadius:'50%', background:'#fff', animation:'pulse-dot 1.5s infinite'}} />
                   Needs attention — waiting {timer.val} {timer.unit}
                 </div>
               )}
-              {/* Snapshot photo with AI bounding boxes — full width, prominent */}
-              <ViolationSnapshot src={v._snapshot_url} detections={v._detections} maxHeight={220} borderRadius={0} onClick={v._snapshot_url ? () => setSelectedViol(v) : undefined} />
+              {/* Snapshot photo with single bounding box on violating vehicle */}
+              <ViolationSnapshot src={v._snapshot_url} detections={v._detections} matchedDetection={matchViolationDetection(v._detections, v.zone_id, camZonesMap[v.camera_id])} maxHeight={220} borderRadius={0} onClick={v._snapshot_url ? () => setSelectedViol(v) : undefined} />
               {/* Vehicle summary bar — quick-glance info for the tow operator */}
               <div className="vehicle-summary">
                 {v.plate_text ? (
@@ -2683,10 +3250,11 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   </button>
                 </div>
                 {lot?.address && (
-                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener" style={{fontSize:12, color:'#3b82f6', fontWeight:600, textDecoration:'none', display:'flex', alignItems:'center', gap:3}}
-                    onClick={e => e.stopPropagation()}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                    Directions
+                  <a href={mapsLink(lot.address)} target="_blank" rel="noopener"
+                    className="action-btn navigate" style={{textDecoration:'none', display:'flex', alignItems:'center', justifyContent:'center', gap:4, minWidth:90, padding:'8px 12px'}}
+                    onClick={e => { e.stopPropagation(); haptic('medium'); }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                    Navigate
                   </a>
                 )}
               </div>
@@ -2707,7 +3275,31 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
             const actionColor = { boot: '#fbbf24', tow: '#f87171', dismissed: '#a78bfa', no_action: '#6b7280', already_gone: '#6b7280' };
             const col = actionColor[v.action_taken?.toLowerCase()] || '#9ca3af';
             return (
-              <div key={v.id} className="job-card">
+              <div key={v.id} className="job-card" style={{position:'relative'}}>
+                {/* Owner delete X */}
+                {isOwner && (
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      try {
+                        await db.deleteViolation(v.id);
+                        addToast('Job deleted', 'success');
+                        if (onAction) onAction();
+                      } catch (err) {
+                        addToast('Failed to delete: ' + (err.message || 'Unknown error'), 'error');
+                      }
+                    }}
+                    style={{
+                      position:'absolute', top:8, right:8, zIndex:5, width:28, height:28, borderRadius:'50%',
+                      background:'rgba(0,0,0,.5)', backdropFilter:'blur(4px)', border:'none', cursor:'pointer',
+                      display:'flex', alignItems:'center', justifyContent:'center', padding:0,
+                    }}
+                    aria-label="Delete job"
+                    title="Delete job"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                )}
                 <div className="job-body">
                   <div className="job-top">
                     <div>
@@ -2741,7 +3333,12 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       )}
 
       {/* Violation detail modal */}
-      {selectedViol && <ImageZoom src={selectedViol._snapshot_url} alt="Violation snapshot" onClose={() => setSelectedViol(null)} />}
+      {selectedViol && (() => {
+        const cam = allCams.find(c => c.camera_id === selectedViol.camera_id);
+        const latestUrl = cam?.latest_snapshot?.url || cam?.latest_snapshot?.storage_url || null;
+        const matched = matchViolationDetection(selectedViol._detections, selectedViol.zone_id, camZonesMap[selectedViol.camera_id]);
+        return <ViolationProofModal violation={selectedViol} latestSnapshotUrl={latestUrl} matchedDetection={matched} onClose={() => setSelectedViol(null)} />;
+      })()}
 
     </div>
   );
@@ -2749,21 +3346,54 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
 
 // ── Zone overlay (read-only, shown on camera snapshots) ──────
 function ZoneOverlay({ zones }) {
+  const selfRef = useRef(null);
+  const [pos, setPos] = useState(null);
+
+  useEffect(() => {
+    function calc() {
+      const el = selfRef.current;
+      if (!el) return;
+      const wrap = el.parentElement;
+      const img = wrap?.querySelector('img');
+      if (!img || !wrap || !img.naturalWidth || !img.naturalHeight) return;
+      const wW = wrap.clientWidth, wH = wrap.clientHeight;
+      const scale = Math.min(wW / img.naturalWidth, wH / img.naturalHeight);
+      const rW = img.naturalWidth * scale, rH = img.naturalHeight * scale;
+      setPos({ left: (wW - rW) / 2, top: (wH - rH) / 2, width: rW, height: rH });
+    }
+    // Run on mount and when image loads
+    calc();
+    const el = selfRef.current;
+    const img = el?.parentElement?.querySelector('img');
+    if (img) {
+      img.addEventListener('load', calc);
+      // If already loaded, recalc
+      if (img.complete) setTimeout(calc, 0);
+    }
+    window.addEventListener('resize', calc);
+    return () => { if (img) img.removeEventListener('load', calc); window.removeEventListener('resize', calc); };
+  }, [zones]);
+
   if (!zones || zones.length === 0) return null;
   return (
-    <svg className="zone-overlay-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-      {zones.map(z => {
-        const pts = (z.polygon || []).map(p => `${p.x},${p.y}`).join(' ');
-        const cx = (z.polygon || []).reduce((s, p) => s + p.x, 0) / (z.polygon?.length || 1);
-        const cy = (z.polygon || []).reduce((s, p) => s + p.y, 0) / (z.polygon?.length || 1);
-        return (
-          <g key={z.zone_id}>
-            <polygon className={`zone-poly ${z.zone_type || 'no_parking'}`} points={pts} />
-            {z.label && <text className="zone-label-text" x={cx} y={cy} textAnchor="middle" dominantBaseline="central">{z.label}</text>}
-          </g>
-        );
-      })}
-    </svg>
+    <span ref={selfRef} style={{position:'absolute', top:0, left:0, width:'100%', height:'100%', pointerEvents:'none'}}>
+      {pos && (
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+          style={{position:'absolute', left:pos.left, top:pos.top, width:pos.width, height:pos.height, pointerEvents:'none'}}>
+          {zones.map(z => {
+            const pts = (z.polygon || []).map(p => `${p.x},${p.y}`).join(' ');
+            const cx = (z.polygon || []).reduce((s, p) => s + p.x, 0) / (z.polygon?.length || 1);
+            const cy = (z.polygon || []).reduce((s, p) => s + p.y, 0) / (z.polygon?.length || 1);
+            return (
+              <g key={z.zone_id}>
+                <polygon className={`zone-poly ${z.zone_type || 'no_parking'}`} points={pts} />
+                {z.label && <text className="zone-label-text" x={cx} y={cy} textAnchor="middle" dominantBaseline="central">{z.label}</text>}
+              </g>
+            );
+          })}
+        </svg>
+      )}
+    </span>
   );
 }
 
@@ -2802,88 +3432,162 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const [dragIdx, setDragIdx] = useState(null);
   const svgRef = useRef(null);
   const imgRef = useRef(null);
+  const wrapRef = useRef(null);
 
-  // Live feed state
-  const [feedLive, setFeedLive] = useState(false);
-  const [feedInterval, setFeedInterval] = useState(5000); // ms
+  // LOCKED layout: calculated ONCE on first image load, then never changes.
+  // No ResizeObserver, no recalculation on frame refresh. The image and SVG
+  // stay at the exact same pixel position until the editor is closed.
+  const layoutRef = useRef(null);
+  const [layout, setLayout] = useState(null);
+  const syncLayout = useCallback(() => {
+    // Once layout is locked, never recalculate — everything stays put
+    if (layoutRef.current) return;
+    const img = imgRef.current;
+    const wrap = wrapRef.current;
+    if (!img || !wrap || !img.naturalWidth || !img.naturalHeight) return;
+    const wW = wrap.clientWidth;
+    const wH = wrap.clientHeight;
+    if (!wW || !wH) return;
+    const scale = Math.min(wW / img.naturalWidth, wH / img.naturalHeight);
+    const rW = Math.round(img.naturalWidth * scale);
+    const rH = Math.round(img.naturalHeight * scale);
+    const l = { left: Math.round((wW - rW) / 2), top: Math.round((wH - rH) / 2), width: rW, height: rH };
+    layoutRef.current = l;
+    setLayout(l);
+  }, []);
+
+  // Live feed state — persisted to localStorage
+  const [feedLive, setFeedLive] = useState(() => {
+    const saved = localStorage.getItem('lotlogic_ze_feedlive');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [feedInterval, setFeedInterval] = useState(() => {
+    const saved = localStorage.getItem('lotlogic_ze_feedinterval');
+    return saved ? Number(saved) : 10000;
+  });
   const [feedStatus, setFeedStatus] = useState('loading'); // loading | live | paused | offline
   const [lastFrameTime, setLastFrameTime] = useState(null);
   const feedTimerRef = useRef(null);
 
-  // Detection state
-  const [detections, setDetections] = useState([]); // array of { type, bbox, plate_text, color, confidence, label, id }
-  const [showDetections, setShowDetections] = useState(true);
-  const [detectionTab, setDetectionTab] = useState('all'); // all | vehicles | people | plates
+  // Persist feed settings
+  useEffect(() => { localStorage.setItem('lotlogic_ze_feedlive', String(feedLive)); }, [feedLive]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_feedinterval', String(feedInterval)); }, [feedInterval]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_showdetections', String(showDetections)); }, [showDetections]);
+  useEffect(() => { localStorage.setItem('lotlogic_ze_detectiontab', detectionTab); }, [detectionTab]);
+
+  // Detection state — persisted to localStorage
+  const [detections, setDetections] = useState([]);
+  const [showDetections, setShowDetections] = useState(() => {
+    const saved = localStorage.getItem('lotlogic_ze_showdetections');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [detectionTab, setDetectionTab] = useState(() => localStorage.getItem('lotlogic_ze_detectiontab') || 'all');
   const [snapshotMeta, setSnapshotMeta] = useState(null); // latest snapshot metadata
 
-  const ZONE_COLORS = { no_parking: '#ef4444', time_limited: '#8b5cf6', handicap_only: '#eab308' };
+  const ZONE_COLORS = {
+    no_parking: '#3b82f6', unauthorized: '#3b82f6', time_limited: '#8b5cf6',
+    handicap_only: '#eab308', fire_lane: '#f97316', reserved: '#06b6d4',
+    permit_only: '#10b981', loading_zone: '#64748b', double_parked: '#ec4899',
+    blocking: '#f43f5e', expired_meter: '#a855f7', abandoned: '#78716c',
+  };
 
   // Load a single frame + detections
   const loadFrame = useCallback(async (showError = true) => {
+    let frameLoaded = false;
+    let snap = null;
+
+    // 1. Fetch latest snapshot from Supabase (primary source for both frame + detections)
     try {
-      const r = await fetch(API + `/cameras/${cameraId}/frame`, { headers: { 'X-API-Key': API_KEY } });
-      if (!r.ok) throw new Error(r.status);
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      setFrameUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
-      setLastFrameTime(new Date());
-      setFeedStatus('live');
+      if (supabase) {
+        const { data, error } = await supabase.from('snapshots').select('*').eq('camera_id', cameraId).order('captured_at', { ascending: false }).limit(1);
+        if (!error && data && data.length > 0) {
+          snap = data[0];
+        }
+      } else {
+        try { snap = await apiFetch(`/cameras/${cameraId}/latest-snapshot`); } catch {}
+      }
     } catch {
-      if (showError) setError('Could not load camera frame');
-      setFeedStatus('offline');
+      // Supabase query failed
     }
 
-    // Also fetch latest snapshot metadata for detection data
-    try {
-      let snap;
-      if (supabase) {
-        const { data } = await supabase.from('snapshots').select('*').eq('camera_id', cameraId).order('captured_at', { ascending: false }).limit(1).single();
-        snap = data;
-      } else {
-        snap = await apiFetch(`/cameras/${cameraId}/latest-snapshot`);
-      }
-      setSnapshotMeta(snap);
-      // Build detections from snapshot detections array
-      const dets = [];
-      if (snap?.detections) {
-        snap.detections.forEach((d, i) => {
-          dets.push({
-            id: d.id || `det_${i}`,
-            type: d.type || d.object_type || 'vehicle',
-            bbox: d.bbox || d.bounding_box || null,
-            plate_text: d.plate_text || d.license_plate || null,
-            color: d.color || d.vehicle_color || null,
-            vehicle_type: d.vehicle_type || null,
-            confidence: d.confidence != null ? parseFloat(d.confidence) : null,
-            label: d.label || d.class_name || null,
-            zone_id: d.zone_id || null,
-            track_id: d.track_id || null,
-          });
-        });
-      }
-      // Also incorporate vehicles_detected / people_detected counts if detections array absent
-      if (dets.length === 0 && snap) {
-        const vc = snap.vehicles_detected || snap.vehicle_count || 0;
-        const pc = snap.people_detected || snap.person_count || snap.humans_detected || 0;
-        for (let i = 0; i < vc; i++) dets.push({ id: `v_${i}`, type: 'vehicle', bbox: null, plate_text: null, color: null, confidence: null, label: 'Vehicle' });
-        for (let i = 0; i < pc; i++) dets.push({ id: `p_${i}`, type: 'person', bbox: null, plate_text: null, color: null, confidence: null, label: 'Person' });
-        // Plate readings
-        if (snap.plate_readings) {
-          snap.plate_readings.forEach((pr, i) => {
-            dets.push({ id: `pl_${i}`, type: 'vehicle', bbox: pr.bbox || null, plate_text: pr.plate_text || pr.text, color: pr.vehicle_color || null, confidence: pr.confidence, label: 'Vehicle', vehicle_type: pr.vehicle_type || null });
-          });
-        }
-      }
-      setDetections(dets);
-    } catch {
-      // Snapshot endpoint may not exist yet — silent fail, keep any existing detections
+    // 2. Use snapshot storage_url as frame
+    if (snap?.storage_url) {
+      const ts = snap.captured_at ? new Date(snap.captured_at).getTime() : Date.now();
+      setFrameUrl(snap.storage_url + '?t=' + ts);
+      setLastFrameTime(snap.captured_at ? new Date(snap.captured_at) : new Date());
+      setFeedStatus('live');
+      frameLoaded = true;
     }
+
+    // 3. Fallback: try loading /frame endpoint as img src (bypasses CORS unlike fetch)
+    if (!frameLoaded) {
+      try {
+        const frameImgUrl = API + `/cameras/${cameraId}/frame?api_key=${API_KEY}&_t=${Date.now()}`;
+        const testImg = new Image();
+        const loaded = await new Promise((resolve) => {
+          testImg.onload = () => resolve(true);
+          testImg.onerror = () => resolve(false);
+          testImg.src = frameImgUrl;
+          setTimeout(() => resolve(false), 8000);
+        });
+        if (loaded && testImg.naturalWidth > 0) {
+          setFrameUrl(frameImgUrl);
+          setLastFrameTime(new Date());
+          setFeedStatus('live');
+          frameLoaded = true;
+        }
+      } catch {
+        // /frame img load also failed
+      }
+    }
+
+    if (!frameLoaded) {
+      if (showError) setError('Could not load camera frame');
+      setFeedStatus('offline');
+    } else {
+      setError('');
+    }
+
+    // Build detections from snapshot metadata
+    setSnapshotMeta(snap);
+    const dets = [];
+    const rawDets = snap?.raw_detections?.detections || snap?.detections || [];
+    rawDets.forEach((d, i) => {
+      dets.push({
+        id: d.id || `det_${i}`,
+        type: d.class === 'person' ? 'person' : 'vehicle',
+        bbox: d.bbox || null,
+        plate_text: d.plate_text || null,
+        color: d.color || null,
+        vehicle_type: d.class || null,
+        confidence: d.conf != null ? parseFloat(d.conf) : (d.confidence != null ? parseFloat(d.confidence) : null),
+        label: d.class || d.label || null,
+        zone_id: d.zone_id || null,
+        track_id: d.track_id || null,
+      });
+    });
+    if (dets.length === 0 && snap) {
+      const vc = snap.vehicles_detected || 0;
+      for (let i = 0; i < vc; i++) dets.push({ id: `v_${i}`, type: 'vehicle', bbox: null, plate_text: null, color: null, confidence: null, label: 'Vehicle' });
+    }
+    setDetections(dets);
   }, [cameraId]);
 
   // Initial frame load
   useEffect(() => {
     loadFrame(true);
   }, [loadFrame]);
+
+  // Supabase realtime: auto-refresh when new snapshot arrives for this camera
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase.channel('ze-snapshots-' + cameraId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'snapshots', filter: 'camera_id=eq.' + cameraId }, () => {
+        loadFrame(false);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [cameraId, loadFrame]);
 
   // Live feed polling
   useEffect(() => {
@@ -2909,12 +3613,12 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   const plateCount = detections.filter(d => !!d.plate_text).length;
 
   function svgPoint(e) {
-    const svg = svgRef.current;
-    if (!svg) return null;
-    const rect = svg.getBoundingClientRect();
+    const wrap = wrapRef.current;
+    if (!wrap || !layout) return null;
+    const wr = wrap.getBoundingClientRect();
     return {
-      x: Math.round(((e.clientX - rect.left) / rect.width) * 10000) / 100,
-      y: Math.round(((e.clientY - rect.top) / rect.height) * 10000) / 100,
+      x: Math.max(0, Math.min(100, Math.round(((e.clientX - wr.left - layout.left) / layout.width) * 10000) / 100)),
+      y: Math.max(0, Math.min(100, Math.round(((e.clientY - wr.top - layout.top) / layout.height) * 10000) / 100)),
     };
   }
 
@@ -2927,7 +3631,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       if (newPoints.length >= 3) {
         const first = newPoints[0];
         const dist = Math.sqrt((pt.x - first.x) ** 2 + (pt.y - first.y) ** 2);
-        if (dist < 3) { finishDrawing(); return; }
+        if (dist < 2) { finishDrawing(); return; }
       }
       setNewPoints(prev => [...prev, pt]);
     } else {
@@ -3024,7 +3728,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
   return (
     <div className="zone-editor-overlay">
       <div className="ze-header">
-        <div className="ze-title">{cameraName} — Zone Editor</div>
+        <div className="ze-title">{cameraName} — Zone Editor <span style={{fontSize:9, color:'var(--text-ghost)', marginLeft:6}}>v3-locked</span></div>
         <div style={{display:'flex', gap:8}}>
           <button className="ze-btn ze-btn-ghost" onClick={onClose}>Cancel</button>
           <button className="ze-btn ze-btn-primary" onClick={save} disabled={saving}>
@@ -3077,117 +3781,82 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       <div className="ze-body">
         {error && <div style={{padding:'8px 16px', background:'rgba(220,38,38,.1)', color:'#fca5a5', fontSize:13}}>{error}</div>}
 
-        <div className="ze-canvas-wrap" onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
+        <div ref={wrapRef} className="ze-canvas-wrap" onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
           {frameUrl ? (
-            <img ref={imgRef} src={frameUrl} alt="Camera frame" draggable="false" />
+            <>
+              <img ref={imgRef} src={frameUrl} alt="Camera frame" draggable="false"
+                onLoad={syncLayout}
+                style={layout ? {left:layout.left, top:layout.top, width:layout.width, height:layout.height} : {opacity:0}}
+              />
+              {layout && (
+                <svg ref={svgRef} className="ze-svg" viewBox="0 0 100 100" preserveAspectRatio="none"
+                  style={{left:layout.left, top:layout.top, width:layout.width, height:layout.height}}>
+                  {/* Existing zones */}
+                  {zones.map((z, i) => {
+                    const pts = z.polygon.map(p => `${p.x},${p.y}`).join(' ');
+                    const color = ZONE_COLORS[z.zone_type] || '#3b82f6';
+                    const isSelected = i === selectedIdx;
+                    const cx = z.polygon.reduce((s, p) => s + p.x, 0) / z.polygon.length;
+                    const cy = z.polygon.reduce((s, p) => s + p.y, 0) / z.polygon.length;
+                    return (
+                      <g key={z.zone_id}>
+                        <polygon
+                          className={`ze-poly ${isSelected ? 'selected' : ''}`}
+                          points={pts}
+                          fill={color}
+                          stroke={color}
+                          onClick={e => { e.stopPropagation(); setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}
+                        />
+                        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
+                          style={{fontSize:'1.8px', fill:'#fff', fontWeight:700, pointerEvents:'none', textShadow:'0 0 1px rgba(0,0,0,.6)'}}>
+                          {z.label}
+                        </text>
+                        {isSelected && z.polygon.map((p, pi) => (
+                          <circle key={pi} className="ze-vertex" cx={p.x} cy={p.y} r={0.8}
+                            style={{fill:'#fff', stroke:color, strokeWidth:0.3, cursor:'grab'}}
+                            onMouseDown={e => handleVertexDrag(e, i, pi)}
+                            onTouchStart={e => { e.preventDefault(); handleVertexDrag(e.touches[0], i, pi); }}
+                            onClick={e => e.stopPropagation()}
+                          />
+                        ))}
+                      </g>
+                    );
+                  })}
+
+                  {/* Drawing in progress */}
+                  {drawing && newPoints.length > 0 && (
+                    <g>
+                      <polygon className="ze-drawing-poly"
+                        points={newPoints.map(p => `${p.x},${p.y}`).join(' ')} />
+                      {newPoints.map((p, i) => (
+                        <circle key={i} cx={p.x} cy={p.y} r={0.7}
+                          style={{fill: i === 0 ? '#3b82f6' : '#fff', stroke:'#3b82f6', strokeWidth:0.25}} />
+                      ))}
+                    </g>
+                  )}
+                </svg>
+              )}
+            </>
           ) : (
-            <div style={{color:'var(--text-ghost)', fontSize:14}}>
+            <div style={{position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)', color:'var(--text-ghost)', fontSize:14}}>
               {feedStatus === 'loading' ? 'Loading frame…' : 'No frame available'}
             </div>
           )}
-
-          <svg ref={svgRef} className="ze-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-            {/* Existing zones */}
-            {zones.map((z, i) => {
-              const pts = z.polygon.map(p => `${p.x},${p.y}`).join(' ');
-              const color = ZONE_COLORS[z.zone_type] || '#ef4444';
-              const isSelected = i === selectedIdx;
-              const cx = z.polygon.reduce((s, p) => s + p.x, 0) / z.polygon.length;
-              const cy = z.polygon.reduce((s, p) => s + p.y, 0) / z.polygon.length;
-              return (
-                <g key={z.zone_id}>
-                  <polygon
-                    className={`ze-poly ${isSelected ? 'selected' : ''}`}
-                    points={pts}
-                    fill={color}
-                    stroke={color}
-                    onClick={e => { e.stopPropagation(); setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}
-                  />
-                  <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
-                    style={{fontSize:'3px', fill:'#fff', fontWeight:700, pointerEvents:'none'}}>
-                    {z.label}
-                  </text>
-                  {isSelected && z.polygon.map((p, pi) => (
-                    <circle key={pi} className="ze-vertex" cx={p.x} cy={p.y} r={1.2}
-                      style={{fill:'#fff', stroke:color, strokeWidth:0.5, cursor:'grab'}}
-                      onMouseDown={e => handleVertexDrag(e, i, pi)}
-                      onTouchStart={e => { e.preventDefault(); handleVertexDrag(e.touches[0], i, pi); }}
-                      onClick={e => e.stopPropagation()}
-                    />
-                  ))}
-                </g>
-              );
-            })}
-
-            {/* Detection bounding boxes */}
-            {showDetections && detections.map(d => {
-              if (!d.bbox) return null;
-              const isPerson = d.type === 'person' || d.type === 'pedestrian' || d.type === 'human';
-              const bx = d.bbox.x ?? d.bbox.left ?? 0;
-              const by = d.bbox.y ?? d.bbox.top ?? 0;
-              const bw = d.bbox.w ?? d.bbox.width ?? 10;
-              const bh = d.bbox.h ?? d.bbox.height ?? 10;
-              const strokeColor = isPerson ? '#f59e0b' : '#3b82f6';
-              const labelText = d.plate_text
-                ? d.plate_text
-                : (d.color ? d.color + ' ' : '') + (d.label || d.type || '');
-              const confText = d.confidence != null ? ` ${Math.round(d.confidence * 100)}%` : '';
-              return (
-                <g key={d.id}>
-                  <rect className={`ze-detection-bbox ${isPerson ? 'person' : 'vehicle'}`}
-                    x={bx} y={by} width={bw} height={bh} />
-                  {/* Label background */}
-                  <rect className="ze-detection-label-bg"
-                    x={bx} y={by - 2.8} width={Math.max(labelText.length * 1.1 + confText.length * 1.1, 6)} height={2.6}
-                    fill={strokeColor} opacity={0.85} />
-                  <text className="ze-detection-label"
-                    x={bx + 0.4} y={by - 0.8}
-                    fill="#fff" dominantBaseline="central">
-                    {labelText}{confText}
-                  </text>
-                  {/* Plate badge overlay */}
-                  {d.plate_text && (
-                    <>
-                      <rect x={bx} y={by + bh + 0.3} width={d.plate_text.length * 1.3 + 1} height={2.4}
-                        fill="#fef3c7" stroke="#fbbf24" strokeWidth={0.2} rx={0.3} />
-                      <text x={bx + 0.5} y={by + bh + 1.8} fill="#1c1009"
-                        style={{fontSize:'1.8px', fontWeight:800, fontFamily:'Courier New, monospace', letterSpacing:'0.1em'}}>
-                        {d.plate_text}
-                      </text>
-                    </>
-                  )}
-                  {/* Color swatch dot */}
-                  {d.color && (
-                    <circle cx={bx + bw - 1.2} cy={by + 1.2} r={1}
-                      fill={colorHex(d.color)} stroke="rgba(255,255,255,.5)" strokeWidth={0.3} />
-                  )}
-                </g>
-              );
-            })}
-
-            {/* Drawing in progress */}
-            {drawing && newPoints.length > 0 && (
-              <g>
-                <polygon className="ze-drawing-poly"
-                  points={newPoints.map(p => `${p.x},${p.y}`).join(' ')} />
-                {newPoints.map((p, i) => (
-                  <circle key={i} cx={p.x} cy={p.y} r={1}
-                    style={{fill: i === 0 ? '#3b82f6' : '#fff', stroke:'#3b82f6', strokeWidth:0.4}} />
-                ))}
-              </g>
-            )}
-          </svg>
         </div>
 
         {/* Drawing hint */}
         {drawing && (
-          <div className="ze-hint">
-            Click to place points. {newPoints.length >= 3 ? 'Double-click or click first point to close the polygon.' : `Need ${3 - newPoints.length} more point${3 - newPoints.length > 1 ? 's' : ''}.`}
+          <div className="ze-hint" style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:8}}>
+            <span>Click to place points. {newPoints.length >= 3 ? 'Double-click or click first point to close the polygon.' : `Need ${3 - newPoints.length} more point${3 - newPoints.length > 1 ? 's' : ''}.`}</span>
+            <button onClick={() => { setDrawing(false); setNewPoints([]); }}
+              style={{background:'transparent', border:'1px solid rgba(239,68,68,.4)', borderRadius:4, color:'#ef4444', fontSize:10, fontWeight:600, padding:'2px 8px', cursor:'pointer', flexShrink:0}}>
+              Cancel
+            </button>
           </div>
         )}
 
-        {/* Toolbar: zone chips + new zone button */}
-        <div className="ze-toolbar">
+        {/* Toolbar: zone chips + new zone button — hidden via style while drawing */}
+        <div className="ze-toolbar" style={drawing ? {display:'none'} : {}}>
           <div className="ze-zone-list">
             {zones.map((z, i) => (
               <span key={z.zone_id}
@@ -3217,8 +3886,17 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
               <select className="ze-panel-select" value={selected.zone_type || 'no_parking'}
                 onChange={e => updateZoneProp(selectedIdx, 'zone_type', e.target.value)}>
                 <option value="no_parking">No Parking</option>
+                <option value="unauthorized">Unauthorized Vehicle</option>
                 <option value="time_limited">Time Limited</option>
                 <option value="handicap_only">Handicap Only</option>
+                <option value="fire_lane">Fire Lane</option>
+                <option value="reserved">Reserved Spot</option>
+                <option value="permit_only">Permit Only</option>
+                <option value="loading_zone">Loading Zone</option>
+                <option value="double_parked">Double Parked</option>
+                <option value="blocking">Blocking / Obstructing</option>
+                <option value="expired_meter">Expired Meter</option>
+                <option value="abandoned">Abandoned Vehicle</option>
               </select>
             </div>
             {selected.zone_type === 'time_limited' && (
@@ -3353,11 +4031,135 @@ function AddCameraModal({ lotId, onClose, onAdded }) {
   );
 }
 
+// ── Permits modal ──────────────────────────────────────────────
+function PermitsModal({ lotId, lotName, onClose }) {
+  const [permits, setPermits] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [plate, setPlate] = useState('');
+  const [permitType, setPermitType] = useState('whitelist');
+  const [holderName, setHolderName] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+  const [saving, setSaving] = useState(false);
+  const { addToast } = useToast();
+
+  useEffect(() => {
+    db.getPermits(lotId).then(data => { setPermits(data); setLoading(false); }).catch(() => setLoading(false));
+  }, [lotId]);
+
+  async function addPermit(e) {
+    e.preventDefault();
+    const cleanPlate = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!cleanPlate || cleanPlate.length < 2) { addToast('Enter a valid plate number', 'error'); return; }
+    if (permits.some(p => p.plate_text === cleanPlate)) { addToast('Plate already permitted', 'error'); return; }
+    setSaving(true);
+    try {
+      const permit = {
+        lot_id: lotId,
+        plate_text: cleanPlate,
+        permit_type: permitType,
+        holder_name: holderName.trim() || null,
+        expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+      };
+      const saved = await db.addPermit(permit);
+      setPermits(prev => [saved, ...prev]);
+      setPlate(''); setHolderName(''); setExpiresAt('');
+      addToast(`${cleanPlate} added to permits`, 'success');
+    } catch (err) {
+      addToast('Failed to add permit: ' + err.message, 'error');
+    } finally { setSaving(false); }
+  }
+
+  async function removePermit(permitId, plateText) {
+    try {
+      await db.deletePermit(permitId);
+      setPermits(prev => prev.filter(p => p.id !== permitId));
+      addToast(`${plateText} removed`, 'info');
+    } catch (err) {
+      addToast('Failed to remove: ' + err.message, 'error');
+    }
+  }
+
+  const expired = p => p.expires_at && new Date(p.expires_at) < new Date();
+
+  return (
+    <div className="permits-overlay" onClick={onClose}>
+      <div className="permits-sheet" onClick={e => e.stopPropagation()}>
+        <div className="permits-header">
+          <div>
+            <div className="permits-title">Permitted Vehicles</div>
+            <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2}}>{lotName} — {permits.length} permit{permits.length !== 1 ? 's' : ''}</div>
+          </div>
+          <button onClick={onClose} style={{background:'var(--bg-inset)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 14px', fontSize:12, fontWeight:700, color:'var(--text-muted)', cursor:'pointer', fontFamily:'inherit'}}>Close</button>
+        </div>
+
+        {/* Add permit form */}
+        <form className="permit-add-form" onSubmit={addPermit}>
+          <div className="permit-form-row">
+            <input className="field-input" value={plate} onChange={e => setPlate(e.target.value)}
+              placeholder="Plate number" style={{textTransform:'uppercase', fontFamily:"'Courier New', monospace", fontWeight:700, letterSpacing:'.08em'}} autoFocus />
+            <select value={permitType} onChange={e => setPermitType(e.target.value)}>
+              <option value="whitelist">Whitelist</option>
+              <option value="monthly">Monthly</option>
+              <option value="temporary">Temporary</option>
+              <option value="employee">Employee</option>
+            </select>
+          </div>
+          <div className="permit-form-row">
+            <input className="field-input" value={holderName} onChange={e => setHolderName(e.target.value)}
+              placeholder="Name (optional)" />
+            {permitType !== 'whitelist' && (
+              <input className="field-input" type="date" value={expiresAt} onChange={e => setExpiresAt(e.target.value)}
+                placeholder="Expires" style={{maxWidth:160}} />
+            )}
+          </div>
+          <button className="login-btn" type="submit" disabled={saving} style={{marginTop:8}}>
+            {saving ? 'Adding…' : 'Add Permit'}
+          </button>
+        </form>
+
+        {/* Permit list */}
+        {loading ? (
+          <div className="loader"><span className="spin" /> Loading permits…</div>
+        ) : permits.length === 0 ? (
+          <div className="empty-state" style={{padding:'32px 20px'}}>
+            <div className="empty-title">No permits yet</div>
+            <div className="empty-body">Add plate numbers above to whitelist vehicles at this lot</div>
+          </div>
+        ) : (
+          <div>
+            {permits.map(p => (
+              <div key={p.id} className="permit-card" style={expired(p) ? {opacity:.5} : undefined}>
+                <div style={{display:'flex', alignItems:'center', gap:10}}>
+                  <span className="permit-plate">{p.plate_text}</span>
+                  <div>
+                    <span className={`permit-type-badge ${p.permit_type}`}>{p.permit_type}</span>
+                    {p.holder_name && <div style={{fontSize:12, color:'var(--text-muted)', marginTop:2}}>{p.holder_name}</div>}
+                    {p.expires_at && (
+                      <div style={{fontSize:10, color: expired(p) ? '#ef4444' : 'var(--text-faint)', marginTop:2}}>
+                        {expired(p) ? 'Expired' : 'Expires'}: {new Date(p.expires_at).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button onClick={() => removePermit(p.id, p.plate_text)}
+                  style={{background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, padding:'5px 10px', fontSize:11, fontWeight:700, color:'#ef4444', cursor:'pointer', fontFamily:'inherit'}}>
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Lots tab ──────────────────────────────────────────────────
 function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   const [expandedCams, setExpandedCams] = useState({});
   const [editingZones, setEditingZones] = useState(null);
   const [addingCamera, setAddingCamera] = useState(null); // lot id
+  const [managingPermits, setManagingPermits] = useState(null); // {lotId, lotName}
   const { addToast } = useToast();
 
   if (loading && lots.length === 0) {
@@ -3443,7 +4245,12 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
               </button>
               {ownerRole === 'owner' && (
                 <button className="lot-action-btn primary" onClick={() => setAddingCamera(lot.id)}>
-                  + Add Camera
+                  + Camera
+                </button>
+              )}
+              {ownerRole === 'owner' && (
+                <button className="lot-action-btn primary" onClick={() => setManagingPermits({lotId: lot.id, lotName: lot.name})}>
+                  Permits
                 </button>
               )}
               <button className="lot-action-btn">
@@ -3456,6 +4263,8 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
               <div className="cam-sheet">
                 {state.cameras.map(cam => {
                   const snap = cam.latest_snapshot;
+                  const snapAge = snap?.captured_at ? (Date.now() - new Date(snap.captured_at).getTime()) / 1000 : Infinity;
+                  const snapStale = snapAge > 300; // 5 minutes
                   const snapVehicles = snap?.vehicles_detected || snap?.vehicle_count || 0;
                   const snapPeople = snap?.people_detected || snap?.person_count || snap?.humans_detected || 0;
                   const snapPlates = snap?.plates_read || snap?.plate_count || (snap?.plate_readings ? snap.plate_readings.length : 0);
@@ -3481,7 +4290,10 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                             </button>
                           )}
                           {snap && (
-                            <div className="cam-time">{fmtTime(snap.captured_at)}</div>
+                            <div className="cam-time" style={snapStale ? {color:'#fbbf24'} : undefined}>
+                              {snapStale ? smartDate(snap.captured_at) + ' ' : ''}{fmtTime(snap.captured_at)}
+                              {snapStale && <span style={{fontSize:9, marginLeft:4, color:'#ef4444'}}>(stale)</span>}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -3498,6 +4310,11 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                             <ZoneOverlay zones={cam.zones} />
                             {cam.active_violations > 0 && (
                               <div className="cam-viol-overlay">{cam.active_violations} open</div>
+                            )}
+                            {snapStale && (
+                              <div style={{position:'absolute', top:8, right:8, background:'rgba(239,68,68,.85)', color:'#fff', borderRadius:6, padding:'3px 8px', fontSize:10, fontWeight:700, backdropFilter:'blur(4px)'}}>
+                                {snapAge > 3600 ? `${Math.floor(snapAge/3600)}h ago` : `${Math.floor(snapAge/60)}m ago`}
+                              </div>
                             )}
                           </>
                         ) : (
@@ -3636,6 +4453,15 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
           lotId={addingCamera}
           onClose={() => setAddingCamera(null)}
           onAdded={() => { if (onZonesSaved) onZonesSaved(); }}
+        />
+      )}
+
+      {/* Permits modal */}
+      {managingPermits && (
+        <PermitsModal
+          lotId={managingPermits.lotId}
+          lotName={managingPermits.lotName}
+          onClose={() => setManagingPermits(null)}
         />
       )}
     </div>
@@ -3851,6 +4677,115 @@ function EarningsPage({ violations, lots, isOwner, user }) {
   );
 }
 
+// ── Invoices page (owner only — action log from violations, QuickBooks coming soon) ────
+function InvoicesPage({ user, lots, violations: allViolations }) {
+  const [subTab, setSubTab] = React.useState('log'); // log | quickbooks
+  const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
+
+  function formatDate(d) {
+    if (!d) return '—';
+    return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  function formatTime(d) {
+    if (!d) return '';
+    return new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+
+  // Build action log from resolved violations (real data from violations table)
+  const actionLogs = (allViolations || [])
+    .filter(v => v.action_taken && v.action_taken !== 'pending' && v.action_taken !== 'plate_correction')
+    .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
+
+  const totalRevenue = actionLogs.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+
+  // Sub-tab buttons
+  const subTabs = React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
+    [
+      { id: 'log', label: 'Action Log' },
+      { id: 'quickbooks', label: 'QuickBooks' },
+    ].map(t => React.createElement('button', {
+      key: t.id,
+      onClick: () => setSubTab(t.id),
+      style: {
+        padding: '8px 16px', borderRadius: 8, border: '1px solid',
+        borderColor: subTab === t.id ? 'var(--accent)' : 'var(--border)',
+        background: subTab === t.id ? 'rgba(59,130,246,.15)' : 'transparent',
+        color: subTab === t.id ? 'var(--accent)' : 'var(--text-muted)',
+        fontSize: 13, fontWeight: 600, cursor: 'pointer',
+      }
+    }, t.label))
+  );
+
+  // ── Action Log sub-tab (from violations) ──
+  if (subTab === 'log') {
+    return React.createElement('div', { className: 'page-section' },
+      React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Action Log'),
+      React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 } },
+        `${actionLogs.length} actions recorded · ${fmtMoney(totalRevenue)} total revenue`),
+      subTabs,
+      actionLogs.length === 0
+        ? React.createElement('div', { style: { textAlign: 'center', padding: 40, color: 'var(--text-muted)' } },
+            React.createElement('p', { style: { fontSize: 15, marginBottom: 8 } }, 'No actions recorded yet'),
+            React.createElement('p', { style: { fontSize: 13 } }, 'Boot and tow actions will appear here automatically'))
+        : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            actionLogs.slice(0, 100).map(v => React.createElement('div', {
+              key: v.id,
+              style: {
+                background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 14,
+                borderLeft: `3px solid ${v.action_taken === 'tow' ? '#ef4444' : v.action_taken === 'boot' ? '#fbbf24' : '#6b7280'}`,
+              }
+            },
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                  React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: v.action_taken === 'tow' ? '#ef4444' : v.action_taken === 'boot' ? '#fbbf24' : '#a78bfa', textTransform: 'uppercase' } }, v.action_taken.replace(/_/g, ' ')),
+                  React.createElement('span', { style: { fontSize: 13, color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 600 } }, v.plate_text || 'No plate'),
+                ),
+                v.gross_revenue > 0 && React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: 'var(--green)' } }, fmtMoney(v.gross_revenue)),
+              ),
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)' } },
+                React.createElement('span', null, `${lotMap[v.lot_id]?.name || 'Lot'} · ${v.zone_id || ''}`),
+                React.createElement('span', null, `${formatDate(v.resolved_at || v.detected_at)} ${formatTime(v.resolved_at || v.detected_at)}`),
+              ),
+              React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 6, fontSize: 11 } },
+                v.vehicle_color && React.createElement('span', { style: { color: 'var(--text-muted)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, `${v.vehicle_color} ${v.vehicle_type || 'vehicle'}`),
+                React.createElement('span', { style: { color: v.paid ? 'var(--green)' : 'var(--yellow)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, v.paid ? 'Paid' : 'Unpaid'),
+              ),
+            ))
+          )
+    );
+  }
+
+  // ── QuickBooks sub-tab (coming soon) ──
+  if (subTab === 'quickbooks') {
+    return React.createElement('div', { className: 'page-section' },
+      React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'QuickBooks Integration'),
+      React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 } },
+        'Auto-sync invoices and deposits with QuickBooks'),
+      subTabs,
+      React.createElement('div', { style: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, textAlign: 'center' } },
+        React.createElement('div', { style: { fontSize: 40, marginBottom: 12 } }, '\uD83D\uDCDA'),
+        React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 } }, 'QuickBooks — Coming Soon'),
+        React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', maxWidth: 300, margin: '0 auto 16px' } },
+          'QuickBooks integration is being set up. Once connected, invoices will auto-sync to your QuickBooks account.'),
+        React.createElement('div', { style: { fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', maxWidth: 320, margin: '0 auto 20px', lineHeight: 1.8 } },
+          React.createElement('div', null, '\u2713 Daily invoices auto-created in QuickBooks'),
+          React.createElement('div', null, '\u2713 Revenue deposited to your checking account'),
+          React.createElement('div', null, '\u2713 Boot & tow fees tracked per lot'),
+          React.createElement('div', null, '\u2713 Expense reports ready for tax season'),
+        ),
+        React.createElement('div', {
+          style: {
+            padding: '12px 24px', borderRadius: 8, display: 'inline-block',
+            background: 'rgba(107,114,128,.15)', color: 'var(--text-muted)', fontSize: 15, fontWeight: 700,
+          }
+        }, 'Coming Soon'),
+      ),
+    );
+  }
+
+  return null;
+}
+
 // ── Operator Activity page (no revenue, just job history) ────
 function OperatorActivityPage({ violations, lots }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
@@ -3960,9 +4895,194 @@ function OperatorActivityPage({ violations, lots }) {
   );
 }
 
+// ── Owner Overview page — per-operator stats + "View as" ──────
+function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
+  const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
+
+  // Map partner_id → lots assigned
+  const partnerLots = {};
+  lots.forEach(l => {
+    if (l.partner_id) {
+      if (!partnerLots[l.partner_id]) partnerLots[l.partner_id] = [];
+      partnerLots[l.partner_id].push(l);
+    }
+  });
+
+  // Global KPIs
+  const pending = violations.filter(v => v.status === 'pending').length;
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  const todayResolved = violations.filter(v => v.status !== 'pending' && new Date(v.resolved_at || v.detected_at) >= todayStart).length;
+  const totalGross = violations.filter(v => v.status !== 'pending').reduce((s, v) => s + (v.gross_revenue || 0), 0);
+  const totalOurs = violations.filter(v => v.status !== 'pending').reduce((s, v) => s + (v.our_revenue || 0), 0);
+
+  // Camera stats
+  const allCams = Object.values(lotStates).flatMap(s => s?.cameras || []);
+  const camsOnline = allCams.filter(c => c.online).length;
+  const camsTotal = allCams.length;
+
+  // Per-operator stats
+  const operatorStats = partners.map(p => {
+    const pLots = partnerLots[p.id] || [];
+    const pLotIds = pLots.map(l => l.id);
+    const pViols = violations.filter(v => pLotIds.includes(v.lot_id));
+    const pPending = pViols.filter(v => v.status === 'pending').length;
+    const pResolved = pViols.filter(v => v.status !== 'pending');
+    const pTodayResolved = pResolved.filter(v => new Date(v.resolved_at || v.detected_at) >= todayStart).length;
+    const pGross = pResolved.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+    const pOurs = pResolved.reduce((s, v) => s + (v.our_revenue || 0), 0);
+    const pPartnerPay = pGross - pOurs;
+    const booted = pResolved.filter(v => v.action_taken === 'boot').length;
+    const towed = pResolved.filter(v => v.action_taken === 'tow').length;
+    const dismissed = pResolved.filter(v => v.action_taken === 'dismissed' || v.action_taken === 'already_gone' || v.action_taken === 'no_action').length;
+    // Avg response time (detected → resolved) in minutes
+    const responseTimes = pResolved.filter(v => v.detected_at && v.resolved_at).map(v => (new Date(v.resolved_at) - new Date(v.detected_at)) / 60000);
+    const avgResponse = responseTimes.length > 0 ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : null;
+
+    return { partner: p, lots: pLots, pending: pPending, todayResolved: pTodayResolved, totalResolved: pResolved.length, gross: pGross, ours: pOurs, partnerPay: pPartnerPay, booted, towed, dismissed, avgResponse };
+  });
+
+  return (
+    <div className="page-enter">
+      <div className="section-header">
+        <div className="section-title">Overview</div>
+        <div className="section-count">{lots.length} lot{lots.length !== 1 ? 's' : ''} · {partners.length} operator{partners.length !== 1 ? 's' : ''}</div>
+      </div>
+
+      {/* Global KPIs */}
+      <div className="kpi-bar" style={{marginBottom:16}}>
+        <div className="kpi-card">
+          <div className="kpi-val red">{pending}</div>
+          <div className="kpi-label">Pending</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val green">{todayResolved}</div>
+          <div className="kpi-label">Resolved Today</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val blue">{camsOnline}/{camsTotal}</div>
+          <div className="kpi-label">Cameras</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-val green">{fmtMoney(totalOurs)}</div>
+          <div className="kpi-label">Revenue</div>
+        </div>
+      </div>
+
+      {/* Per-operator cards */}
+      <div className="section-header" style={{marginTop:20}}>
+        <div className="section-title">Operators</div>
+      </div>
+
+      {operatorStats.length === 0 ? (
+        <div className="empty-state">
+          <div style={{width:48, height:48, borderRadius:12, background:'rgba(59,130,246,.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22}}>👥</div>
+          <div className="empty-title">No operators assigned</div>
+          <div className="empty-body">Enforcement partners linked to your lots will appear here</div>
+        </div>
+      ) : operatorStats.map(os => (
+        <div key={os.partner.id} className="card-animated" style={{
+          background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:14,
+          marginBottom:12, overflow:'hidden',
+        }}>
+          {/* Operator header */}
+          <div style={{padding:'14px 16px 10px', display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
+            <div>
+              <div style={{fontSize:16, fontWeight:800, color:'var(--text-primary)'}}>{os.partner.company_name || os.partner.contact_name}</div>
+              <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2}}>{os.partner.email} · {os.lots.length} lot{os.lots.length !== 1 ? 's' : ''}</div>
+            </div>
+            <button onClick={() => onViewAs(os.partner)} style={{
+              background:'rgba(59,130,246,.1)', color:'#3b82f6', border:'1px solid rgba(59,130,246,.25)',
+              borderRadius:8, padding:'6px 12px', fontSize:12, fontWeight:700, cursor:'pointer',
+              whiteSpace:'nowrap',
+            }}>
+              View as Operator
+            </button>
+          </div>
+
+          {/* Operator KPIs */}
+          <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:1, background:'var(--border)'}}>
+            <div style={{background:'var(--bg-card)', padding:'10px 8px', textAlign:'center'}}>
+              <div style={{fontSize:18, fontWeight:800, color:'var(--red)'}}>{os.pending}</div>
+              <div style={{fontSize:10, fontWeight:600, color:'var(--text-faint)', textTransform:'uppercase', letterSpacing:'.04em'}}>Pending</div>
+            </div>
+            <div style={{background:'var(--bg-card)', padding:'10px 8px', textAlign:'center'}}>
+              <div style={{fontSize:18, fontWeight:800, color:'var(--green)'}}>{os.todayResolved}</div>
+              <div style={{fontSize:10, fontWeight:600, color:'var(--text-faint)', textTransform:'uppercase', letterSpacing:'.04em'}}>Today</div>
+            </div>
+            <div style={{background:'var(--bg-card)', padding:'10px 8px', textAlign:'center'}}>
+              <div style={{fontSize:18, fontWeight:800, color:'var(--text-primary)'}}>{os.totalResolved}</div>
+              <div style={{fontSize:10, fontWeight:600, color:'var(--text-faint)', textTransform:'uppercase', letterSpacing:'.04em'}}>All Time</div>
+            </div>
+            <div style={{background:'var(--bg-card)', padding:'10px 8px', textAlign:'center'}}>
+              <div style={{fontSize:18, fontWeight:800, color:'var(--green)'}}>{fmtMoney(os.partnerPay)}</div>
+              <div style={{fontSize:10, fontWeight:600, color:'var(--text-faint)', textTransform:'uppercase', letterSpacing:'.04em'}}>Paid Out</div>
+            </div>
+          </div>
+
+          {/* Action breakdown + fees */}
+          <div style={{padding:'10px 16px 14px', display:'flex', flexWrap:'wrap', gap:8, alignItems:'center'}}>
+            {os.booted > 0 && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700, color:'#fbbf24', background:'rgba(251,191,36,.1)', border:'1px solid rgba(251,191,36,.2)'}}>Boot ×{os.booted}</span>}
+            {os.towed > 0 && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700, color:'#f87171', background:'rgba(248,113,113,.1)', border:'1px solid rgba(248,113,113,.2)'}}>Tow ×{os.towed}</span>}
+            {os.dismissed > 0 && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700, color:'#a78bfa', background:'rgba(167,139,250,.1)', border:'1px solid rgba(167,139,250,.2)'}}>Dismissed ×{os.dismissed}</span>}
+            {os.avgResponse != null && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:600, color:'var(--text-muted)', background:'var(--bg-inset)', border:'1px solid var(--border)'}}>Avg {os.avgResponse < 60 ? `${os.avgResponse}m` : `${Math.round(os.avgResponse / 60)}h`} response</span>}
+            <span style={{marginLeft:'auto', fontSize:11, color:'var(--text-faint)'}}>
+              Boot ${os.partner.boot_fee || 75} · Tow ${os.partner.tow_fee || 150} · {Math.round((os.partner.revenue_share || 0.3) * 100)}% share
+            </span>
+          </div>
+        </div>
+      ))}
+
+      {/* Revenue split summary */}
+      {totalGross > 0 && (
+        <div className="earnings-breakdown" style={{marginTop:8, marginBottom:16}}>
+          <div className="breakdown-header">Revenue Split (All Time)</div>
+          <div className="breakdown-row">
+            <div style={{display:'flex', alignItems:'center', gap:8}}>
+              <span style={{width:8, height:8, borderRadius:'50%', background:'var(--green)', flexShrink:0}} />
+              <span style={{fontSize:15, fontWeight:700, color:'var(--text-primary)'}}>Gross Revenue</span>
+            </div>
+            <div style={{fontSize:15, fontWeight:700, color:'var(--green)'}}>{fmtMoney(totalGross)}</div>
+          </div>
+          <div className="breakdown-row">
+            <div style={{display:'flex', alignItems:'center', gap:8}}>
+              <span style={{width:8, height:8, borderRadius:'50%', background:'var(--accent)', flexShrink:0}} />
+              <span style={{fontSize:15, fontWeight:700, color:'var(--text-primary)'}}>LotLogic Cut</span>
+            </div>
+            <div style={{fontSize:15, fontWeight:700, color:'var(--accent)'}}>{fmtMoney(totalOurs)}</div>
+          </div>
+          {operatorStats.map(os => os.partnerPay > 0 && (
+            <div key={os.partner.id} className="breakdown-row">
+              <div style={{display:'flex', alignItems:'center', gap:8}}>
+                <span style={{width:8, height:8, borderRadius:'50%', background:'#a78bfa', flexShrink:0}} />
+                <span style={{fontSize:15, fontWeight:700, color:'var(--text-primary)'}}>{os.partner.company_name || os.partner.contact_name}</span>
+              </div>
+              <div style={{fontSize:15, fontWeight:700, color:'#a78bfa'}}>{fmtMoney(os.partnerPay)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Account / Settings page ────────────────────────────────────
-function AccountPage({ user, onLogout }) {
+function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) {
   const isOwner = user._role === 'owner';
+
+  function ToggleSwitch({ on, onChange }) {
+    return (
+      <div onClick={onChange} style={{
+        width: 44, height: 24, borderRadius: 12, cursor: 'pointer', transition: 'background .2s',
+        background: on ? '#4ade80' : 'rgba(107,114,128,.3)', position: 'relative', flexShrink: 0,
+      }}>
+        <div style={{
+          width: 20, height: 20, borderRadius: 10, background: '#fff', position: 'absolute', top: 2,
+          left: on ? 22 : 2, transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.3)',
+        }} />
+      </div>
+    );
+  }
+
   return (
     <div className="page-enter">
       {/* Profile card */}
@@ -4034,16 +5154,35 @@ function AccountPage({ user, onLogout }) {
         </div>
       )}
 
-      {/* App info */}
+      {/* App settings */}
       <div className="settings-section">
         <div className="settings-section-title">App</div>
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">Auto-refresh</div>
-            <div className="settings-row-desc">Data refreshes every 30 seconds</div>
+            <div className="settings-row-desc">
+              {autoRefresh ? `Data refreshes every ${refreshInterval / 1000}s` : 'Auto-refresh is paused'}
+            </div>
           </div>
-          <div className="settings-row-value" style={{color:'var(--green)'}}>Active</div>
+          <ToggleSwitch on={autoRefresh} onChange={() => setAutoRefresh(!autoRefresh)} />
         </div>
+        {autoRefresh && (
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">Refresh Interval</div>
+              <div className="settings-row-desc">How often to poll for updates</div>
+            </div>
+            <select value={refreshInterval} onChange={e => setRefreshInterval(Number(e.target.value))} style={{
+              background: 'var(--bg-inset)', color: 'var(--text-primary)', border: '1px solid var(--border)',
+              borderRadius: 8, padding: '4px 8px', fontSize: 13, fontWeight: 600,
+            }}>
+              <option value={10000}>10s</option>
+              <option value={15000}>15s</option>
+              <option value={30000}>30s</option>
+              <option value={60000}>60s</option>
+            </select>
+          </div>
+        )}
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">SMS Notifications</div>
@@ -4062,13 +5201,218 @@ function AccountPage({ user, onLogout }) {
           <div className="settings-row-info">
             <div className="settings-row-label">Version</div>
           </div>
-          <div className="settings-row-value">4.0.0</div>
+          <div className="settings-row-value">4.2.0</div>
         </div>
       </div>
 
       <button className="login-btn" style={{background:'rgba(239,68,68,.15)', color:'#f87171', boxShadow:'none', border:'1px solid rgba(239,68,68,.3)'}} onClick={onLogout}>
         Sign Out
       </button>
+    </div>
+  );
+}
+
+// ── Analytics tab ──────────────────────────────────────────────
+function AnalyticsPage({ lots, violations, isOwner, onNavigate }) {
+  const [hourlyData, setHourlyData] = useState(null);
+  const [utilData, setUtilData] = useState(null);
+  const [projData, setProjData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedLot, setSelectedLot] = useState('all');
+
+  const lotIds = lots.map(l => l.id);
+  const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
+
+  useEffect(() => {
+    if (lotIds.length === 0) return;
+    setLoading(true);
+    const ids = selectedLot === 'all' ? lotIds : [selectedLot];
+    Promise.all([
+      db.getHourlyStats(ids),
+      db.getUtilization(ids),
+      db.getRevenueProjection(ids),
+    ]).then(([h, u, p]) => {
+      setHourlyData(h);
+      setUtilData(u);
+      setProjData(p);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [lots.length, selectedLot]);
+
+  if (loading) return <div className="page-enter"><SkeletonKPIs /><SkeletonCards count={3} /></div>;
+
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const maxHeat = hourlyData ? Math.max(...Object.values(hourlyData.heatmap), 1) : 1;
+
+  // Get total spaces for utilization percentage
+  const filteredLots = selectedLot === 'all' ? lots : lots.filter(l => l.id === selectedLot);
+  const totalSpaces = filteredLots.reduce((s, l) => s + (l.total_spaces || 0), 0);
+
+  return (
+    <div className="page-enter">
+      <div className="section-header">
+        <div className="section-title">Analytics</div>
+        {lots.length > 1 && (
+          <select value={selectedLot} onChange={e => setSelectedLot(e.target.value)}
+            style={{background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:8, padding:'5px 10px', fontSize:12, fontWeight:600, color:'var(--text-secondary)', fontFamily:'inherit'}}>
+            <option value="all">All Lots</option>
+            {lots.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        )}
+      </div>
+
+      {/* Revenue Projections */}
+      {projData && (
+        <div className="analytics-card">
+          <div className="analytics-card-title">Revenue Projections</div>
+          <div className="projection-row">
+            <div className="projection-label">Monthly projection</div>
+            <div>
+              <span className="projection-val green">${projData.monthlyProjection.toLocaleString()}</span>
+              {projData.trendPct !== 0 && (
+                <span className={`projection-trend ${projData.trend}`}>
+                  {projData.trend === 'up' ? '+' : ''}{projData.trendPct}%
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="projection-row">
+            <div className="projection-label">Daily average</div>
+            <div>
+              <span className="projection-val blue">${projData.dailyAvg.toLocaleString()}</span>
+            </div>
+          </div>
+          <div className="projection-row">
+            <div className="projection-label">Last 7 days total</div>
+            <div>
+              <span className="projection-val">${projData.weeklyAvg.toLocaleString()}</span>
+            </div>
+          </div>
+          <div className="projection-row">
+            <div className="projection-label">Violations per day</div>
+            <div>
+              <span className="projection-val">{projData.violationsPerDay}</span>
+              {projData.violTrendPct !== 0 && (
+                <span className={`projection-trend ${projData.violTrend}`}>
+                  {projData.violTrend === 'up' ? '+' : ''}{projData.violTrendPct}%
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Peak Violation Hours Heatmap */}
+      {hourlyData && (
+        <div className="analytics-card">
+          <div className="analytics-card-title">Peak Violation Hours (Last 90 Days)</div>
+          <div style={{overflowX:'auto', paddingBottom:4}}>
+            <div className="heatmap-grid" style={{minWidth:360}}>
+              {/* Hour labels */}
+              <div />
+              {Array.from({length: 24}, (_, h) => (
+                <div key={`h${h}`} className="heatmap-hour">{h % 3 === 0 ? `${h}` : ''}</div>
+              ))}
+              {/* Days */}
+              {dayNames.map((day, dow) => (
+                <React.Fragment key={day}>
+                  <div className="heatmap-label">{day}</div>
+                  {Array.from({length: 24}, (_, hour) => {
+                    const count = hourlyData.heatmap[`${dow}-${hour}`] || 0;
+                    const intensity = count / maxHeat;
+                    const bg = count === 0
+                      ? 'var(--bg-inset)'
+                      : `rgba(239, 68, 68, ${0.15 + intensity * 0.85})`;
+                    return (
+                      <div key={`${dow}-${hour}`} className="heatmap-cell"
+                        style={{background: bg}}
+                        title={`${day} ${hour}:00 — ${count} violation${count !== 1 ? 's' : ''}`}
+                      />
+                    );
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+          <div style={{display:'flex', alignItems:'center', gap:6, marginTop:8, justifyContent:'flex-end'}}>
+            <span style={{fontSize:10, color:'var(--text-faint)'}}>Low</span>
+            {[0.15, 0.35, 0.55, 0.75, 1].map((v, i) => (
+              <div key={i} style={{width:12, height:12, borderRadius:2, background:`rgba(239,68,68,${v})`}} />
+            ))}
+            <span style={{fontSize:10, color:'var(--text-faint)'}}>High</span>
+          </div>
+        </div>
+      )}
+
+      {/* Lot Utilization */}
+      {utilData && totalSpaces > 0 && (
+        <div className="analytics-card">
+          <div className="analytics-card-title">Avg. Vehicles by Hour (Last 7 Days)</div>
+          {Array.from({length: 24}, (_, hour) => {
+            const avg = utilData.hourly[hour] || 0;
+            const pct = Math.min((avg / totalSpaces) * 100, 100);
+            const color = pct > 80 ? '#ef4444' : pct > 50 ? '#fbbf24' : '#4ade80';
+            return (
+              <div key={hour} className="utilization-bar-row">
+                <div className="utilization-bar-label">{hour.toString().padStart(2, '0')}:00</div>
+                <div className="utilization-bar-track">
+                  <div className="utilization-bar-fill" style={{width: `${pct}%`, background: color}} />
+                </div>
+                <div className="utilization-bar-val">{avg.toFixed(1)}</div>
+              </div>
+            );
+          }).filter((_, hour) => {
+            // Only show hours 6am-11pm to reduce clutter
+            return hour >= 6 && hour <= 23;
+          })}
+          <div style={{fontSize:11, color:'var(--text-faint)', marginTop:8, textAlign:'center'}}>
+            {totalSpaces} total spaces across {filteredLots.length} lot{filteredLots.length !== 1 ? 's' : ''}
+          </div>
+        </div>
+      )}
+
+      {utilData && totalSpaces === 0 && (
+        <div className="analytics-card">
+          <div className="analytics-card-title">Lot Utilization</div>
+          <div style={{padding:'16px 0', textAlign:'center', color:'var(--text-faint)', fontSize:13}}>
+            Set total spaces on your lots to see utilization percentages
+          </div>
+        </div>
+      )}
+
+      {/* Quick stats */}
+      <div className="analytics-card">
+        <div className="analytics-card-title">Quick Stats</div>
+        <div className="kpi-bar">
+          <div className="kpi-card">
+            <div className="kpi-val blue">{hourlyData?.total || 0}</div>
+            <div className="kpi-label">Violations (90d)</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-val green">{lots.length}</div>
+            <div className="kpi-label">Active Lots</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-val">{utilData?.totalSnapshots || 0}</div>
+            <div className="kpi-label">Snapshots (7d)</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Link to operator overview */}
+      {isOwner && onNavigate && (
+        <button onClick={() => onNavigate('overview')} style={{
+          width:'100%', background:'var(--bg-card)', border:'1px solid var(--border)', borderRadius:12,
+          padding:'14px 16px', display:'flex', alignItems:'center', justifyContent:'space-between',
+          cursor:'pointer', fontFamily:'inherit', marginTop:4,
+        }}>
+          <div style={{textAlign:'left'}}>
+            <div style={{fontSize:14, fontWeight:700, color:'var(--text-primary)'}}>Operator Overview</div>
+            <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2}}>View per-operator stats and impersonate partners</div>
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      )}
     </div>
   );
 }
@@ -4097,17 +5441,47 @@ function App() {
     const match = path.match(/\/violations\/([0-9a-f-]{36})/i);
     return match ? match[1] : null;
   });
-  const [tab, setTab] = useState('jobs');
+  const [tab, setTab] = useState(() => {
+    try { return localStorage.getItem('lotlogic_tab') || 'jobs'; } catch { return 'jobs'; }
+  });
   const [lots, setLots] = useState([]);
   const [lotStates, setLotStates] = useState({});
   const [violations, setViolations] = useState([]);
+  const [partners, setPartners] = useState([]);
+  const [viewAs, setViewAs] = useState(null); // null = owner view, partner object = operator impersonation
   const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(() => {
+    try { const v = localStorage.getItem('lotlogic_autorefresh'); return v !== 'false'; } catch { return true; }
+  });
+  const [refreshInterval, setRefreshInterval] = useState(() => {
+    try { return parseInt(localStorage.getItem('lotlogic_refresh_interval')) || 30000; } catch { return 30000; }
+  });
   const timerRef = useRef(null);
 
-  const isOwner = owner?._role === 'owner';
-  const isOperator = owner?._role === 'partner';
+  // Persist settings across refresh
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_tab', tab); } catch {}
+  }, [tab]);
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_autorefresh', String(autoRefresh)); } catch {}
+  }, [autoRefresh]);
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_refresh_interval', String(refreshInterval)); } catch {}
+  }, [refreshInterval]);
+
+  const isOwner = owner?._role === 'owner' && !viewAs;
+  const isOperator = owner?._role === 'partner' || !!viewAs;
+
+  // When viewing as operator, filter lots/violations to that partner's lots
+  const effectiveUser = viewAs ? { ...viewAs, _role: 'partner' } : owner;
+  const viewAsLotIds = viewAs ? lots.filter(l => l.partner_id === viewAs.id).map(l => l.id) : null;
+  const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
+  const effectiveViolations = viewAsLotIds ? violations.filter(v => viewAsLotIds.includes(v.lot_id)) : violations;
+  const effectiveLotStates = viewAsLotIds
+    ? Object.fromEntries(Object.entries(lotStates).filter(([id]) => viewAsLotIds.includes(id)))
+    : lotStates;
 
   const realtimeRef = useRef(null);
   const loadIdRef = useRef(0); // Guard against race conditions in concurrent loadData calls
@@ -4123,6 +5497,11 @@ function App() {
       const lotsData = await db.getLots(filter);
       if (loadIdRef.current !== myId) return; // Stale call, discard
       setLots(lotsData);
+
+      // Fetch enforcement partners for owner's lots
+      if (o._role === 'owner') {
+        db.getPartnersForLots(lotsData).then(p => setPartners(p)).catch(() => {});
+      }
 
       const [states, violsArrays] = await Promise.all([
         Promise.all(lotsData.map(l => db.getLotState(l.id).then(s => [l.id, s]).catch(() => [l.id, null]))),
@@ -4158,7 +5537,7 @@ function App() {
     loadIdRef.current++; // Invalidate any in-flight loadData calls
     clearInterval(timerRef.current);
     if (realtimeRef.current) { supabase?.removeChannel(realtimeRef.current); realtimeRef.current = null; }
-    setOwner(null); setLots([]); setLotStates({}); setViolations([]);
+    setOwner(null); setLots([]); setLotStates({}); setViolations([]); setPartners([]); setViewAs(null);
     setTab('jobs');
     try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
   }
@@ -4199,7 +5578,7 @@ function App() {
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
     };
-  });
+  }); // eslint-disable-line -- intentionally re-runs to capture latest handlePullRefresh/showPTR
 
   // Load data on mount if session was restored
   useEffect(() => { if (owner) loadData(owner); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -4210,6 +5589,7 @@ function App() {
   // Auto-refresh + session expiration check
   useEffect(() => {
     if (!owner) return;
+    if (!autoRefresh) { clearInterval(timerRef.current); return; }
     timerRef.current = setInterval(() => {
       // Check session expiration (7 days)
       if (owner._ts && Date.now() - owner._ts > 7 * 86400000) {
@@ -4218,9 +5598,9 @@ function App() {
         return;
       }
       if (navigator.onLine) loadData(owner, true);
-    }, 30000);
+    }, refreshInterval);
     return () => clearInterval(timerRef.current);
-  }, [owner, loadData]);
+  }, [owner, loadData, autoRefresh, refreshInterval]);
 
   // Subscribe to realtime violation changes
   useEffect(() => {
@@ -4238,15 +5618,30 @@ function App() {
 
   if (!owner) return <LoginPage onLogin={login} />;
 
-  const pending = violations.filter(v => v.status === 'pending').length;
+  const pending = effectiveViolations.filter(v => v.status === 'pending').length;
+
+  // Handle "View as Operator" from Overview page
+  function handleViewAs(partner) {
+    setViewAs(partner);
+    setTab('jobs');
+    haptic('medium');
+  }
+  function exitViewAs() {
+    setViewAs(null);
+    setTab('overview');
+    haptic('light');
+  }
 
   // Role-based navigation:
-  // Operators: Jobs + Lots (assigned) + Activity + Earnings + Account
-  // Owners: Jobs + Lots + Earnings + Account
-  const navIcons = { jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, activity: NavIconActivity, account: NavIconAccount };
+  // Owner:    Overview + Jobs + Lots + Earnings + Invoices + Account
+  // Operator (or viewing-as): Jobs + Lots + Activity + Earnings + Account
+  const NavIconInvoices = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('path', {d:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'}), React.createElement('polyline', {points:'14 2 14 8 20 8'}), React.createElement('line', {x1:'8',y1:'13',x2:'16',y2:'13'}), React.createElement('line', {x1:'8',y1:'17',x2:'12',y2:'17'}));
+  const NavIconAnalytics = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('line', {x1:'18',y1:'20',x2:'18',y2:'10'}), React.createElement('line', {x1:'12',y1:'20',x2:'12',y2:'4'}), React.createElement('line', {x1:'6',y1:'20',x2:'6',y2:'14'}));
+  const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics };
   const navTabs = isOwner ? [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
+    { id: 'analytics',label: 'Analytics',badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
@@ -4292,6 +5687,26 @@ function App() {
       </header>
 
       <main id="main-content" className="page-content" role="main">
+        {/* "Viewing as operator" banner */}
+        {viewAs && (
+          <div style={{
+            background:'linear-gradient(90deg, rgba(167,139,250,.15), rgba(59,130,246,.1))',
+            border:'1px solid rgba(167,139,250,.3)', borderRadius:10, margin:'0 0 12px',
+            padding:'10px 14px', display:'flex', alignItems:'center', justifyContent:'space-between',
+          }}>
+            <div>
+              <div style={{fontSize:12, fontWeight:700, color:'#a78bfa', textTransform:'uppercase', letterSpacing:'.05em'}}>Viewing as Operator</div>
+              <div style={{fontSize:14, fontWeight:800, color:'var(--text-primary)', marginTop:2}}>{viewAs.company_name || viewAs.contact_name}</div>
+            </div>
+            <button onClick={exitViewAs} style={{
+              background:'rgba(255,255,255,.1)', color:'var(--text-primary)', border:'1px solid var(--border)',
+              borderRadius:8, padding:'6px 14px', fontSize:12, fontWeight:700, cursor:'pointer',
+            }}>
+              Exit
+            </button>
+          </div>
+        )}
+
         {/* Pull to refresh indicator */}
         {(showPTR || refreshing) && (
           <div className="ptr-spinner" role="status" aria-label="Refreshing">
@@ -4303,12 +5718,15 @@ function App() {
           <div className="last-updated" aria-live="polite">Updated {lastRefreshLabel}</div>
         )}
 
-        <div key={tab} className="page-slide">
-          {tab === 'jobs' && <JobsPage lots={lots} violations={violations} loading={loading} lotStates={lotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={owner} />}
-          {tab === 'lots' && <LotsPage lots={lots} lotStates={lotStates} loading={loading} ownerRole={owner._role} onZonesSaved={() => loadData(owner, true)} />}
-          {tab === 'earnings' && <EarningsPage violations={violations} lots={lots} isOwner={isOwner} user={owner} />}
-          {tab === 'activity' && isOperator && <OperatorActivityPage violations={violations} lots={lots} />}
-          {tab === 'account' && <AccountPage user={owner} onLogout={logout} />}
+        <div key={tab + (viewAs?.id || '')} className="page-slide">
+          {tab === 'overview' && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
+          {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} />}
+          {tab === 'lots' && <LotsPage lots={effectiveLots} lotStates={effectiveLotStates} loading={loading} ownerRole={effectiveUser._role} onZonesSaved={() => loadData(owner, true)} />}
+          {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} />}
+          {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} isOwner={isOwner} onNavigate={setTab} />}
+          {tab === 'invoices' && isOwner && <InvoicesPage user={owner} lots={lots} violations={violations} />}
+          {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
+          {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
       </main>
 

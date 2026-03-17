@@ -56,11 +56,7 @@ class AgentConfig:
     def from_env(cls) -> "AgentConfig":
         cfg = cls(
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
-            supabase_anon_key=os.getenv(
-                "SUPABASE_ANON_KEY",
-                # Fallback to the public anon key from the dashboard
-                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E",
-            ),
+            supabase_anon_key=os.getenv("SUPABASE_ANON_KEY", ""),
             database_url=os.getenv("DATABASE_URL", ""),
             dashboard_url=os.getenv("DASHBOARD_URL", ""),
             slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL", ""),

@@ -1,9 +1,24 @@
+# Secrets
 .env
+.env.*
+!.env.example
 monitoring/.env
+puller/.env
+
+# Logs & reports
 monitoring/logs/
 monitoring/reports/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+
+# Node
 node_modules/
 package-lock.json
 package.json
+
+# OS
+.DS_Store
+Thumbs.db
