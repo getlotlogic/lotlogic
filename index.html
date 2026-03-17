@@ -2617,7 +2617,7 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
           {label}
           {timestamp && <span style={{fontWeight:500, color:'rgba(255,255,255,.3)', textTransform:'none', letterSpacing:0, fontSize:10}}>{timestamp}</span>}
         </div>
-        <div ref={wrapRef} style={{position:'relative', borderRadius:10, overflow:'hidden', background:'#111', aspectRatio:'16/9'}}>
+        <div ref={wrapRef} style={{position:'relative', borderRadius:10, overflow:'hidden', background:'#111', aspectRatio:'16/9', maxHeight:'calc(100vh - 120px)'}}>
           {src ? (
             <>
               <img ref={imgRef} src={src} alt={label}
@@ -2667,6 +2667,8 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         width:'calc(100% - 48px)', maxWidth:960,
+        maxHeight:'calc(100vh - 48px)', overflow:'hidden',
+        display:'flex', flexDirection:'column', justifyContent:'center',
         cursor:'default',
       }}>
         {/* Close button — top right, iMessage style */}
