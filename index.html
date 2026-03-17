@@ -1599,7 +1599,7 @@ const db = {
 
       // Parallel: pending violations count + latest snapshot per camera + camera zones
       const [violRes, ...camData] = await Promise.all([
-        supabase.from('violations').select('id, camera_id').eq('lot_id', lotId).eq('status', 'pending'),
+        supabase.from('violations').select('id, camera_id').eq('lot_id', lotId).in('status', ['pending', 'alerted', 'acknowledged']),
         ...((cams || []).map(cam => Promise.all([
           supabase.from('snapshots').select('*').eq('camera_id', cam.id).order('captured_at', { ascending: false }).limit(1),
           supabase.from('camera_zones').select('*').eq('camera_id', cam.id),
@@ -1865,8 +1865,8 @@ const db = {
       const { data, error } = await supabase
         .from('violations')
         .select('*')
-        .neq('status', 'pending')
-        .gte('resolved_at', since);
+        .in('status', ['resolved', 'cleared'])
+        .gte('detected_at', since);
       if (!error && data) {
         // Revenue stored as dollars in DB
         const totalOur = data.reduce((s, v) => s + (v.our_revenue || 0), 0);
@@ -2004,6 +2004,27 @@ const db = {
       return { success: true };
     }
     return apiFetch(`/violations/${violId}`, { method: 'DELETE' });
+  },
+
+  // ── Violation Dedup ───────────────────────────────────────
+  async acknowledgeViolation(violId) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('violations')
+        .update({
+          status: 'acknowledged',
+          acknowledged_at: new Date().toISOString(),
+          acknowledged_by: 'dashboard',
+        })
+        .eq('id', violId)
+        .eq('status', 'alerted')
+        .select();
+      if (error) throw new Error(error.message);
+      // Also try backend endpoint as fallback/sync
+      try { await apiFetch(`/violations/${violId}/acknowledge`, { method: 'POST' }); } catch (_) {}
+      return { success: true, data };
+    }
+    return apiFetch(`/violations/${violId}/acknowledge`, { method: 'POST' });
   },
 
   // ── Analytics ─────────────────────────────────────────────
@@ -2298,7 +2319,7 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
 
   if (!violation) return null;
   const timer = elapsed(violation.detected_at);
-  const isPending = violation.status === 'pending';
+  const isPending = violation.status === 'pending' || violation.status === 'alerted' || violation.status === 'acknowledged';
 
   return (
     <div className="viol-modal-overlay" onClick={onClose}>
@@ -2358,8 +2379,8 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
           <div className="viol-modal-grid">
             <div className="viol-modal-stat">
               <div className="viol-modal-stat-label">Status</div>
-              <div className="viol-modal-stat-val" style={{color: isPending ? 'var(--yellow)' : 'var(--green)'}}>
-                {isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
+              <div className="viol-modal-stat-val" style={{color: violation.status === 'acknowledged' ? '#f59e0b' : isPending ? 'var(--red)' : 'var(--green)'}}>
+                {violation.status === 'alerted' ? 'Active' : violation.status === 'acknowledged' ? 'Acknowledged' : violation.status === 'cleared' ? 'Cleared' : isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
               </div>
             </div>
             <div className="viol-modal-stat">
@@ -2933,17 +2954,17 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     }
   }, [deepLinkViolationId, violations, selectedViol]);
 
-  // Active jobs = pending violations, oldest first (most urgent first)
+  // Active jobs = pending/alerted/acknowledged violations, oldest first (most urgent first)
   const active = violations
-    .filter(v => v.status === 'pending')
+    .filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status))
     .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at));
 
-  // Recent = resolved today (calendar day)
+  // Recent = resolved/cleared today (calendar day)
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   const todayCutoff = todayStart.getTime();
   const recent = violations
-    .filter(v => v.status !== 'pending' && new Date(v.resolved_at || v.detected_at).getTime() >= todayCutoff)
-    .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
+    .filter(v => ['resolved', 'cleared'].includes(v.status) && new Date(v.resolved_at || v.cleared_at || v.detected_at).getTime() >= todayCutoff)
+    .sort((a, b) => new Date(b.resolved_at || b.cleared_at || b.detected_at) - new Date(a.resolved_at || a.cleared_at || a.detected_at));
 
   // KPIs
   const avgWaitMins = active.length > 0
@@ -2993,6 +3014,30 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
 
   const actionLabels = { boot: 'Boot', tow: 'Tow', dismissed: 'Dismiss', already_gone: 'Already Gone', no_action: 'No Action' };
   const actionColors = { boot: '#fbbf24', tow: '#ef4444', dismissed: '#a78bfa', already_gone: '#6b7280', no_action: '#6b7280' };
+
+  // Status badge config for dedup state machine
+  const statusBadge = {
+    alerted:      { label: 'Active',       color: '#ef4444', bg: 'rgba(239,68,68,.12)', icon: '🔴' },
+    pending:      { label: 'Active',       color: '#ef4444', bg: 'rgba(239,68,68,.12)', icon: '🔴' },
+    acknowledged: { label: 'Acknowledged', color: '#f59e0b', bg: 'rgba(245,158,11,.12)', icon: '🟡' },
+    cleared:      { label: 'Cleared',      color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
+    resolved:     { label: 'Resolved',     color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
+  };
+
+  const [acking, setAcking] = useState(null);
+
+  async function handleAcknowledge(violId) {
+    if (actingRef.current) return;
+    actingRef.current = true;
+    setAcking(violId);
+    try {
+      await db.acknowledgeViolation(violId);
+      addToast('Acknowledged — no more alerts until zone clears', 'success');
+      if (onAction) onAction();
+    } catch (e) {
+      addToast('Acknowledge failed: ' + (e.message || 'Unknown error'), 'error');
+    } finally { setAcking(null); actingRef.current = false; }
+  }
 
   async function handleAction(violId, action) {
     // Guard against double-tap: if already processing any action, bail out
@@ -3233,12 +3278,31 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               {/* Lot name + timer row */}
               <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 16px'}}>
                 <div style={{flex:1, minWidth:0}}>
-                  <div className="job-lot-name" style={{fontSize:14}}>{lot?.name || 'Unknown Lot'}</div>
+                  <div className="job-lot-name" style={{fontSize:14, display:'flex', alignItems:'center', gap:8}}>
+                    {lot?.name || 'Unknown Lot'}
+                    {/* Status badge */}
+                    {(() => {
+                      const badge = statusBadge[v.status] || statusBadge.pending;
+                      return (
+                        <span style={{
+                          fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:6,
+                          background: badge.bg, color: badge.color, whiteSpace:'nowrap',
+                        }}>
+                          {badge.icon} {badge.label}
+                        </span>
+                      );
+                    })()}
+                  </div>
                   <div className="job-lot-addr" style={{display:'flex', alignItems:'center', gap:6}}>
                     {fmtTime(v.detected_at)} · {(v.violation_type || 'violation').replace(/_/g, ' ')}
                     {v.sms_sent_at && (
                       <span style={{fontSize:10, fontWeight:600, color: v.sms_delivered ? 'var(--green)' : 'var(--yellow)'}}>
                         {v.sms_delivered ? '✓ SMS' : '○ SMS'}
+                      </span>
+                    )}
+                    {v.reminder_sent_at && (
+                      <span style={{fontSize:10, fontWeight:600, color:'var(--text-muted)'}}>
+                        · Reminder sent
                       </span>
                     )}
                   </div>
@@ -3261,6 +3325,14 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               </div>
               <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 12px 10px', gap:8}}>
                 <div style={{display:'flex', gap:6}}>
+                  {v.status === 'alerted' && (
+                    <button className="action-btn" disabled={anyActing || acking === v.id}
+                      onClick={(e) => { e.stopPropagation(); handleAcknowledge(v.id); }}
+                      aria-label="Acknowledge violation"
+                      style={{minWidth:60, background:'rgba(245,158,11,.12)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontWeight:700}}>
+                      {acking === v.id ? '…' : 'Acknowledge'}
+                    </button>
+                  )}
                   <button className="action-btn dismiss" disabled={anyActing} onClick={() => requestAction(v.id, 'dismissed')} aria-label="Dismiss violation" style={{minWidth:60}}>
                     Dismiss
                   </button>
@@ -3342,7 +3414,11 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                       <span className="plate-tag no-plate" style={{display:'flex', alignItems:'center', gap:4, background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.2)', color:'#ef4444', fontSize:10}}>No plate</span>
                     )}
                     {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
-                    <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'handled').replace(/_/g, ' ')}</strong></span>
+                    {v.status === 'cleared' ? (
+                      <span className="job-tag" style={{color:'#4ade80'}}>✅ <strong style={{color:'#4ade80'}}>Cleared</strong>{v.duration_seconds ? ` · ${Math.round(v.duration_seconds / 60)}m` : ''}</span>
+                    ) : (
+                      <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'handled').replace(/_/g, ' ')}</strong></span>
+                    )}
                   </div>
                 </div>
               </div>

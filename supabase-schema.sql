@@ -91,15 +91,24 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_camera ON snapshots(camera_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_captured ON snapshots(captured_at DESC);
 
 -- ── Violations ───────────────────────────────────────────────
+-- Status state machine for dedup:
+--   alerted     → car detected, initial SMS sent. No duplicate SMS.
+--   acknowledged → operator replied DONE. Silent until zone empties.
+--   cleared     → zone went empty (camera confirmed). Zone re-armed.
+--   pending     → legacy: pre-dedup violations awaiting operator action
+--   resolved    → legacy: operator took action (boot/tow/dismiss)
 CREATE TABLE IF NOT EXISTS violations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   lot_id UUID REFERENCES lots(id) ON DELETE CASCADE,
   partner_id UUID REFERENCES partners(id),
   camera_id UUID REFERENCES cameras(id),
   snapshot_id UUID REFERENCES snapshots(id),
-  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'resolved')),
+  status TEXT DEFAULT 'alerted' CHECK (status IN ('alerted', 'acknowledged', 'cleared', 'pending', 'resolved')),
   detected_at TIMESTAMPTZ DEFAULT now(),
   resolved_at TIMESTAMPTZ,
+  cleared_at TIMESTAMPTZ,              -- when zone went empty (camera confirmed)
+  acknowledged_at TIMESTAMPTZ,         -- when operator said DONE
+  acknowledged_by TEXT,                 -- 'dashboard' or 'sms_reply'
   action_taken TEXT,
   plate_text TEXT,
   plate_confidence DOUBLE PRECISION,
@@ -115,6 +124,10 @@ CREATE TABLE IF NOT EXISTS violations (
   gross_revenue INTEGER DEFAULT 0, -- dollars (app multiplies by 100 for cents display)
   sms_sent_at TIMESTAMPTZ,
   sms_delivered BOOLEAN DEFAULT false,
+  reminder_sent_at TIMESTAMPTZ,        -- 30-min reminder timestamp
+  snapshot_url TEXT,                    -- direct URL to violation snapshot
+  operator_id UUID,                    -- assigned tow operator
+  duration_seconds INTEGER,            -- computed on clear: cleared_at - detected_at
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -124,6 +137,11 @@ CREATE INDEX IF NOT EXISTS idx_violations_partner ON violations(partner_id);
 CREATE INDEX IF NOT EXISTS idx_violations_status ON violations(status);
 CREATE INDEX IF NOT EXISTS idx_violations_detected ON violations(detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_violations_plate ON violations(plate_text);
+
+-- Dedup safety net: only ONE active violation per zone at a time.
+-- Prevents race conditions if two snapshot processors run concurrently.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_violation_per_zone
+  ON violations (zone_id) WHERE status IN ('alerted', 'acknowledged');
 
 -- ── Permitted Vehicles (whitelist + time-limited permits) ────
 -- Lot owners manage which plates are allowed to park.
@@ -208,7 +226,7 @@ SELECT
   COUNT(*) FILTER (WHERE v.action_taken = 'already_gone') AS already_gone,
   COUNT(*) FILTER (WHERE v.action_taken = 'no_action') AS no_action
 FROM violations v
-WHERE v.status = 'resolved'
+WHERE v.status IN ('resolved', 'cleared')
 GROUP BY v.lot_id;
 
 -- ── Lot state view (live status) ─────────────────────────────
@@ -216,11 +234,11 @@ CREATE OR REPLACE VIEW lot_state AS
 SELECT
   l.id AS lot_id,
   l.name,
-  COUNT(v.id) FILTER (WHERE v.status = 'pending') AS total_active_violations,
+  COUNT(v.id) FILTER (WHERE v.status IN ('pending', 'alerted', 'acknowledged')) AS total_active_violations,
   COUNT(DISTINCT c.id) FILTER (WHERE c.online = true) AS cameras_online,
   COUNT(DISTINCT c.id) AS cameras_total
 FROM lots l
-LEFT JOIN violations v ON v.lot_id = l.id AND v.status = 'pending'
+LEFT JOIN violations v ON v.lot_id = l.id AND v.status IN ('pending', 'alerted', 'acknowledged')
 LEFT JOIN cameras c ON c.lot_id = l.id
 GROUP BY l.id, l.name;
 
