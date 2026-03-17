@@ -27,15 +27,21 @@ AI-powered parking enforcement platform. Cameras detect vehicles in zones, creat
 4. **Resolution too low** - At 640x360 (default), plates become unreadable at distance. Plate Recognizer needs clear character rendering
 5. **Snapshot-to-violation gap** - Camera sees vehicles (vehicles_detected > 0 in snapshots) but violation engine doesn't create violations if zone overlap check fails
 
-### Critical Learning: Zone Matching Pipeline Gap (March 2025)
-**Discovery**: Even when cowork fixed the zone issue, we found the REAL root cause:
-- **Raw detections in snapshots have `zone_id: none`** — the backend does NOT assign zones at the detection level
-- The violation engine does zone matching separately, but it misses zones
-- Example: Zone `zone_7_mmus48js` on Camera 1 had vehicles overlapping it (17-43% overlap)
-  but ZERO violations were ever created for it
-- **Zone polygons use 0-1 normalized coords** (not 0-100 SVG) in the actual DB — e.g. `[0.167, 0.645]`
-- This means zones drawn in the frontend SVG editor (0-100 scale) must be converted to 0-1 for the backend
-- If there's a coordinate system mismatch, zones silently fail — cars are detected but never matched
+### Critical Learning: Backend Uses CENTER-POINT-IN-POLYGON Matching (March 2025)
+**Root cause of zone 7 failure**: The backend violation engine matches detections to zones using
+the **center point of the bounding box**, NOT bounding box overlap percentage.
+
+This means:
+- A vehicle bbox can overlap a zone by 40%+ but if the bbox CENTER falls outside the zone, **no violation is created**
+- Example: Zone `zone_1_mmuxri9a` had a vehicle overlapping it by 47%, but the vehicle center was 0.003 above the zone top boundary → ZERO violations
+- Zones must be drawn **large enough that vehicle centers fall inside**, not just that vehicles visually overlap
+- Zones typically need to extend further toward the camera (lower Y values) because YOLO bbox centers tend to be higher than where the vehicle visually sits on the ground
+
+**Fix applied**: Cowork redrawn zones with new IDs (`mmux` prefix) and wider polygons. After redraw, zone 7 started producing violations.
+
+**Raw detections have `zone_id: none`** — the backend does NOT assign zones at the snapshot/detection level. Zone matching happens separately in the violation engine.
+
+**Zone polygons use 0-1 normalized coords** in the DB — e.g. `[0.167, 0.645]` not `[16.7, 64.5]`
 
 ### Detection Monitoring System (Added March 2025)
 `monitoring/agent_tools.py` -> `check_zone_detection_health()` now automatically detects:

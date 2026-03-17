@@ -591,12 +591,18 @@ def diagnose_zone_issues(supabase_url: str, anon_key: str) -> dict:
     Goes beyond health checks — actually compares raw detection bounding boxes
     against zone polygons to find WHY zones aren't producing violations.
 
+    CRITICAL LEARNING: The backend uses CENTER-POINT-IN-POLYGON matching.
+    A vehicle's bounding box can overlap a zone by 40%+ but if the bbox center
+    point falls outside the zone polygon, NO violation is created. This is the
+    #1 cause of silent zone failures.
+
     Diagnoses:
-    1. Zone polygon doesn't overlap any detected vehicles (misaligned zone)
-    2. Vehicles overlap zone but backend doesn't assign zone_id (pipeline bug)
-    3. Zone too small relative to vehicle bounding boxes
-    4. Zone positioned where no vehicles appear (wrong area of frame)
-    5. All detections near zone but below overlap threshold
+    1. center_outside_zone: Vehicles overlap zone but centers fall outside (most common)
+    2. low_overlap: Vehicles barely touch zone polygon
+    3. zone_near_miss: Vehicles detected near zone but not overlapping
+    4. zone_no_vehicles: Zone in area where no vehicles appear in frame
+    5. zone_too_small: Zone covers < 0.5% of frame
+    6. invalid_polygon: Zone has < 3 polygon points
     """
     if not supabase_url or not anon_key:
         return {"status": "warning", "details": "Supabase not configured", "data": {}}
@@ -732,24 +738,30 @@ def diagnose_zone_issues(supabase_url: str, anon_key: str) -> dict:
 
                 # Diagnosis: zone has overlapping vehicles but no violations ever
                 if overlapping and not has_violations:
-                    assigned_count = sum(1 for o in overlapping if o["assigned_zone"] == zid)
-                    unassigned = sum(1 for o in overlapping if not o["assigned_zone"])
+                    centers_inside = sum(1 for o in overlapping if o["center_inside"])
+                    centers_outside = sum(1 for o in overlapping if not o["center_inside"])
                     avg_overlap = sum(o["overlap_pct"] for o in overlapping) / len(overlapping)
 
-                    if unassigned > 0 and assigned_count == 0:
+                    # CRITICAL: Backend uses CENTER-POINT-IN-POLYGON matching.
+                    # A vehicle bbox can overlap a zone by 40%+ but if the center
+                    # point is outside the zone polygon, NO violation is created.
+                    if centers_outside > 0 and centers_inside == 0:
                         diagnoses.append({
                             "severity": "error",
                             "camera": cname,
                             "zone": zid,
-                            "diagnosis": "zone_matching_failure",
+                            "diagnosis": "center_outside_zone",
                             "vehicles_overlapping": len(overlapping),
+                            "centers_inside": centers_inside,
+                            "centers_outside": centers_outside,
                             "avg_overlap_pct": round(avg_overlap, 1),
-                            "message": f"Zone '{zid}' on '{cname}': {len(overlapping)} vehicle detections "
-                                       f"overlap this zone (avg {avg_overlap:.0f}% overlap) but the backend "
-                                       "is NOT assigning them to this zone. The zone polygon exists and "
-                                       "vehicles are there — the zone matching logic in the violation "
-                                       "engine is failing to match. Check overlap threshold or polygon "
-                                       "format mismatch between frontend (0-100 SVG) and backend (0-1 normalized).",
+                            "message": f"Zone '{zid}' on '{cname}': {len(overlapping)} vehicles overlap "
+                                       f"this zone (avg {avg_overlap:.0f}%) but ALL vehicle center points "
+                                       f"fall OUTSIDE the zone polygon. The backend uses center-point-in-"
+                                       "polygon matching, so bbox overlap alone is not enough. "
+                                       "FIX: Expand the zone polygon to cover where vehicle centers "
+                                       "actually appear — typically the zone needs to extend further "
+                                       "toward the camera (lower Y values in the frame).",
                         })
                     elif avg_overlap < 20:
                         diagnoses.append({
