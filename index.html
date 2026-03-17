@@ -1758,9 +1758,12 @@ const db = {
           }
         }
         // Dismissed / already gone / no action = zero revenue (action-rate only)
+        // Also clear zone_id so the backend won't dedup-match this resolved
+        // violation against new detections in the same zone.
         if (action === 'dismissed' || action === 'already_gone' || action === 'no_action') {
           updates.gross_revenue = 0;
           updates.our_revenue = 0;
+          updates.zone_id = null;
         }
         const { error } = await supabase.from('violations').update(updates).eq('id', violId);
         if (error) throw new Error(error.message || 'Update failed');
