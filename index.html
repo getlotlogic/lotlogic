@@ -3849,23 +3849,17 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
           </div>
         )}
 
-        {/* Toolbar: zone chips + new zone button — hidden while drawing so it doesn't block the canvas */}
-        {/* Toolbar: hidden while drawing */}
+        {/* Toolbar: zone chips + new zone button — hidden via style while drawing */}
         <div className="ze-toolbar" style={drawing ? {display:'none'} : {}}>
-            <div className="ze-zone-list">
-              {zones.map((z, i) => (
-                <span key={z.zone_id}
-                  className={`ze-zone-chip ${i === selectedIdx ? 'active' : ''}`}
-                  style={{background: (ZONE_COLORS[z.zone_type] || '#ef4444') + '22', color: ZONE_COLORS[z.zone_type] || '#ef4444'}}
-                  onClick={() => { setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}>
-                  {z.label || z.zone_id}
-                </span>
-              ))}
-            </div>
-            <button className="ze-btn ze-btn-primary" style={{padding:'6px 14px', fontSize:12}}
-              onClick={() => { setDrawing(true); setSelectedIdx(null); setNewPoints([]); }}>
-              + New Zone
-            </button>
+          <div className="ze-zone-list">
+            {zones.map((z, i) => (
+              <span key={z.zone_id}
+                className={`ze-zone-chip ${i === selectedIdx ? 'active' : ''}`}
+                style={{background: (ZONE_COLORS[z.zone_type] || '#ef4444') + '22', color: ZONE_COLORS[z.zone_type] || '#ef4444'}}
+                onClick={() => { setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}>
+                {z.label || z.zone_id}
+              </span>
+            ))}
           </div>
           <button className="ze-btn ze-btn-primary" style={{padding:'6px 14px', fontSize:12}}
             onClick={() => { setDrawing(true); setSelectedIdx(null); setNewPoints([]); }}
