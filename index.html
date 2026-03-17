@@ -1760,6 +1760,11 @@ const db = {
         // Dismissed / already gone / no action = zero revenue (action-rate only)
         // Also clear zone_id so the backend won't dedup-match this resolved
         // violation against new detections in the same zone.
+        // Fetch camera_id + zone_id BEFORE update (dismiss clears zone_id)
+        const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
+        const _preCameraId = _vPre?.camera_id;
+        const _preZoneId = _vPre?.zone_id;
+
         if (action === 'dismissed' || action === 'already_gone' || action === 'no_action') {
           updates.gross_revenue = 0;
           updates.our_revenue = 0;
@@ -1767,6 +1772,14 @@ const db = {
         }
         const { error } = await supabase.from('violations').update(updates).eq('id', violId);
         if (error) throw new Error(error.message || 'Update failed');
+
+        // Reset zone_occupancy so the next scan can fire a new violation
+        if (_preCameraId && _preZoneId) {
+          await supabase.from('zone_occupancy')
+            .update({ violation_triggered: false })
+            .eq('camera_id', _preCameraId)
+            .eq('zone_id', _preZoneId);
+        }
 
         // Log boot/tow actions for invoicing
         if (action === 'boot' || action === 'tow') {
@@ -1977,8 +1990,17 @@ const db = {
 
   async deleteViolation(violId) {
     if (supabase) {
+      // Fetch camera_id + zone_id before deleting so we can reset occupancy
+      const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
       const { error } = await supabase.from('violations').delete().eq('id', violId);
       if (error) throw new Error(error.message);
+      // Reset zone_occupancy so the next scan can fire a new violation
+      if (_vPre?.camera_id && _vPre?.zone_id) {
+        await supabase.from('zone_occupancy')
+          .update({ violation_triggered: false })
+          .eq('camera_id', _vPre.camera_id)
+          .eq('zone_id', _vPre.zone_id);
+      }
       return { success: true };
     }
     return apiFetch(`/violations/${violId}`, { method: 'DELETE' });
