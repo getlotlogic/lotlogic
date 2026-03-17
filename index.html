@@ -3850,8 +3850,8 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
         )}
 
         {/* Toolbar: zone chips + new zone button — hidden while drawing so it doesn't block the canvas */}
-        {!drawing && (
-          <div className="ze-toolbar">
+        {/* Toolbar: hidden while drawing */}
+        <div className="ze-toolbar" style={drawing ? {display:'none'} : {}}>
             <div className="ze-zone-list">
               {zones.map((z, i) => (
                 <span key={z.zone_id}
@@ -3867,7 +3867,6 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
               + New Zone
             </button>
           </div>
-        )}
           <button className="ze-btn ze-btn-primary" style={{padding:'6px 14px', fontSize:12}}
             onClick={() => { setDrawing(true); setSelectedIdx(null); setNewPoints([]); }}
             disabled={drawing}>
