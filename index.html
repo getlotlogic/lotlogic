@@ -2573,6 +2573,127 @@ function ImageZoom({ src, alt, onClose }) {
   );
 }
 
+// ── Violation Proof Modal — side-by-side initial + current snapshots ──
+function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, onClose }) {
+  if (!violation) return null;
+  const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
+  const det = matchedDetection;
+
+  function ProofImage({ src, label, detection, timestamp }) {
+    const imgRef = useRef(null);
+    const wrapRef = useRef(null);
+    const [loaded, setLoaded] = useState(false);
+    const [coverPos, setCoverPos] = useState(null);
+
+    const calcCover = useCallback(() => {
+      const img = imgRef.current;
+      const wrap = wrapRef.current;
+      if (!img || !wrap || !img.naturalWidth) return;
+      const cW = wrap.clientWidth, cH = wrap.clientHeight;
+      const nW = img.naturalWidth, nH = img.naturalHeight;
+      const scale = Math.max(cW / nW, cH / nH);
+      const rW = nW * scale, rH = nH * scale;
+      setCoverPos({ offX: (cW - rW) / 2, offY: (cH - rH) / 2, rW, rH });
+    }, []);
+
+    const det = detection;
+    const cls = det ? (det.class || 'vehicle').toLowerCase() : 'car';
+    const color = DET_COLORS[cls] || '#3b82f6';
+
+    return (
+      <div style={{flex:1, minWidth:0}}>
+        <div style={{fontSize:11, fontWeight:700, color:'var(--text-muted)', marginBottom:6, textTransform:'uppercase', letterSpacing:'.05em'}}>
+          {label}
+          {timestamp && <span style={{fontWeight:500, color:'var(--text-faint)', marginLeft:6, textTransform:'none', letterSpacing:0}}>{timestamp}</span>}
+        </div>
+        <div ref={wrapRef} style={{position:'relative', borderRadius:8, overflow:'hidden', background:'var(--snapshot-bg)', aspectRatio:'16/9'}}>
+          {src ? (
+            <>
+              <img ref={imgRef} src={src} alt={label}
+                onLoad={() => { setLoaded(true); setTimeout(calcCover, 0); }}
+                style={{width:'100%', height:'100%', objectFit:'cover', display: loaded ? 'block' : 'none'}}
+              />
+              {!loaded && (
+                <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  <div className="spin" style={{marginRight:8}} />
+                  <span style={{color:'var(--text-ghost)', fontSize:12}}>Loading…</span>
+                </div>
+              )}
+              {loaded && det && coverPos && (() => {
+                const [x1, y1, x2, y2] = det.bbox;
+                const px = coverPos.offX + x1 * coverPos.rW;
+                const py = coverPos.offY + y1 * coverPos.rH;
+                const pw = (x2 - x1) * coverPos.rW;
+                const ph = (y2 - y1) * coverPos.rH;
+                return (
+                  <div style={{
+                    position:'absolute', left:px, top:py, width:pw, height:ph,
+                    border:`2px solid ${color}`, borderRadius:3,
+                    pointerEvents:'none', boxSizing:'border-box',
+                  }} />
+                );
+              })()}
+            </>
+          ) : (
+            <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center'}}>
+              <span style={{color:'var(--text-ghost)', fontSize:12}}>No snapshot</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const initialTime = violation.detected_at ? new Date(violation.detected_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '';
+
+  return (
+    <div className="snap-zoom-overlay" onClick={onClose} style={{flexDirection:'column', gap:16, padding:'40px 20px'}}>
+      <div onClick={e => e.stopPropagation()} style={{width:'100%', maxWidth:1000}}>
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12}}>
+          <div style={{fontSize:16, fontWeight:700, color:'#fff'}}>
+            Violation Proof
+            <span style={{fontSize:12, fontWeight:500, color:'rgba(255,255,255,.5)', marginLeft:8}}>
+              {violation.zone_id ? `Zone ${violation.zone_id}` : ''}
+            </span>
+          </div>
+          <button className="snap-zoom-close" onClick={onClose} style={{position:'static'}}>✕</button>
+        </div>
+        <div style={{display:'flex', gap:12}}>
+          <ProofImage
+            src={violation._snapshot_url}
+            label="Detection"
+            detection={det}
+            timestamp={initialTime}
+          />
+          <ProofImage
+            src={latestSnapshotUrl || violation._snapshot_url}
+            label="Current"
+            detection={latestSnapshotUrl ? null : det}
+            timestamp="Live"
+          />
+        </div>
+        {/* Vehicle info bar */}
+        <div style={{marginTop:10, display:'flex', gap:8, flexWrap:'wrap'}}>
+          {violation.plate_text && (
+            <span style={{background:'rgba(255,255,255,.1)', color:'#fff', borderRadius:5, padding:'4px 10px', fontSize:12, fontWeight:700, fontFamily:'Courier New, monospace'}}>
+              {violation.plate_text}
+            </span>
+          )}
+          {violation.vehicle_color && (
+            <span style={{background:'rgba(255,255,255,.08)', color:'rgba(255,255,255,.7)', borderRadius:5, padding:'4px 10px', fontSize:12, display:'flex', alignItems:'center', gap:4}}>
+              <span style={{width:8, height:8, borderRadius:3, background:colorHex(violation.vehicle_color)}} />
+              {violation.vehicle_color} {violation.vehicle_type || 'car'}
+            </span>
+          )}
+          <span style={{background:'rgba(255,255,255,.08)', color:'rgba(255,255,255,.7)', borderRadius:5, padding:'4px 10px', fontSize:12}}>
+            {(violation.violation_type || 'unauthorized').replace(/_/g, ' ')}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Helper: point-in-polygon test (ray casting) ─────────────
 function pointInPolygon(px, py, polygon) {
   let inside = false;
@@ -3207,7 +3328,12 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       )}
 
       {/* Violation detail modal */}
-      {selectedViol && <ImageZoom src={selectedViol._snapshot_url} alt="Violation snapshot" onClose={() => setSelectedViol(null)} />}
+      {selectedViol && (() => {
+        const cam = allCams.find(c => c.camera_id === selectedViol.camera_id);
+        const latestUrl = cam?.latest_snapshot?.url || cam?.latest_snapshot?.storage_url || null;
+        const matched = matchViolationDetection(selectedViol._detections, selectedViol.zone_id, camZonesMap[selectedViol.camera_id]);
+        return <ViolationProofModal violation={selectedViol} latestSnapshotUrl={latestUrl} matchedDetection={matched} onClose={() => setSelectedViol(null)} />;
+      })()}
 
     </div>
   );
