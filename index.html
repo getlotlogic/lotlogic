@@ -791,11 +791,12 @@
     .ze-btn-ghost { background: var(--bg-inset); color: var(--text-muted); }
     .ze-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     .ze-canvas-wrap {
-      flex: 1; overflow: hidden; cursor: crosshair;
-      display: flex; align-items: center; justify-content: center; background: var(--snapshot-bg);
+      flex: none; overflow: hidden; cursor: crosshair;
+      background: var(--snapshot-bg); position: relative;
     }
     .ze-img-wrap { position: relative; width: 100%; }
     .ze-img-wrap img { display: block; width: 100%; user-select: none; -webkit-user-drag: none; }
+    .ze-bottom-panels { flex: 1; overflow-y: auto; }
     .ze-svg {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     }
@@ -3580,21 +3581,21 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
               {feedStatus === 'loading' ? 'Loading frame…' : 'No frame available'}
             </div>
           )}
+          {/* Floating Save button */}
+          {zones.length > 0 && (
+            <button className="ze-floating-save" onClick={save} disabled={saving}
+              style={saved ? {background:'#16a34a'} : undefined}>
+              {saving ? 'Saving…' : saved ? 'Saved!' : `Save All (${zones.length})`}
+            </button>
+          )}
         </div>
 
+        <div className="ze-bottom-panels">
         {/* Drawing hint */}
         {drawing && (
           <div className="ze-hint">
             Click 4 corners of a parking space. {newPoints.length > 0 ? `${newPoints.length}/4 points placed.` : 'Click to start.'}
           </div>
-        )}
-
-        {/* Floating Save button */}
-        {zones.length > 0 && (
-          <button className="ze-floating-save" onClick={save} disabled={saving}
-            style={saved ? {background:'#16a34a'} : undefined}>
-            {saving ? 'Saving…' : saved ? 'Saved!' : `Save All (${zones.length})`}
-          </button>
         )}
 
         {/* Zone list with inline config */}
@@ -3722,6 +3723,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
             )}
           </div>
         )}
+        </div>
       </div>
     </div>
   );
