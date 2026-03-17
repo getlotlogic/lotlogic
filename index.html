@@ -3840,23 +3840,34 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
 
         {/* Drawing hint */}
         {drawing && (
-          <div className="ze-hint">
-            Click to place points. {newPoints.length >= 3 ? 'Double-click or click first point to close the polygon.' : `Need ${3 - newPoints.length} more point${3 - newPoints.length > 1 ? 's' : ''}.`}
+          <div className="ze-hint" style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:8}}>
+            <span>Click to place points. {newPoints.length >= 3 ? 'Double-click or click first point to close the polygon.' : `Need ${3 - newPoints.length} more point${3 - newPoints.length > 1 ? 's' : ''}.`}</span>
+            <button onClick={() => { setDrawing(false); setNewPoints([]); }}
+              style={{background:'transparent', border:'1px solid rgba(239,68,68,.4)', borderRadius:4, color:'#ef4444', fontSize:10, fontWeight:600, padding:'2px 8px', cursor:'pointer', flexShrink:0}}>
+              Cancel
+            </button>
           </div>
         )}
 
-        {/* Toolbar: zone chips + new zone button */}
-        <div className="ze-toolbar">
-          <div className="ze-zone-list">
-            {zones.map((z, i) => (
-              <span key={z.zone_id}
-                className={`ze-zone-chip ${i === selectedIdx ? 'active' : ''}`}
-                style={{background: (ZONE_COLORS[z.zone_type] || '#ef4444') + '22', color: ZONE_COLORS[z.zone_type] || '#ef4444'}}
-                onClick={() => { setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}>
-                {z.label || z.zone_id}
-              </span>
-            ))}
+        {/* Toolbar: zone chips + new zone button — hidden while drawing so it doesn't block the canvas */}
+        {!drawing && (
+          <div className="ze-toolbar">
+            <div className="ze-zone-list">
+              {zones.map((z, i) => (
+                <span key={z.zone_id}
+                  className={`ze-zone-chip ${i === selectedIdx ? 'active' : ''}`}
+                  style={{background: (ZONE_COLORS[z.zone_type] || '#ef4444') + '22', color: ZONE_COLORS[z.zone_type] || '#ef4444'}}
+                  onClick={() => { setSelectedIdx(i); setDrawing(false); setNewPoints([]); }}>
+                  {z.label || z.zone_id}
+                </span>
+              ))}
+            </div>
+            <button className="ze-btn ze-btn-primary" style={{padding:'6px 14px', fontSize:12}}
+              onClick={() => { setDrawing(true); setSelectedIdx(null); setNewPoints([]); }}>
+              + New Zone
+            </button>
           </div>
+        )}
           <button className="ze-btn ze-btn-primary" style={{padding:'6px 14px', fontSize:12}}
             onClick={() => { setDrawing(true); setSelectedIdx(null); setNewPoints([]); }}
             disabled={drawing}>
