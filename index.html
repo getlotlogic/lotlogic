@@ -3114,7 +3114,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       <div className="kpi-bar">
         <div className="kpi-card">
           <div className={`kpi-val ${active.length > 0 ? 'red' : 'green'}`}>{active.length}</div>
-          <div className="kpi-label">Pending</div>
+          <div className="kpi-label">Active</div>
         </div>
         <div className="kpi-card">
           <div className={`kpi-val ${avgWaitMins >= 45 ? 'red' : 'blue'}`}>{avgWaitMins}<span style={{fontSize:12}}>m</span></div>
@@ -5004,11 +5004,13 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
   });
 
   // Global KPIs
-  const pending = violations.filter(v => v.status === 'pending').length;
+  const _activeStatuses = ['pending', 'alerted', 'acknowledged'];
+  const _closedStatuses = ['resolved', 'cleared'];
+  const pending = violations.filter(v => _activeStatuses.includes(v.status)).length;
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-  const todayResolved = violations.filter(v => v.status !== 'pending' && new Date(v.resolved_at || v.detected_at) >= todayStart).length;
-  const totalGross = violations.filter(v => v.status !== 'pending').reduce((s, v) => s + (v.gross_revenue || 0), 0);
-  const totalOurs = violations.filter(v => v.status !== 'pending').reduce((s, v) => s + (v.our_revenue || 0), 0);
+  const todayResolved = violations.filter(v => _closedStatuses.includes(v.status) && new Date(v.resolved_at || v.cleared_at || v.detected_at) >= todayStart).length;
+  const totalGross = violations.filter(v => _closedStatuses.includes(v.status)).reduce((s, v) => s + (v.gross_revenue || 0), 0);
+  const totalOurs = violations.filter(v => _closedStatuses.includes(v.status)).reduce((s, v) => s + (v.our_revenue || 0), 0);
 
   // Camera stats
   const allCams = Object.values(lotStates).flatMap(s => s?.cameras || []);
@@ -5020,8 +5022,8 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
     const pLots = partnerLots[p.id] || [];
     const pLotIds = pLots.map(l => l.id);
     const pViols = violations.filter(v => pLotIds.includes(v.lot_id));
-    const pPending = pViols.filter(v => v.status === 'pending').length;
-    const pResolved = pViols.filter(v => v.status !== 'pending');
+    const pPending = pViols.filter(v => _activeStatuses.includes(v.status)).length;
+    const pResolved = pViols.filter(v => _closedStatuses.includes(v.status));
     const pTodayResolved = pResolved.filter(v => new Date(v.resolved_at || v.detected_at) >= todayStart).length;
     const pGross = pResolved.reduce((s, v) => s + (v.gross_revenue || 0), 0);
     const pOurs = pResolved.reduce((s, v) => s + (v.our_revenue || 0), 0);
@@ -5047,7 +5049,7 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
       <div className="kpi-bar" style={{marginBottom:16}}>
         <div className="kpi-card">
           <div className="kpi-val red">{pending}</div>
-          <div className="kpi-label">Pending</div>
+          <div className="kpi-label">Active</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-val green">{todayResolved}</div>
@@ -5713,7 +5715,7 @@ function App() {
 
   if (!owner) return <LoginPage onLogin={login} />;
 
-  const pending = effectiveViolations.filter(v => v.status === 'pending').length;
+  const pending = effectiveViolations.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status)).length;
 
   // Handle "View as Operator" from Overview page
   function handleViewAs(partner) {

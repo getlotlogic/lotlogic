@@ -891,8 +891,8 @@ def check_operations(supabase_url: str, anon_key: str) -> dict:
 
         violations = resp.json()
         total = len(violations)
-        actioned = sum(1 for v in violations if v.get("status") in ("booted", "towed"))
-        pending = sum(1 for v in violations if v.get("status") == "pending")
+        actioned = sum(1 for v in violations if v.get("status") in ("resolved", "cleared"))
+        pending = sum(1 for v in violations if v.get("status") in ("pending", "alerted", "acknowledged"))
 
         metrics = {
             "violations_24h": total,
