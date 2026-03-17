@@ -43,6 +43,32 @@ This means:
 
 **Zone polygons use 0-1 normalized coords** in the DB — e.g. `[0.167, 0.645]` not `[16.7, 64.5]`
 
+### Issue: Z1 Polygon Boundary Miss (March 2025)
+**Exact root cause**: YOLO centroid for the car in Z1 was at y=66.77%, but Z1's top polygon edge
+started at y=66.91% — literally **0.14% too low**. The car was detected fine, it just fell through
+a tiny gap between zones. Fixed by extending Z1's top boundary from ~66.9% up to 64.5%.
+
+**Key insight**: Zone polygons need a **safety margin** (at least 2%) beyond where vehicle centroids
+actually appear. YOLO bbox centers shift slightly between frames, so a zone boundary that's perfectly
+flush with a centroid position will intermittently miss.
+
+### Zone Guardian Agent (Added March 2025)
+`monitoring/zone_guardian.py` — Autonomous agent that runs every 10 minutes, scans ALL cameras/lots,
+and detects centroid gap issues before they become problems:
+- **centroid_gap**: Vehicles overlap zone but centroids fall outside polygon (the Z1/Z7 problem)
+- **boundary_tight**: Zone works but centroids are within 1% of edge (future risk)
+- **near_miss**: Vehicles detected near zone but not overlapping at all
+- **zone_too_small**: Zone polygon too small for reliable centroid matching
+
+**Auto-fix mode**: `--auto-fix` flag automatically patches zone polygons via the backend API,
+expanding them with a 2% safety margin to capture missed centroids.
+
+**Usage**:
+- `python zone_guardian.py --scan` — single scan
+- `python zone_guardian.py --daemon` — continuous monitoring (every 10 min)
+- `python zone_guardian.py --scan --auto-fix` — scan and auto-patch zones
+- `python zone_guardian.py --scan --camera-id <uuid>` — scan specific camera
+
 ### Detection Monitoring System (Added March 2025)
 `monitoring/agent_tools.py` -> `check_zone_detection_health()` now automatically detects:
 - **Silent zones**: Online camera with zones configured but zero violations ever
