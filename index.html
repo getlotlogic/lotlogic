@@ -2574,11 +2574,21 @@ function ImageZoom({ src, alt, onClose }) {
   );
 }
 
-// ── Violation Proof Modal — side-by-side initial + current snapshots ──
+// ── Violation Proof Modal — iMessage-style full-screen photo viewer ──
+// Uses React Portal to render directly on document.body, bypassing all
+// ancestor transforms that would trap position:fixed.
 function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, onClose }) {
   if (!violation) return null;
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   const det = matchedDetection;
+
+  // Close on Escape key
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', handler); document.body.style.overflow = ''; };
+  }, [onClose]);
 
   function ProofImage({ src, label, detection, timestamp }) {
     const imgRef = useRef(null);
@@ -2602,12 +2612,12 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
     const color = DET_COLORS[cls] || '#3b82f6';
 
     return (
-      <div style={{flex:1, minWidth:0}}>
-        <div style={{fontSize:11, fontWeight:700, color:'var(--text-muted)', marginBottom:6, textTransform:'uppercase', letterSpacing:'.05em'}}>
+      <div style={{flex:'1 1 0', minWidth:0}}>
+        <div style={{fontSize:10, fontWeight:600, color:'rgba(255,255,255,.5)', marginBottom:6, textTransform:'uppercase', letterSpacing:'.06em', display:'flex', alignItems:'center', gap:6}}>
           {label}
-          {timestamp && <span style={{fontWeight:500, color:'var(--text-faint)', marginLeft:6, textTransform:'none', letterSpacing:0}}>{timestamp}</span>}
+          {timestamp && <span style={{fontWeight:500, color:'rgba(255,255,255,.3)', textTransform:'none', letterSpacing:0, fontSize:10}}>{timestamp}</span>}
         </div>
-        <div ref={wrapRef} style={{position:'relative', borderRadius:8, overflow:'hidden', background:'var(--snapshot-bg)', aspectRatio:'16/9'}}>
+        <div ref={wrapRef} style={{position:'relative', borderRadius:10, overflow:'hidden', background:'#111', aspectRatio:'16/9', maxHeight:'calc(100vh - 120px)'}}>
           {src ? (
             <>
               <img ref={imgRef} src={src} alt={label}
@@ -2617,7 +2627,7 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
               {!loaded && (
                 <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center'}}>
                   <div className="spin" style={{marginRight:8}} />
-                  <span style={{color:'var(--text-ghost)', fontSize:12}}>Loading…</span>
+                  <span style={{color:'rgba(255,255,255,.3)', fontSize:12}}>Loading…</span>
                 </div>
               )}
               {loaded && det && coverPos && (() => {
@@ -2637,7 +2647,7 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
             </>
           ) : (
             <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center'}}>
-              <span style={{color:'var(--text-ghost)', fontSize:12}}>No snapshot</span>
+              <span style={{color:'rgba(255,255,255,.3)', fontSize:12}}>No snapshot</span>
             </div>
           )}
         </div>
@@ -2647,19 +2657,29 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
 
   const initialTime = violation.detected_at ? new Date(violation.detected_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '';
 
-  return (
-    <div className="snap-zoom-overlay" onClick={onClose} style={{flexDirection:'column', gap:16, padding:'40px 20px'}}>
-      <div onClick={e => e.stopPropagation()} style={{width:'100%', maxWidth:1000}}>
-        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12}}>
-          <div style={{fontSize:16, fontWeight:700, color:'#fff'}}>
-            Violation Proof
-            <span style={{fontSize:12, fontWeight:500, color:'rgba(255,255,255,.5)', marginLeft:8}}>
-              {violation.zone_id ? `Zone ${violation.zone_id}` : ''}
-            </span>
-          </div>
-          <button className="snap-zoom-close" onClick={onClose} style={{position:'static'}}>✕</button>
-        </div>
-        <div style={{display:'flex', gap:12}}>
+  // Portal: render directly into document.body to escape all ancestor transforms
+  return ReactDOM.createPortal(
+    <div onClick={onClose} style={{
+      position:'fixed', inset:0, zIndex:9999,
+      background:'rgba(0,0,0,.85)', backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
+      display:'flex', alignItems:'flex-start', justifyContent:'center',
+      paddingTop:24, overflow:'hidden',
+      animation:'fadeIn .15s ease',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width:'calc(100% - 48px)', maxWidth:960,
+        cursor:'default',
+      }}>
+        {/* Close button — top right, iMessage style */}
+        <button onClick={onClose} style={{
+          position:'fixed', top:16, right:16, width:32, height:32, borderRadius:'50%',
+          background:'rgba(255,255,255,.12)', border:'none', color:'#fff', fontSize:16,
+          cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
+          zIndex:10000,
+        }}>✕</button>
+
+        {/* Photos — front and center */}
+        <div style={{display:'flex', gap:16, marginBottom:16}}>
           <ProofImage
             src={violation._snapshot_url}
             label="Detection"
@@ -2673,25 +2693,30 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
             timestamp="Live"
           />
         </div>
-        {/* Vehicle info bar */}
-        <div style={{marginTop:10, display:'flex', gap:8, flexWrap:'wrap'}}>
+
+        {/* Info bar — subtle, below photos */}
+        <div style={{display:'flex', gap:10, flexWrap:'wrap', alignItems:'center'}}>
           {violation.plate_text && (
-            <span style={{background:'rgba(255,255,255,.1)', color:'#fff', borderRadius:5, padding:'4px 10px', fontSize:12, fontWeight:700, fontFamily:'Courier New, monospace'}}>
+            <span style={{background:'rgba(255,255,255,.1)', color:'#fff', borderRadius:6, padding:'5px 12px', fontSize:13, fontWeight:700, fontFamily:'Courier New, monospace', letterSpacing:'.04em'}}>
               {violation.plate_text}
             </span>
           )}
           {violation.vehicle_color && (
-            <span style={{background:'rgba(255,255,255,.08)', color:'rgba(255,255,255,.7)', borderRadius:5, padding:'4px 10px', fontSize:12, display:'flex', alignItems:'center', gap:4}}>
-              <span style={{width:8, height:8, borderRadius:3, background:colorHex(violation.vehicle_color)}} />
+            <span style={{color:'rgba(255,255,255,.5)', fontSize:12, display:'flex', alignItems:'center', gap:5}}>
+              <span style={{width:8, height:8, borderRadius:'50%', background:colorHex(violation.vehicle_color)}} />
               {violation.vehicle_color} {violation.vehicle_type || 'car'}
             </span>
           )}
-          <span style={{background:'rgba(255,255,255,.08)', color:'rgba(255,255,255,.7)', borderRadius:5, padding:'4px 10px', fontSize:12}}>
+          <span style={{color:'rgba(255,255,255,.35)', fontSize:12}}>
             {(violation.violation_type || 'unauthorized').replace(/_/g, ' ')}
           </span>
+          {violation.zone_id && (
+            <span style={{color:'rgba(255,255,255,.25)', fontSize:11}}>Zone {violation.zone_id}</span>
+          )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
