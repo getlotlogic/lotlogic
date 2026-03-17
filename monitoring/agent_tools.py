@@ -227,7 +227,7 @@ def check_cameras(supabase_url: str, anon_key: str) -> dict:
                 "stale": is_stale,
             })
 
-        offline = [c for c in results if c["status"] != "online"]
+        offline = [c for c in results if c["status"] != "active"]
         stale = [c for c in results if c["stale"]]
 
         data = {
@@ -274,7 +274,7 @@ def check_zone_detection_health(supabase_url: str, anon_key: str) -> dict:
         # Fetch cameras with zone config
         cam_resp = requests.get(
             f"{supabase_url}/rest/v1/cameras"
-            "?select=id,name,lot_id,online,zones,snapshot_width,snapshot_height,last_heartbeat",
+            "?select=id,name,lot_id,active,status,zones,snapshot_width,snapshot_height,last_heartbeat",
             headers=headers,
             timeout=10,
         )
@@ -375,7 +375,7 @@ def check_zone_detection_health(supabase_url: str, anon_key: str) -> dict:
         for cam in cameras:
             cid = cam["id"]
             cname = cam.get("name", "Unknown")
-            is_online = cam.get("online", False)
+            is_online = cam.get("active", False)
             zones = cam.get("zones") or []
 
             if not is_online:
@@ -470,7 +470,7 @@ def check_zone_detection_health(supabase_url: str, anon_key: str) -> dict:
         for cam in cameras:
             cid = cam["id"]
             cname = cam.get("name", "Unknown")
-            if not cam.get("online", False):
+            if not cam.get("active", False):
                 continue
 
             snap_count = cam_snapshots.get(cid, 0)
@@ -554,6 +554,301 @@ def check_zone_detection_health(supabase_url: str, anon_key: str) -> dict:
         return {"status": "error", "details": str(e), "data": {}}
 
 
+# ── Auto-Diagnosis: Zone Detection Issues ────────────────────────────────────
+
+def _bbox_zone_overlap(bbox, zone_polygon):
+    """Calculate overlap between a detection bbox [x1,y1,x2,y2] and a zone polygon.
+    Returns (overlap_pct, center_inside) where overlap_pct is relative to bbox area."""
+    if len(bbox) != 4 or len(zone_polygon) < 3:
+        return 0.0, False
+
+    x1, y1, x2, y2 = bbox
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    bbox_area = (x2 - x1) * (y2 - y1)
+    if bbox_area <= 0:
+        return 0.0, False
+
+    # Get zone bounding box (approximate — works for convex-ish zones)
+    zxs = [p[0] for p in zone_polygon]
+    zys = [p[1] for p in zone_polygon]
+    zx1, zx2 = min(zxs), max(zxs)
+    zy1, zy2 = min(zys), max(zys)
+
+    center_inside = zx1 <= cx <= zx2 and zy1 <= cy <= zy2
+
+    overlap_x = max(0, min(x2, zx2) - max(x1, zx1))
+    overlap_y = max(0, min(y2, zy2) - max(y1, zy1))
+    if overlap_x <= 0 or overlap_y <= 0:
+        return 0.0, center_inside
+
+    overlap_pct = (overlap_x * overlap_y) / bbox_area * 100
+    return round(overlap_pct, 1), center_inside
+
+
+def diagnose_zone_issues(supabase_url: str, anon_key: str) -> dict:
+    """Deep auto-diagnosis of zone detection failures.
+
+    Goes beyond health checks — actually compares raw detection bounding boxes
+    against zone polygons to find WHY zones aren't producing violations.
+
+    Diagnoses:
+    1. Zone polygon doesn't overlap any detected vehicles (misaligned zone)
+    2. Vehicles overlap zone but backend doesn't assign zone_id (pipeline bug)
+    3. Zone too small relative to vehicle bounding boxes
+    4. Zone positioned where no vehicles appear (wrong area of frame)
+    5. All detections near zone but below overlap threshold
+    """
+    if not supabase_url or not anon_key:
+        return {"status": "warning", "details": "Supabase not configured", "data": {}}
+
+    headers = {
+        "apikey": anon_key,
+        "Authorization": f"Bearer {anon_key}",
+    }
+
+    try:
+        # Get all active cameras with zones
+        cam_resp = requests.get(
+            f"{supabase_url}/rest/v1/cameras"
+            "?select=id,name,zones,active,status"
+            "&active=eq.true",
+            headers=headers,
+            timeout=10,
+        )
+        if cam_resp.status_code != 200:
+            return {"status": "error", "details": f"Cameras HTTP {cam_resp.status_code}", "data": {}}
+
+        cameras = cam_resp.json()
+        if not cameras:
+            return {"status": "warning", "details": "No active cameras", "data": {}}
+
+        now = datetime.now(timezone.utc)
+        since_24h = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+
+        diagnoses = []
+
+        for cam in cameras:
+            cid = cam["id"]
+            cname = cam.get("name", "Unknown")
+            zones = cam.get("zones") or []
+            if not isinstance(zones, list) or len(zones) == 0:
+                continue
+
+            # Get recent snapshots with raw detections for this camera
+            snap_resp = requests.get(
+                f"{supabase_url}/rest/v1/snapshots",
+                params={
+                    "select": "id,raw_detections,vehicles_detected,captured_at",
+                    "camera_id": f"eq.{cid}",
+                    "captured_at": f"gte.{since_24h}",
+                    "order": "captured_at.desc",
+                    "limit": "10",
+                },
+                headers=headers,
+                timeout=10,
+            )
+            if snap_resp.status_code != 200:
+                continue
+
+            snapshots = snap_resp.json()
+            if not snapshots:
+                continue
+
+            # Get violations for this camera
+            viol_resp = requests.get(
+                f"{supabase_url}/rest/v1/violations",
+                params={
+                    "select": "id,zone_id,detected_at",
+                    "camera_id": f"eq.{cid}",
+                    "order": "detected_at.desc",
+                    "limit": "200",
+                },
+                headers=headers,
+                timeout=10,
+            )
+            violations = viol_resp.json() if viol_resp.status_code == 200 else []
+            violation_zones = set(v.get("zone_id") for v in violations)
+
+            # Collect all detection bboxes from recent snapshots
+            all_detections = []
+            for snap in snapshots:
+                raw = snap.get("raw_detections") or {}
+                dets = raw.get("detections", []) if isinstance(raw, dict) else []
+                for d in dets:
+                    bbox = d.get("bbox") or d.get("bounding_box")
+                    if bbox and len(bbox) == 4:
+                        all_detections.append({
+                            "bbox": bbox,
+                            "conf": d.get("conf", d.get("confidence", 0)),
+                            "assigned_zone": d.get("zone_id"),
+                            "class": d.get("class", "unknown"),
+                        })
+
+            if not all_detections:
+                continue
+
+            # Analyze each zone against actual detections
+            for zone in zones:
+                zid = zone.get("zone_id") or zone.get("id") or "unknown"
+                polygon = zone.get("polygon", [])
+                if not polygon or len(polygon) < 3:
+                    diagnoses.append({
+                        "severity": "error",
+                        "camera": cname,
+                        "zone": zid,
+                        "diagnosis": "invalid_polygon",
+                        "message": f"Zone '{zid}' has invalid polygon ({len(polygon)} points). "
+                                   "Needs at least 3 points to form a zone.",
+                    })
+                    continue
+
+                # Check zone area
+                zxs = [p[0] for p in polygon]
+                zys = [p[1] for p in polygon]
+                zone_area = (max(zxs) - min(zxs)) * (max(zys) - min(zys))
+
+                # How many detections overlap this zone?
+                overlapping = []
+                near_misses = []
+                for det in all_detections:
+                    overlap_pct, center_in = _bbox_zone_overlap(det["bbox"], polygon)
+                    if overlap_pct > 0:
+                        overlapping.append({
+                            "overlap_pct": overlap_pct,
+                            "center_inside": center_in,
+                            "conf": det["conf"],
+                            "assigned_zone": det["assigned_zone"],
+                        })
+                    else:
+                        # Check if detection is close to zone (within 5% margin)
+                        bx1, by1, bx2, by2 = det["bbox"]
+                        bcx, bcy = (bx1 + bx2) / 2, (by1 + by2) / 2
+                        dist_x = max(min(zxs) - bcx, bcx - max(zxs), 0)
+                        dist_y = max(min(zys) - bcy, bcy - max(zys), 0)
+                        if dist_x < 0.05 and dist_y < 0.05:
+                            near_misses.append(det)
+
+                has_violations = zid in violation_zones
+
+                # Diagnosis: zone has overlapping vehicles but no violations ever
+                if overlapping and not has_violations:
+                    assigned_count = sum(1 for o in overlapping if o["assigned_zone"] == zid)
+                    unassigned = sum(1 for o in overlapping if not o["assigned_zone"])
+                    avg_overlap = sum(o["overlap_pct"] for o in overlapping) / len(overlapping)
+
+                    if unassigned > 0 and assigned_count == 0:
+                        diagnoses.append({
+                            "severity": "error",
+                            "camera": cname,
+                            "zone": zid,
+                            "diagnosis": "zone_matching_failure",
+                            "vehicles_overlapping": len(overlapping),
+                            "avg_overlap_pct": round(avg_overlap, 1),
+                            "message": f"Zone '{zid}' on '{cname}': {len(overlapping)} vehicle detections "
+                                       f"overlap this zone (avg {avg_overlap:.0f}% overlap) but the backend "
+                                       "is NOT assigning them to this zone. The zone polygon exists and "
+                                       "vehicles are there — the zone matching logic in the violation "
+                                       "engine is failing to match. Check overlap threshold or polygon "
+                                       "format mismatch between frontend (0-100 SVG) and backend (0-1 normalized).",
+                        })
+                    elif avg_overlap < 20:
+                        diagnoses.append({
+                            "severity": "warning",
+                            "camera": cname,
+                            "zone": zid,
+                            "diagnosis": "low_overlap",
+                            "vehicles_overlapping": len(overlapping),
+                            "avg_overlap_pct": round(avg_overlap, 1),
+                            "message": f"Zone '{zid}' on '{cname}': vehicles overlap by only {avg_overlap:.0f}% "
+                                       "on average. Zone polygon may be too small or offset from actual "
+                                       "parking positions. Consider expanding the zone polygon.",
+                        })
+
+                # Diagnosis: no vehicles overlapping at all
+                elif not overlapping and not has_violations:
+                    if near_misses:
+                        diagnoses.append({
+                            "severity": "warning",
+                            "camera": cname,
+                            "zone": zid,
+                            "diagnosis": "zone_near_miss",
+                            "near_miss_count": len(near_misses),
+                            "message": f"Zone '{zid}' on '{cname}': {len(near_misses)} vehicles detected "
+                                       "NEAR this zone but not overlapping. Zone polygon may need to be "
+                                       "shifted or enlarged to capture these vehicles.",
+                        })
+                    elif all_detections:
+                        diagnoses.append({
+                            "severity": "warning",
+                            "camera": cname,
+                            "zone": zid,
+                            "diagnosis": "zone_no_vehicles",
+                            "total_detections": len(all_detections),
+                            "message": f"Zone '{zid}' on '{cname}': camera detects {len(all_detections)} "
+                                       "vehicles but NONE overlap this zone. Zone may be positioned in "
+                                       "an area where no vehicles appear in the camera frame, or "
+                                       "coordinate system mismatch between zone editor and detection.",
+                        })
+
+                # Diagnosis: zone too small
+                if zone_area < 0.005:
+                    diagnoses.append({
+                        "severity": "warning",
+                        "camera": cname,
+                        "zone": zid,
+                        "diagnosis": "zone_too_small",
+                        "zone_area": round(zone_area, 5),
+                        "message": f"Zone '{zid}' on '{cname}' covers only {zone_area:.3%} of frame. "
+                                   "Very small zones are hard to reliably match with vehicle bounding "
+                                   "boxes, especially at distance.",
+                    })
+
+        # Build result
+        error_diags = [d for d in diagnoses if d["severity"] == "error"]
+        warning_diags = [d for d in diagnoses if d["severity"] == "warning"]
+
+        data = {
+            "cameras_analyzed": len(cameras),
+            "diagnoses": diagnoses,
+            "diagnosis_counts": {
+                "error": len(error_diags),
+                "warning": len(warning_diags),
+            },
+            "summary": {},
+        }
+
+        # Build summary by diagnosis type
+        for d in diagnoses:
+            dtype = d["diagnosis"]
+            data["summary"][dtype] = data["summary"].get(dtype, 0) + 1
+
+        if error_diags:
+            top_issues = "; ".join(
+                f"{d['camera']}/{d['zone']}: {d['diagnosis']}"
+                for d in error_diags[:3]
+            )
+            return {
+                "status": "error",
+                "details": f"{len(error_diags)} zone detection failures found: {top_issues}",
+                "data": data,
+            }
+        elif warning_diags:
+            return {
+                "status": "warning",
+                "details": f"{len(warning_diags)} potential zone issues detected",
+                "data": data,
+            }
+
+        return {
+            "status": "ok",
+            "details": "All zones properly aligned with vehicle detections",
+            "data": data,
+        }
+
+    except Exception as e:
+        return {"status": "error", "details": str(e), "data": {}}
+
+
 # ── Revenue & Operations ─────────────────────────────────────────────────────
 
 def check_operations(supabase_url: str, anon_key: str) -> dict:
@@ -613,6 +908,7 @@ def run_all_checks(config) -> dict:
             "supabase": check_supabase(config.supabase_url, config.supabase_anon_key),
             "detection_quality": check_detection_quality(config.supabase_url, config.supabase_anon_key),
             "zone_detection_health": check_zone_detection_health(config.supabase_url, config.supabase_anon_key),
+            "zone_diagnosis": diagnose_zone_issues(config.supabase_url, config.supabase_anon_key),
             "cameras": check_cameras(config.supabase_url, config.supabase_anon_key),
             "operations": check_operations(config.supabase_url, config.supabase_anon_key),
         },
