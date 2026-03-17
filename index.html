@@ -2662,13 +2662,12 @@ function ViolationProofModal({ violation, latestSnapshotUrl, matchedDetection, o
     <div onClick={onClose} style={{
       position:'fixed', inset:0, zIndex:9999,
       background:'rgba(0,0,0,.85)', backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
-      display:'flex', alignItems:'center', justifyContent:'center',
+      display:'flex', alignItems:'flex-start', justifyContent:'center',
+      paddingTop:24, overflow:'hidden',
       animation:'fadeIn .15s ease',
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         width:'calc(100% - 48px)', maxWidth:960,
-        maxHeight:'calc(100vh - 48px)', overflow:'hidden',
-        display:'flex', flexDirection:'column', justifyContent:'center',
         cursor:'default',
       }}>
         {/* Close button — top right, iMessage style */}
