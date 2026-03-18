@@ -1,25 +1,21 @@
 """
 Violation Dedup System — Zone State Machine
 
-Violations require manual operator resolution. The system never auto-clears.
-
 State machine:
   CLEAR  ──car detected──▶  ALERTED  ──operator acks──▶  ACKNOWLEDGED
-                                                              │
-                                                     operator resolves
-                                                       (boot/tow/dismiss)
-                                                              │
-                                                              ▼
-                                                          RESOLVED
-                                                              │
-                                                         zone re-arms
-                                                      (dedup query finds
-                                                       no active violation)
+                               │                              │
+                          3 empty snaps                  operator resolves
+                               │                          (boot/tow/dismiss)
+                               ▼                              │
+                           DEPARTED                           ▼
+                          (zone re-arms)                  RESOLVED
+                                                         (zone re-arms)
 
 Key rules:
   - No duplicate SMS while alerted or acknowledged
-  - Violations persist until operator manually resolves
-  - Zone re-arms only after operator closes the violation
+  - Zone re-arms after 3 consecutive empty snapshots (car departed)
+  - Departed violations are terminal — no operator action needed
+  - Operator can still resolve before departure (boot/tow/dismiss)
   - One 30-min reminder if still alerted (not acknowledged)
 
 SMS Provider:
@@ -48,6 +44,9 @@ ACK_KEYWORDS = {"DONE", "OK", "COMPLETE", "TOWED", "GOT IT", "ON IT"}
 
 # Reminder delay in seconds (30 minutes)
 REMINDER_DELAY_SECONDS = 1800
+
+# Consecutive empty snapshots before a violation is marked 'departed'
+EMPTY_STREAK_THRESHOLD = 3
 
 
 def _get_supabase() -> Client:
@@ -98,7 +97,7 @@ async def process_snapshot(
     # Check for active (non-cleared) violation on this zone
     active_resp = (
         sb.table("violations")
-        .select("id, status, detected_at, sms_sent_at, reminder_sent_at")
+        .select("id, status, detected_at, sms_sent_at, reminder_sent_at, empty_streak")
         .eq("zone_id", zone_id)
         .in_("status", ["alerted", "acknowledged"])
         .limit(1)
@@ -108,8 +107,12 @@ async def process_snapshot(
 
     if has_car:
         if active:
-            # Car still there — check if 30-min reminder is needed
+            # Car still there — reset empty streak and check for reminder
             violation = active[0]
+            if (violation.get("empty_streak") or 0) > 0:
+                sb.table("violations").update(
+                    {"empty_streak": 0}
+                ).eq("id", violation["id"]).execute()
             if (
                 violation["status"] == "alerted"
                 and violation.get("reminder_sent_at") is None
@@ -174,16 +177,37 @@ async def process_snapshot(
         return {"action": "created", "violation_id": violation_id}
 
     else:
-        # Zone appears empty — but violations require manual operator resolution.
-        # Do NOT auto-clear. The violation stays alerted/acknowledged until the
-        # operator handles it via dashboard or SMS reply.
+        # Zone appears empty — increment empty streak on active violation.
+        # After EMPTY_STREAK_THRESHOLD consecutive empty snapshots, mark
+        # the violation as 'departed' and unlock the zone for new detections.
         if active:
             violation = active[0]
-            logger.debug(
-                "Zone %s appears empty but violation %s still active (status=%s) — awaiting operator",
-                zone_id, violation["id"], violation["status"],
-            )
-            return {"action": "existing", "violation_id": violation["id"]}
+            new_streak = (violation.get("empty_streak") or 0) + 1
+
+            if new_streak >= EMPTY_STREAK_THRESHOLD:
+                # Car is gone — mark departed, unlock zone
+                sb.table("violations").update(
+                    {
+                        "status": "departed",
+                        "departed_at": _now(),
+                        "empty_streak": new_streak,
+                    }
+                ).eq("id", violation["id"]).execute()
+                logger.info(
+                    "Violation %s departed after %d empty snapshots — zone %s re-armed",
+                    violation["id"], new_streak, zone_id,
+                )
+                return {"action": "departed", "violation_id": violation["id"]}
+            else:
+                # Not enough consecutive empties yet — just bump the counter
+                sb.table("violations").update(
+                    {"empty_streak": new_streak}
+                ).eq("id", violation["id"]).execute()
+                logger.debug(
+                    "Zone %s empty streak %d/%d for violation %s",
+                    zone_id, new_streak, EMPTY_STREAK_THRESHOLD, violation["id"],
+                )
+                return {"action": "existing", "violation_id": violation["id"]}
 
         # No active violation, zone is clear — nothing to do
         return {"action": "idle", "zone_id": zone_id}

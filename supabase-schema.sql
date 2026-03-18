@@ -103,10 +103,12 @@ CREATE TABLE IF NOT EXISTS violations (
   partner_id UUID REFERENCES partners(id),
   camera_id UUID REFERENCES cameras(id),
   snapshot_id UUID REFERENCES snapshots(id),
-  status TEXT DEFAULT 'alerted' CHECK (status IN ('alerted', 'acknowledged', 'cleared', 'pending', 'resolved')),
+  status TEXT DEFAULT 'alerted' CHECK (status IN ('alerted', 'acknowledged', 'cleared', 'departed', 'pending', 'resolved')),
   detected_at TIMESTAMPTZ DEFAULT now(),
   resolved_at TIMESTAMPTZ,
   cleared_at TIMESTAMPTZ,              -- when zone went empty (camera confirmed)
+  departed_at TIMESTAMPTZ,             -- when car departed (3 consecutive empty snapshots)
+  empty_streak INTEGER NOT NULL DEFAULT 0,  -- consecutive empty snapshots counter
   acknowledged_at TIMESTAMPTZ,         -- when operator said DONE
   acknowledged_by TEXT,                 -- 'dashboard' or 'sms_reply'
   action_taken TEXT,
