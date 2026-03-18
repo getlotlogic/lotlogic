@@ -18,40 +18,29 @@ Key rules:
   - No duplicate SMS while alerted or acknowledged
   - Zone ONLY re-arms on empty snapshot
   - One 30-min reminder if still alerted (not acknowledged)
+
+SMS Provider:
+  Set NOTIFY_SMS_PROVIDER env var to swap providers without code changes:
+    "twilio"  — Twilio (default, existing)
+    "telnyx"  — Telnyx v2 API
+    "vonage"  — Vonage/Nexmo
+    "log"     — Stdout only (dev/testing)
+  Set NOTIFY_CHANNELS="in_app,sms" to enable SMS alongside in-app.
 """
 
-import asyncio
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
+
+from notifications import notify_violation, notify_reminder
 
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://nzdkoouoaedbbccraoti.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
-# SMS templates
-SMS_INITIAL_TEMPLATE = (
-    "🚨 VIOLATION — {violation_type}\n"
-    "📍 {zone_name} at {lot_name}\n"
-    "📸 {snapshot_url}\n"
-    "🗺️ {map_url}\n"
-    "⏰ {detected_at}\n"
-    "\n"
-    "Reply DONE to acknowledge."
-)
-
-SMS_REMINDER_TEMPLATE = (
-    "⏰ REMINDER — {violation_type} still active\n"
-    "📍 {zone_name} at {lot_name}\n"
-    "📸 {snapshot_url}\n"
-    "First detected: {detected_at} (30 min ago)\n"
-    "\n"
-    "Reply DONE to acknowledge."
-)
-
-# Accepted operator acknowledgment replies
+# Accepted operator acknowledgment replies (SMS inbound)
 ACK_KEYWORDS = {"DONE", "OK", "COMPLETE", "TOWED", "GOT IT", "ON IT"}
 
 # Reminder delay in seconds (30 minutes)
@@ -77,77 +66,6 @@ def _seconds_since(iso_ts: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# SMS sending (Twilio) — runs sync Twilio SDK off the event loop
-# ---------------------------------------------------------------------------
-
-def _send_sms_sync(to: str, body: str):
-    """Blocking Twilio send. Called via asyncio.to_thread() from async code."""
-    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
-    from_number = os.environ.get("TWILIO_FROM_NUMBER")
-
-    if not all([account_sid, auth_token, from_number]):
-        logger.warning("Twilio credentials not configured — SMS not sent")
-        return
-
-    try:
-        from twilio.rest import Client as TwilioClient
-        client = TwilioClient(account_sid, auth_token)
-        client.messages.create(body=body, from_=from_number, to=to)
-    except Exception as e:
-        logger.error("Failed to send SMS to %s: %s", to, e)
-
-
-async def _send_sms(to: str, body: str):
-    """Send SMS without blocking the event loop."""
-    await asyncio.to_thread(_send_sms_sync, to, body)
-
-
-async def send_violation_sms(
-    operator_phone: str,
-    zone_name: str,
-    lot_name: str,
-    violation_type: str,
-    snapshot_url: str,
-    map_url: str,
-    detected_at: str,
-    violation_id: str,
-):
-    """Send initial violation alert SMS to the tow operator."""
-    body = SMS_INITIAL_TEMPLATE.format(
-        violation_type=violation_type or "unauthorized",
-        zone_name=zone_name or "Unknown zone",
-        lot_name=lot_name or "Unknown lot",
-        snapshot_url=snapshot_url or "",
-        map_url=map_url or "",
-        detected_at=detected_at or "",
-    )
-    await _send_sms(operator_phone, body)
-    logger.info("Sent violation SMS for %s to %s", violation_id, operator_phone)
-
-
-async def send_reminder_sms(
-    operator_phone: str,
-    zone_name: str,
-    lot_name: str,
-    violation_type: str,
-    snapshot_url: str,
-    detected_at: str,
-    violation_id: str,
-):
-    """Send 30-minute reminder SMS if operator hasn't acknowledged."""
-    body = SMS_REMINDER_TEMPLATE.format(
-        violation_type=violation_type or "unauthorized",
-        zone_name=zone_name or "Unknown zone",
-        lot_name=lot_name or "Unknown lot",
-        snapshot_url=snapshot_url or "",
-        detected_at=detected_at or "",
-    )
-    await _send_sms(operator_phone, body)
-    logger.info("Sent reminder SMS for %s to %s", violation_id, operator_phone)
-
-
-# ---------------------------------------------------------------------------
 # Core detection pipeline — called every ~10s per snapshot
 # ---------------------------------------------------------------------------
 
@@ -167,7 +85,7 @@ async def process_snapshot(
     """
     Main dedup entry point. Called every ~10s when a new snapshot arrives.
 
-    If has_car is True and no active violation exists → create one, send SMS.
+    If has_car is True and no active violation exists → create one, send text.
     If has_car is True and active violation exists → check for 30-min reminder.
     If has_car is False and active violation exists → clear it, re-arm zone.
     """
@@ -193,17 +111,16 @@ async def process_snapshot(
                 and violation.get("reminder_sent_at") is None
                 and _seconds_since(violation.get("sms_sent_at") or violation["detected_at"]) >= REMINDER_DELAY_SECONDS
             ):
-                # Send ONE reminder
-                if operator_phone:
-                    await send_reminder_sms(
-                        operator_phone=operator_phone,
-                        zone_name=zone_name,
-                        lot_name=lot_name,
-                        violation_type=violation_type,
-                        snapshot_url=snapshot_url,
-                        detected_at=violation["detected_at"],
-                        violation_id=violation["id"],
-                    )
+                # Send ONE reminder via notification channels
+                await notify_reminder(
+                    operator_phone=operator_phone or "",
+                    zone_name=zone_name,
+                    lot_name=lot_name,
+                    violation_type=violation_type,
+                    snapshot_url=snapshot_url,
+                    detected_at=violation["detected_at"],
+                    violation_id=violation["id"],
+                )
                 sb.table("violations").update(
                     {"reminder_sent_at": _now()}
                 ).eq("id", violation["id"]).execute()
@@ -237,18 +154,17 @@ async def process_snapshot(
 
         violation_id = result.data[0]["id"]
 
-        # Send SMS to tow operator
-        if operator_phone:
-            await send_violation_sms(
-                operator_phone=operator_phone,
-                zone_name=zone_name,
-                lot_name=lot_name,
-                violation_type=violation_type,
-                snapshot_url=snapshot_url,
-                map_url=map_url,
-                detected_at=now_ts,
-                violation_id=violation_id,
-            )
+        # Send alert via all configured notification channels
+        await notify_violation(
+            operator_phone=operator_phone or "",
+            zone_name=zone_name,
+            lot_name=lot_name,
+            violation_type=violation_type,
+            snapshot_url=snapshot_url,
+            map_url=map_url,
+            detected_at=now_ts,
+            violation_id=violation_id,
+        )
 
         logger.info("New violation %s created for zone %s", violation_id, zone_id)
         return {"action": "created", "violation_id": violation_id}
@@ -310,13 +226,16 @@ async def acknowledge_violation(violation_id: str, source: str = "dashboard"):
 
 
 # ---------------------------------------------------------------------------
-# SMS reply webhook — Twilio POST /webhooks/sms-reply
+# Inbound SMS webhook — provider-agnostic
 # ---------------------------------------------------------------------------
 
 async def handle_sms_reply(body: str, from_phone: str):
     """
     Handle operator SMS replies like 'DONE', 'OK', 'TOWED'.
     Acknowledges ALL active violations for the operator matching by phone.
+
+    Works with any SMS provider — the webhook just needs to extract
+    the message body and sender phone from the provider's POST payload.
     """
     keyword = body.strip().upper()
     if keyword not in ACK_KEYWORDS:
@@ -342,9 +261,9 @@ async def handle_sms_reply(body: str, from_phone: str):
 
     # Acknowledge active violations: match by operator_id OR by lot ownership
     now_ts = _now()
-    count = 0
+    viol_ids = set()
 
-    # First: violations explicitly assigned to this operator
+    # By operator_id
     by_operator = (
         sb.table("violations")
         .select("id")
@@ -352,10 +271,9 @@ async def handle_sms_reply(body: str, from_phone: str):
         .eq("status", "alerted")
         .execute()
     )
-    viol_ids = {v["id"] for v in by_operator.data}
+    viol_ids.update(v["id"] for v in by_operator.data)
 
-    # Second: violations on lots this partner manages (operator_id may be null
-    # if process_snapshot wasn't passed operator_id)
+    # By lot ownership (operator_id may be null on older violations)
     for lid in lot_ids:
         by_lot = (
             sb.table("violations")
@@ -366,6 +284,7 @@ async def handle_sms_reply(body: str, from_phone: str):
         )
         viol_ids.update(v["id"] for v in by_lot.data)
 
+    count = 0
     for vid in viol_ids:
         sb.table("violations").update(
             {
@@ -399,17 +318,14 @@ def _get_operator_by_phone(sb: Client, phone: str):
 async def run_reminders():
     """
     Query violations where status='alerted' AND reminder_sent_at IS NULL
-    AND detected_at older than 30 minutes. Send reminder SMS, set reminder_sent_at.
+    AND detected_at older than 30 minutes. Send reminder, set reminder_sent_at.
 
     Call this from a scheduler (cron job, Railway cron, or background task).
     Returns count of reminders sent.
     """
     sb = _get_supabase()
-    now = datetime.now(timezone.utc)
-    cutoff = (now - __import__("datetime").timedelta(seconds=REMINDER_DELAY_SECONDS)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=REMINDER_DELAY_SECONDS)).isoformat()
 
-    # Find violations needing a reminder:
-    # status=alerted, no reminder sent yet, detected more than 30 min ago
     resp = (
         sb.table("violations")
         .select("id, zone_id, lot_id, operator_id, violation_type, snapshot_url, detected_at")
@@ -426,62 +342,17 @@ async def run_reminders():
 
     count = 0
     for v in resp.data:
-        # Resolve operator phone: try operator_id first, then lot→partner
-        phone = None
-        zone_name = ""
-        lot_name = ""
+        phone, zone_name, lot_name = _resolve_context(sb, v)
 
-        if v.get("operator_id"):
-            op = sb.table("partners").select("phone, name").eq("id", v["operator_id"]).limit(1).execute()
-            if op.data:
-                phone = op.data[0].get("phone")
-
-        if not phone and v.get("lot_id"):
-            lot = (
-                sb.table("lots")
-                .select("name, partner_id")
-                .eq("id", v["lot_id"])
-                .limit(1)
-                .execute()
-            )
-            if lot.data:
-                lot_name = lot.data[0].get("name", "")
-                pid = lot.data[0].get("partner_id")
-                if pid:
-                    partner = sb.table("partners").select("phone").eq("id", pid).limit(1).execute()
-                    if partner.data:
-                        phone = partner.data[0].get("phone")
-        elif v.get("lot_id"):
-            lot = sb.table("lots").select("name").eq("id", v["lot_id"]).limit(1).execute()
-            if lot.data:
-                lot_name = lot.data[0].get("name", "")
-
-        # Resolve zone_name from camera zones JSONB
-        if v.get("zone_id"):
-            cam = (
-                sb.table("cameras")
-                .select("zones")
-                .eq("lot_id", v["lot_id"])
-                .limit(1)
-                .execute()
-            )
-            if cam.data and cam.data[0].get("zones"):
-                for z in cam.data[0]["zones"]:
-                    zid = z.get("zone_id") or z.get("id")
-                    if zid == v["zone_id"]:
-                        zone_name = z.get("label") or z.get("name") or zid
-                        break
-
-        if phone:
-            await send_reminder_sms(
-                operator_phone=phone,
-                zone_name=zone_name or v.get("zone_id", "Unknown"),
-                lot_name=lot_name,
-                violation_type=v.get("violation_type", "unauthorized"),
-                snapshot_url=v.get("snapshot_url", ""),
-                detected_at=v.get("detected_at", ""),
-                violation_id=v["id"],
-            )
+        await notify_reminder(
+            operator_phone=phone or "",
+            zone_name=zone_name or v.get("zone_id", "Unknown"),
+            lot_name=lot_name,
+            violation_type=v.get("violation_type", "unauthorized"),
+            snapshot_url=v.get("snapshot_url", ""),
+            detected_at=v.get("detected_at", ""),
+            violation_id=v["id"],
+        )
 
         # Mark reminder sent even if no phone (prevent retrying every cycle)
         sb.table("violations").update(
@@ -492,6 +363,42 @@ async def run_reminders():
 
     logger.info("run_reminders: sent %d reminders", count)
     return count
+
+
+def _resolve_context(sb: Client, violation: dict) -> tuple:
+    """Resolve operator phone, zone_name, lot_name from a violation row."""
+    phone = None
+    zone_name = ""
+    lot_name = ""
+
+    # Operator phone: try operator_id first, then lot→partner chain
+    if violation.get("operator_id"):
+        op = sb.table("partners").select("phone").eq("id", violation["operator_id"]).limit(1).execute()
+        if op.data:
+            phone = op.data[0].get("phone")
+
+    if violation.get("lot_id"):
+        lot = sb.table("lots").select("name, partner_id").eq("id", violation["lot_id"]).limit(1).execute()
+        if lot.data:
+            lot_name = lot.data[0].get("name", "")
+            if not phone:
+                pid = lot.data[0].get("partner_id")
+                if pid:
+                    partner = sb.table("partners").select("phone").eq("id", pid).limit(1).execute()
+                    if partner.data:
+                        phone = partner.data[0].get("phone")
+
+    # Zone name from camera zones JSONB
+    if violation.get("zone_id") and violation.get("lot_id"):
+        cam = sb.table("cameras").select("zones").eq("lot_id", violation["lot_id"]).limit(1).execute()
+        if cam.data and cam.data[0].get("zones"):
+            for z in cam.data[0]["zones"]:
+                zid = z.get("zone_id") or z.get("id")
+                if zid == violation["zone_id"]:
+                    zone_name = z.get("label") or z.get("name") or zid
+                    break
+
+    return phone, zone_name, lot_name
 
 
 # ---------------------------------------------------------------------------
@@ -518,18 +425,38 @@ def register_routes(app):
     @app.post("/webhooks/sms-reply")
     async def api_sms_reply(request: Request):
         """
-        Twilio SMS webhook. Twilio sends form-encoded data with
-        Body (message text) and From (sender phone).
+        Inbound SMS webhook. Works with any provider — just extracts
+        message body and sender phone from the POST payload.
+
+        Twilio sends:  Body=..., From=...
+        Telnyx sends:  data.payload.text, data.payload.from.phone_number
+        Vonage sends:  text=..., msisdn=...
         """
-        form = await request.form()
-        body = form.get("Body", "")
-        from_phone = form.get("From", "")
-        result = await handle_sms_reply(body, from_phone)
-        # Return TwiML empty response (no auto-reply)
-        return JSONResponse(
-            content=result,
-            headers={"Content-Type": "application/json"},
-        )
+        content_type = request.headers.get("content-type", "")
+
+        if "json" in content_type:
+            # Telnyx / generic JSON webhooks
+            data = await request.json()
+            # Telnyx v2 format
+            if "data" in data and "payload" in data.get("data", {}):
+                payload = data["data"]["payload"]
+                body_text = payload.get("text", "")
+                from_ph = payload.get("from", {}).get("phone_number", "")
+            # Vonage format
+            elif "text" in data:
+                body_text = data.get("text", "")
+                from_ph = "+" + data.get("msisdn", "")
+            else:
+                body_text = data.get("Body", data.get("body", ""))
+                from_ph = data.get("From", data.get("from", ""))
+        else:
+            # Twilio form-encoded
+            form = await request.form()
+            body_text = form.get("Body", "")
+            from_ph = form.get("From", "")
+
+        result = await handle_sms_reply(body_text, from_ph)
+        return JSONResponse(content=result)
 
     @app.post("/reminders/run")
     async def api_run_reminders():
