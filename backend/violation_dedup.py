@@ -2,21 +2,26 @@
 Violation Dedup System — Zone State Machine
 
 State machine:
-  CLEAR  ──car detected──▶  ALERTED  ──operator acks──▶  ACKNOWLEDGED
-                               │                              │
-                          3 empty snaps                  operator resolves
-                               │                          (boot/tow/dismiss)
-                               ▼                              │
-                           DEPARTED                           ▼
-                          (zone re-arms)                  RESOLVED
-                                                         (zone re-arms)
+  CLEAR  ──car confirmed──▶  ALERTED  ──operator acks──▶  ACKNOWLEDGED
+                                │                              │
+                          sliding window                  operator resolves
+                          says car gone                   (boot/tow/dismiss)
+                                │                              │
+                                ▼                              ▼
+                            DEPARTED                       RESOLVED
+                          (zone re-arms)                (zone re-arms)
 
 Key rules:
   - No duplicate SMS while alerted or acknowledged
-  - Zone re-arms after 3 consecutive empty snapshots (car departed)
   - Departed violations are terminal — no operator action needed
   - Operator can still resolve before departure (boot/tow/dismiss)
   - One 30-min reminder if still alerted (not acknowledged)
+
+Departure detection (sliding window):
+  - Tracks last N snapshots per zone (default 6)
+  - Car departs when ≥80% of window is empty OR N consecutive empties (default 5)
+  - Tolerates intermittent YOLO misses (1 false detection won't reset departure)
+  - Single false-positive frame in window is absorbed, not a hard reset
 
 Accuracy rules:
   - Confirmation snapshots: car must be detected in 2+ consecutive snapshots
@@ -53,8 +58,32 @@ ACK_KEYWORDS = {"DONE", "OK", "COMPLETE", "TOWED", "GOT IT", "ON IT"}
 # Reminder delay in seconds (30 minutes)
 REMINDER_DELAY_SECONDS = 1800
 
-# Consecutive empty snapshots before a violation is marked 'departed'
-EMPTY_STREAK_THRESHOLD = 3
+# ── Departure detection (sliding window) ──
+# Instead of requiring N consecutive empty frames (brittle — one false positive
+# resets the counter), we use a sliding window: track the last N snapshots and
+# require that a supermajority show "no car" before marking departed.
+#
+# Example with defaults (window=6, ratio=0.8):
+#   Last 6 snapshots: [empty, car, empty, empty, empty, empty]
+#   Empty ratio = 5/6 = 0.83 ≥ 0.8 → DEPARTED
+#   This tolerates 1 false-positive detection in the window.
+#
+# The old EMPTY_STREAK_THRESHOLD is kept as a fallback floor — if we get
+# this many consecutive empties, depart immediately even if the window
+# isn't full yet.
+EMPTY_STREAK_THRESHOLD = int(os.environ.get("EMPTY_STREAK_THRESHOLD", "5"))
+
+# Sliding window size: how many recent snapshots to consider for departure.
+DEPARTURE_WINDOW_SIZE = int(os.environ.get("DEPARTURE_WINDOW_SIZE", "6"))
+
+# Ratio of empty snapshots within the window required to trigger departure.
+# 0.8 = 80% of the window must be empty.
+DEPARTURE_EMPTY_RATIO = float(os.environ.get("DEPARTURE_EMPTY_RATIO", "0.80"))
+
+# In-memory sliding window per zone: zone_id → list of bools (True=car, False=empty).
+# Capped at DEPARTURE_WINDOW_SIZE entries. Persists across snapshots for the
+# lifetime of the process; safe because each zone_id is globally unique.
+_zone_presence: dict[str, list[bool]] = {}
 
 # Cooldown after operator resolves — don't re-fire on same zone for this many seconds.
 # Prevents "resolved → next snapshot → new violation" loop when car is still being towed.
@@ -149,14 +178,24 @@ async def process_snapshot(
     )
     active = active_resp.data
 
+    # ── Update sliding window ──
+    window = _zone_presence.setdefault(zone_id, [])
+    window.append(has_car)
+    if len(window) > DEPARTURE_WINDOW_SIZE:
+        window[:] = window[-DEPARTURE_WINDOW_SIZE:]
+
     if has_car:
         if active:
             # Car still there — reset empty streak and check for reminder
             violation = active[0]
+            update_fields = {}
             if (violation.get("empty_streak") or 0) > 0:
-                sb.table("violations").update(
-                    {"empty_streak": 0}
-                ).eq("id", violation["id"]).execute()
+                update_fields["empty_streak"] = 0
+            # Keep the snapshot URL current so the dashboard shows the latest image
+            if snapshot_url:
+                update_fields["snapshot_url"] = snapshot_url
+            if update_fields:
+                sb.table("violations").update(update_fields).eq("id", violation["id"]).execute()
             if (
                 violation["status"] == "alerted"
                 and violation.get("reminder_sent_at") is None
@@ -234,8 +273,9 @@ async def process_snapshot(
                 _zone_confirmations.pop(zone_id, None)
                 return {"action": "plate_dedup", "zone_id": zone_id, "existing_id": existing["id"]}
 
-        # Confirmation met — reset counter
+        # Confirmation met — reset counters
         _zone_confirmations.pop(zone_id, None)
+        _zone_presence.pop(zone_id, None)  # fresh window for new violation
 
         # NEW violation: car detected, no active violation on this zone
         now_ts = _now()
@@ -292,15 +332,30 @@ async def process_snapshot(
         # No car — reset confirmation counter for this zone
         _zone_confirmations.pop(zone_id, None)
 
-        # Zone appears empty — increment empty streak on active violation.
-        # After EMPTY_STREAK_THRESHOLD consecutive empty snapshots, mark
-        # the violation as 'departed' and unlock the zone for new detections.
+        # Zone appears empty — use BOTH consecutive streak AND sliding window
+        # to decide departure. Either condition triggers it:
+        #   1. Consecutive streak ≥ EMPTY_STREAK_THRESHOLD (fast path for clear exits)
+        #   2. Sliding window empty ratio ≥ DEPARTURE_EMPTY_RATIO (tolerates intermittent YOLO misses)
         if active:
             violation = active[0]
             new_streak = (violation.get("empty_streak") or 0) + 1
 
-            if new_streak >= EMPTY_STREAK_THRESHOLD:
-                # Car is gone — mark departed, unlock zone
+            # Check sliding window: what fraction of recent snapshots are empty?
+            window = _zone_presence.get(zone_id, [])
+            empty_count = sum(1 for v in window if not v)
+            window_ratio = empty_count / len(window) if window else 0.0
+            window_full = len(window) >= DEPARTURE_WINDOW_SIZE
+
+            should_depart = (
+                # Fast path: N consecutive empties — car clearly left
+                new_streak >= EMPTY_STREAK_THRESHOLD
+                # Sliding window: supermajority of recent snapshots empty.
+                # Only triggers when window is full to avoid premature departure.
+                or (window_full and window_ratio >= DEPARTURE_EMPTY_RATIO)
+            )
+
+            if should_depart:
+                # Car is gone — mark departed, unlock zone, clear window
                 sb.table("violations").update(
                     {
                         "status": "departed",
@@ -308,19 +363,22 @@ async def process_snapshot(
                         "empty_streak": new_streak,
                     }
                 ).eq("id", violation["id"]).execute()
+                _zone_presence.pop(zone_id, None)
                 logger.info(
-                    "Violation %s departed after %d empty snapshots — zone %s re-armed",
-                    violation["id"], new_streak, zone_id,
+                    "Violation %s departed (streak=%d, window=%d/%d=%.0f%%) — zone %s re-armed",
+                    violation["id"], new_streak, empty_count, len(window),
+                    window_ratio * 100, zone_id,
                 )
                 return {"action": "departed", "violation_id": violation["id"]}
             else:
-                # Not enough consecutive empties yet — just bump the counter
+                # Not enough evidence yet — bump the streak counter
                 sb.table("violations").update(
                     {"empty_streak": new_streak}
                 ).eq("id", violation["id"]).execute()
                 logger.debug(
-                    "Zone %s empty streak %d/%d for violation %s",
-                    zone_id, new_streak, EMPTY_STREAK_THRESHOLD, violation["id"],
+                    "Zone %s empty streak %d/%d, window %d/%d=%.0f%% for violation %s",
+                    zone_id, new_streak, EMPTY_STREAK_THRESHOLD,
+                    empty_count, len(window), window_ratio * 100, violation["id"],
                 )
                 return {"action": "existing", "violation_id": violation["id"]}
 
