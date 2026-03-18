@@ -1599,7 +1599,7 @@ const db = {
 
       // Parallel: pending violations count + latest snapshot per camera + camera zones
       const [violRes, ...camData] = await Promise.all([
-        supabase.from('violations').select('id, camera_id').eq('lot_id', lotId).eq('status', 'pending'),
+        supabase.from('violations').select('id, camera_id').eq('lot_id', lotId).in('status', ['pending', 'alerted', 'acknowledged']),
         ...((cams || []).map(cam => Promise.all([
           supabase.from('snapshots').select('*').eq('camera_id', cam.id).order('captured_at', { ascending: false }).limit(1),
           supabase.from('camera_zones').select('*').eq('camera_id', cam.id),
@@ -1865,8 +1865,8 @@ const db = {
       const { data, error } = await supabase
         .from('violations')
         .select('*')
-        .neq('status', 'pending')
-        .gte('resolved_at', since);
+        .in('status', ['resolved', 'cleared'])
+        .gte('detected_at', since);
       if (!error && data) {
         // Revenue stored as dollars in DB
         const totalOur = data.reduce((s, v) => s + (v.our_revenue || 0), 0);
@@ -2004,6 +2004,27 @@ const db = {
       return { success: true };
     }
     return apiFetch(`/violations/${violId}`, { method: 'DELETE' });
+  },
+
+  // ── Violation Dedup ───────────────────────────────────────
+  async acknowledgeViolation(violId) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('violations')
+        .update({
+          status: 'acknowledged',
+          acknowledged_at: new Date().toISOString(),
+          acknowledged_by: 'dashboard',
+        })
+        .eq('id', violId)
+        .eq('status', 'alerted')
+        .select();
+      if (error) throw new Error(error.message);
+      // Also try backend endpoint as fallback/sync
+      try { await apiFetch(`/violations/${violId}/acknowledge`, { method: 'POST' }); } catch (_) {}
+      return { success: true, data };
+    }
+    return apiFetch(`/violations/${violId}/acknowledge`, { method: 'POST' });
   },
 
   // ── Analytics ─────────────────────────────────────────────
@@ -2161,6 +2182,121 @@ function haptic(style = 'light') {
   else navigator.vibrate(8);
 }
 
+// ── In-app notification system (replaces SMS dependency) ─────
+const NotifyManager = (() => {
+  let _audioCtx = null;
+
+  function _getPrefs() {
+    try {
+      const raw = localStorage.getItem('lotlogic_notify_prefs');
+      return raw ? JSON.parse(raw) : { sound: true, browser: true, volume: 0.4 };
+    } catch { return { sound: true, browser: true, volume: 0.4 }; }
+  }
+  function _setPrefs(p) {
+    try { localStorage.setItem('lotlogic_notify_prefs', JSON.stringify(p)); } catch {}
+  }
+
+  function getPrefs() { return _getPrefs(); }
+  function updatePrefs(patch) { const p = { ..._getPrefs(), ...patch }; _setPrefs(p); return p; }
+
+  // Two-tone chime via Web Audio API — no external audio files needed
+  function playChime() {
+    const prefs = _getPrefs();
+    if (!prefs.sound) return;
+    try {
+      if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = _audioCtx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const now = ctx.currentTime;
+
+      // First tone: C6 (1047 Hz)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.connect(gain1); gain1.connect(ctx.destination);
+      osc1.frequency.value = 1047;
+      osc1.type = 'sine';
+      gain1.gain.setValueAtTime(prefs.volume, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc1.start(now); osc1.stop(now + 0.15);
+
+      // Second tone: E6 (1319 Hz) — 100ms later, slightly longer
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2); gain2.connect(ctx.destination);
+      osc2.frequency.value = 1319;
+      osc2.type = 'sine';
+      gain2.gain.setValueAtTime(prefs.volume, now + 0.1);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+      osc2.start(now + 0.1); osc2.stop(now + 0.35);
+    } catch (e) { console.warn('Chime failed:', e); }
+  }
+
+  // Urgent double-chime for reminders
+  function playUrgentChime() {
+    playChime();
+    setTimeout(playChime, 500);
+  }
+
+  // Browser Notification API
+  function browserNotify(title, body, tag) {
+    const prefs = _getPrefs();
+    if (!prefs.browser) return;
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    try {
+      new Notification(title, {
+        body,
+        tag: tag || 'lotlogic-violation',
+        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🅿️</text></svg>',
+        renotify: true,
+        requireInteraction: false,
+      });
+    } catch (e) { console.warn('Browser notification failed:', e); }
+  }
+
+  // Request browser notification permission (must be user-gesture triggered)
+  async function requestPermission() {
+    if (!('Notification' in window)) return 'unsupported';
+    if (Notification.permission === 'granted') return 'granted';
+    if (Notification.permission === 'denied') return 'denied';
+    return await Notification.requestPermission();
+  }
+
+  function getPermission() {
+    if (!('Notification' in window)) return 'unsupported';
+    return Notification.permission;
+  }
+
+  // Main entry: fire notification for a new violation
+  function notifyNewViolation(violation) {
+    const zone = violation.zone_id || 'Unknown zone';
+    const plate = violation.plate_text || 'No plate';
+    const type = violation.violation_type || 'Violation';
+
+    playChime();
+    haptic('heavy');
+    browserNotify(
+      `New ${type}`,
+      `${plate} in ${zone}`,
+      `violation-${violation.id}`,
+    );
+  }
+
+  // Fire notification for a reminder (more urgent)
+  function notifyReminder(violation) {
+    const zone = violation.zone_id || 'Unknown zone';
+    playUrgentChime();
+    haptic('heavy');
+    browserNotify(
+      '30-min reminder',
+      `${zone} — still waiting for action`,
+      `reminder-${violation.id}`,
+    );
+  }
+
+  return { getPrefs, updatePrefs, playChime, playUrgentChime, browserNotify, requestPermission, getPermission, notifyNewViolation, notifyReminder };
+})();
+
 // ── Smarter date labels ──────────────────────────────────────
 function smartDate(isoStr) {
   if (!isoStr) return '';
@@ -2298,7 +2434,7 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
 
   if (!violation) return null;
   const timer = elapsed(violation.detected_at);
-  const isPending = violation.status === 'pending';
+  const isPending = violation.status === 'pending' || violation.status === 'alerted' || violation.status === 'acknowledged';
 
   return (
     <div className="viol-modal-overlay" onClick={onClose}>
@@ -2358,8 +2494,8 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
           <div className="viol-modal-grid">
             <div className="viol-modal-stat">
               <div className="viol-modal-stat-label">Status</div>
-              <div className="viol-modal-stat-val" style={{color: isPending ? 'var(--yellow)' : 'var(--green)'}}>
-                {isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
+              <div className="viol-modal-stat-val" style={{color: violation.status === 'acknowledged' ? '#f59e0b' : violation.status === 'departed' ? '#6b7280' : isPending ? 'var(--red)' : 'var(--green)'}}>
+                {violation.status === 'alerted' ? 'Active' : violation.status === 'acknowledged' ? 'Acknowledged' : violation.status === 'cleared' ? 'Cleared' : violation.status === 'departed' ? 'Departed' : isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
               </div>
             </div>
             <div className="viol-modal-stat">
@@ -2933,17 +3069,17 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     }
   }, [deepLinkViolationId, violations, selectedViol]);
 
-  // Active jobs = pending violations, oldest first (most urgent first)
+  // Active jobs = pending/alerted/acknowledged violations, oldest first (most urgent first)
   const active = violations
-    .filter(v => v.status === 'pending')
+    .filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status))
     .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at));
 
-  // Recent = resolved today (calendar day)
+  // Recent = resolved/cleared today (calendar day)
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   const todayCutoff = todayStart.getTime();
   const recent = violations
-    .filter(v => v.status !== 'pending' && new Date(v.resolved_at || v.detected_at).getTime() >= todayCutoff)
-    .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
+    .filter(v => ['resolved', 'cleared', 'departed'].includes(v.status) && new Date(v.resolved_at || v.departed_at || v.cleared_at || v.detected_at).getTime() >= todayCutoff)
+    .sort((a, b) => new Date(b.resolved_at || b.departed_at || b.cleared_at || b.detected_at) - new Date(a.resolved_at || a.departed_at || a.cleared_at || a.detected_at));
 
   // KPIs
   const avgWaitMins = active.length > 0
@@ -2993,6 +3129,31 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
 
   const actionLabels = { boot: 'Boot', tow: 'Tow', dismissed: 'Dismiss', already_gone: 'Already Gone', no_action: 'No Action' };
   const actionColors = { boot: '#fbbf24', tow: '#ef4444', dismissed: '#a78bfa', already_gone: '#6b7280', no_action: '#6b7280' };
+
+  // Status badge config for dedup state machine
+  const statusBadge = {
+    alerted:      { label: 'Active',       color: '#ef4444', bg: 'rgba(239,68,68,.12)', icon: '🔴' },
+    pending:      { label: 'Active',       color: '#ef4444', bg: 'rgba(239,68,68,.12)', icon: '🔴' },
+    acknowledged: { label: 'Acknowledged', color: '#f59e0b', bg: 'rgba(245,158,11,.12)', icon: '🟡' },
+    cleared:      { label: 'Cleared',      color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
+    resolved:     { label: 'Resolved',     color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
+    departed:     { label: 'Departed',     color: '#6b7280', bg: 'rgba(107,114,128,.12)', icon: '🚗' },
+  };
+
+  const [acking, setAcking] = useState(null);
+
+  async function handleAcknowledge(violId) {
+    if (actingRef.current) return;
+    actingRef.current = true;
+    setAcking(violId);
+    try {
+      await db.acknowledgeViolation(violId);
+      addToast('Acknowledged — no more alerts until zone clears', 'success');
+      if (onAction) onAction();
+    } catch (e) {
+      addToast('Acknowledge failed: ' + (e.message || 'Unknown error'), 'error');
+    } finally { setAcking(null); actingRef.current = false; }
+  }
 
   async function handleAction(violId, action) {
     // Guard against double-tap: if already processing any action, bail out
@@ -3069,7 +3230,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       <div className="kpi-bar">
         <div className="kpi-card">
           <div className={`kpi-val ${active.length > 0 ? 'red' : 'green'}`}>{active.length}</div>
-          <div className="kpi-label">Pending</div>
+          <div className="kpi-label">Active</div>
         </div>
         <div className="kpi-card">
           <div className={`kpi-val ${avgWaitMins >= 45 ? 'red' : 'blue'}`}>{avgWaitMins}<span style={{fontSize:12}}>m</span></div>
@@ -3233,12 +3394,31 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               {/* Lot name + timer row */}
               <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 16px'}}>
                 <div style={{flex:1, minWidth:0}}>
-                  <div className="job-lot-name" style={{fontSize:14}}>{lot?.name || 'Unknown Lot'}</div>
+                  <div className="job-lot-name" style={{fontSize:14, display:'flex', alignItems:'center', gap:8}}>
+                    {lot?.name || 'Unknown Lot'}
+                    {/* Status badge */}
+                    {(() => {
+                      const badge = statusBadge[v.status] || statusBadge.pending;
+                      return (
+                        <span style={{
+                          fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:6,
+                          background: badge.bg, color: badge.color, whiteSpace:'nowrap',
+                        }}>
+                          {badge.icon} {badge.label}
+                        </span>
+                      );
+                    })()}
+                  </div>
                   <div className="job-lot-addr" style={{display:'flex', alignItems:'center', gap:6}}>
                     {fmtTime(v.detected_at)} · {(v.violation_type || 'violation').replace(/_/g, ' ')}
                     {v.sms_sent_at && (
                       <span style={{fontSize:10, fontWeight:600, color: v.sms_delivered ? 'var(--green)' : 'var(--yellow)'}}>
                         {v.sms_delivered ? '✓ SMS' : '○ SMS'}
+                      </span>
+                    )}
+                    {v.reminder_sent_at && (
+                      <span style={{fontSize:10, fontWeight:600, color:'var(--text-muted)'}}>
+                        · Reminder sent
                       </span>
                     )}
                   </div>
@@ -3261,6 +3441,14 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               </div>
               <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 12px 10px', gap:8}}>
                 <div style={{display:'flex', gap:6}}>
+                  {v.status === 'alerted' && (
+                    <button className="action-btn" disabled={anyActing || acking === v.id}
+                      onClick={(e) => { e.stopPropagation(); handleAcknowledge(v.id); }}
+                      aria-label="Acknowledge violation"
+                      style={{minWidth:60, background:'rgba(245,158,11,.12)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontWeight:700}}>
+                      {acking === v.id ? '…' : 'Acknowledge'}
+                    </button>
+                  )}
                   <button className="action-btn dismiss" disabled={anyActing} onClick={() => requestAction(v.id, 'dismissed')} aria-label="Dismiss violation" style={{minWidth:60}}>
                     Dismiss
                   </button>
@@ -3342,7 +3530,11 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                       <span className="plate-tag no-plate" style={{display:'flex', alignItems:'center', gap:4, background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.2)', color:'#ef4444', fontSize:10}}>No plate</span>
                     )}
                     {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
-                    <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'handled').replace(/_/g, ' ')}</strong></span>
+                    {v.status === 'cleared' ? (
+                      <span className="job-tag" style={{color:'#4ade80'}}>✅ <strong style={{color:'#4ade80'}}>Cleared</strong>{v.duration_seconds ? ` · ${Math.round(v.duration_seconds / 60)}m` : ''}</span>
+                    ) : (
+                      <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'handled').replace(/_/g, ' ')}</strong></span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -4173,6 +4365,82 @@ function PermitsModal({ lotId, lotName, onClose }) {
   );
 }
 
+// ── Live camera feed — self-refreshing snapshot ────────────────
+function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
+  const [snap, setSnap] = useState(initialSnap);
+  const [tick, setTick] = useState(0);
+
+  // Poll latest snapshot from DB every 15s — independent of parent loadData
+  useEffect(() => {
+    if (!supabase || !cameraId) return;
+    let mounted = true;
+    const poll = async () => {
+      try {
+        const { data } = await supabase
+          .from('snapshots')
+          .select('storage_url, captured_at, vehicles_detected, raw_detections')
+          .eq('camera_id', cameraId)
+          .order('captured_at', { ascending: false })
+          .limit(1);
+        if (mounted && data?.[0]) {
+          const s = data[0];
+          setSnap({
+            url: (s.storage_url || '') + ((s.storage_url || '').includes('?') ? '&' : '?') + '_t=' + Date.now(),
+            captured_at: s.captured_at,
+            vehicles_detected: s.vehicles_detected || 0,
+            detections: s.raw_detections?.detections || [],
+          });
+        }
+      } catch (e) { /* silent — parent loadData is the fallback */ }
+    };
+    const iv = setInterval(poll, 15000);
+    // Also subscribe to realtime INSERT for this specific camera
+    const channel = supabase.channel('live-cam-' + cameraId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'snapshots', filter: 'camera_id=eq.' + cameraId }, () => {
+        poll();
+      })
+      .subscribe();
+    return () => { mounted = false; clearInterval(iv); supabase.removeChannel(channel); };
+  }, [cameraId]);
+
+  // Keep tick updated so snapAge recalculates
+  useEffect(() => {
+    const iv = setInterval(() => setTick(t => t + 1), 5000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Sync with parent if parent has a newer snapshot
+  useEffect(() => {
+    if (initialSnap?.captured_at && (!snap?.captured_at || new Date(initialSnap.captured_at) > new Date(snap.captured_at))) {
+      setSnap(initialSnap);
+    }
+  }, [initialSnap?.captured_at]);
+
+  const snapAge = snap?.captured_at ? (Date.now() - new Date(snap.captured_at).getTime()) / 1000 : Infinity;
+  const snapStale = snapAge > 300;
+
+  if (!snap?.url) {
+    return <div className="cam-offline">{online ? 'No snapshot yet' : 'Camera offline'}</div>;
+  }
+
+  return (
+    <>
+      <img
+        className="cam-img"
+        src={snap.url}
+        alt={cameraName}
+        loading="lazy"
+        onError={e => { e.target.style.display = 'none'; e.target.parentNode.querySelector('.cam-offline') || (e.target.parentNode.innerHTML = '<div class="cam-offline">Snapshot unavailable</div>'); }}
+      />
+      {snapStale && (
+        <div style={{position:'absolute', top:8, right:8, background:'rgba(239,68,68,.85)', color:'#fff', borderRadius:6, padding:'3px 8px', fontSize:10, fontWeight:700, backdropFilter:'blur(4px)'}}>
+          {snapAge > 3600 ? `${Math.floor(snapAge/3600)}h ago` : `${Math.floor(snapAge/60)}m ago`}
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Lots tab ──────────────────────────────────────────────────
 function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   const [expandedCams, setExpandedCams] = useState({});
@@ -4282,8 +4550,6 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
               <div className="cam-sheet">
                 {state.cameras.map(cam => {
                   const snap = cam.latest_snapshot;
-                  const snapAge = snap?.captured_at ? (Date.now() - new Date(snap.captured_at).getTime()) / 1000 : Infinity;
-                  const snapStale = snapAge > 300; // 5 minutes
                   const snapVehicles = snap?.vehicles_detected || snap?.vehicle_count || 0;
                   const snapPeople = snap?.people_detected || snap?.person_count || snap?.humans_detected || 0;
                   const snapPlates = snap?.plates_read || snap?.plate_count || (snap?.plate_readings ? snap.plate_readings.length : 0);
@@ -4309,35 +4575,17 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                             </button>
                           )}
                           {snap && (
-                            <div className="cam-time" style={snapStale ? {color:'#fbbf24'} : undefined}>
-                              {snapStale ? smartDate(snap.captured_at) + ' ' : ''}{fmtTime(snap.captured_at)}
-                              {snapStale && <span style={{fontSize:9, marginLeft:4, color:'#ef4444'}}>(stale)</span>}
+                            <div className="cam-time">
+                              {fmtTime(snap.captured_at)}
                             </div>
                           )}
                         </div>
                       </div>
                       <div className="cam-img-wrap">
-                        {snap?.url ? (
-                          <>
-                            <img
-                              className="cam-img"
-                              src={snap.url}
-                              alt={cam.camera_name}
-                              loading="lazy"
-                              onError={e => { e.target.style.display = 'none'; e.target.parentNode.querySelector('.cam-offline') || (e.target.parentNode.innerHTML = '<div class="cam-offline">Snapshot unavailable</div>'); }}
-                            />
-                            <ZoneOverlay zones={cam.zones} />
-                            {cam.active_violations > 0 && (
-                              <div className="cam-viol-overlay">{cam.active_violations} open</div>
-                            )}
-                            {snapStale && (
-                              <div style={{position:'absolute', top:8, right:8, background:'rgba(239,68,68,.85)', color:'#fff', borderRadius:6, padding:'3px 8px', fontSize:10, fontWeight:700, backdropFilter:'blur(4px)'}}>
-                                {snapAge > 3600 ? `${Math.floor(snapAge/3600)}h ago` : `${Math.floor(snapAge/60)}m ago`}
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          <div className="cam-offline">{cam.online ? 'No snapshot yet' : 'Camera offline'}</div>
+                        <LiveCameraFeed cameraId={cam.camera_id} initialSnap={snap} cameraName={cam.camera_name} online={cam.online} />
+                        <ZoneOverlay zones={cam.zones} />
+                        {cam.active_violations > 0 && (
+                          <div className="cam-viol-overlay">{cam.active_violations} open</div>
                         )}
                       </div>
 
@@ -4928,11 +5176,13 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
   });
 
   // Global KPIs
-  const pending = violations.filter(v => v.status === 'pending').length;
+  const _activeStatuses = ['pending', 'alerted', 'acknowledged'];
+  const _closedStatuses = ['resolved', 'cleared', 'departed'];
+  const pending = violations.filter(v => _activeStatuses.includes(v.status)).length;
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-  const todayResolved = violations.filter(v => v.status !== 'pending' && new Date(v.resolved_at || v.detected_at) >= todayStart).length;
-  const totalGross = violations.filter(v => v.status !== 'pending').reduce((s, v) => s + (v.gross_revenue || 0), 0);
-  const totalOurs = violations.filter(v => v.status !== 'pending').reduce((s, v) => s + (v.our_revenue || 0), 0);
+  const todayResolved = violations.filter(v => _closedStatuses.includes(v.status) && new Date(v.resolved_at || v.cleared_at || v.detected_at) >= todayStart).length;
+  const totalGross = violations.filter(v => _closedStatuses.includes(v.status)).reduce((s, v) => s + (v.gross_revenue || 0), 0);
+  const totalOurs = violations.filter(v => _closedStatuses.includes(v.status)).reduce((s, v) => s + (v.our_revenue || 0), 0);
 
   // Camera stats
   const allCams = Object.values(lotStates).flatMap(s => s?.cameras || []);
@@ -4944,8 +5194,8 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
     const pLots = partnerLots[p.id] || [];
     const pLotIds = pLots.map(l => l.id);
     const pViols = violations.filter(v => pLotIds.includes(v.lot_id));
-    const pPending = pViols.filter(v => v.status === 'pending').length;
-    const pResolved = pViols.filter(v => v.status !== 'pending');
+    const pPending = pViols.filter(v => _activeStatuses.includes(v.status)).length;
+    const pResolved = pViols.filter(v => _closedStatuses.includes(v.status));
     const pTodayResolved = pResolved.filter(v => new Date(v.resolved_at || v.detected_at) >= todayStart).length;
     const pGross = pResolved.reduce((s, v) => s + (v.gross_revenue || 0), 0);
     const pOurs = pResolved.reduce((s, v) => s + (v.our_revenue || 0), 0);
@@ -4971,7 +5221,7 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
       <div className="kpi-bar" style={{marginBottom:16}}>
         <div className="kpi-card">
           <div className="kpi-val red">{pending}</div>
-          <div className="kpi-label">Pending</div>
+          <div className="kpi-label">Active</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-val green">{todayResolved}</div>
@@ -5087,6 +5337,13 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
 // ── Account / Settings page ────────────────────────────────────
 function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) {
   const isOwner = user._role === 'owner';
+  const [notifyPrefs, setNotifyPrefs] = useState(() => NotifyManager.getPrefs());
+  const [notifyPerm, setNotifyPerm] = useState(() => NotifyManager.getPermission());
+
+  function updateNotify(patch) {
+    const next = NotifyManager.updatePrefs(patch);
+    setNotifyPrefs(next);
+  }
 
   function ToggleSwitch({ on, onChange }) {
     return (
@@ -5202,13 +5459,67 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
             </select>
           </div>
         )}
+      </div>
+
+      {/* Notification settings */}
+      <div className="settings-section">
+        <div className="settings-section-title">Notifications</div>
         <div className="settings-row">
           <div className="settings-row-info">
-            <div className="settings-row-label">SMS Notifications</div>
-            <div className="settings-row-desc">Violation alerts sent via SMS</div>
+            <div className="settings-row-label">Alert Sound</div>
+            <div className="settings-row-desc">Play chime when a new violation is detected</div>
           </div>
-          <div className="settings-row-value" style={{color:'var(--green)'}}>Enabled</div>
+          <div style={{display:'flex', alignItems:'center', gap:8}}>
+            <button onClick={() => NotifyManager.playChime()} style={{
+              background:'var(--bg-inset)', border:'1px solid var(--border)', borderRadius:6,
+              padding:'3px 8px', fontSize:11, fontWeight:600, color:'var(--text-muted)', cursor:'pointer',
+            }}>Test</button>
+            <ToggleSwitch on={notifyPrefs.sound} onChange={() => updateNotify({ sound: !notifyPrefs.sound })} />
+          </div>
         </div>
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Browser Notifications</div>
+            <div className="settings-row-desc">
+              {notifyPerm === 'granted' ? 'Desktop alerts when tab is in background' :
+               notifyPerm === 'denied' ? 'Blocked — enable in browser settings' :
+               notifyPerm === 'unsupported' ? 'Not supported in this browser' :
+               'Click Enable to allow desktop alerts'}
+            </div>
+          </div>
+          <div style={{display:'flex', alignItems:'center', gap:8}}>
+            {notifyPerm === 'default' && (
+              <button onClick={async () => {
+                const p = await NotifyManager.requestPermission();
+                setNotifyPerm(p);
+                if (p === 'granted') updateNotify({ browser: true });
+              }} style={{
+                background:'var(--accent)', color:'#fff', border:'none', borderRadius:6,
+                padding:'4px 12px', fontSize:12, fontWeight:700, cursor:'pointer',
+              }}>Enable</button>
+            )}
+            {notifyPerm === 'granted' && (
+              <ToggleSwitch on={notifyPrefs.browser} onChange={() => updateNotify({ browser: !notifyPrefs.browser })} />
+            )}
+            {notifyPerm === 'denied' && (
+              <div className="settings-row-value" style={{color:'#f87171'}}>Blocked</div>
+            )}
+          </div>
+        </div>
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Vibration</div>
+            <div className="settings-row-desc">Haptic feedback on mobile devices</div>
+          </div>
+          <div className="settings-row-value" style={{color: navigator.vibrate ? 'var(--green)' : 'var(--text-faint)'}}>
+            {navigator.vibrate ? 'Auto' : 'Unsupported'}
+          </div>
+        </div>
+      </div>
+
+      {/* System info */}
+      <div className="settings-section">
+        <div className="settings-section-title">System</div>
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">Database</div>
@@ -5220,7 +5531,7 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
           <div className="settings-row-info">
             <div className="settings-row-label">Version</div>
           </div>
-          <div className="settings-row-value">4.2.0</div>
+          <div className="settings-row-value">5.0.0</div>
         </div>
       </div>
 
@@ -5626,6 +5937,10 @@ function App() {
     if (!owner || lots.length === 0) return;
     const lotIds = lots.map(l => l.id);
     const channel = db.subscribeViolations(lotIds, (payload) => {
+      // Fire in-app notification for new alerted violations
+      if (payload.eventType === 'INSERT' && payload.new?.status === 'alerted') {
+        NotifyManager.notifyNewViolation(payload.new);
+      }
       // On any violation change, do a silent refresh
       loadData(owner, true);
     }, (errStatus) => {
@@ -5637,7 +5952,7 @@ function App() {
 
   if (!owner) return <LoginPage onLogin={login} />;
 
-  const pending = effectiveViolations.filter(v => v.status === 'pending').length;
+  const pending = effectiveViolations.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status)).length;
 
   // Handle "View as Operator" from Overview page
   function handleViewAs(partner) {
