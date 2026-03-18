@@ -4365,6 +4365,82 @@ function PermitsModal({ lotId, lotName, onClose }) {
   );
 }
 
+// ── Live camera feed — self-refreshing snapshot ────────────────
+function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
+  const [snap, setSnap] = useState(initialSnap);
+  const [tick, setTick] = useState(0);
+
+  // Poll latest snapshot from DB every 15s — independent of parent loadData
+  useEffect(() => {
+    if (!supabase || !cameraId) return;
+    let mounted = true;
+    const poll = async () => {
+      try {
+        const { data } = await supabase
+          .from('snapshots')
+          .select('storage_url, captured_at, vehicles_detected, raw_detections')
+          .eq('camera_id', cameraId)
+          .order('captured_at', { ascending: false })
+          .limit(1);
+        if (mounted && data?.[0]) {
+          const s = data[0];
+          setSnap({
+            url: (s.storage_url || '') + ((s.storage_url || '').includes('?') ? '&' : '?') + '_t=' + Date.now(),
+            captured_at: s.captured_at,
+            vehicles_detected: s.vehicles_detected || 0,
+            detections: s.raw_detections?.detections || [],
+          });
+        }
+      } catch (e) { /* silent — parent loadData is the fallback */ }
+    };
+    const iv = setInterval(poll, 15000);
+    // Also subscribe to realtime INSERT for this specific camera
+    const channel = supabase.channel('live-cam-' + cameraId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'snapshots', filter: 'camera_id=eq.' + cameraId }, () => {
+        poll();
+      })
+      .subscribe();
+    return () => { mounted = false; clearInterval(iv); supabase.removeChannel(channel); };
+  }, [cameraId]);
+
+  // Keep tick updated so snapAge recalculates
+  useEffect(() => {
+    const iv = setInterval(() => setTick(t => t + 1), 5000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Sync with parent if parent has a newer snapshot
+  useEffect(() => {
+    if (initialSnap?.captured_at && (!snap?.captured_at || new Date(initialSnap.captured_at) > new Date(snap.captured_at))) {
+      setSnap(initialSnap);
+    }
+  }, [initialSnap?.captured_at]);
+
+  const snapAge = snap?.captured_at ? (Date.now() - new Date(snap.captured_at).getTime()) / 1000 : Infinity;
+  const snapStale = snapAge > 300;
+
+  if (!snap?.url) {
+    return <div className="cam-offline">{online ? 'No snapshot yet' : 'Camera offline'}</div>;
+  }
+
+  return (
+    <>
+      <img
+        className="cam-img"
+        src={snap.url}
+        alt={cameraName}
+        loading="lazy"
+        onError={e => { e.target.style.display = 'none'; e.target.parentNode.querySelector('.cam-offline') || (e.target.parentNode.innerHTML = '<div class="cam-offline">Snapshot unavailable</div>'); }}
+      />
+      {snapStale && (
+        <div style={{position:'absolute', top:8, right:8, background:'rgba(239,68,68,.85)', color:'#fff', borderRadius:6, padding:'3px 8px', fontSize:10, fontWeight:700, backdropFilter:'blur(4px)'}}>
+          {snapAge > 3600 ? `${Math.floor(snapAge/3600)}h ago` : `${Math.floor(snapAge/60)}m ago`}
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Lots tab ──────────────────────────────────────────────────
 function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   const [expandedCams, setExpandedCams] = useState({});
@@ -4474,8 +4550,6 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
               <div className="cam-sheet">
                 {state.cameras.map(cam => {
                   const snap = cam.latest_snapshot;
-                  const snapAge = snap?.captured_at ? (Date.now() - new Date(snap.captured_at).getTime()) / 1000 : Infinity;
-                  const snapStale = snapAge > 300; // 5 minutes
                   const snapVehicles = snap?.vehicles_detected || snap?.vehicle_count || 0;
                   const snapPeople = snap?.people_detected || snap?.person_count || snap?.humans_detected || 0;
                   const snapPlates = snap?.plates_read || snap?.plate_count || (snap?.plate_readings ? snap.plate_readings.length : 0);
@@ -4501,35 +4575,17 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                             </button>
                           )}
                           {snap && (
-                            <div className="cam-time" style={snapStale ? {color:'#fbbf24'} : undefined}>
-                              {snapStale ? smartDate(snap.captured_at) + ' ' : ''}{fmtTime(snap.captured_at)}
-                              {snapStale && <span style={{fontSize:9, marginLeft:4, color:'#ef4444'}}>(stale)</span>}
+                            <div className="cam-time">
+                              {fmtTime(snap.captured_at)}
                             </div>
                           )}
                         </div>
                       </div>
                       <div className="cam-img-wrap">
-                        {snap?.url ? (
-                          <>
-                            <img
-                              className="cam-img"
-                              src={snap.url}
-                              alt={cam.camera_name}
-                              loading="lazy"
-                              onError={e => { e.target.style.display = 'none'; e.target.parentNode.querySelector('.cam-offline') || (e.target.parentNode.innerHTML = '<div class="cam-offline">Snapshot unavailable</div>'); }}
-                            />
-                            <ZoneOverlay zones={cam.zones} />
-                            {cam.active_violations > 0 && (
-                              <div className="cam-viol-overlay">{cam.active_violations} open</div>
-                            )}
-                            {snapStale && (
-                              <div style={{position:'absolute', top:8, right:8, background:'rgba(239,68,68,.85)', color:'#fff', borderRadius:6, padding:'3px 8px', fontSize:10, fontWeight:700, backdropFilter:'blur(4px)'}}>
-                                {snapAge > 3600 ? `${Math.floor(snapAge/3600)}h ago` : `${Math.floor(snapAge/60)}m ago`}
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          <div className="cam-offline">{cam.online ? 'No snapshot yet' : 'Camera offline'}</div>
+                        <LiveCameraFeed cameraId={cam.camera_id} initialSnap={snap} cameraName={cam.camera_name} online={cam.online} />
+                        <ZoneOverlay zones={cam.zones} />
+                        {cam.active_violations > 0 && (
+                          <div className="cam-viol-overlay">{cam.active_violations} open</div>
                         )}
                       </div>
 
