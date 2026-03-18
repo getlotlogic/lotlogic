@@ -18,6 +18,14 @@ Key rules:
   - Operator can still resolve before departure (boot/tow/dismiss)
   - One 30-min reminder if still alerted (not acknowledged)
 
+Accuracy rules:
+  - Confirmation snapshots: car must be detected in 2+ consecutive snapshots
+    before a violation is created (prevents single-frame false positives)
+  - Minimum confidence threshold: detections below MIN_CONFIDENCE are ignored
+  - Cross-zone plate dedup: if same plate already has an active violation on
+    the same lot, don't create a duplicate in another zone
+  - Confidence, plate, and vehicle data are stored on violation records
+
 SMS Provider:
   Set NOTIFY_SMS_PROVIDER env var to swap providers without code changes:
     "twilio"  — Twilio (default, existing)
@@ -51,6 +59,18 @@ EMPTY_STREAK_THRESHOLD = 3
 # Cooldown after operator resolves — don't re-fire on same zone for this many seconds.
 # Prevents "resolved → next snapshot → new violation" loop when car is still being towed.
 RESOLVED_COOLDOWN_SECONDS = 300  # 5 minutes
+
+# Minimum YOLO confidence to accept a detection. Below this, the snapshot is
+# treated as "no car detected" to avoid false positives from shadows/reflections.
+MIN_CONFIDENCE = float(os.environ.get("MIN_DETECTION_CONFIDENCE", "0.35"))
+
+# Consecutive confirmed snapshots required before creating a violation.
+# Prevents single-frame false positives (e.g., a shadow or passing car).
+CONFIRMATION_SNAPSHOTS = int(os.environ.get("CONFIRMATION_SNAPSHOTS", "2"))
+
+# In-memory confirmation tracker: zone_id → consecutive detection count.
+# Reset to 0 when a snapshot has no car (or below confidence threshold).
+_zone_confirmations: dict[str, int] = {}
 
 
 def _get_supabase() -> Client:
@@ -87,6 +107,11 @@ async def process_snapshot(
     operator_id: str = None,
     operator_phone: str = None,
     map_url: str = "",
+    confidence: float = None,
+    plate_text: str = None,
+    plate_confidence: float = None,
+    vehicle_color: str = None,
+    vehicle_type: str = None,
 ):
     """
     Main dedup entry point. Called every ~10s when a new snapshot arrives.
@@ -95,8 +120,23 @@ async def process_snapshot(
     If has_car is True and no active violation → check cooldown, then create one + send text.
     If has_car is False and active violation → increment empty_streak (3 → departed).
     If has_car is False and no active violation → idle (zone is clear).
+
+    Accuracy guards:
+    - Detections below MIN_CONFIDENCE are treated as no-car.
+    - Car must be confirmed in CONFIRMATION_SNAPSHOTS consecutive snapshots
+      before a violation is created.
+    - If plate_text matches an active violation on the same lot (different zone),
+      the detection is treated as a duplicate and skipped.
     """
     sb = _get_supabase()
+
+    # ── Confidence gate: reject low-confidence detections ──
+    if has_car and confidence is not None and confidence < MIN_CONFIDENCE:
+        logger.debug(
+            "Zone %s detection rejected: confidence %.2f < threshold %.2f",
+            zone_id, confidence, MIN_CONFIDENCE,
+        )
+        has_car = False  # treat as no detection
 
     # Check for active (non-cleared) violation on this zone
     active_resp = (
@@ -162,6 +202,41 @@ async def process_snapshot(
                 )
                 return {"action": "cooldown", "zone_id": zone_id, "previous_id": prev["id"]}
 
+        # ── Confirmation gate: require consecutive detections ──
+        # Prevents single-frame false positives (shadows, passing cars, YOLO glitches).
+        _zone_confirmations[zone_id] = _zone_confirmations.get(zone_id, 0) + 1
+        if _zone_confirmations[zone_id] < CONFIRMATION_SNAPSHOTS:
+            logger.info(
+                "Zone %s confirmation %d/%d — waiting for more snapshots before creating violation",
+                zone_id, _zone_confirmations[zone_id], CONFIRMATION_SNAPSHOTS,
+            )
+            return {"action": "confirming", "zone_id": zone_id, "count": _zone_confirmations[zone_id]}
+
+        # ── Cross-zone plate dedup ──
+        # If same plate already has an active violation on this lot (any zone),
+        # don't create a duplicate. This handles cars detected across zone boundaries.
+        if plate_text and plate_text.strip():
+            plate_dup_resp = (
+                sb.table("violations")
+                .select("id, zone_id")
+                .eq("lot_id", lot_id)
+                .eq("plate_text", plate_text.strip().upper())
+                .in_("status", ["alerted", "acknowledged"])
+                .limit(1)
+                .execute()
+            )
+            if plate_dup_resp.data:
+                existing = plate_dup_resp.data[0]
+                logger.info(
+                    "Zone %s plate %s already has active violation %s in zone %s — skipping duplicate",
+                    zone_id, plate_text, existing["id"], existing["zone_id"],
+                )
+                _zone_confirmations.pop(zone_id, None)
+                return {"action": "plate_dedup", "zone_id": zone_id, "existing_id": existing["id"]}
+
+        # Confirmation met — reset counter
+        _zone_confirmations.pop(zone_id, None)
+
         # NEW violation: car detected, no active violation on this zone
         now_ts = _now()
         insert_data = {
@@ -176,6 +251,16 @@ async def process_snapshot(
         }
         if operator_id:
             insert_data["operator_id"] = operator_id
+        if confidence is not None:
+            insert_data["confidence"] = round(confidence, 4)
+        if plate_text and plate_text.strip():
+            insert_data["plate_text"] = plate_text.strip().upper()
+        if plate_confidence is not None:
+            insert_data["plate_confidence"] = round(plate_confidence, 4)
+        if vehicle_color:
+            insert_data["vehicle_color"] = vehicle_color
+        if vehicle_type:
+            insert_data["vehicle_type"] = vehicle_type
 
         try:
             result = sb.table("violations").insert(insert_data).execute()
@@ -204,6 +289,9 @@ async def process_snapshot(
         return {"action": "created", "violation_id": violation_id}
 
     else:
+        # No car — reset confirmation counter for this zone
+        _zone_confirmations.pop(zone_id, None)
+
         # Zone appears empty — increment empty streak on active violation.
         # After EMPTY_STREAK_THRESHOLD consecutive empty snapshots, mark
         # the violation as 'departed' and unlock the zone for new detections.
