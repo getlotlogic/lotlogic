@@ -2494,8 +2494,8 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
           <div className="viol-modal-grid">
             <div className="viol-modal-stat">
               <div className="viol-modal-stat-label">Status</div>
-              <div className="viol-modal-stat-val" style={{color: violation.status === 'acknowledged' ? '#f59e0b' : isPending ? 'var(--red)' : 'var(--green)'}}>
-                {violation.status === 'alerted' ? 'Active' : violation.status === 'acknowledged' ? 'Acknowledged' : violation.status === 'cleared' ? 'Cleared' : isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
+              <div className="viol-modal-stat-val" style={{color: violation.status === 'acknowledged' ? '#f59e0b' : violation.status === 'departed' ? '#6b7280' : isPending ? 'var(--red)' : 'var(--green)'}}>
+                {violation.status === 'alerted' ? 'Active' : violation.status === 'acknowledged' ? 'Acknowledged' : violation.status === 'cleared' ? 'Cleared' : violation.status === 'departed' ? 'Departed' : isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
               </div>
             </div>
             <div className="viol-modal-stat">
@@ -3078,8 +3078,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   const todayCutoff = todayStart.getTime();
   const recent = violations
-    .filter(v => ['resolved', 'cleared'].includes(v.status) && new Date(v.resolved_at || v.cleared_at || v.detected_at).getTime() >= todayCutoff)
-    .sort((a, b) => new Date(b.resolved_at || b.cleared_at || b.detected_at) - new Date(a.resolved_at || a.cleared_at || a.detected_at));
+    .filter(v => ['resolved', 'cleared', 'departed'].includes(v.status) && new Date(v.resolved_at || v.departed_at || v.cleared_at || v.detected_at).getTime() >= todayCutoff)
+    .sort((a, b) => new Date(b.resolved_at || b.departed_at || b.cleared_at || b.detected_at) - new Date(a.resolved_at || a.departed_at || a.cleared_at || a.detected_at));
 
   // KPIs
   const avgWaitMins = active.length > 0
@@ -3137,6 +3137,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     acknowledged: { label: 'Acknowledged', color: '#f59e0b', bg: 'rgba(245,158,11,.12)', icon: '🟡' },
     cleared:      { label: 'Cleared',      color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
     resolved:     { label: 'Resolved',     color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
+    departed:     { label: 'Departed',     color: '#6b7280', bg: 'rgba(107,114,128,.12)', icon: '🚗' },
   };
 
   const [acking, setAcking] = useState(null);
@@ -5120,7 +5121,7 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
 
   // Global KPIs
   const _activeStatuses = ['pending', 'alerted', 'acknowledged'];
-  const _closedStatuses = ['resolved', 'cleared'];
+  const _closedStatuses = ['resolved', 'cleared', 'departed'];
   const pending = violations.filter(v => _activeStatuses.includes(v.status)).length;
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   const todayResolved = violations.filter(v => _closedStatuses.includes(v.status) && new Date(v.resolved_at || v.cleared_at || v.detected_at) >= todayStart).length;

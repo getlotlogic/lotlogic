@@ -48,6 +48,10 @@ REMINDER_DELAY_SECONDS = 1800
 # Consecutive empty snapshots before a violation is marked 'departed'
 EMPTY_STREAK_THRESHOLD = 3
 
+# Cooldown after operator resolves — don't re-fire on same zone for this many seconds.
+# Prevents "resolved → next snapshot → new violation" loop when car is still being towed.
+RESOLVED_COOLDOWN_SECONDS = 300  # 5 minutes
+
 
 def _get_supabase() -> Client:
     """Create a Supabase client using service key for backend operations."""
@@ -87,9 +91,9 @@ async def process_snapshot(
     """
     Main dedup entry point. Called every ~10s when a new snapshot arrives.
 
-    If has_car is True and no active violation exists → create one, send text.
     If has_car is True and active violation exists → check for 30-min reminder.
-    If has_car is False and active violation exists → do nothing (require manual resolution).
+    If has_car is True and no active violation → check cooldown, then create one + send text.
+    If has_car is False and active violation → increment empty_streak (3 → departed).
     If has_car is False and no active violation → idle (zone is clear).
     """
     sb = _get_supabase()
@@ -134,6 +138,29 @@ async def process_snapshot(
                 logger.info("30-min reminder sent for violation %s", violation["id"])
             # Otherwise: do nothing. Zone is locked to this violation event.
             return {"action": "existing", "violation_id": violation["id"]}
+
+        # Cooldown check: don't re-fire if a violation on this zone was
+        # recently resolved or departed. Prevents the "operator boots car →
+        # 30 seconds later → new violation for same car" loop.
+        cooldown_resp = (
+            sb.table("violations")
+            .select("id, status, resolved_at, departed_at")
+            .eq("zone_id", zone_id)
+            .in_("status", ["resolved", "departed", "cleared"])
+            .order("resolved_at", desc=True)  # most recent first
+            .limit(1)
+            .execute()
+        )
+        if cooldown_resp.data:
+            prev = cooldown_resp.data[0]
+            closed_at = prev.get("resolved_at") or prev.get("departed_at") or prev.get("cleared_at")
+            if closed_at and _seconds_since(closed_at) < RESOLVED_COOLDOWN_SECONDS:
+                logger.info(
+                    "Zone %s in cooldown (violation %s %s %ds ago) — skipping new violation",
+                    zone_id, prev["id"], prev["status"],
+                    int(_seconds_since(closed_at)),
+                )
+                return {"action": "cooldown", "zone_id": zone_id, "previous_id": prev["id"]}
 
         # NEW violation: car detected, no active violation on this zone
         now_ts = _now()
