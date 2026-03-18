@@ -1,22 +1,25 @@
 """
 Violation Dedup System — Zone State Machine
 
-Each zone has a state: CLEAR → ALERTED → ACKNOWLEDGED → CLEAR
-The camera is the source of truth. The zone only re-arms when the camera
-shows the zone is empty. Operator replies are acknowledgments only.
+Violations require manual operator resolution. The system never auto-clears.
 
 State machine:
-  CLEAR  ──car detected──▶  ALERTED  ──zone empty──▶  CLEAR
-                               │                        ▲
-                               │                        │
-                          operator acks            (auto re-arm)
-                               │                        │
-                               ▼                        │
-                           ACKNOWLEDGED  ──zone empty──▶  CLEAR
+  CLEAR  ──car detected──▶  ALERTED  ──operator acks──▶  ACKNOWLEDGED
+                                                              │
+                                                     operator resolves
+                                                       (boot/tow/dismiss)
+                                                              │
+                                                              ▼
+                                                          RESOLVED
+                                                              │
+                                                         zone re-arms
+                                                      (dedup query finds
+                                                       no active violation)
 
 Key rules:
   - No duplicate SMS while alerted or acknowledged
-  - Zone ONLY re-arms on empty snapshot
+  - Violations persist until operator manually resolves
+  - Zone re-arms only after operator closes the violation
   - One 30-min reminder if still alerted (not acknowledged)
 
 SMS Provider:
@@ -87,7 +90,8 @@ async def process_snapshot(
 
     If has_car is True and no active violation exists → create one, send text.
     If has_car is True and active violation exists → check for 30-min reminder.
-    If has_car is False and active violation exists → clear it, re-arm zone.
+    If has_car is False and active violation exists → do nothing (require manual resolution).
+    If has_car is False and no active violation → idle (zone is clear).
     """
     sb = _get_supabase()
 
@@ -170,25 +174,18 @@ async def process_snapshot(
         return {"action": "created", "violation_id": violation_id}
 
     else:
-        # ZONE IS EMPTY — this is the ONLY way to re-arm
+        # Zone appears empty — but violations require manual operator resolution.
+        # Do NOT auto-clear. The violation stays alerted/acknowledged until the
+        # operator handles it via dashboard or SMS reply.
         if active:
             violation = active[0]
-            duration = int(_seconds_since(violation["detected_at"]))
-            now_ts = _now()
-            sb.table("violations").update(
-                {
-                    "status": "cleared",
-                    "cleared_at": now_ts,
-                    "duration_seconds": duration,
-                }
-            ).eq("id", violation["id"]).execute()
-            logger.info(
-                "Violation %s cleared (zone %s empty after %ds)",
-                violation["id"], zone_id, duration,
+            logger.debug(
+                "Zone %s appears empty but violation %s still active (status=%s) — awaiting operator",
+                zone_id, violation["id"], violation["status"],
             )
-            return {"action": "cleared", "violation_id": violation["id"], "duration": duration}
+            return {"action": "existing", "violation_id": violation["id"]}
 
-        # No active violation, zone already clear
+        # No active violation, zone is clear — nothing to do
         return {"action": "idle", "zone_id": zone_id}
 
 
@@ -198,8 +195,8 @@ async def process_snapshot(
 
 async def acknowledge_violation(violation_id: str, source: str = "dashboard"):
     """
-    Operator says DONE — stops reminders but does NOT re-arm the zone.
-    The zone only re-arms when the camera shows it's empty.
+    Operator says DONE — stops reminders. Zone re-arms when the operator
+    later resolves the violation (boot/tow/dismiss) from the dashboard.
     """
     sb = _get_supabase()
     now_ts = _now()
