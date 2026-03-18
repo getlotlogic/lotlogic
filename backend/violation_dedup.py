@@ -6,10 +6,11 @@ State machine:
                                 │                              │
                           sliding window                  operator resolves
                           says car gone                   (boot/tow/dismiss)
-                                │                              │
-                                ▼                              ▼
-                            DEPARTED                       RESOLVED
-                          (zone re-arms)                (zone re-arms)
+                          OR plate swap                        │
+                                │                              ▼
+                                ▼                          RESOLVED
+                            DEPARTED                    (zone re-arms)
+                          (zone re-arms)
 
 Key rules:
   - No duplicate SMS while alerted or acknowledged
@@ -17,15 +18,33 @@ Key rules:
   - Operator can still resolve before departure (boot/tow/dismiss)
   - One 30-min reminder if still alerted (not acknowledged)
 
-Departure detection (sliding window):
-  - Tracks last N snapshots per zone (default 6)
-  - Car departs when ≥80% of window is empty OR N consecutive empties (default 5)
-  - Tolerates intermittent YOLO misses (1 false detection won't reset departure)
-  - Single false-positive frame in window is absorbed, not a hard reset
+Inference pipeline (rock-solid detection):
+
+  1. Confidence-weighted presence scoring:
+     - Each snapshot contributes a score, not a binary True/False
+     - High-confidence detection (0.90) = strong presence signal
+     - Low-confidence detection (0.36) = weak signal, barely above noise
+     - No detection = 0.0 (absence signal)
+     - Departure triggers when weighted presence drops below threshold
+
+  2. Plate-based car swap detection:
+     - If active violation has a plate and new detection shows a DIFFERENT plate,
+       the original car left and a new one arrived
+     - Auto-depart old violation → create new one for the new plate
+     - Prevents "wrong car" violations where operator finds a different vehicle
+
+  3. Sliding window departure (replaces brittle consecutive-empty-streak):
+     - Tracks last N snapshots per zone with confidence weights
+     - Car departs when weighted presence score < 0.2 (mostly empty)
+       OR N consecutive empties (fast path, default 5)
+     - Single YOLO miss or false positive doesn't reset departure progress
+
+  4. Sliding window confirmation (arrival):
+     - Car must be detected in M of last N snapshots (default 2 of 3)
+     - One YOLO miss between two real detections doesn't reset confirmation
+     - Prevents single-frame false positives from shadows/passing cars
 
 Accuracy rules:
-  - Confirmation snapshots: car must be detected in 2+ consecutive snapshots
-    before a violation is created (prevents single-frame false positives)
   - Minimum confidence threshold: detections below MIN_CONFIDENCE are ignored
   - Cross-zone plate dedup: if same plate already has an active violation on
     the same lot, don't create a duplicate in another zone
@@ -58,32 +77,35 @@ ACK_KEYWORDS = {"DONE", "OK", "COMPLETE", "TOWED", "GOT IT", "ON IT"}
 # Reminder delay in seconds (30 minutes)
 REMINDER_DELAY_SECONDS = 1800
 
-# ── Departure detection (sliding window) ──
-# Instead of requiring N consecutive empty frames (brittle — one false positive
-# resets the counter), we use a sliding window: track the last N snapshots and
-# require that a supermajority show "no car" before marking departed.
+# ── Departure detection (sliding window with confidence weighting) ──
 #
-# Example with defaults (window=6, ratio=0.8):
-#   Last 6 snapshots: [empty, car, empty, empty, empty, empty]
-#   Empty ratio = 5/6 = 0.83 ≥ 0.8 → DEPARTED
-#   This tolerates 1 false-positive detection in the window.
+# Each snapshot stores a confidence score (0.0 = no car, 0.0-1.0 = detection
+# confidence). The departure decision uses the WEIGHTED average of the window
+# rather than a simple empty/non-empty ratio.
 #
-# The old EMPTY_STREAK_THRESHOLD is kept as a fallback floor — if we get
-# this many consecutive empties, depart immediately even if the window
-# isn't full yet.
+# Example: window = [0.0, 0.92, 0.0, 0.0, 0.0, 0.0]
+#   Weighted presence = (0 + 0.92 + 0 + 0 + 0 + 0) / 6 = 0.153
+#   0.153 < DEPARTURE_PRESENCE_THRESHOLD (0.2) → DEPARTED
+#
+# A single low-confidence detection (0.36) barely moves the needle:
+#   window = [0.0, 0.36, 0.0, 0.0, 0.0, 0.0] → 0.06 → still departs
+#
+# But a real car consistently detected (0.85+) holds the zone:
+#   window = [0.88, 0.0, 0.91, 0.87, 0.0, 0.90] → 0.59 → stays
+#
+# Consecutive streak is kept as a fast path for clear exits.
 EMPTY_STREAK_THRESHOLD = int(os.environ.get("EMPTY_STREAK_THRESHOLD", "5"))
 
 # Sliding window size: how many recent snapshots to consider for departure.
 DEPARTURE_WINDOW_SIZE = int(os.environ.get("DEPARTURE_WINDOW_SIZE", "6"))
 
-# Ratio of empty snapshots within the window required to trigger departure.
-# 0.8 = 80% of the window must be empty.
-DEPARTURE_EMPTY_RATIO = float(os.environ.get("DEPARTURE_EMPTY_RATIO", "0.80"))
+# Weighted presence threshold below which the car is considered gone.
+# 0.2 means the average confidence across the window is very low.
+DEPARTURE_PRESENCE_THRESHOLD = float(os.environ.get("DEPARTURE_PRESENCE_THRESHOLD", "0.20"))
 
-# In-memory sliding window per zone: zone_id → list of bools (True=car, False=empty).
-# Capped at DEPARTURE_WINDOW_SIZE entries. Persists across snapshots for the
-# lifetime of the process; safe because each zone_id is globally unique.
-_zone_presence: dict[str, list[bool]] = {}
+# In-memory sliding window per zone: zone_id → list of floats (confidence scores).
+# 0.0 = no detection, >0 = detection confidence. Capped at DEPARTURE_WINDOW_SIZE.
+_zone_presence: dict[str, list[float]] = {}
 
 # Cooldown after operator resolves — don't re-fire on same zone for this many seconds.
 # Prevents "resolved → next snapshot → new violation" loop when car is still being towed.
@@ -93,13 +115,18 @@ RESOLVED_COOLDOWN_SECONDS = 300  # 5 minutes
 # treated as "no car detected" to avoid false positives from shadows/reflections.
 MIN_CONFIDENCE = float(os.environ.get("MIN_DETECTION_CONFIDENCE", "0.35"))
 
-# Consecutive confirmed snapshots required before creating a violation.
-# Prevents single-frame false positives (e.g., a shadow or passing car).
-CONFIRMATION_SNAPSHOTS = int(os.environ.get("CONFIRMATION_SNAPSHOTS", "2"))
+# ── Arrival confirmation (sliding window) ──
+# Car must be detected in CONFIRMATION_REQUIRED of the last CONFIRMATION_WINDOW
+# snapshots. This is more robust than strict consecutive detections — one YOLO
+# miss between two real detections doesn't reset confirmation.
+#
+# Default: 2 detections in last 3 snapshots.
+CONFIRMATION_REQUIRED = int(os.environ.get("CONFIRMATION_REQUIRED", "2"))
+CONFIRMATION_WINDOW = int(os.environ.get("CONFIRMATION_WINDOW", "3"))
 
-# In-memory confirmation tracker: zone_id → consecutive detection count.
-# Reset to 0 when a snapshot has no car (or below confidence threshold).
-_zone_confirmations: dict[str, int] = {}
+# In-memory confirmation tracker: zone_id → list of bools (recent detection results).
+# Capped at CONFIRMATION_WINDOW entries.
+_zone_confirmations: dict[str, list[bool]] = {}
 
 
 def _get_supabase() -> Client:
@@ -143,34 +170,31 @@ async def process_snapshot(
     vehicle_type: str = None,
 ):
     """
-    Main dedup entry point. Called every ~10s when a new snapshot arrives.
+    Main dedup entry point. Called every ~10-30s when a new snapshot arrives.
 
-    If has_car is True and active violation exists → check for 30-min reminder.
-    If has_car is True and no active violation → check cooldown, then create one + send text.
-    If has_car is False and active violation → increment empty_streak (3 → departed).
-    If has_car is False and no active violation → idle (zone is clear).
-
-    Accuracy guards:
-    - Detections below MIN_CONFIDENCE are treated as no-car.
-    - Car must be confirmed in CONFIRMATION_SNAPSHOTS consecutive snapshots
-      before a violation is created.
-    - If plate_text matches an active violation on the same lot (different zone),
-      the detection is treated as a duplicate and skipped.
+    Inference pipeline:
+    1. Confidence gate → reject noise, compute presence score
+    2. Plate swap detection → auto-depart if a different car replaced the original
+    3. Sliding window departure → weighted presence score, not brittle consecutive streak
+    4. Sliding window confirmation → M of N detections, not strict consecutive
     """
     sb = _get_supabase()
 
-    # ── Confidence gate: reject low-confidence detections ──
+    # ── Confidence gate: reject low-confidence, compute presence score ──
+    # presence_score: 0.0 = no car, else the detection confidence (0.35–1.0).
+    # This feeds into the weighted sliding window for nuanced departure decisions.
     if has_car and confidence is not None and confidence < MIN_CONFIDENCE:
         logger.debug(
             "Zone %s detection rejected: confidence %.2f < threshold %.2f",
             zone_id, confidence, MIN_CONFIDENCE,
         )
-        has_car = False  # treat as no detection
+        has_car = False
+    presence_score = (confidence if confidence is not None else 0.75) if has_car else 0.0
 
     # Check for active (non-cleared) violation on this zone
     active_resp = (
         sb.table("violations")
-        .select("id, status, detected_at, sms_sent_at, reminder_sent_at, empty_streak")
+        .select("id, status, detected_at, sms_sent_at, reminder_sent_at, empty_streak, plate_text")
         .eq("zone_id", zone_id)
         .in_("status", ["alerted", "acknowledged"])
         .limit(1)
@@ -178,55 +202,88 @@ async def process_snapshot(
     )
     active = active_resp.data
 
-    # ── Update sliding window ──
+    # ── Update confidence-weighted sliding window ──
     window = _zone_presence.setdefault(zone_id, [])
-    window.append(has_car)
+    window.append(presence_score)
     if len(window) > DEPARTURE_WINDOW_SIZE:
         window[:] = window[-DEPARTURE_WINDOW_SIZE:]
 
     if has_car:
         if active:
-            # Car still there — reset empty streak and check for reminder
             violation = active[0]
-            update_fields = {}
-            if (violation.get("empty_streak") or 0) > 0:
-                update_fields["empty_streak"] = 0
-            # Keep the snapshot URL current so the dashboard shows the latest image
-            if snapshot_url:
-                update_fields["snapshot_url"] = snapshot_url
-            if update_fields:
-                sb.table("violations").update(update_fields).eq("id", violation["id"]).execute()
+
+            # ── Plate swap detection ──
+            # If we have a plate for both the violation and the current detection,
+            # and they're DIFFERENT, the original car left and a new one arrived.
+            # Auto-depart the old violation so a new one can be created.
+            normalized_plate = plate_text.strip().upper() if plate_text and plate_text.strip() else None
+            violation_plate = violation.get("plate_text", "").strip().upper() if violation.get("plate_text") else None
+
             if (
-                violation["status"] == "alerted"
-                and violation.get("reminder_sent_at") is None
-                and _seconds_since(violation.get("sms_sent_at") or violation["detected_at"]) >= REMINDER_DELAY_SECONDS
+                normalized_plate
+                and violation_plate
+                and normalized_plate != violation_plate
+                # Require decent plate confidence to avoid OCR-flicker false swaps
+                and (plate_confidence is None or plate_confidence >= 0.60)
             ):
-                # Send ONE reminder via notification channels
-                await notify_reminder(
-                    operator_phone=operator_phone or "",
-                    zone_name=zone_name,
-                    lot_name=lot_name,
-                    violation_type=violation_type,
-                    snapshot_url=snapshot_url,
-                    detected_at=violation["detected_at"],
-                    violation_id=violation["id"],
+                logger.info(
+                    "Plate swap detected in zone %s: violation %s has plate %s, "
+                    "new detection has plate %s (conf=%.2f) — auto-departing old violation",
+                    zone_id, violation["id"], violation_plate, normalized_plate,
+                    plate_confidence or 0.0,
                 )
                 sb.table("violations").update(
-                    {"reminder_sent_at": _now()}
+                    {
+                        "status": "departed",
+                        "departed_at": _now(),
+                        "empty_streak": 0,
+                    }
                 ).eq("id", violation["id"]).execute()
-                logger.info("30-min reminder sent for violation %s", violation["id"])
-            # Otherwise: do nothing. Zone is locked to this violation event.
-            return {"action": "existing", "violation_id": violation["id"]}
+                _zone_presence.pop(zone_id, None)
+                _zone_confirmations.pop(zone_id, None)
+                # Fall through to create a new violation for the new plate below
+                active = []
+            else:
+                # Same car still there — reset empty streak and check for reminder
+                update_fields = {}
+                if (violation.get("empty_streak") or 0) > 0:
+                    update_fields["empty_streak"] = 0
+                # Keep the snapshot URL current so the dashboard shows the latest image
+                if snapshot_url:
+                    update_fields["snapshot_url"] = snapshot_url
+                if update_fields:
+                    sb.table("violations").update(update_fields).eq("id", violation["id"]).execute()
+                if (
+                    violation["status"] == "alerted"
+                    and violation.get("reminder_sent_at") is None
+                    and _seconds_since(violation.get("sms_sent_at") or violation["detected_at"]) >= REMINDER_DELAY_SECONDS
+                ):
+                    await notify_reminder(
+                        operator_phone=operator_phone or "",
+                        zone_name=zone_name,
+                        lot_name=lot_name,
+                        violation_type=violation_type,
+                        snapshot_url=snapshot_url,
+                        detected_at=violation["detected_at"],
+                        violation_id=violation["id"],
+                    )
+                    sb.table("violations").update(
+                        {"reminder_sent_at": _now()}
+                    ).eq("id", violation["id"]).execute()
+                    logger.info("30-min reminder sent for violation %s", violation["id"])
+                return {"action": "existing", "violation_id": violation["id"]}
+
+        # ── No active violation (or just auto-departed due to plate swap) ──
 
         # Cooldown check: don't re-fire if a violation on this zone was
         # recently resolved or departed. Prevents the "operator boots car →
         # 30 seconds later → new violation for same car" loop.
         cooldown_resp = (
             sb.table("violations")
-            .select("id, status, resolved_at, departed_at")
+            .select("id, status, resolved_at, departed_at, plate_text")
             .eq("zone_id", zone_id)
             .in_("status", ["resolved", "departed", "cleared"])
-            .order("resolved_at", desc=True)  # most recent first
+            .order("resolved_at", desc=True)
             .limit(1)
             .execute()
         )
@@ -234,26 +291,39 @@ async def process_snapshot(
             prev = cooldown_resp.data[0]
             closed_at = prev.get("resolved_at") or prev.get("departed_at") or prev.get("cleared_at")
             if closed_at and _seconds_since(closed_at) < RESOLVED_COOLDOWN_SECONDS:
-                logger.info(
-                    "Zone %s in cooldown (violation %s %s %ds ago) — skipping new violation",
-                    zone_id, prev["id"], prev["status"],
-                    int(_seconds_since(closed_at)),
-                )
-                return {"action": "cooldown", "zone_id": zone_id, "previous_id": prev["id"]}
+                # Skip cooldown if this is a DIFFERENT plate than the previous violation.
+                # A new car parking right after the old one left should get its own violation.
+                prev_plate = prev.get("plate_text", "").strip().upper() if prev.get("plate_text") else None
+                curr_plate = plate_text.strip().upper() if plate_text and plate_text.strip() else None
+                if not curr_plate or not prev_plate or curr_plate == prev_plate:
+                    logger.info(
+                        "Zone %s in cooldown (violation %s %s %ds ago) — skipping",
+                        zone_id, prev["id"], prev["status"],
+                        int(_seconds_since(closed_at)),
+                    )
+                    return {"action": "cooldown", "zone_id": zone_id, "previous_id": prev["id"]}
+                else:
+                    logger.info(
+                        "Zone %s cooldown bypassed: new plate %s != previous %s",
+                        zone_id, curr_plate, prev_plate,
+                    )
 
-        # ── Confirmation gate: require consecutive detections ──
-        # Prevents single-frame false positives (shadows, passing cars, YOLO glitches).
-        _zone_confirmations[zone_id] = _zone_confirmations.get(zone_id, 0) + 1
-        if _zone_confirmations[zone_id] < CONFIRMATION_SNAPSHOTS:
+        # ── Sliding window confirmation gate ──
+        # Require CONFIRMATION_REQUIRED detections in last CONFIRMATION_WINDOW snapshots.
+        # More robust than strict consecutive — one YOLO miss doesn't reset confirmation.
+        conf_window = _zone_confirmations.setdefault(zone_id, [])
+        conf_window.append(True)
+        if len(conf_window) > CONFIRMATION_WINDOW:
+            conf_window[:] = conf_window[-CONFIRMATION_WINDOW:]
+        detection_count = sum(1 for v in conf_window if v)
+        if detection_count < CONFIRMATION_REQUIRED:
             logger.info(
-                "Zone %s confirmation %d/%d — waiting for more snapshots before creating violation",
-                zone_id, _zone_confirmations[zone_id], CONFIRMATION_SNAPSHOTS,
+                "Zone %s confirmation %d/%d in last %d snapshots — waiting",
+                zone_id, detection_count, CONFIRMATION_REQUIRED, len(conf_window),
             )
-            return {"action": "confirming", "zone_id": zone_id, "count": _zone_confirmations[zone_id]}
+            return {"action": "confirming", "zone_id": zone_id, "count": detection_count}
 
         # ── Cross-zone plate dedup ──
-        # If same plate already has an active violation on this lot (any zone),
-        # don't create a duplicate. This handles cars detected across zone boundaries.
         if plate_text and plate_text.strip():
             plate_dup_resp = (
                 sb.table("violations")
@@ -267,17 +337,17 @@ async def process_snapshot(
             if plate_dup_resp.data:
                 existing = plate_dup_resp.data[0]
                 logger.info(
-                    "Zone %s plate %s already has active violation %s in zone %s — skipping duplicate",
-                    zone_id, plate_text, existing["id"], existing["zone_id"],
+                    "Zone %s plate %s already active on zone %s — skipping duplicate",
+                    zone_id, plate_text, existing["zone_id"],
                 )
                 _zone_confirmations.pop(zone_id, None)
                 return {"action": "plate_dedup", "zone_id": zone_id, "existing_id": existing["id"]}
 
-        # Confirmation met — reset counters
+        # Confirmation met — reset counters, fresh window for new violation
         _zone_confirmations.pop(zone_id, None)
-        _zone_presence.pop(zone_id, None)  # fresh window for new violation
+        _zone_presence.pop(zone_id, None)
 
-        # NEW violation: car detected, no active violation on this zone
+        # ── Create new violation ──
         now_ts = _now()
         insert_data = {
             "zone_id": zone_id,
@@ -305,7 +375,6 @@ async def process_snapshot(
         try:
             result = sb.table("violations").insert(insert_data).execute()
         except Exception as e:
-            # Unique index violation → another processor already created one
             if "idx_one_active_violation_per_zone" in str(e):
                 logger.warning("Dedup race caught by index for zone %s", zone_id)
                 return {"action": "dedup_race", "zone_id": zone_id}
@@ -313,7 +382,6 @@ async def process_snapshot(
 
         violation_id = result.data[0]["id"]
 
-        # Send alert via all configured notification channels
         await notify_violation(
             operator_phone=operator_phone or "",
             zone_name=zone_name,
@@ -329,33 +397,35 @@ async def process_snapshot(
         return {"action": "created", "violation_id": violation_id}
 
     else:
-        # No car — reset confirmation counter for this zone
-        _zone_confirmations.pop(zone_id, None)
+        # No car — update confirmation window (for zones building toward confirmation)
+        conf_window = _zone_confirmations.get(zone_id)
+        if conf_window is not None:
+            conf_window.append(False)
+            if len(conf_window) > CONFIRMATION_WINDOW:
+                conf_window[:] = conf_window[-CONFIRMATION_WINDOW:]
+            # If no recent detections at all, clear the confirmation tracker
+            if not any(conf_window):
+                _zone_confirmations.pop(zone_id, None)
 
-        # Zone appears empty — use BOTH consecutive streak AND sliding window
-        # to decide departure. Either condition triggers it:
-        #   1. Consecutive streak ≥ EMPTY_STREAK_THRESHOLD (fast path for clear exits)
-        #   2. Sliding window empty ratio ≥ DEPARTURE_EMPTY_RATIO (tolerates intermittent YOLO misses)
+        # ── Departure decision: confidence-weighted sliding window ──
+        # Uses BOTH consecutive streak AND weighted presence score.
+        # Either condition triggers departure:
+        #   1. Consecutive streak ≥ EMPTY_STREAK_THRESHOLD (fast path)
+        #   2. Full window with weighted presence < DEPARTURE_PRESENCE_THRESHOLD
         if active:
             violation = active[0]
             new_streak = (violation.get("empty_streak") or 0) + 1
 
-            # Check sliding window: what fraction of recent snapshots are empty?
             window = _zone_presence.get(zone_id, [])
-            empty_count = sum(1 for v in window if not v)
-            window_ratio = empty_count / len(window) if window else 0.0
+            weighted_presence = sum(window) / len(window) if window else 0.0
             window_full = len(window) >= DEPARTURE_WINDOW_SIZE
 
             should_depart = (
-                # Fast path: N consecutive empties — car clearly left
                 new_streak >= EMPTY_STREAK_THRESHOLD
-                # Sliding window: supermajority of recent snapshots empty.
-                # Only triggers when window is full to avoid premature departure.
-                or (window_full and window_ratio >= DEPARTURE_EMPTY_RATIO)
+                or (window_full and weighted_presence < DEPARTURE_PRESENCE_THRESHOLD)
             )
 
             if should_depart:
-                # Car is gone — mark departed, unlock zone, clear window
                 sb.table("violations").update(
                     {
                         "status": "departed",
@@ -364,25 +434,24 @@ async def process_snapshot(
                     }
                 ).eq("id", violation["id"]).execute()
                 _zone_presence.pop(zone_id, None)
+                _zone_confirmations.pop(zone_id, None)
                 logger.info(
-                    "Violation %s departed (streak=%d, window=%d/%d=%.0f%%) — zone %s re-armed",
-                    violation["id"], new_streak, empty_count, len(window),
-                    window_ratio * 100, zone_id,
+                    "Violation %s departed (streak=%d, presence=%.2f) — zone %s re-armed",
+                    violation["id"], new_streak, weighted_presence, zone_id,
                 )
                 return {"action": "departed", "violation_id": violation["id"]}
             else:
-                # Not enough evidence yet — bump the streak counter
                 sb.table("violations").update(
                     {"empty_streak": new_streak}
                 ).eq("id", violation["id"]).execute()
                 logger.debug(
-                    "Zone %s empty streak %d/%d, window %d/%d=%.0f%% for violation %s",
+                    "Zone %s streak=%d/%d, presence=%.2f for violation %s",
                     zone_id, new_streak, EMPTY_STREAK_THRESHOLD,
-                    empty_count, len(window), window_ratio * 100, violation["id"],
+                    weighted_presence, violation["id"],
                 )
                 return {"action": "existing", "violation_id": violation["id"]}
 
-        # No active violation, zone is clear — nothing to do
+        # No active violation, zone is clear
         return {"action": "idle", "zone_id": zone_id}
 
 
