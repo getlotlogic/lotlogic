@@ -3440,13 +3440,13 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                 </button>
               </div>
               <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 12px 10px', gap:8}}>
-                <div style={{display:'flex', gap:6}}>
+                <div style={{display:'flex', gap:8, flex:1}}>
                   {v.status === 'alerted' && (
                     <button className="action-btn" disabled={anyActing || acking === v.id}
                       onClick={(e) => { e.stopPropagation(); handleAcknowledge(v.id); }}
                       aria-label="Acknowledge violation"
-                      style={{minWidth:60, background:'rgba(245,158,11,.12)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontWeight:700}}>
-                      {acking === v.id ? '…' : 'Acknowledge'}
+                      style={{flex:'0 0 auto', padding:'8px 14px', background:'rgba(245,158,11,.12)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b', fontWeight:700}}>
+                      {acking === v.id ? '…' : 'Ack'}
                     </button>
                   )}
                   <button className="action-btn dismiss" disabled={anyActing} onClick={() => requestAction(v.id, 'dismissed')} aria-label="Dismiss violation" style={{minWidth:60}}>
