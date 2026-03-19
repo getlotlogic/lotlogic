@@ -2719,10 +2719,51 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   const det = matchedDetection;
 
-  // Check if vehicle is still in zone using latest snapshot detections
+  // Live-poll the latest snapshot from this camera every 10s while modal is open
+  const [liveUrl, setLiveUrl] = useState(latestSnapshotUrl);
+  const [liveDets, setLiveDets] = useState(latestDetections);
+  const [liveTime, setLiveTime] = useState(null);
+
+  useEffect(() => {
+    if (!supabase || !violation.camera_id) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const { data } = await supabase
+          .from('snapshots')
+          .select('storage_url, url, raw_detections, captured_at')
+          .eq('camera_id', violation.camera_id)
+          .order('captured_at', { ascending: false })
+          .limit(1);
+        if (cancelled || !data?.[0]) return;
+        const snap = data[0];
+        const base = snap.storage_url || snap.url;
+        if (base) {
+          setLiveUrl(base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now());
+        }
+        const dets = snap.raw_detections?.detections?.map((d, i) => ({
+          id: `det_${i}`,
+          type: d.class === 'person' ? 'person' : 'vehicle',
+          bbox: d.bbox ? { x: d.bbox[0] * 100, y: d.bbox[1] * 100, w: (d.bbox[2] - d.bbox[0]) * 100, h: (d.bbox[3] - d.bbox[1]) * 100 } : null,
+          confidence: d.conf,
+          label: d.class,
+        })) || [];
+        setLiveDets(dets);
+        if (snap.captured_at) {
+          const ago = Math.round((Date.now() - new Date(snap.captured_at).getTime()) / 1000);
+          setLiveTime(ago < 60 ? `${ago}s ago` : `${Math.round(ago / 60)}m ago`);
+        }
+      } catch (e) { console.warn('Live snapshot poll error:', e); }
+    };
+    poll(); // fetch immediately on open
+    const iv = setInterval(poll, 10000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [violation.camera_id]);
+
+  // Check if vehicle is still in zone using live snapshot detections
   const vehicleStillInZone = useMemo(() =>
-    isVehicleInZone(latestDetections, violation.zone_id, cameraZones),
-    [latestDetections, violation.zone_id, cameraZones]
+    isVehicleInZone(liveDets, violation.zone_id, cameraZones),
+    [liveDets, violation.zone_id, cameraZones]
   );
 
   const isPending = violation.status === 'pending' || violation.status === 'alerted' || violation.status === 'acknowledged';
@@ -2833,10 +2874,10 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
             timestamp={initialTime}
           />
           <ProofImage
-            src={latestSnapshotUrl || violation._snapshot_url}
+            src={liveUrl || violation._snapshot_url}
             label="Current"
-            detection={latestSnapshotUrl ? null : det}
-            timestamp="Live"
+            detection={liveUrl ? null : det}
+            timestamp={liveTime || 'Live'}
           />
         </div>
 
@@ -6058,6 +6099,68 @@ function App() {
     }, refreshInterval);
     return () => clearInterval(timerRef.current);
   }, [owner, loadData, autoRefresh, refreshInterval]);
+
+  // Fast snapshot poll (every 10s) — refreshes latest_snapshot for cameras with active violations
+  // so departure banners on cards update without waiting for the full 30s loadData cycle
+  useEffect(() => {
+    if (!supabase || !owner) return;
+    const activeCamIds = () => {
+      const pending = violations.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status));
+      return [...new Set(pending.map(v => v.camera_id).filter(Boolean))];
+    };
+    const pollSnapshots = async () => {
+      const camIds = activeCamIds();
+      if (camIds.length === 0) return;
+      try {
+        const results = await Promise.all(camIds.map(cid =>
+          supabase.from('snapshots')
+            .select('camera_id, storage_url, url, raw_detections, captured_at, vehicles_detected')
+            .eq('camera_id', cid)
+            .order('captured_at', { ascending: false })
+            .limit(1)
+            .then(r => r.data?.[0] || null)
+        ));
+        setLotStates(prev => {
+          const next = { ...prev };
+          let changed = false;
+          for (const [lotId, state] of Object.entries(next)) {
+            if (!state?.cameras) continue;
+            const updatedCams = state.cameras.map(cam => {
+              const snap = results.find(r => r && r.camera_id === cam.camera_id);
+              if (!snap) return cam;
+              const base = snap.storage_url || snap.url;
+              const newCaptured = snap.captured_at;
+              // Only update if we have a newer snapshot
+              if (cam.latest_snapshot?.captured_at && newCaptured && new Date(newCaptured) <= new Date(cam.latest_snapshot.captured_at)) return cam;
+              changed = true;
+              return {
+                ...cam,
+                latest_snapshot: {
+                  url: base ? base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now() : null,
+                  captured_at: newCaptured,
+                  vehicles_detected: snap.vehicles_detected || 0,
+                  people_detected: 0,
+                  plates_read: 0,
+                  plate_readings: [],
+                  detections: snap.raw_detections?.detections?.map((d, i) => ({
+                    id: `det_${i}`,
+                    type: d.class === 'person' ? 'person' : 'vehicle',
+                    bbox: d.bbox ? { x: d.bbox[0] * 100, y: d.bbox[1] * 100, w: (d.bbox[2] - d.bbox[0]) * 100, h: (d.bbox[3] - d.bbox[1]) * 100 } : null,
+                    confidence: d.conf,
+                    label: d.class,
+                  })) || [],
+                },
+              };
+            });
+            if (changed) next[lotId] = { ...state, cameras: updatedCams };
+          }
+          return changed ? next : prev;
+        });
+      } catch (e) { console.warn('Fast snapshot poll error:', e); }
+    };
+    const iv = setInterval(pollSnapshots, 10000);
+    return () => clearInterval(iv);
+  }, [owner, violations]);
 
   // Subscribe to realtime violation changes
   useEffect(() => {
