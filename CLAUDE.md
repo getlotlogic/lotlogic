@@ -4,7 +4,9 @@
 AI-powered parking enforcement platform. Cameras detect vehicles in zones, create violations, operators take action (boot/tow/dismiss).
 
 ## Architecture
-- **Frontend**: React SPA in `frontend/index.html`, deployed on Railway via Docker/nginx
+- **Frontend**: React SPA in `frontend/index.html`, deployed on Vercel (auto-deploys from `main` branch, root dir: `frontend/`)
+  - Live URL: `https://lotlogic.vercel.app` (or check Vercel dashboard)
+  - Vercel project: `lotlogic` on team `gabebs1-2452s-projects`
 - **Backend**: Python API on Railway at `https://lotlogic-backend-production.up.railway.app`
   - Backend modules (notifications, violation dedup) live in `backend/`
 - **Database**: Supabase (PostgreSQL) at `https://nzdkoouoaedbbccraoti.supabase.co`
@@ -15,11 +17,12 @@ AI-powered parking enforcement platform. Cameras detect vehicles in zones, creat
 ## Repository Structure
 ```
 lotlogic/
-├── frontend/          # React SPA + nginx (Railway web service)
+├── frontend/          # React SPA deployed on Vercel (auto-deploy from main)
 │   ├── index.html     # Single-file React app
-│   ├── Dockerfile     # nginx:alpine container
-│   ├── nginx.conf     # SPA routing + compression
-│   └── railway.toml   # Railway deploy config
+│   ├── vercel.json    # Vercel config (SPA rewrites)
+│   ├── Dockerfile     # nginx:alpine container (legacy Railway)
+│   ├── nginx.conf     # SPA routing + compression (legacy Railway)
+│   └── railway.toml   # Railway deploy config (legacy)
 ├── backend/           # Python modules imported by the API server
 │   ├── violation_dedup.py
 │   └── notifications.py
@@ -141,14 +144,16 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 - Backend API should enforce authorization on every request
 
 ## Build & Deploy
-- **Frontend**: `frontend/Dockerfile` copies `index.html` + `nginx.conf` into nginx:alpine
-- **Puller**: `puller/Dockerfile` runs `async_puller.py` in python:3.12-slim
-- **Monitoring**: `monitoring/Dockerfile` runs agents in python:3.12-slim
+- **Frontend**: Deployed on Vercel — auto-deploys on push to `main`, root dir `frontend/`
+  - Vercel serves `index.html` as static site with SPA rewrites (see `frontend/vercel.json`)
+  - No build step needed — single HTML file served directly
+- **Backend**: FastAPI on Railway — auto-deploys from `getlotlogic/lotlogic-backend` repo
+- **Puller**: `puller/Dockerfile` runs `async_puller.py` in python:3.12-slim (Railway worker)
+- **Monitoring**: `monitoring/Dockerfile` runs agents in python:3.12-slim (Railway worker)
 - **Migrations**: `puller/Dockerfile.migrate` runs one-shot schema patches
 - Railway auto-deploys on push to main (each service has its own root directory)
-- GitHub Pages deployment via `.github/workflows/pages.yml` (serves `frontend/`)
 - Use `make help` to see all build/run commands
-- Each Railway service should have its root directory set to its subdirectory (e.g., `frontend/`, `puller/`, `monitoring/`)
+- Each Railway service should have its root directory set to its subdirectory (e.g., `puller/`, `monitoring/`)
 
 ## Development Rules
 - The frontend is a single `frontend/index.html` file (React + Babel transpiled in-browser)
