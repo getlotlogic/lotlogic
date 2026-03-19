@@ -30,7 +30,7 @@ case "${1:-once}" in
         pip3 install -r requirements.txt
         echo "Done. Set your environment variables in monitoring/.env:"
         echo "  ANTHROPIC_API_KEY=sk-ant-..."
-        echo "  DASHBOARD_URL=https://your-app.up.railway.app"
+        echo "  DASHBOARD_URL=https://lotlogic-beta.vercel.app"
         ;;
 
     daemon)

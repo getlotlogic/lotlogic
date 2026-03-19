@@ -5,7 +5,7 @@ AI-powered parking enforcement platform. Cameras detect vehicles in zones, creat
 
 ## Architecture
 - **Frontend**: React SPA in `frontend/index.html`, deployed on Vercel (auto-deploys from `main` branch, root dir: `frontend/`)
-  - Live URL: `https://lotlogic.vercel.app` (or check Vercel dashboard)
+  - Live URL: `https://lotlogic-beta.vercel.app`
   - Vercel project: `lotlogic` on team `gabebs1-2452s-projects`
 - **Backend**: Python API on Railway at `https://lotlogic-backend-production.up.railway.app`
   - Backend modules (notifications, violation dedup) live in `backend/`
