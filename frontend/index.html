@@ -3289,6 +3289,26 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     handleAction(violId, action);
   }
 
+  // Auto-cancel violations when vehicle has left the zone
+  // Tracks which violations we've already auto-cancelled to avoid duplicate calls
+  const autoCancelledRef = useRef(new Set());
+  useEffect(() => {
+    if (!active.length || !allCams.length) return;
+    for (const v of active) {
+      if (autoCancelledRef.current.has(v.id)) continue;
+      const cam = allCams.find(c => c.camera_id === v.camera_id);
+      const dets = cam?.latest_snapshot?.detections || [];
+      const zones = camZonesMap[v.camera_id] || [];
+      const gone = isVehicleInZone(dets, v.zone_id, zones);
+      if (gone === false) {
+        // Vehicle confirmed departed — auto-cancel
+        autoCancelledRef.current.add(v.id);
+        console.log(`Auto-cancelling violation ${v.id} — vehicle left zone ${v.zone_id}`);
+        handleAction(v.id, 'already_gone');
+      }
+    }
+  }, [active, allCams, camZonesMap]);
+
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all'); // all | urgent | plates
 
@@ -3455,7 +3475,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               )}
               {/* Snapshot photo with single bounding box on violating vehicle */}
               <ViolationSnapshot src={v._snapshot_url} detections={v._detections} matchedDetection={matchViolationDetection(v._detections, v.zone_id, camZonesMap[v.camera_id])} maxHeight={220} borderRadius={0} onClick={v._snapshot_url ? () => setSelectedViol(v) : undefined} />
-              {/* Vehicle departed banner — shown when current snapshot shows zone is empty */}
+              {/* Vehicle departed banner — auto-cancelling */}
               {(() => {
                 const cam = allCams.find(c => c.camera_id === v.camera_id);
                 const latestDets = cam?.latest_snapshot?.detections || [];
@@ -3463,15 +3483,11 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                 return gone ? (
                   <div style={{
                     background:'rgba(34,197,94,.1)', borderBottom:'1px solid rgba(34,197,94,.2)',
-                    padding:'6px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8,
+                    padding:'6px 16px', display:'flex', alignItems:'center', gap:8,
                   }}>
                     <span style={{color:'#4ade80', fontSize:12, fontWeight:600, display:'flex', alignItems:'center', gap:6}}>
-                      <span>&#x2714;</span> Vehicle has left the zone
+                      <div className="spin" style={{width:12, height:12, borderWidth:2}} /> Auto-cancelling — vehicle left the zone
                     </span>
-                    <button onClick={(e) => { e.stopPropagation(); requestAction(v.id, 'already_gone'); }} disabled={anyActing} style={{
-                      background:'#22c55e', color:'#fff', border:'none', borderRadius:6,
-                      padding:'4px 10px', fontSize:11, fontWeight:700, cursor: anyActing ? 'not-allowed' : 'pointer',
-                    }}>Cancel</button>
                   </div>
                 ) : null;
               })()}
