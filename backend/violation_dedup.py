@@ -111,6 +111,20 @@ _zone_presence: dict[str, list[float]] = {}
 # Prevents "resolved → next snapshot → new violation" loop when car is still being towed.
 RESOLVED_COOLDOWN_SECONDS = 300  # 5 minutes
 
+# Shorter cooldown when plates aren't readable. If we can't identify the car,
+# we can't tell if it's the same one or a new one. Use a shorter cooldown so
+# we don't block new violations for 5 minutes on every zone cycle.
+PLATELESS_COOLDOWN_SECONDS = int(os.environ.get("PLATELESS_COOLDOWN_SECONDS", "90"))
+
+# Maximum time a violation can sit in 'alerted' without operator action before
+# auto-clearing. Prevents zones from being permanently locked by ignored violations.
+# Default: 4 hours. Set to 0 to disable.
+STALE_VIOLATION_SECONDS = int(os.environ.get("STALE_VIOLATION_SECONDS", "14400"))
+
+# Maximum time a violation can sit in 'acknowledged' without resolution.
+# Operator acknowledged but never booted/towed. Default: 8 hours.
+STALE_ACKNOWLEDGED_SECONDS = int(os.environ.get("STALE_ACKNOWLEDGED_SECONDS", "28800"))
+
 # Minimum YOLO confidence to accept a detection. Below this, the snapshot is
 # treated as "no car detected" to avoid false positives from shadows/reflections.
 MIN_CONFIDENCE = float(os.environ.get("MIN_DETECTION_CONFIDENCE", "0.35"))
@@ -182,14 +196,17 @@ async def process_snapshot(
 
     # ── Confidence gate: reject low-confidence, compute presence score ──
     # presence_score: 0.0 = no car, else the detection confidence (0.35–1.0).
-    # This feeds into the weighted sliding window for nuanced departure decisions.
+    # When confidence is None (backend didn't send it), use a conservative default
+    # of 0.5 — enough to register as a detection but not strong enough to single-
+    # handedly hold a zone against departure. 0.75 was too high and made ghost
+    # detections (no metadata) act like rock-solid confirmations.
     if has_car and confidence is not None and confidence < MIN_CONFIDENCE:
         logger.debug(
             "Zone %s detection rejected: confidence %.2f < threshold %.2f",
             zone_id, confidence, MIN_CONFIDENCE,
         )
         has_car = False
-    presence_score = (confidence if confidence is not None else 0.75) if has_car else 0.0
+    presence_score = (confidence if confidence is not None else 0.5) if has_car else 0.0
 
     # Check for active (non-cleared) violation on this zone
     active_resp = (
@@ -202,7 +219,39 @@ async def process_snapshot(
     )
     active = active_resp.data
 
+    # ── Stale violation auto-clear ──
+    # If a violation has been sitting in 'alerted' or 'acknowledged' for too long
+    # without operator action, auto-clear it so the zone can create new violations.
+    # This is the #1 reason for "why aren't there more violations" — a single
+    # ignored alert permanently locks a zone.
+    if active:
+        violation = active[0]
+        age_seconds = _seconds_since(violation["detected_at"])
+        stale_limit = (
+            STALE_ACKNOWLEDGED_SECONDS if violation["status"] == "acknowledged"
+            else STALE_VIOLATION_SECONDS
+        )
+        if stale_limit > 0 and age_seconds > stale_limit:
+            sb.table("violations").update(
+                {
+                    "status": "departed",
+                    "departed_at": _now(),
+                    "empty_streak": violation.get("empty_streak") or 0,
+                }
+            ).eq("id", violation["id"]).execute()
+            _zone_presence.pop(zone_id, None)
+            _zone_confirmations.pop(zone_id, None)
+            logger.warning(
+                "Violation %s auto-cleared: %s for %.0f hours with no operator action — zone %s re-armed",
+                violation["id"], violation["status"], age_seconds / 3600, zone_id,
+            )
+            active = []  # zone is now clear, fall through to create new if has_car
+
     # ── Update confidence-weighted sliding window ──
+    # NOTE: we do NOT clear the window when creating a new violation. The window
+    # should reflect the actual recent detection history for the zone, not reset
+    # on violation lifecycle events. This allows faster departure detection after
+    # short-lived violations.
     window = _zone_presence.setdefault(zone_id, [])
     window.append(presence_score)
     if len(window) > DEPARTURE_WINDOW_SIZE:
@@ -248,7 +297,6 @@ async def process_snapshot(
                 update_fields = {}
                 if (violation.get("empty_streak") or 0) > 0:
                     update_fields["empty_streak"] = 0
-                # Keep the snapshot URL current so the dashboard shows the latest image
                 if snapshot_url:
                     update_fields["snapshot_url"] = snapshot_url
                 if update_fields:
@@ -273,11 +321,10 @@ async def process_snapshot(
                     logger.info("30-min reminder sent for violation %s", violation["id"])
                 return {"action": "existing", "violation_id": violation["id"]}
 
-        # ── No active violation (or just auto-departed due to plate swap) ──
+        # ── No active violation (or just auto-cleared/plate-swapped) ──
 
         # Cooldown check: don't re-fire if a violation on this zone was
-        # recently resolved or departed. Prevents the "operator boots car →
-        # 30 seconds later → new violation for same car" loop.
+        # recently resolved or departed.
         cooldown_resp = (
             sb.table("violations")
             .select("id, status, resolved_at, departed_at, plate_text")
@@ -290,27 +337,39 @@ async def process_snapshot(
         if cooldown_resp.data:
             prev = cooldown_resp.data[0]
             closed_at = prev.get("resolved_at") or prev.get("departed_at") or prev.get("cleared_at")
-            if closed_at and _seconds_since(closed_at) < RESOLVED_COOLDOWN_SECONDS:
-                # Skip cooldown if this is a DIFFERENT plate than the previous violation.
-                # A new car parking right after the old one left should get its own violation.
+            if closed_at:
+                elapsed = _seconds_since(closed_at)
                 prev_plate = prev.get("plate_text", "").strip().upper() if prev.get("plate_text") else None
                 curr_plate = plate_text.strip().upper() if plate_text and plate_text.strip() else None
-                if not curr_plate or not prev_plate or curr_plate == prev_plate:
-                    logger.info(
-                        "Zone %s in cooldown (violation %s %s %ds ago) — skipping",
-                        zone_id, prev["id"], prev["status"],
-                        int(_seconds_since(closed_at)),
-                    )
-                    return {"action": "cooldown", "zone_id": zone_id, "previous_id": prev["id"]}
-                else:
+
+                if curr_plate and prev_plate and curr_plate != prev_plate:
+                    # Different plate = different car → skip cooldown entirely
                     logger.info(
                         "Zone %s cooldown bypassed: new plate %s != previous %s",
                         zone_id, curr_plate, prev_plate,
                     )
+                elif curr_plate and prev_plate and curr_plate == prev_plate:
+                    # Same plate = same car still around → full cooldown
+                    if elapsed < RESOLVED_COOLDOWN_SECONDS:
+                        logger.info(
+                            "Zone %s in cooldown (same plate %s, %ds ago) — skipping",
+                            zone_id, curr_plate, int(elapsed),
+                        )
+                        return {"action": "cooldown", "zone_id": zone_id, "previous_id": prev["id"]}
+                else:
+                    # Can't read plates — use shorter cooldown so we don't block
+                    # new violations for 5 minutes when we can't even tell if it's
+                    # the same car. This was a major violation-killer: every plateless
+                    # detection was blocked for the full 5-minute cooldown.
+                    if elapsed < PLATELESS_COOLDOWN_SECONDS:
+                        logger.info(
+                            "Zone %s in plateless cooldown (%ds/%ds ago) — skipping",
+                            zone_id, int(elapsed), PLATELESS_COOLDOWN_SECONDS,
+                        )
+                        return {"action": "cooldown", "zone_id": zone_id, "previous_id": prev["id"]}
 
         # ── Sliding window confirmation gate ──
         # Require CONFIRMATION_REQUIRED detections in last CONFIRMATION_WINDOW snapshots.
-        # More robust than strict consecutive — one YOLO miss doesn't reset confirmation.
         conf_window = _zone_confirmations.setdefault(zone_id, [])
         conf_window.append(True)
         if len(conf_window) > CONFIRMATION_WINDOW:
@@ -343,9 +402,8 @@ async def process_snapshot(
                 _zone_confirmations.pop(zone_id, None)
                 return {"action": "plate_dedup", "zone_id": zone_id, "existing_id": existing["id"]}
 
-        # Confirmation met — reset counters, fresh window for new violation
+        # Confirmation met — reset confirmation tracker only (NOT the presence window)
         _zone_confirmations.pop(zone_id, None)
-        _zone_presence.pop(zone_id, None)
 
         # ── Create new violation ──
         now_ts = _now()
@@ -403,7 +461,6 @@ async def process_snapshot(
             conf_window.append(False)
             if len(conf_window) > CONFIRMATION_WINDOW:
                 conf_window[:] = conf_window[-CONFIRMATION_WINDOW:]
-            # If no recent detections at all, clear the confirmation tracker
             if not any(conf_window):
                 _zone_confirmations.pop(zone_id, None)
 
@@ -411,18 +468,21 @@ async def process_snapshot(
         # Uses BOTH consecutive streak AND weighted presence score.
         # Either condition triggers departure:
         #   1. Consecutive streak ≥ EMPTY_STREAK_THRESHOLD (fast path)
-        #   2. Full window with weighted presence < DEPARTURE_PRESENCE_THRESHOLD
+        #   2. Window with ≥4 entries and weighted presence below threshold
+        #      (don't require full window — allows faster departure)
         if active:
             violation = active[0]
             new_streak = (violation.get("empty_streak") or 0) + 1
 
             window = _zone_presence.get(zone_id, [])
             weighted_presence = sum(window) / len(window) if window else 0.0
-            window_full = len(window) >= DEPARTURE_WINDOW_SIZE
+            # Allow window-based departure with ≥4 entries (not just when full at 6).
+            # This means departure can trigger after ~2 minutes instead of ~3 minutes.
+            window_ready = len(window) >= max(4, DEPARTURE_WINDOW_SIZE - 2)
 
             should_depart = (
                 new_streak >= EMPTY_STREAK_THRESHOLD
-                or (window_full and weighted_presence < DEPARTURE_PRESENCE_THRESHOLD)
+                or (window_ready and weighted_presence < DEPARTURE_PRESENCE_THRESHOLD)
             )
 
             if should_depart:
@@ -436,8 +496,8 @@ async def process_snapshot(
                 _zone_presence.pop(zone_id, None)
                 _zone_confirmations.pop(zone_id, None)
                 logger.info(
-                    "Violation %s departed (streak=%d, presence=%.2f) — zone %s re-armed",
-                    violation["id"], new_streak, weighted_presence, zone_id,
+                    "Violation %s departed (streak=%d, presence=%.2f, window=%d) — zone %s re-armed",
+                    violation["id"], new_streak, weighted_presence, len(window), zone_id,
                 )
                 return {"action": "departed", "violation_id": violation["id"]}
             else:
