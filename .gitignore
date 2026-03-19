@@ -4,6 +4,7 @@
 !.env.example
 monitoring/.env
 puller/.env
+backend/.env
 
 # Logs & reports
 monitoring/logs/
@@ -13,12 +14,17 @@ monitoring/reports/
 __pycache__/
 *.pyc
 *.pyo
+.venv/
+venv/
 
 # Node
 node_modules/
 package-lock.json
-package.json
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Docker
+*.tar
+docker-compose.override.yml

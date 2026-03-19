@@ -4,11 +4,39 @@
 AI-powered parking enforcement platform. Cameras detect vehicles in zones, create violations, operators take action (boot/tow/dismiss).
 
 ## Architecture
-- **Frontend**: React SPA in `index.html`, deployed on Railway via Docker/nginx
+- **Frontend**: React SPA in `frontend/index.html`, deployed on Railway via Docker/nginx
 - **Backend**: Python API on Railway at `https://lotlogic-backend-production.up.railway.app`
+  - Backend modules (notifications, violation dedup) live in `backend/`
 - **Database**: Supabase (PostgreSQL) at `https://nzdkoouoaedbbccraoti.supabase.co`
-- **Monitoring**: Python agent system in `monitoring/` with Claude AI analysis
+- **Snapshot Puller**: Async camera polling service in `puller/`, deployed as Railway worker
+- **Monitoring**: Python agent system in `monitoring/` with Claude AI analysis (containerized)
 - **Detection Pipeline**: Camera RTSP -> Snapshots (30s poll) -> YOLO + Plate Recognizer -> Zone filtering -> Violation creation
+
+## Repository Structure
+```
+lotlogic/
+├── frontend/          # React SPA + nginx (Railway web service)
+│   ├── index.html     # Single-file React app
+│   ├── Dockerfile     # nginx:alpine container
+│   ├── nginx.conf     # SPA routing + compression
+│   └── railway.toml   # Railway deploy config
+├── backend/           # Python modules imported by the API server
+│   ├── violation_dedup.py
+│   └── notifications.py
+├── puller/            # Async snapshot capture (Railway worker service)
+│   ├── async_puller.py
+│   ├── Dockerfile
+│   └── railway.toml
+├── monitoring/        # AI monitoring agents (Railway worker service)
+│   ├── agent_monitor.py
+│   ├── zone_guardian.py
+│   ├── Dockerfile
+│   └── railway.toml
+├── migrations/        # SQL schema patches
+├── supabase-schema.sql
+├── Makefile           # Unified build/run commands (make help)
+└── CLAUDE.md
+```
 
 ## Key Tables
 - `cameras` - IP cameras with RTSP URLs, zones (JSONB), resolution settings
@@ -113,13 +141,17 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 - Backend API should enforce authorization on every request
 
 ## Build & Deploy
-- `Dockerfile` copies only `index.html` + `nginx.conf` into nginx:alpine
-- Railway auto-deploys on push to main
-- GitHub Pages deployment via `.github/workflows/pages.yml`
-- The monitoring system in `monitoring/` is NOT part of the Docker build (runs separately)
+- **Frontend**: `frontend/Dockerfile` copies `index.html` + `nginx.conf` into nginx:alpine
+- **Puller**: `puller/Dockerfile` runs `async_puller.py` in python:3.12-slim
+- **Monitoring**: `monitoring/Dockerfile` runs agents in python:3.12-slim
+- **Migrations**: `puller/Dockerfile.migrate` runs one-shot schema patches
+- Railway auto-deploys on push to main (each service has its own root directory)
+- GitHub Pages deployment via `.github/workflows/pages.yml` (serves `frontend/`)
+- Use `make help` to see all build/run commands
+- Each Railway service should have its root directory set to its subdirectory (e.g., `frontend/`, `puller/`, `monitoring/`)
 
 ## Development Rules
-- The frontend is a single `index.html` file (React + Babel transpiled in-browser)
+- The frontend is a single `frontend/index.html` file (React + Babel transpiled in-browser)
 - Zone coordinates are percentage-based (0-100) mapped to SVG viewBox
 - All timestamps are UTC (TIMESTAMPTZ)
 - Violation status is only 'pending' or 'resolved' (CHECK constraint)
