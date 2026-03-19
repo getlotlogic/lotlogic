@@ -2891,17 +2891,10 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
             <div style={{display:'flex', alignItems:'center', gap:10}}>
               <span style={{fontSize:18}}>&#x2714;</span>
               <div>
-                <div style={{color:'#4ade80', fontSize:14, fontWeight:700}}>Vehicle has left the zone</div>
-                <div style={{color:'rgba(255,255,255,.5)', fontSize:12}}>Current camera image shows no vehicle in this zone</div>
+                <div style={{color:'#4ade80', fontSize:14, fontWeight:700}}>Vehicle appears to have left the zone</div>
+                <div style={{color:'rgba(255,255,255,.5)', fontSize:12}}>Verifying across multiple snapshots before auto-cancelling</div>
               </div>
             </div>
-            {onAutoGone && (
-              <button onClick={() => onAutoGone(violation.id)} style={{
-                background:'#22c55e', color:'#fff', border:'none', borderRadius:8,
-                padding:'8px 16px', fontSize:13, fontWeight:700, cursor:'pointer',
-                whiteSpace:'nowrap', flexShrink:0,
-              }}>Cancel Violation</button>
-            )}
           </div>
         )}
 
@@ -3289,23 +3282,60 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     handleAction(violId, action);
   }
 
-  // Auto-cancel violations when vehicle has left the zone
-  // Tracks which violations we've already auto-cancelled to avoid duplicate calls
-  const autoCancelledRef = useRef(new Set());
+  // Smart auto-cancel: require 3 consecutive empty snapshots before cancelling
+  // This prevents false cancels from momentary occlusion, camera glitches, or YOLO misses
+  const autoCancelledRef = useRef(new Set());       // violations already auto-cancelled
+  const emptyStreakRef = useRef({});                 // violationId -> { count, lastSnapshotTime }
+  const AUTO_CANCEL_STREAK = 3;                     // consecutive empty snapshots required
+  const AUTO_CANCEL_MIN_AGE_MS = 2 * 60 * 1000;    // violation must be at least 2 min old
+
   useEffect(() => {
     if (!active.length || !allCams.length) return;
     for (const v of active) {
       if (autoCancelledRef.current.has(v.id)) continue;
+
+      // Don't auto-cancel violations that are too recent — give operators time to act
+      const age = Date.now() - new Date(v.detected_at).getTime();
+      if (age < AUTO_CANCEL_MIN_AGE_MS) continue;
+
+      // Don't auto-cancel acknowledged violations — operator is actively working on it
+      if (v.status === 'acknowledged') continue;
+
       const cam = allCams.find(c => c.camera_id === v.camera_id);
       const dets = cam?.latest_snapshot?.detections || [];
       const zones = camZonesMap[v.camera_id] || [];
+      const snapTime = cam?.latest_snapshot?.captured_at || null;
+
+      // Need valid detections data (not just an empty array from no snapshot)
+      if (!cam?.latest_snapshot) continue;
+
       const gone = isVehicleInZone(dets, v.zone_id, zones);
+
+      const streak = emptyStreakRef.current[v.id] || { count: 0, lastSnapshotTime: null };
+
       if (gone === false) {
-        // Vehicle confirmed departed — auto-cancel
-        autoCancelledRef.current.add(v.id);
-        console.log(`Auto-cancelling violation ${v.id} — vehicle left zone ${v.zone_id}`);
-        handleAction(v.id, 'already_gone');
+        // Only count if this is a different snapshot than the last one we checked
+        if (snapTime && snapTime !== streak.lastSnapshotTime) {
+          streak.count++;
+          streak.lastSnapshotTime = snapTime;
+        }
+        emptyStreakRef.current[v.id] = streak;
+
+        if (streak.count >= AUTO_CANCEL_STREAK) {
+          autoCancelledRef.current.add(v.id);
+          console.log(`Auto-cancelling violation ${v.id} — zone ${v.zone_id} empty for ${streak.count} consecutive snapshots`);
+          addToast(`Vehicle left zone — auto-cancelled`, 'success');
+          handleAction(v.id, 'already_gone');
+        }
+      } else {
+        // Vehicle detected in zone (or inconclusive) — reset streak
+        emptyStreakRef.current[v.id] = { count: 0, lastSnapshotTime: null };
       }
+    }
+    // Clean up streaks for violations no longer active
+    const activeIds = new Set(active.map(v => v.id));
+    for (const id of Object.keys(emptyStreakRef.current)) {
+      if (!activeIds.has(id)) delete emptyStreakRef.current[id];
     }
   }, [active, allCams, camZonesMap]);
 
@@ -3475,21 +3505,30 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               )}
               {/* Snapshot photo with single bounding box on violating vehicle */}
               <ViolationSnapshot src={v._snapshot_url} detections={v._detections} matchedDetection={matchViolationDetection(v._detections, v.zone_id, camZonesMap[v.camera_id])} maxHeight={220} borderRadius={0} onClick={v._snapshot_url ? () => setSelectedViol(v) : undefined} />
-              {/* Vehicle departed banner — auto-cancelling */}
+              {/* Vehicle departed banner — shows streak progress toward auto-cancel */}
               {(() => {
                 const cam = allCams.find(c => c.camera_id === v.camera_id);
                 const latestDets = cam?.latest_snapshot?.detections || [];
                 const gone = isVehicleInZone(latestDets, v.zone_id, camZonesMap[v.camera_id]) === false;
-                return gone ? (
+                if (!gone) return null;
+                const streak = emptyStreakRef.current[v.id]?.count || 0;
+                const pct = Math.min(100, Math.round((streak / AUTO_CANCEL_STREAK) * 100));
+                return (
                   <div style={{
                     background:'rgba(34,197,94,.1)', borderBottom:'1px solid rgba(34,197,94,.2)',
-                    padding:'6px 16px', display:'flex', alignItems:'center', gap:8,
+                    padding:'6px 16px', display:'flex', flexDirection:'column', gap:4,
                   }}>
-                    <span style={{color:'#4ade80', fontSize:12, fontWeight:600, display:'flex', alignItems:'center', gap:6}}>
-                      <div className="spin" style={{width:12, height:12, borderWidth:2}} /> Auto-cancelling — vehicle left the zone
-                    </span>
+                    <div style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+                      <span style={{color:'#4ade80', fontSize:12, fontWeight:600, display:'flex', alignItems:'center', gap:6}}>
+                        <div className="spin" style={{width:12, height:12, borderWidth:2}} />
+                        Vehicle appears gone — verifying ({streak}/{AUTO_CANCEL_STREAK})
+                      </span>
+                    </div>
+                    <div style={{height:3, borderRadius:2, background:'rgba(34,197,94,.15)', overflow:'hidden'}}>
+                      <div style={{height:'100%', width:`${pct}%`, background:'#22c55e', borderRadius:2, transition:'width .3s ease'}} />
+                    </div>
                   </div>
-                ) : null;
+                );
               })()}
               {/* Vehicle summary bar — quick-glance info for the tow operator */}
               <div className="vehicle-summary">
