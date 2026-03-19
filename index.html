@@ -572,7 +572,7 @@
       font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;
       transition: all .15s; text-align: center; text-transform: uppercase; letter-spacing: .04em;
     }
-    .secondary-actions .action-btn { flex: 0 0 auto; min-width: auto; padding: 8px 12px; }
+    .job-secondary-actions .action-btn { flex: 0 0 auto; min-width: unset; padding: 8px 14px; white-space: nowrap; }
     .action-btn:active { transform: scale(.96); }
     .action-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
     .action-btn.boot { background: rgba(251,191,36,.1); border-color: rgba(251,191,36,.4); color: #fbbf24; }
@@ -2018,7 +2018,7 @@ const db = {
           acknowledged_by: 'dashboard',
         })
         .eq('id', violId)
-        .in('status', ['pending', 'alerted'])
+        .eq('status', 'alerted')
         .select();
       if (error) throw new Error(error.message);
       // Also try backend endpoint as fallback/sync
@@ -3440,8 +3440,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   {isActing ? '…' : `Tow · $${user?.tow_fee || 250}`}
                 </button>
               </div>
-              <div className="secondary-actions" style={{display:'flex', alignItems:'center', flexWrap:'wrap', padding:'4px 12px 10px', gap:8}}>
-                  {(v.status === 'alerted' || v.status === 'pending') && (
+              <div className="job-secondary-actions" style={{display:'flex', alignItems:'center', padding:'0 12px 10px', gap:8, flexWrap:'wrap'}}>
+                  {v.status === 'alerted' && (
                     <button className="action-btn" disabled={anyActing || acking === v.id}
                       onClick={(e) => { e.stopPropagation(); handleAcknowledge(v.id); }}
                       aria-label="Acknowledge violation"
