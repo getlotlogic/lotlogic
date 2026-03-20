@@ -75,6 +75,7 @@ MIN_FRAME_SIZE = 1000
 MAX_BACKOFF = 60  # 1 minute max backoff (recover faster when tunnel reconnects)
 INGEST_RETRY_ATTEMPTS = 2
 INGEST_RETRY_DELAY = 2  # seconds
+HEALTHCHECK_FILE = "/tmp/puller_heartbeat"
 
 logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -392,6 +393,9 @@ class CameraTask:
                 {"last_heartbeat": datetime.now(timezone.utc).isoformat(), "status": "active"},
             )
             self._last_heartbeat = now
+            # Touch healthcheck file so Docker knows we're alive
+            with open(HEALTHCHECK_FILE, "w") as f:
+                f.write(str(time.time()))
         except Exception as e:
             log.debug("[%s] Heartbeat failed: %s", self.name, e)
 

@@ -1,0 +1,39 @@
+# LotLogic — Local Development & Self-Hosted Deployment
+# Usage: docker compose up -d
+# Logs:  docker compose logs -f puller
+
+services:
+  puller:
+    build:
+      context: puller/
+      dockerfile: Dockerfile
+    container_name: lotlogic-puller
+    restart: always
+    env_file: puller/.env
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  monitoring:
+    build:
+      context: monitoring/
+      dockerfile: Dockerfile
+    container_name: lotlogic-monitoring
+    restart: always
+    env_file: monitoring/.env
+    depends_on:
+      puller:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

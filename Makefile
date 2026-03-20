@@ -3,7 +3,8 @@
 
 .PHONY: help build-frontend build-puller build-monitoring build-all \
         run-frontend run-puller run-monitoring \
-        migrate logs status
+        up down logs restart health \
+        migrate status
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -32,6 +33,29 @@ run-puller: build-puller ## Run snapshot puller locally
 
 run-monitoring: build-monitoring ## Run monitoring agents locally
 	docker run --rm --env-file monitoring/.env lotlogic-monitoring
+
+# ── Docker Compose (recommended) ──────────────────────
+
+up: ## Start all services (puller + monitoring)
+	docker compose up -d --build
+
+down: ## Stop all services
+	docker compose down
+
+restart: ## Restart all services
+	docker compose restart
+
+logs: ## Tail logs from all services
+	docker compose logs -f
+
+health: ## Check service health
+	@docker compose ps
+	@echo ""
+	@echo "── Puller Health ──"
+	@docker exec lotlogic-puller python /app/healthcheck.py 2>/dev/null || echo "Container not running"
+	@echo ""
+	@echo "── Camera Heartbeats ──"
+	@curl -s -H "X-API-Key: $${LOTLOGIC_API_KEY}" "https://lotlogic-backend-production.up.railway.app/cameras?lot_id=$${LOT_ID}" 2>/dev/null | python3 -c "import sys,json;[print(f'  {c[\"name\"]}: {c.get(\"last_heartbeat\",\"never\")}') for c in json.load(sys.stdin)]" 2>/dev/null || echo "  (set LOTLOGIC_API_KEY and LOT_ID env vars)"
 
 # ── Database ───────────────────────────────────────────
 
