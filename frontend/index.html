@@ -4655,7 +4655,21 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
   const bufferRef = useRef(null);
   const frameEndpointFailed = useRef(false); // skip /frame if it's known broken
 
-  // Fetch latest snapshot from DB
+  // Fetch latest snapshot timestamp (and optionally image) from DB
+  const fetchLatestCapturedAt = useCallback(async () => {
+    if (!supabase) return null;
+    try {
+      const { data } = await supabase
+        .from('snapshots')
+        .select('captured_at')
+        .eq('camera_id', cameraId)
+        .order('captured_at', { ascending: false })
+        .limit(1);
+      return data?.[0]?.captured_at ? new Date(data[0].captured_at) : null;
+    } catch { return null; }
+  }, [cameraId]);
+
+  // Fetch latest snapshot from DB (full data, used as image fallback)
   const loadFromDB = useCallback(async () => {
     if (!supabase) return false;
     try {
@@ -4700,7 +4714,9 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
         });
         if (loaded && testImg.naturalWidth > 0) {
           setFrameUrl(frameImgUrl);
-          setLastFrameTime(new Date());
+          // Use DB captured_at as source of truth — /frame may serve cached stale images
+          const dbTime = await fetchLatestCapturedAt();
+          setLastFrameTime(dbTime || new Date());
           setFeedStatus('live');
           return;
         }
@@ -4723,7 +4739,7 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
         setFeedStatus('offline');
       }
     }
-  }, [cameraId, initialSnap, loadFromDB]);
+  }, [cameraId, initialSnap, loadFromDB, fetchLatestCapturedAt]);
 
   // Initial load
   useEffect(() => { loadFrame(); }, [loadFrame]);
