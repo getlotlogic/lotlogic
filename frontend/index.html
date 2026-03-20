@@ -331,6 +331,7 @@
       box-shadow: 0 2px 12px rgba(0,0,0,.06);
     }
     .job-card.urgent { border-color: rgba(220,38,38,.4); box-shadow: 0 2px 16px rgba(220,38,38,.12); }
+    .job-card.departed { opacity: .55; border-color: rgba(34,197,94,.3); }
     .job-urgent-bar {
       background: linear-gradient(90deg, #dc2626, #b91c1c);
       padding: 7px 16px;
@@ -1849,6 +1850,18 @@ const db = {
       body: JSON.stringify({ action, ...cleanExtra }),
     });
   },
+  // Mark a violation as departed (vehicle left zone, confirmed by consecutive empty snapshots)
+  // Does NOT resolve the violation — operator must still dismiss it manually
+  async markDeparted(violId, emptyStreak) {
+    if (supabase) {
+      const { error } = await supabase.from('violations').update({
+        departed_at: new Date().toISOString(),
+        empty_streak: emptyStreak,
+        status: 'departed',
+      }).eq('id', violId);
+      if (error) console.error('markDeparted error:', error);
+    }
+  },
   async getSnapshotUrl(snapshotId) {
     if (supabase) {
       const { data, error } = await supabase
@@ -2719,10 +2732,51 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   const det = matchedDetection;
 
-  // Check if vehicle is still in zone using latest snapshot detections
+  // Live-poll the latest snapshot from this camera every 10s while modal is open
+  const [liveUrl, setLiveUrl] = useState(latestSnapshotUrl);
+  const [liveDets, setLiveDets] = useState(latestDetections);
+  const [liveTime, setLiveTime] = useState(null);
+
+  useEffect(() => {
+    if (!supabase || !violation.camera_id) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const { data } = await supabase
+          .from('snapshots')
+          .select('storage_url, url, raw_detections, captured_at')
+          .eq('camera_id', violation.camera_id)
+          .order('captured_at', { ascending: false })
+          .limit(1);
+        if (cancelled || !data?.[0]) return;
+        const snap = data[0];
+        const base = snap.storage_url || snap.url;
+        if (base) {
+          setLiveUrl(base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now());
+        }
+        const dets = snap.raw_detections?.detections?.map((d, i) => ({
+          id: `det_${i}`,
+          type: d.class === 'person' ? 'person' : 'vehicle',
+          bbox: d.bbox ? { x: d.bbox[0] * 100, y: d.bbox[1] * 100, w: (d.bbox[2] - d.bbox[0]) * 100, h: (d.bbox[3] - d.bbox[1]) * 100 } : null,
+          confidence: d.conf,
+          label: d.class,
+        })) || [];
+        setLiveDets(dets);
+        if (snap.captured_at) {
+          const ago = Math.round((Date.now() - new Date(snap.captured_at).getTime()) / 1000);
+          setLiveTime(ago < 60 ? `${ago}s ago` : `${Math.round(ago / 60)}m ago`);
+        }
+      } catch (e) { console.warn('Live snapshot poll error:', e); }
+    };
+    poll(); // fetch immediately on open
+    const iv = setInterval(poll, 10000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [violation.camera_id]);
+
+  // Check if vehicle is still in zone using live snapshot detections
   const vehicleStillInZone = useMemo(() =>
-    isVehicleInZone(latestDetections, violation.zone_id, cameraZones),
-    [latestDetections, violation.zone_id, cameraZones]
+    isVehicleInZone(liveDets, violation.zone_id, cameraZones),
+    [liveDets, violation.zone_id, cameraZones]
   );
 
   const isPending = violation.status === 'pending' || violation.status === 'alerted' || violation.status === 'acknowledged';
@@ -2833,15 +2887,15 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
             timestamp={initialTime}
           />
           <ProofImage
-            src={latestSnapshotUrl || violation._snapshot_url}
+            src={liveUrl || violation._snapshot_url}
             label="Current"
-            detection={latestSnapshotUrl ? null : det}
-            timestamp="Live"
+            detection={liveUrl ? null : det}
+            timestamp={liveTime || 'Live'}
           />
         </div>
 
         {/* Vehicle departed banner */}
-        {vehicleDeparted && (
+        {(vehicleDeparted || violation.status === 'departed' || violation.departed_at) && (
           <div style={{
             background:'rgba(34,197,94,.15)', border:'1px solid rgba(34,197,94,.3)',
             borderRadius:10, padding:'12px 16px', marginBottom:12,
@@ -2851,7 +2905,11 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
               <span style={{fontSize:18}}>&#x2714;</span>
               <div>
                 <div style={{color:'#4ade80', fontSize:14, fontWeight:700}}>Vehicle has left the zone</div>
-                <div style={{color:'rgba(255,255,255,.5)', fontSize:12}}>Current camera image shows no vehicle in this zone</div>
+                <div style={{color:'rgba(255,255,255,.5)', fontSize:12}}>
+                  {violation.departed_at
+                    ? `Confirmed gone at ${new Date(violation.departed_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}`
+                    : 'Current camera image shows no vehicle in this zone'}
+                </div>
               </div>
             </div>
             {onAutoGone && (
@@ -2859,7 +2917,7 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
                 background:'#22c55e', color:'#fff', border:'none', borderRadius:8,
                 padding:'8px 16px', fontSize:13, fontWeight:700, cursor:'pointer',
                 whiteSpace:'nowrap', flexShrink:0,
-              }}>Cancel Violation</button>
+              }}>Dismiss</button>
             )}
           </div>
         )}
@@ -3118,16 +3176,23 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     }
   }, [deepLinkViolationId, violations, selectedViol]);
 
-  // Active jobs = pending/alerted/acknowledged violations, oldest first (most urgent first)
+  // Active jobs = pending/alerted/acknowledged/departed violations
+  // Departed violations sort to the bottom, rest sorted oldest-first (most urgent)
   const active = violations
-    .filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status))
-    .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at));
+    .filter(v => ['pending', 'alerted', 'acknowledged', 'departed'].includes(v.status))
+    .sort((a, b) => {
+      const aDep = a.status === 'departed' || a.departed_at;
+      const bDep = b.status === 'departed' || b.departed_at;
+      if (aDep && !bDep) return 1;  // departed goes to bottom
+      if (!aDep && bDep) return -1;
+      return new Date(a.detected_at) - new Date(b.detected_at);
+    });
 
   // Recent = resolved/cleared today (calendar day)
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   const todayCutoff = todayStart.getTime();
   const recent = violations
-    .filter(v => ['resolved', 'cleared', 'departed'].includes(v.status) && new Date(v.resolved_at || v.departed_at || v.cleared_at || v.detected_at).getTime() >= todayCutoff)
+    .filter(v => ['resolved', 'cleared'].includes(v.status) && new Date(v.resolved_at || v.cleared_at || v.detected_at).getTime() >= todayCutoff)
     .sort((a, b) => new Date(b.resolved_at || b.departed_at || b.cleared_at || b.detected_at) - new Date(a.resolved_at || a.departed_at || a.cleared_at || a.detected_at));
 
   // KPIs
@@ -3186,7 +3251,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     acknowledged: { label: 'Acknowledged', color: '#f59e0b', bg: 'rgba(245,158,11,.12)', icon: '🟡' },
     cleared:      { label: 'Cleared',      color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
     resolved:     { label: 'Resolved',     color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
-    departed:     { label: 'Departed',     color: '#6b7280', bg: 'rgba(107,114,128,.12)', icon: '🚗' },
+    departed:     { label: 'Gone',         color: '#4ade80', bg: 'rgba(34,197,94,.15)', icon: '✓' },
   };
 
   const [acking, setAcking] = useState(null);
@@ -3247,6 +3312,53 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     haptic(action === 'tow' ? 'heavy' : action === 'boot' ? 'medium' : 'light');
     handleAction(violId, action);
   }
+
+  // Smart departure detection: require 3 consecutive empty snapshots before flagging
+  // Flags as "departed" (stays on dashboard) — does NOT auto-resolve
+  const departedFlaggedRef = useRef(new Set());     // violations already flagged as departed
+  const emptyStreakRef = useRef({});                 // violationId -> { count, lastSnapshotTime }
+  const DEPARTED_STREAK = 3;                        // consecutive empty snapshots required
+
+  useEffect(() => {
+    if (!active.length || !allCams.length) return;
+    for (const v of active) {
+      // Skip if already flagged as departed (in DB or locally)
+      if (v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) continue;
+
+      const cam = allCams.find(c => c.camera_id === v.camera_id);
+      if (!cam?.latest_snapshot) continue;
+
+      const dets = cam.latest_snapshot.detections || [];
+      const zones = camZonesMap[v.camera_id] || [];
+      const snapTime = cam.latest_snapshot.captured_at || null;
+      const gone = isVehicleInZone(dets, v.zone_id, zones);
+
+      const streak = emptyStreakRef.current[v.id] || { count: 0, lastSnapshotTime: null };
+
+      if (gone === false) {
+        // Only count if this is a different snapshot than the last one we checked
+        if (snapTime && snapTime !== streak.lastSnapshotTime) {
+          streak.count++;
+          streak.lastSnapshotTime = snapTime;
+        }
+        emptyStreakRef.current[v.id] = streak;
+
+        if (streak.count >= DEPARTED_STREAK) {
+          departedFlaggedRef.current.add(v.id);
+          console.log(`Vehicle departed — violation ${v.id}, zone ${v.zone_id}, ${streak.count} consecutive empty snapshots`);
+          db.markDeparted(v.id, streak.count);
+        }
+      } else {
+        // Vehicle detected in zone (or inconclusive) — reset streak
+        emptyStreakRef.current[v.id] = { count: 0, lastSnapshotTime: null };
+      }
+    }
+    // Clean up streaks for violations no longer active
+    const activeIds = new Set(active.map(v => v.id));
+    for (const id of Object.keys(emptyStreakRef.current)) {
+      if (!activeIds.has(id)) delete emptyStreakRef.current[id];
+    }
+  }, [active, allCams, camZonesMap]);
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all'); // all | urgent | plates
@@ -3381,7 +3493,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
           const typeClass = v.violation_type?.toLowerCase().includes('unauthorized')
             ? 'unauthorized' : v.violation_type?.toLowerCase().includes('overtime') ? 'overtime' : 'default';
           return (
-            <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''}`} style={{position:'relative'}}>
+            <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''} ${(v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) ? 'departed' : ''}`} style={{position:'relative'}}>
               {/* Owner delete X */}
               {isOwner && (
                 <button
@@ -3414,25 +3526,87 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               )}
               {/* Snapshot photo with single bounding box on violating vehicle */}
               <ViolationSnapshot src={v._snapshot_url} detections={v._detections} matchedDetection={matchViolationDetection(v._detections, v.zone_id, camZonesMap[v.camera_id])} maxHeight={220} borderRadius={0} onClick={v._snapshot_url ? () => setSelectedViol(v) : undefined} />
-              {/* Vehicle departed banner — shown when current snapshot shows zone is empty */}
+              {/* Live vehicle presence indicator */}
               {(() => {
+                const isDeparted = v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id);
+                const streak = emptyStreakRef.current[v.id]?.count || 0;
+                const verifying = !isDeparted && streak > 0;
+
+                if (isDeparted) {
+                  const departedAgo = v.departed_at
+                    ? Math.round((Date.now() - new Date(v.departed_at).getTime()) / 60000)
+                    : null;
+                  return (
+                    <div style={{
+                      background:'rgba(34,197,94,.15)', borderBottom:'1px solid rgba(34,197,94,.3)',
+                      padding:'8px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8,
+                    }}>
+                      <span style={{color:'#4ade80', fontSize:12, fontWeight:700, display:'flex', alignItems:'center', gap:6}}>
+                        <span style={{fontSize:14}}>&#x2714;</span>
+                        Vehicle left{departedAgo != null && departedAgo > 0 ? ` ${departedAgo}m ago` : ''}
+                      </span>
+                      <button onClick={(e) => { e.stopPropagation(); requestAction(v.id, 'already_gone'); }} disabled={anyActing} style={{
+                        background:'rgba(34,197,94,.2)', color:'#4ade80', border:'1px solid rgba(34,197,94,.3)', borderRadius:6,
+                        padding:'4px 12px', fontSize:11, fontWeight:700, cursor: anyActing ? 'not-allowed' : 'pointer',
+                      }}>Dismiss</button>
+                    </div>
+                  );
+                }
+                if (verifying) {
+                  const pct = Math.min(100, Math.round((streak / DEPARTED_STREAK) * 100));
+                  return (
+                    <div style={{
+                      background:'rgba(251,191,36,.08)', borderBottom:'1px solid rgba(251,191,36,.2)',
+                      padding:'6px 16px', display:'flex', flexDirection:'column', gap:4,
+                    }}>
+                      <span style={{color:'#fbbf24', fontSize:11, fontWeight:600, display:'flex', alignItems:'center', gap:6}}>
+                        <div className="spin" style={{width:10, height:10, borderWidth:2}} />
+                        Checking if vehicle left ({streak}/{DEPARTED_STREAK})
+                      </span>
+                      <div style={{height:2, borderRadius:2, background:'rgba(251,191,36,.15)', overflow:'hidden'}}>
+                        <div style={{height:'100%', width:`${pct}%`, background:'#fbbf24', borderRadius:2, transition:'width .3s ease'}} />
+                      </div>
+                    </div>
+                  );
+                }
+                // Live presence check — show vehicle still detected in zone
                 const cam = allCams.find(c => c.camera_id === v.camera_id);
-                const latestDets = cam?.latest_snapshot?.detections || [];
-                const gone = isVehicleInZone(latestDets, v.zone_id, camZonesMap[v.camera_id]) === false;
-                return gone ? (
-                  <div style={{
-                    background:'rgba(34,197,94,.1)', borderBottom:'1px solid rgba(34,197,94,.2)',
-                    padding:'6px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8,
-                  }}>
-                    <span style={{color:'#4ade80', fontSize:12, fontWeight:600, display:'flex', alignItems:'center', gap:6}}>
-                      <span>&#x2714;</span> Vehicle has left the zone
-                    </span>
-                    <button onClick={(e) => { e.stopPropagation(); requestAction(v.id, 'already_gone'); }} disabled={anyActing} style={{
-                      background:'#22c55e', color:'#fff', border:'none', borderRadius:6,
-                      padding:'4px 10px', fontSize:11, fontWeight:700, cursor: anyActing ? 'not-allowed' : 'pointer',
-                    }}>Cancel</button>
-                  </div>
+                const presence = cam?.latest_snapshot ? isVehicleInZone(
+                  cam.latest_snapshot.detections || [],
+                  v.zone_id,
+                  camZonesMap[v.camera_id] || []
                 ) : null;
+                const snapAge = cam?.latest_snapshot?.captured_at
+                  ? Math.round((Date.now() - new Date(cam.latest_snapshot.captured_at).getTime()) / 1000)
+                  : null;
+                const snapAgeLabel = snapAge != null
+                  ? (snapAge < 60 ? `${snapAge}s ago` : `${Math.round(snapAge / 60)}m ago`)
+                  : null;
+                if (presence === true) {
+                  return (
+                    <div style={{
+                      background:'rgba(239,68,68,.06)', borderBottom:'1px solid rgba(239,68,68,.15)',
+                      padding:'6px 16px', display:'flex', alignItems:'center', gap:6,
+                    }}>
+                      <span style={{width:6, height:6, borderRadius:'50%', background:'#ef4444', flexShrink:0, animation:'pulse-dot 1.5s infinite'}} />
+                      <span style={{color:'rgba(239,68,68,.8)', fontSize:11, fontWeight:600}}>Vehicle still in zone</span>
+                      {snapAgeLabel && <span style={{color:'rgba(255,255,255,.3)', fontSize:10, marginLeft:'auto'}}>{snapAgeLabel}</span>}
+                    </div>
+                  );
+                }
+                if (presence === false) {
+                  return (
+                    <div style={{
+                      background:'rgba(251,191,36,.06)', borderBottom:'1px solid rgba(251,191,36,.15)',
+                      padding:'6px 16px', display:'flex', alignItems:'center', gap:6,
+                    }}>
+                      <div className="spin" style={{width:8, height:8, borderWidth:2, flexShrink:0}} />
+                      <span style={{color:'rgba(251,191,36,.8)', fontSize:11, fontWeight:600}}>Vehicle not detected — verifying...</span>
+                      {snapAgeLabel && <span style={{color:'rgba(255,255,255,.3)', fontSize:10, marginLeft:'auto'}}>{snapAgeLabel}</span>}
+                    </div>
+                  );
+                }
+                return null;
               })()}
               {/* Vehicle summary bar — quick-glance info for the tow operator */}
               <div className="vehicle-summary">
@@ -3499,7 +3673,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   </div>
                 )}
               </div>
-              {/* Primary actions — Boot and Tow get prominent placement */}
+              {/* Primary actions — hidden for departed violations (dismiss from banner instead) */}
+              {!(v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) && (<>
               <div className="job-actions-row" role="group" aria-label="Enforcement actions" style={{gap:8, padding:'10px 12px'}}>
                 <button className="action-btn boot" disabled={anyActing} onClick={() => requestAction(v.id, 'boot')} aria-label={`Boot vehicle for $${user?.boot_fee || 75}`} style={{padding:'12px 6px', fontSize:13}}>
                   {isActing ? '…' : `Boot · $${user?.boot_fee || 75}`}
@@ -3533,6 +3708,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   </a>
                 )}
               </div>
+              </>)}
             </div>
           );
         })
@@ -6058,6 +6234,68 @@ function App() {
     }, refreshInterval);
     return () => clearInterval(timerRef.current);
   }, [owner, loadData, autoRefresh, refreshInterval]);
+
+  // Fast snapshot poll (every 10s) — refreshes latest_snapshot for cameras with active violations
+  // so departure banners on cards update without waiting for the full 30s loadData cycle
+  useEffect(() => {
+    if (!supabase || !owner) return;
+    const activeCamIds = () => {
+      const pending = violations.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status));
+      return [...new Set(pending.map(v => v.camera_id).filter(Boolean))];
+    };
+    const pollSnapshots = async () => {
+      const camIds = activeCamIds();
+      if (camIds.length === 0) return;
+      try {
+        const results = await Promise.all(camIds.map(cid =>
+          supabase.from('snapshots')
+            .select('camera_id, storage_url, url, raw_detections, captured_at, vehicles_detected')
+            .eq('camera_id', cid)
+            .order('captured_at', { ascending: false })
+            .limit(1)
+            .then(r => r.data?.[0] || null)
+        ));
+        setLotStates(prev => {
+          const next = { ...prev };
+          let changed = false;
+          for (const [lotId, state] of Object.entries(next)) {
+            if (!state?.cameras) continue;
+            const updatedCams = state.cameras.map(cam => {
+              const snap = results.find(r => r && r.camera_id === cam.camera_id);
+              if (!snap) return cam;
+              const base = snap.storage_url || snap.url;
+              const newCaptured = snap.captured_at;
+              // Only update if we have a newer snapshot
+              if (cam.latest_snapshot?.captured_at && newCaptured && new Date(newCaptured) <= new Date(cam.latest_snapshot.captured_at)) return cam;
+              changed = true;
+              return {
+                ...cam,
+                latest_snapshot: {
+                  url: base ? base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now() : null,
+                  captured_at: newCaptured,
+                  vehicles_detected: snap.vehicles_detected || 0,
+                  people_detected: 0,
+                  plates_read: 0,
+                  plate_readings: [],
+                  detections: snap.raw_detections?.detections?.map((d, i) => ({
+                    id: `det_${i}`,
+                    type: d.class === 'person' ? 'person' : 'vehicle',
+                    bbox: d.bbox ? { x: d.bbox[0] * 100, y: d.bbox[1] * 100, w: (d.bbox[2] - d.bbox[0]) * 100, h: (d.bbox[3] - d.bbox[1]) * 100 } : null,
+                    confidence: d.conf,
+                    label: d.class,
+                  })) || [],
+                },
+              };
+            });
+            if (changed) next[lotId] = { ...state, cameras: updatedCams };
+          }
+          return changed ? next : prev;
+        });
+      } catch (e) { console.warn('Fast snapshot poll error:', e); }
+    };
+    const iv = setInterval(pollSnapshots, 10000);
+    return () => clearInterval(iv);
+  }, [owner, violations]);
 
   // Subscribe to realtime violation changes
   useEffect(() => {

@@ -144,9 +144,20 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 - Backend API should enforce authorization on every request
 
 ## Build & Deploy
-- **Frontend**: Deployed on Vercel — auto-deploys on push to `main`, root dir `frontend/`
-  - Vercel serves `index.html` as static site with SPA rewrites (see `frontend/vercel.json`)
-  - No build step needed — single HTML file served directly
+
+### Frontend — Vercel
+- **Live URL**: https://lotlogic-beta.vercel.app
+- **Vercel Project**: `lotlogic` (ID: `prj_X69wXEACGHveq0etAvX3xFBWDsqJ`)
+- **Vercel Team**: `gabebs1-2452s-projects` (ID: `team_r9Qsbhq7f117Wza8KnrvV55t`)
+- **Root directory**: `frontend/` (configured in Vercel project settings)
+- **Framework**: None — static HTML, no build step
+- **Deploy trigger**: Auto-deploys on push to `main` via GitHub integration
+- **Preview deploys**: Created automatically for PRs
+- **Config**: `frontend/vercel.json` handles SPA rewrites (all routes → `index.html`) and cache headers
+- **To deploy manually**: Push to `main` or open a PR — Vercel picks it up automatically
+- **Vercel MCP tools available**: Use `list_deployments`, `get_deployment`, `get_deployment_build_logs`, `get_runtime_logs`, `deploy_to_vercel` for deployment management
+
+### Backend & Workers — Railway
 - **Backend**: FastAPI on Railway — auto-deploys from `getlotlogic/lotlogic-backend` repo
 - **Puller**: `puller/Dockerfile` runs `async_puller.py` in python:3.12-slim (Railway worker)
 - **Monitoring**: `monitoring/Dockerfile` runs agents in python:3.12-slim (Railway worker)
