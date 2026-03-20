@@ -4653,94 +4653,131 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
   const [snap, setSnap] = useState(initialSnap); // DB snapshot fallback
   const imgRef = useRef(null);
   const bufferRef = useRef(null);
+  const frameEndpointFailed = useRef(false); // skip /frame if it's known broken
+
+  // Fetch latest snapshot from DB
+  const loadFromDB = useCallback(async () => {
+    if (!supabase) return false;
+    try {
+      const { data } = await supabase
+        .from('snapshots')
+        .select('storage_url, url, captured_at, vehicles_detected, raw_detections')
+        .eq('camera_id', cameraId)
+        .order('captured_at', { ascending: false })
+        .limit(1);
+      if (data?.[0]) {
+        const s = data[0];
+        const base = s.storage_url || s.url || '';
+        const url = base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now();
+        setFrameUrl(url);
+        setLastFrameTime(s.captured_at ? new Date(s.captured_at) : new Date());
+        setSnap({
+          url,
+          captured_at: s.captured_at,
+          vehicles_detected: s.vehicles_detected || 0,
+          detections: s.raw_detections?.detections || [],
+        });
+        setFeedStatus('live');
+        return true;
+      }
+    } catch {}
+    return false;
+  }, [cameraId]);
 
   // Try loading a live frame from /frame endpoint, fall back to DB snapshot
   const loadFrame = useCallback(async () => {
-    // 1. Try /frame endpoint (true live feed from RTSP)
-    try {
-      const frameImgUrl = API + `/cameras/${cameraId}/frame?api_key=${API_KEY}&_t=${Date.now()}`;
-      const testImg = bufferRef.current || new Image();
-      bufferRef.current = testImg;
-      const loaded = await new Promise((resolve) => {
-        testImg.onload = () => resolve(true);
-        testImg.onerror = () => resolve(false);
-        testImg.src = frameImgUrl;
-        setTimeout(() => resolve(false), 5000);
-      });
-      if (loaded && testImg.naturalWidth > 0) {
-        setFrameUrl(frameImgUrl);
-        setLastFrameTime(new Date());
-        setFeedStatus('live');
-        return;
-      }
-    } catch {}
-
-    // 2. Fallback: latest snapshot from DB
-    try {
-      if (supabase) {
-        const { data } = await supabase
-          .from('snapshots')
-          .select('storage_url, captured_at, vehicles_detected, raw_detections')
-          .eq('camera_id', cameraId)
-          .order('captured_at', { ascending: false })
-          .limit(1);
-        if (data?.[0]) {
-          const s = data[0];
-          const url = (s.storage_url || '') + ((s.storage_url || '').includes('?') ? '&' : '?') + '_t=' + Date.now();
-          setFrameUrl(url);
-          setLastFrameTime(s.captured_at ? new Date(s.captured_at) : new Date());
-          setSnap({
-            url,
-            captured_at: s.captured_at,
-            vehicles_detected: s.vehicles_detected || 0,
-            detections: s.raw_detections?.detections || [],
-          });
+    // 1. Try /frame endpoint (true live feed from RTSP) — skip if already known broken
+    if (!frameEndpointFailed.current) {
+      try {
+        const frameImgUrl = API + `/cameras/${cameraId}/frame?api_key=${API_KEY}&_t=${Date.now()}`;
+        const testImg = bufferRef.current || new Image();
+        bufferRef.current = testImg;
+        const loaded = await new Promise((resolve) => {
+          testImg.onload = () => resolve(true);
+          testImg.onerror = () => resolve(false);
+          testImg.src = frameImgUrl;
+          setTimeout(() => resolve(false), 3000);
+        });
+        if (loaded && testImg.naturalWidth > 0) {
+          setFrameUrl(frameImgUrl);
+          setLastFrameTime(new Date());
           setFeedStatus('live');
           return;
         }
+        frameEndpointFailed.current = true; // don't try again
+      } catch {
+        frameEndpointFailed.current = true;
       }
-    } catch {}
+    }
+
+    // 2. Fallback: latest snapshot from DB
+    const got = await loadFromDB();
 
     // 3. Use initial snap if nothing else worked
-    if (initialSnap?.url) {
-      setFrameUrl(initialSnap.url);
-      setLastFrameTime(initialSnap.captured_at ? new Date(initialSnap.captured_at) : null);
-      setFeedStatus('live');
-    } else {
-      setFeedStatus('offline');
+    if (!got) {
+      if (initialSnap?.url) {
+        setFrameUrl(initialSnap.url);
+        setLastFrameTime(initialSnap.captured_at ? new Date(initialSnap.captured_at) : null);
+        setFeedStatus('live');
+      } else {
+        setFeedStatus('offline');
+      }
     }
-  }, [cameraId, initialSnap]);
+  }, [cameraId, initialSnap, loadFromDB]);
 
   // Initial load
   useEffect(() => { loadFrame(); }, [loadFrame]);
 
-  // Live polling — refresh frame every 5s (matches zone editor pattern)
+  // Live polling — refresh every 5s, go direct to DB once /frame is known broken
   useEffect(() => {
     if (!cameraId) return;
-    const iv = setInterval(() => loadFrame(), 5000);
+    const iv = setInterval(() => {
+      if (frameEndpointFailed.current) {
+        loadFromDB();
+      } else {
+        loadFrame();
+      }
+    }, 5000);
     return () => clearInterval(iv);
-  }, [cameraId, loadFrame]);
+  }, [cameraId, loadFrame, loadFromDB]);
 
-  // Realtime: auto-refresh on new snapshot INSERT
+  // Realtime: auto-refresh on new snapshot INSERT — go straight to DB (fastest path)
   useEffect(() => {
     if (!supabase || !cameraId) return;
     const channel = supabase.channel('live-cam-' + cameraId)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'snapshots', filter: 'camera_id=eq.' + cameraId }, () => {
-        loadFrame();
+        loadFromDB();
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [cameraId, loadFrame]);
+  }, [cameraId, loadFromDB]);
 
-  // Sync with parent if parent has a newer snapshot
+  // Sync with parent if parent has a newer snapshot (from fast poll / loadData)
   useEffect(() => {
     if (initialSnap?.captured_at && (!snap?.captured_at || new Date(initialSnap.captured_at) > new Date(snap.captured_at))) {
       setSnap(initialSnap);
+      if (initialSnap.url) {
+        const base = initialSnap.url;
+        setFrameUrl(base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now());
+        setLastFrameTime(new Date(initialSnap.captured_at));
+        setFeedStatus('live');
+      }
     }
   }, [initialSnap?.captured_at]);
 
+  // Force re-render every 5s so age label stays current
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => setTick(t => t + 1), 5000);
+    return () => clearInterval(iv);
+  }, []);
+
   const snapAge = lastFrameTime ? (Date.now() - lastFrameTime.getTime()) / 1000 : Infinity;
-  const snapStale = snapAge > 300;
+  const snapStale = snapAge > 120; // 2min = stale (cameras snapshot every 30s)
+  const ageLabel = snapAge < 10 ? 'just now'
+    : snapAge < 60 ? `${Math.floor(snapAge)}s ago`
+    : snapAge < 3600 ? `${Math.floor(snapAge/60)}m ago`
+    : `${Math.floor(snapAge/3600)}h ago`;
 
   if (!frameUrl) {
     return <div className="cam-offline">{feedStatus === 'loading' ? 'Loading...' : (online ? 'No snapshot yet' : 'Camera offline')}</div>;
@@ -4758,12 +4795,12 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
       {feedStatus === 'live' && !snapStale && (
         <div style={{position:'absolute', top:8, right:8, background:'rgba(34,197,94,.85)', color:'#fff', borderRadius:6, padding:'3px 8px', fontSize:10, fontWeight:700, backdropFilter:'blur(4px)', display:'flex', alignItems:'center', gap:4}}>
           <span style={{width:6, height:6, borderRadius:'50%', background:'#fff', animation:'pulse-dot 1.5s infinite'}} />
-          LIVE
+          LIVE · {ageLabel}
         </div>
       )}
       {snapStale && (
         <div style={{position:'absolute', top:8, right:8, background:'rgba(239,68,68,.85)', color:'#fff', borderRadius:6, padding:'3px 8px', fontSize:10, fontWeight:700, backdropFilter:'blur(4px)'}}>
-          {snapAge > 3600 ? `${Math.floor(snapAge/3600)}h ago` : `${Math.floor(snapAge/60)}m ago`}
+          {ageLabel}
         </div>
       )}
     </>
