@@ -72,7 +72,7 @@ HEARTBEAT_INTERVAL = 30
 INGEST_TIMEOUT = 30
 HTTP_TIMEOUT = 10
 MIN_FRAME_SIZE = 1000
-MAX_BACKOFF = 300  # 5 minutes max backoff
+MAX_BACKOFF = 60  # 1 minute max backoff (recover faster when tunnel reconnects)
 INGEST_RETRY_ATTEMPTS = 2
 INGEST_RETRY_DELAY = 2  # seconds
 
@@ -154,6 +154,7 @@ class CameraTask:
         self.consecutive_failures = 0
         self.backoff_until: float = 0
         self.bytes_sent = 0
+        self.last_success_time: float = time.monotonic()
 
         # Control
         self._stop = asyncio.Event()
@@ -164,8 +165,12 @@ class CameraTask:
         if camera.get("http_snapshot_url"):
             parsed = urlparse(camera["http_snapshot_url"])
             return f"{parsed.scheme}://{parsed.netloc}"
-        if camera.get("ip_address") and "trycloudflare.com" in camera.get("ip_address", ""):
-            return f"https://{camera['ip_address']}"
+        ip = camera.get("ip_address", "")
+        if ip and ("." in ip or "cloudflare" in ip):
+            # Cloudflare tunnels (both trycloudflare.com quick tunnels and named tunnels)
+            # use HTTPS; raw IPs use HTTP
+            scheme = "https" if "cloudflare" in ip or not ip.replace(".", "").isdigit() else "http"
+            return f"{scheme}://{ip}"
         if camera.get("rtsp_url"):
             parsed = urlparse(camera["rtsp_url"])
             return f"http://{parsed.hostname}"
@@ -214,6 +219,15 @@ class CameraTask:
                         break
                     except asyncio.TimeoutError:
                         continue
+
+                # Watchdog: if no successful frame in 10 min, force full reconnect
+                if time.monotonic() - self.last_success_time > 600:
+                    log.warning("[%s] No successful frame in 10min — forcing reconnect", self.name)
+                    self.token = None
+                    self.consecutive_failures = 0
+                    self.backoff_until = 0
+                    self.last_success_time = time.monotonic()  # reset to avoid spamming
+                    await self._login()
 
                 # Grab and send frame
                 frame = await self._grab_frame()
@@ -338,6 +352,7 @@ class CameraTask:
 
                 self.frames_sent += 1
                 self.bytes_sent += len(jpeg_bytes)
+                self.last_success_time = time.monotonic()
                 self._track_bandwidth(len(jpeg_bytes))
                 return
 
