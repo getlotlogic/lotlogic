@@ -1634,6 +1634,7 @@ const db = {
           last_heartbeat: cam.last_heartbeat,
           channel: cam.channel,
           active_violations: camViols,
+          tunnel_snapshot_url: cam.ip_address ? `https://${cam.ip_address}/cgi-bin/api.cgi?cmd=Snap&channel=${cam.channel || 0}&rs=lotlogic` : null,
           latest_snapshot: snap ? {
             url: (snap.storage_url || snap.url) ? (snap.storage_url || snap.url) + (((snap.storage_url || snap.url).includes('?')) ? '&' : '?') + '_t=' + Date.now() : null,
             captured_at: snap.captured_at,
@@ -4646,7 +4647,7 @@ function PermitsModal({ lotId, lotName, onClose }) {
 }
 
 // ── Live camera feed — true live frames via /frame endpoint ────
-function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
+function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnapshotUrl }) {
   const [frameUrl, setFrameUrl] = useState(null);
   const [lastFrameTime, setLastFrameTime] = useState(null);
   const [feedStatus, setFeedStatus] = useState('loading'); // loading | live | offline
@@ -4713,7 +4714,26 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
     // 2. Fallback: latest snapshot from DB
     const got = await loadFromDB();
 
-    // 3. Use initial snap if nothing else worked
+    // 3. Try direct tunnel snapshot URL (works even when puller is down)
+    if (!got && tunnelSnapshotUrl) {
+      try {
+        const tunnelImg = new Image();
+        const tunnelLoaded = await new Promise((resolve) => {
+          tunnelImg.onload = () => resolve(true);
+          tunnelImg.onerror = () => resolve(false);
+          tunnelImg.src = tunnelSnapshotUrl + '&_t=' + Date.now();
+          setTimeout(() => resolve(false), 5000);
+        });
+        if (tunnelLoaded && tunnelImg.naturalWidth > 0) {
+          setFrameUrl(tunnelSnapshotUrl + '&_t=' + Date.now());
+          setLastFrameTime(new Date());
+          setFeedStatus('live');
+          return;
+        }
+      } catch {}
+    }
+
+    // 4. Use initial snap if nothing else worked
     if (!got) {
       if (initialSnap?.url) {
         setFrameUrl(initialSnap.url);
@@ -4723,23 +4743,41 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online }) {
         setFeedStatus('offline');
       }
     }
-  }, [cameraId, initialSnap, loadFromDB]);
+  }, [cameraId, initialSnap, loadFromDB, tunnelSnapshotUrl]);
 
   // Initial load
   useEffect(() => { loadFrame(); }, [loadFrame]);
 
   // Live polling — refresh every 5s, go direct to DB once /frame is known broken
+  // If DB snapshot is stale and tunnel URL is available, try tunnel directly
   useEffect(() => {
     if (!cameraId) return;
-    const iv = setInterval(() => {
+    const iv = setInterval(async () => {
       if (frameEndpointFailed.current) {
-        loadFromDB();
+        const got = await loadFromDB();
+        // If DB snapshot is stale (>2min) and we have a tunnel URL, try direct
+        if (tunnelSnapshotUrl && lastFrameTime && (Date.now() - lastFrameTime.getTime()) > 120000) {
+          try {
+            const tImg = new Image();
+            const ok = await new Promise(r => {
+              tImg.onload = () => r(true);
+              tImg.onerror = () => r(false);
+              tImg.src = tunnelSnapshotUrl + '&_t=' + Date.now();
+              setTimeout(() => r(false), 5000);
+            });
+            if (ok && tImg.naturalWidth > 0) {
+              setFrameUrl(tunnelSnapshotUrl + '&_t=' + Date.now());
+              setLastFrameTime(new Date());
+              setFeedStatus('live');
+            }
+          } catch {}
+        }
       } else {
         loadFrame();
       }
     }, 5000);
     return () => clearInterval(iv);
-  }, [cameraId, loadFrame, loadFromDB]);
+  }, [cameraId, loadFrame, loadFromDB, tunnelSnapshotUrl, lastFrameTime]);
 
   // Realtime: auto-refresh on new snapshot INSERT — go straight to DB (fastest path)
   useEffect(() => {
@@ -4948,7 +4986,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                         </div>
                       </div>
                       <div className="cam-img-wrap">
-                        <LiveCameraFeed cameraId={cam.camera_id} initialSnap={snap} cameraName={cam.camera_name} online={cam.online} />
+                        <LiveCameraFeed cameraId={cam.camera_id} initialSnap={snap} cameraName={cam.camera_name} online={cam.online} tunnelSnapshotUrl={cam.tunnel_snapshot_url} />
                         <ZoneOverlay zones={cam.zones} />
                         {cam.active_violations > 0 && (
                           <div className="cam-viol-overlay">{cam.active_violations} open</div>
