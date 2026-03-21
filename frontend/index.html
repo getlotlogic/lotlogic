@@ -1623,7 +1623,7 @@ const db = {
         return {
           camera_id: cam.id,
           camera_name: cam.name,
-          online: (cam.status === 'active' || cam.active === true) && (!cam.last_heartbeat || (Date.now() - new Date(cam.last_heartbeat).getTime()) < 300000),
+          online: (cam.status === 'active' || cam.active === true) && (cam.ip_address || !cam.last_heartbeat || (Date.now() - new Date(cam.last_heartbeat).getTime()) < 300000),
           zones,
           deployment_profile: cam.camera_type === 'lte_solar' ? 'lte_solar' : 'wired',
           snapshot_width: cam.snapshot_width || 640,
