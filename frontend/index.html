@@ -1635,6 +1635,9 @@ const db = {
           channel: cam.channel,
           active_violations: camViols,
           tunnel_snapshot_url: (cam.ip_address && cam.http_snapshot_url) ? (() => { try { const u = new URL(cam.http_snapshot_url); return `https://${cam.ip_address}${u.pathname}${u.search}`; } catch { return null; } })() : null,
+          tunnel_base_url: cam.ip_address ? `https://${cam.ip_address}` : null,
+          cam_username: cam.username || null,
+          cam_password: cam.rtsp_url ? (() => { try { const u = new URL(cam.rtsp_url); return decodeURIComponent(u.password); } catch { return null; } })() : null,
           latest_snapshot: snap ? {
             url: (snap.storage_url || snap.url) ? (snap.storage_url || snap.url) + (((snap.storage_url || snap.url).includes('?')) ? '&' : '?') + '_t=' + Date.now() : null,
             captured_at: snap.captured_at,
@@ -4647,7 +4650,7 @@ function PermitsModal({ lotId, lotName, onClose }) {
 }
 
 // ── Live camera feed — true live frames via /frame endpoint ────
-function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnapshotUrl }) {
+function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnapshotUrl, tunnelBaseUrl, camUsername, camPassword }) {
   const [frameUrl, setFrameUrl] = useState(null);
   const [lastFrameTime, setLastFrameTime] = useState(null);
   const [feedStatus, setFeedStatus] = useState('loading'); // loading | live | offline
@@ -4655,6 +4658,36 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnaps
   const imgRef = useRef(null);
   const bufferRef = useRef(null);
   const frameEndpointFailed = useRef(false); // skip /frame if it's known broken
+  const tunnelTokenRef = useRef(null); // cached Reolink session token
+
+  // Login to camera via tunnel and get a fresh snapshot URL
+  const getTunnelSnapshot = useCallback(async () => {
+    if (!tunnelBaseUrl || !camUsername || !camPassword) return null;
+    try {
+      // Login to get fresh token
+      const loginRes = await fetch(`${tunnelBaseUrl}/cgi-bin/api.cgi?cmd=Login`, {
+        method: 'POST',
+        body: JSON.stringify([{ cmd: 'Login', param: { User: { Version: '0', userName: camUsername, password: camPassword } } }]),
+      });
+      const loginData = await loginRes.json();
+      const token = loginData?.[0]?.value?.Token?.name;
+      if (!token) return null;
+      tunnelTokenRef.current = token;
+      return `${tunnelBaseUrl}/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=lotlogic&token=${token}`;
+    } catch { return null; }
+  }, [tunnelBaseUrl, camUsername, camPassword]);
+
+  // Try loading an image from a URL, returns true if successful
+  const tryLoadImage = useCallback(async (url, timeout = 5000) => {
+    const img = new Image();
+    const ok = await new Promise(r => {
+      img.onload = () => r(true);
+      img.onerror = () => r(false);
+      img.src = url;
+      setTimeout(() => r(false), timeout);
+    });
+    return ok && img.naturalWidth > 0;
+  }, []);
 
   // Fetch latest snapshot from DB
   const loadFromDB = useCallback(async () => {
@@ -4715,17 +4748,23 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnaps
     const got = await loadFromDB();
 
     // 3. Try direct tunnel snapshot URL (works even when puller is down)
-    if (!got && tunnelSnapshotUrl) {
+    if (!got && tunnelBaseUrl) {
       try {
-        const tunnelImg = new Image();
-        const tunnelLoaded = await new Promise((resolve) => {
-          tunnelImg.onload = () => resolve(true);
-          tunnelImg.onerror = () => resolve(false);
-          tunnelImg.src = tunnelSnapshotUrl + '&_t=' + Date.now();
-          setTimeout(() => resolve(false), 5000);
-        });
-        if (tunnelLoaded && tunnelImg.naturalWidth > 0) {
-          setFrameUrl(tunnelSnapshotUrl + '&_t=' + Date.now());
+        // Try cached token first, then login for fresh token
+        let url = tunnelTokenRef.current
+          ? `${tunnelBaseUrl}/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=lotlogic&token=${tunnelTokenRef.current}&_t=${Date.now()}`
+          : null;
+        let loaded = url ? await tryLoadImage(url) : false;
+        if (!loaded) {
+          // Token expired or missing — login for fresh one
+          url = await getTunnelSnapshot();
+          if (url) {
+            loaded = await tryLoadImage(url + '&_t=' + Date.now());
+            if (loaded) url = url + '&_t=' + Date.now();
+          }
+        }
+        if (loaded && url) {
+          setFrameUrl(url);
           setLastFrameTime(new Date());
           setFeedStatus('live');
           return;
@@ -4743,7 +4782,7 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnaps
         setFeedStatus('offline');
       }
     }
-  }, [cameraId, initialSnap, loadFromDB, tunnelSnapshotUrl]);
+  }, [cameraId, initialSnap, loadFromDB, tunnelBaseUrl, getTunnelSnapshot, tryLoadImage]);
 
   // Initial load
   useEffect(() => { loadFrame(); }, [loadFrame]);
@@ -4755,18 +4794,19 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnaps
     const iv = setInterval(async () => {
       if (frameEndpointFailed.current) {
         const got = await loadFromDB();
-        // If DB snapshot is stale (>2min) and we have a tunnel URL, try direct
-        if (tunnelSnapshotUrl && lastFrameTime && (Date.now() - lastFrameTime.getTime()) > 120000) {
+        // If DB snapshot is stale (>2min) and we have a tunnel, try direct with auto-login
+        if (tunnelBaseUrl && lastFrameTime && (Date.now() - lastFrameTime.getTime()) > 120000) {
           try {
-            const tImg = new Image();
-            const ok = await new Promise(r => {
-              tImg.onload = () => r(true);
-              tImg.onerror = () => r(false);
-              tImg.src = tunnelSnapshotUrl + '&_t=' + Date.now();
-              setTimeout(() => r(false), 5000);
-            });
-            if (ok && tImg.naturalWidth > 0) {
-              setFrameUrl(tunnelSnapshotUrl + '&_t=' + Date.now());
+            let url = tunnelTokenRef.current
+              ? `${tunnelBaseUrl}/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=lotlogic&token=${tunnelTokenRef.current}&_t=${Date.now()}`
+              : null;
+            let ok = url ? await tryLoadImage(url) : false;
+            if (!ok) {
+              url = await getTunnelSnapshot();
+              if (url) { ok = await tryLoadImage(url + '&_t=' + Date.now()); if (ok) url = url + '&_t=' + Date.now(); }
+            }
+            if (ok && url) {
+              setFrameUrl(url);
               setLastFrameTime(new Date());
               setFeedStatus('live');
             }
@@ -4777,7 +4817,7 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnaps
       }
     }, 5000);
     return () => clearInterval(iv);
-  }, [cameraId, loadFrame, loadFromDB, tunnelSnapshotUrl, lastFrameTime]);
+  }, [cameraId, loadFrame, loadFromDB, tunnelBaseUrl, lastFrameTime, getTunnelSnapshot, tryLoadImage]);
 
   // Realtime: auto-refresh on new snapshot INSERT — go straight to DB (fastest path)
   useEffect(() => {
@@ -4986,7 +5026,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                         </div>
                       </div>
                       <div className="cam-img-wrap">
-                        <LiveCameraFeed cameraId={cam.camera_id} initialSnap={snap} cameraName={cam.camera_name} online={cam.online} tunnelSnapshotUrl={cam.tunnel_snapshot_url} />
+                        <LiveCameraFeed cameraId={cam.camera_id} initialSnap={snap} cameraName={cam.camera_name} online={cam.online} tunnelSnapshotUrl={cam.tunnel_snapshot_url} tunnelBaseUrl={cam.tunnel_base_url} camUsername={cam.cam_username} camPassword={cam.cam_password} />
                         <ZoneOverlay zones={cam.zones} />
                         {cam.active_violations > 0 && (
                           <div className="cam-viol-overlay">{cam.active_violations} open</div>
