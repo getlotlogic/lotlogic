@@ -52,17 +52,39 @@ CREATE TABLE IF NOT EXISTS cameras (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   lot_id UUID REFERENCES lots(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  ip_address TEXT,                          -- tunnel hostname or LAN IP
+  port INTEGER DEFAULT 443,
+  username TEXT DEFAULT 'admin',
+  password_encrypted TEXT,
   rtsp_url TEXT,
+  http_snapshot_url TEXT,                   -- full HTTP snapshot URL with auth token
   channel INTEGER DEFAULT 0,
-  online BOOLEAN DEFAULT false,
-  deployment_profile TEXT DEFAULT 'wired', -- 'wired' | 'lte_solar'
+  active BOOLEAN DEFAULT true,
+  status TEXT DEFAULT 'active',
+  camera_type TEXT DEFAULT 'live',
+  preferred_feed TEXT DEFAULT 'rtsp',
+  deployment_profile TEXT DEFAULT 'wired',  -- 'wired' | 'lte_solar'
   snapshot_width INTEGER DEFAULT 640,
   snapshot_height INTEGER DEFAULT 360,
+  resolution_width INTEGER DEFAULT 1920,
+  resolution_height INTEGER DEFAULT 1080,
   poll_interval_sec INTEGER DEFAULT 30,
+  jpeg_quality INTEGER DEFAULT 85,
+  codec TEXT DEFAULT 'h264',
+  fps INTEGER DEFAULT 15,
+  night_mode BOOLEAN DEFAULT false,
+  motion_sensitivity INTEGER DEFAULT 50,
+  use_motion_trigger BOOLEAN DEFAULT false,
+  connection_timeout INTEGER DEFAULT 10,
+  retry_interval INTEGER DEFAULT 30,
+  max_retries INTEGER DEFAULT 3,
   bandwidth_budget_mb INTEGER,
   bandwidth_used_mb INTEGER DEFAULT 0,
   zones JSONB DEFAULT '[]'::jsonb,
+  entry_zones JSONB DEFAULT '[]'::jsonb,
   last_heartbeat TIMESTAMPTZ,
+  firmware_version TEXT,
+  notes TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
