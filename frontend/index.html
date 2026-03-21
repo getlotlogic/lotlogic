@@ -1623,7 +1623,7 @@ const db = {
         return {
           camera_id: cam.id,
           camera_name: cam.name,
-          online: (cam.status === 'active' || cam.active === true) && (!cam.last_heartbeat || (Date.now() - new Date(cam.last_heartbeat).getTime()) < 300000),
+          online: (cam.status === 'active' || cam.active === true) && (!!cam.ip_address || (cam.last_heartbeat && (Date.now() - new Date(cam.last_heartbeat).getTime()) < 300000)),
           zones,
           deployment_profile: cam.camera_type === 'lte_solar' ? 'lte_solar' : 'wired',
           snapshot_width: cam.snapshot_width || 640,
@@ -1639,9 +1639,9 @@ const db = {
             url: (snap.storage_url || snap.url) ? (snap.storage_url || snap.url) + (((snap.storage_url || snap.url).includes('?')) ? '&' : '?') + '_t=' + Date.now() : null,
             captured_at: snap.captured_at,
             vehicles_detected: snap.vehicles_detected || 0,
-            people_detected: 0,
-            plates_read: 0,
-            plate_readings: [],
+            people_detected: snap.raw_detections?.detections?.filter(d => d.class === 'person').length || 0,
+            plates_read: snap.raw_detections?.detections?.filter(d => d.plate_text).length || 0,
+            plate_readings: snap.raw_detections?.detections?.filter(d => d.plate_text).map(d => d.plate_text) || [],
             detections: snap.raw_detections?.detections?.map((d, i) => ({
               id: `det_${i}`,
               type: d.class === 'person' ? 'person' : 'vehicle',
@@ -5771,7 +5771,7 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
             {os.dismissed > 0 && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700, color:'#a78bfa', background:'rgba(167,139,250,.1)', border:'1px solid rgba(167,139,250,.2)'}}>Dismissed ×{os.dismissed}</span>}
             {os.avgResponse != null && <span style={{padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:600, color:'var(--text-muted)', background:'var(--bg-inset)', border:'1px solid var(--border)'}}>Avg {os.avgResponse < 60 ? `${os.avgResponse}m` : `${Math.round(os.avgResponse / 60)}h`} response</span>}
             <span style={{marginLeft:'auto', fontSize:11, color:'var(--text-faint)'}}>
-              Boot ${os.partner.boot_fee || 75} · Tow ${os.partner.tow_fee || 150} · {Math.round((os.partner.revenue_share || 0.3) * 100)}% share
+              Boot ${os.partner.boot_fee || 75} · Tow ${os.partner.tow_fee || 250} · {Math.round((os.partner.revenue_share || 0.3) * 100)}% share
             </span>
           </div>
         </div>
