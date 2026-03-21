@@ -1634,7 +1634,7 @@ const db = {
           last_heartbeat: cam.last_heartbeat,
           channel: cam.channel,
           active_violations: camViols,
-          tunnel_snapshot_url: cam.ip_address ? `https://${cam.ip_address}/cgi-bin/api.cgi?cmd=Snap&channel=${cam.channel || 0}&rs=lotlogic` : null,
+          tunnel_snapshot_url: (cam.ip_address && cam.http_snapshot_url) ? (() => { try { const u = new URL(cam.http_snapshot_url); return `https://${cam.ip_address}${u.pathname}${u.search}`; } catch { return null; } })() : null,
           latest_snapshot: snap ? {
             url: (snap.storage_url || snap.url) ? (snap.storage_url || snap.url) + (((snap.storage_url || snap.url).includes('?')) ? '&' : '?') + '_t=' + Date.now() : null,
             captured_at: snap.captured_at,
