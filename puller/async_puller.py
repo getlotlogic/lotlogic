@@ -162,11 +162,18 @@ class CameraTask:
 
     def _resolve_base_url(self, camera: dict) -> str:
         from urllib.parse import urlparse
+        # 1. Use ip_address as tunnel hostname (covers trycloudflare, named tunnels, any provider)
+        if camera.get("ip_address"):
+            ip = camera["ip_address"]
+            # If it looks like a hostname (has dots, not a bare IP on LAN), use HTTPS (tunnel)
+            if "." in ip and not ip.startswith("192.168.") and not ip.startswith("10.") and not ip.startswith("172."):
+                return f"https://{ip}"
+            return f"http://{ip}"
+        # 2. Extract host from http_snapshot_url
         if camera.get("http_snapshot_url"):
             parsed = urlparse(camera["http_snapshot_url"])
             return f"{parsed.scheme}://{parsed.netloc}"
-        if camera.get("ip_address") and "trycloudflare.com" in camera.get("ip_address", ""):
-            return f"https://{camera['ip_address']}"
+        # 3. Extract host from rtsp_url
         if camera.get("rtsp_url"):
             parsed = urlparse(camera["rtsp_url"])
             return f"http://{parsed.hostname}"

@@ -214,8 +214,13 @@ class HTTPStream:
             from urllib.parse import urlparse
             parsed = urlparse(http_url)
             self.base_url = f"{parsed.scheme}://{parsed.netloc}"
-        elif camera.get("ip_address") and "trycloudflare.com" in camera.get("ip_address", ""):
-            self.base_url = f"https://{camera['ip_address']}"
+        elif camera.get("ip_address"):
+            ip = camera["ip_address"]
+            # Hostname with dots (not LAN IP) = tunnel, use HTTPS
+            if "." in ip and not ip.startswith("192.168.") and not ip.startswith("10.") and not ip.startswith("172."):
+                self.base_url = f"https://{ip}"
+            else:
+                self.base_url = f"http://{ip}"
         else:
             from urllib.parse import urlparse
             parsed = urlparse(camera.get("rtsp_url", ""))
@@ -223,7 +228,7 @@ class HTTPStream:
 
         self.channel = camera.get("channel", 0)
         self.user = os.getenv("CAMERA_USER", "admin")
-        self.password = os.getenv("CAMERA_PASS", "Na9HTk&C1234")
+        self.password = os.getenv("CAMERA_PASS", "")
 
         log.info("[%s] HTTP mode via %s", self.name, self.base_url)
         self._login()
