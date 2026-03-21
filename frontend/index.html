@@ -2751,7 +2751,7 @@ function ImageZoom({ src, alt, onClose }) {
 // ── Violation Proof Modal — iMessage-style full-screen photo viewer ──
 // Uses React Portal to render directly on document.body, bypassing all
 // ancestor transforms that would trap position:fixed.
-function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, cameraZones, matchedDetection, onClose, onAutoGone }) {
+function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, cameraZones, matchedDetection, tunnelSnapshotUrl, onClose, onAutoGone }) {
   if (!violation) return null;
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   const det = matchedDetection;
@@ -2766,29 +2766,26 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
     let cancelled = false;
     const poll = async () => {
       try {
-        const { data } = await supabase
-          .from('snapshots')
-          .select('storage_url, url, raw_detections, captured_at')
-          .eq('camera_id', violation.camera_id)
-          .order('captured_at', { ascending: false })
-          .limit(1);
-        if (cancelled || !data?.[0]) return;
-        const snap = data[0];
-        const base = snap.storage_url || snap.url;
-        if (base) {
-          setLiveUrl(base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now());
+        // Try DB snapshot first, then tunnel fallback via shared utility
+        const result = await resolveCameraSnapshot(violation.camera_id, tunnelSnapshotUrl);
+        if (cancelled) return;
+        if (result?.url) {
+          setLiveUrl(result.url);
+          if (result.capturedAt) {
+            const ago = Math.round((Date.now() - new Date(result.capturedAt).getTime()) / 1000);
+            setLiveTime(ago < 60 ? `${ago}s ago` : `${Math.round(ago / 60)}m ago`);
+          }
         }
-        const dets = snap.raw_detections?.detections?.map((d, i) => ({
-          id: `det_${i}`,
-          type: d.class === 'person' ? 'person' : 'vehicle',
-          bbox: d.bbox ? { x: d.bbox[0] * 100, y: d.bbox[1] * 100, w: (d.bbox[2] - d.bbox[0]) * 100, h: (d.bbox[3] - d.bbox[1]) * 100 } : null,
-          confidence: d.conf,
-          label: d.class,
-        })) || [];
-        setLiveDets(dets);
-        if (snap.captured_at) {
-          const ago = Math.round((Date.now() - new Date(snap.captured_at).getTime()) / 1000);
-          setLiveTime(ago < 60 ? `${ago}s ago` : `${Math.round(ago / 60)}m ago`);
+        // Update detections from DB snapshot if available
+        if (result?.snap?.raw_detections) {
+          const dets = (result.snap.raw_detections.detections || []).map((d, i) => ({
+            id: `det_${i}`,
+            type: d.class === 'person' ? 'person' : 'vehicle',
+            bbox: d.bbox ? { x: d.bbox[0] * 100, y: d.bbox[1] * 100, w: (d.bbox[2] - d.bbox[0]) * 100, h: (d.bbox[3] - d.bbox[1]) * 100 } : null,
+            confidence: d.conf,
+            label: d.class,
+          }));
+          setLiveDets(dets);
         }
       } catch (e) { console.warn('Live snapshot poll error:', e); }
     };
@@ -3827,6 +3824,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
           latestDetections={latestDets}
           cameraZones={zones}
           matchedDetection={matched}
+          tunnelSnapshotUrl={cam?.tunnel_snapshot_url}
           onClose={() => setSelectedViol(null)}
           onAutoGone={(violId) => { setSelectedViol(null); handleAction(violId, 'already_gone'); }}
         />;
@@ -4667,6 +4665,49 @@ function PermitsModal({ lotId, lotName, onClose }) {
       </div>
     </div>
   );
+}
+
+// ── Shared: try loading an image URL, returns true if it loads successfully ──
+async function tryLoadImageUrl(url, timeout = 5000) {
+  const img = new Image();
+  const ok = await new Promise(r => {
+    img.onload = () => r(true);
+    img.onerror = () => r(false);
+    img.src = url;
+    setTimeout(() => r(false), timeout);
+  });
+  return ok && img.naturalWidth > 0;
+}
+
+// ── Shared: resolve best snapshot URL for a camera ──────────
+// Tries DB snapshot first (if fresh), then tunnel URL. Returns { url, capturedAt } or null.
+async function resolveCameraSnapshot(cameraId, tunnelSnapshotUrl, maxAgeSec = 120) {
+  // 1. Try latest DB snapshot
+  if (supabase) {
+    try {
+      const { data } = await supabase
+        .from('snapshots')
+        .select('storage_url, url, captured_at, vehicles_detected, raw_detections')
+        .eq('camera_id', cameraId)
+        .order('captured_at', { ascending: false })
+        .limit(1);
+      if (data?.[0]) {
+        const s = data[0];
+        const age = s.captured_at ? (Date.now() - new Date(s.captured_at).getTime()) / 1000 : Infinity;
+        const base = s.storage_url || s.url || '';
+        if (age < maxAgeSec && base) {
+          return { url: base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now(), capturedAt: s.captured_at, snap: s };
+        }
+      }
+    } catch {}
+  }
+  // 2. Try tunnel snapshot URL directly
+  if (tunnelSnapshotUrl) {
+    const tUrl = tunnelSnapshotUrl + (tunnelSnapshotUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    const ok = await tryLoadImageUrl(tUrl);
+    if (ok) return { url: tUrl, capturedAt: new Date().toISOString(), snap: null };
+  }
+  return null;
 }
 
 // ── Live camera feed — true live frames via /frame endpoint ────
