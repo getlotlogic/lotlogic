@@ -3913,7 +3913,7 @@ function displayColor(name) {
 }
 
 // ── Zone editor (full-screen draw/edit/delete/save + live feed + detections) ──
-function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
+function ZoneEditor({ cameraId, cameraName, existingZones, tunnelSnapshotUrl, onClose, onSave }) {
   const [frameUrl, setFrameUrl] = useState(null);
   const [zones, setZones] = useState(() => (existingZones || []).map(z => ({...z})));
   const [selectedIdx, setSelectedIdx] = useState(null);
@@ -4002,13 +4002,16 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       // Supabase query failed
     }
 
-    // 2. Use snapshot storage_url as frame
+    // 2. Use snapshot storage_url as frame (only if fresh — <2min old)
     if (snap?.storage_url) {
-      const ts = snap.captured_at ? new Date(snap.captured_at).getTime() : Date.now();
-      setFrameUrl(snap.storage_url + '?t=' + ts);
-      setLastFrameTime(snap.captured_at ? new Date(snap.captured_at) : new Date());
-      setFeedStatus('live');
-      frameLoaded = true;
+      const snapAge = snap.captured_at ? (Date.now() - new Date(snap.captured_at).getTime()) / 1000 : Infinity;
+      if (snapAge < 120) {
+        const ts = snap.captured_at ? new Date(snap.captured_at).getTime() : Date.now();
+        setFrameUrl(snap.storage_url + '?t=' + ts);
+        setLastFrameTime(snap.captured_at ? new Date(snap.captured_at) : new Date());
+        setFeedStatus('live');
+        frameLoaded = true;
+      }
     }
 
     // 3. Fallback: try loading /frame endpoint as img src (bypasses CORS unlike fetch)
@@ -4031,6 +4034,26 @@ function ZoneEditor({ cameraId, cameraName, existingZones, onClose, onSave }) {
       } catch {
         // /frame img load also failed
       }
+    }
+
+    // 4. Fallback: try tunnel snapshot URL directly
+    if (!frameLoaded && tunnelSnapshotUrl) {
+      try {
+        const tUrl = tunnelSnapshotUrl + (tunnelSnapshotUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+        const tImg = new Image();
+        const tLoaded = await new Promise((resolve) => {
+          tImg.onload = () => resolve(true);
+          tImg.onerror = () => resolve(false);
+          tImg.src = tUrl;
+          setTimeout(() => resolve(false), 8000);
+        });
+        if (tLoaded && tImg.naturalWidth > 0) {
+          setFrameUrl(tUrl);
+          setLastFrameTime(new Date());
+          setFeedStatus('live');
+          frameLoaded = true;
+        }
+      } catch {}
     }
 
     if (!frameLoaded) {
@@ -4981,7 +5004,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                         <div style={{display:'flex', alignItems:'center', gap:8}}>
                           {ownerRole === 'owner' && (
                             <button className="ze-btn ze-btn-ghost" style={{padding:'3px 10px', fontSize:11}}
-                              onClick={() => setEditingZones({ cameraId: cam.camera_id, cameraName: cam.camera_name, lotId: lot.id, zones: cam.zones || [] })}>
+                              onClick={() => setEditingZones({ cameraId: cam.camera_id, cameraName: cam.camera_name, lotId: lot.id, zones: cam.zones || [], tunnelSnapshotUrl: cam.tunnel_snapshot_url })}>
                               Edit Zones
                             </button>
                           )}
@@ -5120,6 +5143,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
           cameraId={editingZones.cameraId}
           cameraName={editingZones.cameraName}
           existingZones={editingZones.zones}
+          tunnelSnapshotUrl={editingZones.tunnelSnapshotUrl}
           onClose={() => setEditingZones(null)}
           onSave={(savedZones) => { if (onZonesSaved) onZonesSaved(); }}
         />
