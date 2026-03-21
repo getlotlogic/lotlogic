@@ -4705,7 +4705,13 @@ async function resolveCameraSnapshot(cameraId, tunnelSnapshotUrl, maxAgeSec = 12
   if (tunnelSnapshotUrl) {
     const tUrl = tunnelSnapshotUrl + (tunnelSnapshotUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
     const ok = await tryLoadImageUrl(tUrl);
-    if (ok) return { url: tUrl, capturedAt: new Date().toISOString(), snap: null };
+    if (ok) {
+      // Update heartbeat — camera is reachable via tunnel
+      if (supabase && cameraId) {
+        supabase.from('cameras').update({ last_heartbeat: new Date().toISOString() }).eq('id', cameraId).then(() => {});
+      }
+      return { url: tUrl, capturedAt: new Date().toISOString(), snap: null };
+    }
   }
   return null;
 }
@@ -4804,6 +4810,10 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnaps
           setFrameUrl(url);
           setLastFrameTime(new Date());
           setFeedStatus('live');
+          // Update heartbeat in DB so dashboard reflects camera is reachable
+          if (supabase && cameraId) {
+            supabase.from('cameras').update({ last_heartbeat: new Date().toISOString() }).eq('id', cameraId).then(() => {});
+          }
           return;
         }
       } catch {}
@@ -4840,6 +4850,10 @@ function LiveCameraFeed({ cameraId, initialSnap, cameraName, online, tunnelSnaps
               setFrameUrl(url);
               setLastFrameTime(new Date());
               setFeedStatus('live');
+              // Update heartbeat so dashboard stays current
+              if (supabase && cameraId) {
+                supabase.from('cameras').update({ last_heartbeat: new Date().toISOString() }).eq('id', cameraId).then(() => {});
+              }
             }
           } catch {}
         }
