@@ -293,12 +293,14 @@ async def process_snapshot(
                 # Fall through to create a new violation for the new plate below
                 active = []
             else:
-                # Same car still there — reset empty streak and check for reminder
+                # Same car still there — reset empty streak and check for reminder.
+                # NOTE: Do NOT update snapshot_url here. The violation's snapshot_url
+                # is the ORIGINAL detection image and must be preserved so the UI can
+                # show "Detection" vs "Current Live" side-by-side. Overwriting it with
+                # the latest snapshot made both images identical.
                 update_fields = {}
                 if (violation.get("empty_streak") or 0) > 0:
                     update_fields["empty_streak"] = 0
-                if snapshot_url:
-                    update_fields["snapshot_url"] = snapshot_url
                 if update_fields:
                     sb.table("violations").update(update_fields).eq("id", violation["id"]).execute()
                 if (
@@ -688,6 +690,76 @@ async def run_reminders():
     return count
 
 
+async def clear_stale_violations():
+    """
+    Standalone stale violation cleanup — runs independently of process_snapshot.
+
+    Catches violations that process_snapshot's inline stale check misses:
+    - Zones that were renamed/deleted (orphaned zone_ids)
+    - Cameras that went offline permanently
+    - Pipeline outages that prevent process_snapshot from running
+
+    Call this from a scheduler alongside run_reminders().
+    """
+    sb = _get_supabase()
+
+    # Find all active violations older than their stale limit
+    alerted_cutoff = datetime.now(timezone.utc) - timedelta(seconds=STALE_VIOLATION_SECONDS)
+    ack_cutoff = datetime.now(timezone.utc) - timedelta(seconds=STALE_ACKNOWLEDGED_SECONDS)
+
+    if STALE_VIOLATION_SECONDS <= 0 and STALE_ACKNOWLEDGED_SECONDS <= 0:
+        return 0
+
+    count = 0
+
+    # Clear stale 'alerted' violations
+    if STALE_VIOLATION_SECONDS > 0:
+        stale_alerted = (
+            sb.table("violations")
+            .select("id, zone_id, detected_at")
+            .eq("status", "alerted")
+            .lt("detected_at", alerted_cutoff.isoformat())
+            .limit(100)
+            .execute()
+        )
+        for v in stale_alerted.data:
+            sb.table("violations").update(
+                {"status": "departed", "departed_at": _now()}
+            ).eq("id", v["id"]).execute()
+            _zone_presence.pop(v["zone_id"], None)
+            _zone_confirmations.pop(v["zone_id"], None)
+            count += 1
+            logger.warning(
+                "Stale cleanup: violation %s (zone %s) alerted since %s — auto-departed",
+                v["id"], v["zone_id"], v["detected_at"],
+            )
+
+    # Clear stale 'acknowledged' violations
+    if STALE_ACKNOWLEDGED_SECONDS > 0:
+        stale_acked = (
+            sb.table("violations")
+            .select("id, zone_id, detected_at")
+            .eq("status", "acknowledged")
+            .lt("detected_at", ack_cutoff.isoformat())
+            .limit(100)
+            .execute()
+        )
+        for v in stale_acked.data:
+            sb.table("violations").update(
+                {"status": "departed", "departed_at": _now()}
+            ).eq("id", v["id"]).execute()
+            _zone_presence.pop(v["zone_id"], None)
+            _zone_confirmations.pop(v["zone_id"], None)
+            count += 1
+            logger.warning(
+                "Stale cleanup: violation %s (zone %s) acknowledged since %s — auto-departed",
+                v["id"], v["zone_id"], v["detected_at"],
+            )
+
+    logger.info("clear_stale_violations: cleared %d stale violations", count)
+    return count
+
+
 def _resolve_context(sb: Client, violation: dict) -> tuple:
     """Resolve operator phone, zone_name, lot_name from a violation row."""
     phone = None
@@ -786,5 +858,11 @@ def register_routes(app):
         """Trigger reminder check manually or via cron."""
         count = await run_reminders()
         return JSONResponse(content={"reminders_sent": count})
+
+    @app.post("/violations/clear-stale")
+    async def api_clear_stale():
+        """Clear stale violations that process_snapshot missed (orphaned zones, offline cameras)."""
+        count = await clear_stale_violations()
+        return JSONResponse(content={"cleared": count})
 
     logger.info("Violation dedup routes registered")

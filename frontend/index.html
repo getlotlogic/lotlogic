@@ -1725,6 +1725,32 @@ const db = {
         console.error('Snapshot enrichment failed:', e);
       }
     }
+    // Look up the original detection-time snapshot for each violation.
+    // violation.snapshot_url may have been overwritten by the backend (old bug),
+    // so we always resolve the snapshot closest to detected_at as the true detection image.
+    if (supabase) {
+      try {
+        await Promise.all(viols.map(async v => {
+          if (!v.camera_id || !v.detected_at) return;
+          const { data: snaps } = await supabase
+            .from('snapshots')
+            .select('storage_url, raw_detections')
+            .eq('camera_id', v.camera_id)
+            .not('storage_url', 'is', null)
+            .lte('captured_at', v.detected_at)
+            .order('captured_at', { ascending: false })
+            .limit(1);
+          if (snaps?.[0]?.storage_url) {
+            v._detection_snapshot_url = snaps[0].storage_url;
+            if (!v._detections?.length) {
+              v._detections = snaps[0].raw_detections?.detections || [];
+            }
+          }
+        }));
+      } catch (e) {
+        console.error('Detection snapshot lookup failed:', e);
+      }
+    }
     return viols;
   },
   async getViolations(lotId) {
@@ -2503,7 +2529,7 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
             </div>
           )}
           {/* AI confidence + time overlays */}
-          {snapshotUrl && violation.confidence && (
+          {snapshotUrl && violation.confidence != null && (
             <div style={{position:'absolute', top:8, right:8, background:'rgba(0,0,0,.7)', backdropFilter:'blur(4px)', borderRadius:6, padding:'4px 8px', display:'flex', alignItems:'center', gap:6}}>
               <span style={{fontSize:10, fontWeight:700, color:'#fff'}}>AI</span>
               <div className="conf-bar" style={{width:50}}>
@@ -2633,7 +2659,7 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
                 <div className="viol-modal-stat-val" style={{color:'var(--green)'}}>{fmtMoney(violation.our_revenue)}</div>
               </div>
             )}
-            {violation.confidence && (() => {
+            {violation.confidence != null && (() => {
               const conf = Math.round(parseFloat(violation.confidence) * 100);
               const confColor = conf >= 80 ? '#4ade80' : conf >= 50 ? '#fbbf24' : '#ef4444';
               return (
@@ -2867,8 +2893,9 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
               })()}
             </>
           ) : (
-            <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center'}}>
-              <span style={{color:'rgba(255,255,255,.3)', fontSize:12}}>No snapshot</span>
+            <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
+              {label === 'Current' && <div className="spin" />}
+              <span style={{color:'rgba(255,255,255,.3)', fontSize:12}}>{label === 'Current' ? 'Loading live view\u2026' : 'No snapshot'}</span>
             </div>
           )}
         </div>
@@ -2902,13 +2929,13 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
         {/* Photos — front and center */}
         <div style={{display:'flex', gap:16, marginBottom:16}}>
           <ProofImage
-            src={violation._snapshot_url}
+            src={violation._detection_snapshot_url || violation._snapshot_url}
             label="Detection"
             detection={det}
             timestamp={initialTime}
           />
           <ProofImage
-            src={liveUrl || latestSnapshotUrl || violation._snapshot_url}
+            src={liveUrl || latestSnapshotUrl || null}
             label="Current"
             detection={null}
             timestamp={liveTime || 'Live'}
