@@ -61,6 +61,7 @@ SMS Provider:
 
 import os
 import logging
+import time as _time
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 
@@ -106,6 +107,12 @@ DEPARTURE_PRESENCE_THRESHOLD = float(os.environ.get("DEPARTURE_PRESENCE_THRESHOL
 # In-memory sliding window per zone: zone_id → list of floats (confidence scores).
 # 0.0 = no detection, >0 = detection confidence. Capped at DEPARTURE_WINDOW_SIZE.
 _zone_presence: dict[str, list[float]] = {}
+
+# Track last snapshot timestamp per zone to detect gaps (e.g., puller outage).
+# If the gap between snapshots exceeds WINDOW_RESET_GAP_SECONDS, the sliding
+# window is stale and must be reset to prevent false departures.
+WINDOW_RESET_GAP_SECONDS = int(os.environ.get("WINDOW_RESET_GAP_SECONDS", "120"))
+_zone_last_snapshot: dict[str, float] = {}  # zone_id → monotonic timestamp
 
 # Cooldown after operator resolves — don't re-fire on same zone for this many seconds.
 # Prevents "resolved → next snapshot → new violation" loop when car is still being towed.
@@ -252,6 +259,22 @@ async def process_snapshot(
     # should reflect the actual recent detection history for the zone, not reset
     # on violation lifecycle events. This allows faster departure detection after
     # short-lived violations.
+    #
+    # Gap detection: if the puller was down and there's a large time gap since
+    # the last snapshot for this zone, reset the window. Stale window data from
+    # before the gap causes false departures (e.g., 55-min outage → 3 empties
+    # push stale window below threshold even though cars never left).
+    now_mono = _time.monotonic()
+    last_seen = _zone_last_snapshot.get(zone_id)
+    if last_seen is not None and (now_mono - last_seen) > WINDOW_RESET_GAP_SECONDS:
+        logger.info(
+            "Zone %s snapshot gap %.0fs > %ds — resetting sliding window",
+            zone_id, now_mono - last_seen, WINDOW_RESET_GAP_SECONDS,
+        )
+        _zone_presence.pop(zone_id, None)
+        _zone_confirmations.pop(zone_id, None)
+    _zone_last_snapshot[zone_id] = now_mono
+
     window = _zone_presence.setdefault(zone_id, [])
     window.append(presence_score)
     if len(window) > DEPARTURE_WINDOW_SIZE:
