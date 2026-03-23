@@ -2503,7 +2503,7 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
             </div>
           )}
           {/* AI confidence + time overlays */}
-          {snapshotUrl && violation.confidence && (
+          {snapshotUrl && violation.confidence != null && (
             <div style={{position:'absolute', top:8, right:8, background:'rgba(0,0,0,.7)', backdropFilter:'blur(4px)', borderRadius:6, padding:'4px 8px', display:'flex', alignItems:'center', gap:6}}>
               <span style={{fontSize:10, fontWeight:700, color:'#fff'}}>AI</span>
               <div className="conf-bar" style={{width:50}}>
@@ -2633,7 +2633,7 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
                 <div className="viol-modal-stat-val" style={{color:'var(--green)'}}>{fmtMoney(violation.our_revenue)}</div>
               </div>
             )}
-            {violation.confidence && (() => {
+            {violation.confidence != null && (() => {
               const conf = Math.round(parseFloat(violation.confidence) * 100);
               const confColor = conf >= 80 ? '#4ade80' : conf >= 50 ? '#fbbf24' : '#ef4444';
               return (
