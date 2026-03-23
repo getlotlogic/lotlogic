@@ -3367,7 +3367,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
   // Flags as "departed" (stays on dashboard) — does NOT auto-resolve
   const departedFlaggedRef = useRef(new Set());     // violations already flagged as departed
   const emptyStreakRef = useRef({});                 // violationId -> { count, lastSnapshotTime }
-  const DEPARTED_STREAK = 3;                        // consecutive empty snapshots required
+  const DEPARTED_STREAK = 8;                        // consecutive empty snapshots required (~4min at 30s intervals)
 
   useEffect(() => {
     if (!active.length || !allCams.length) return;
