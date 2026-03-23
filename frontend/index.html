@@ -3363,6 +3363,36 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
   const emptyStreakRef = useRef({});                 // violationId -> { count, lastSnapshotTime }
   const DEPARTED_STREAK = 8;                        // consecutive empty snapshots required (~4min at 30s intervals)
 
+  // Auto-recover false departures: if backend marked departed but car is still in zone, re-alert
+  const recoveredRef = useRef(new Set());
+  useEffect(() => {
+    if (!allCams.length) return;
+    for (const v of violations) {
+      if (v.status !== 'departed' || !v.zone_id || recoveredRef.current.has(v.id)) continue;
+      const cam = allCams.find(c => c.camera_id === v.camera_id);
+      if (!cam?.latest_snapshot) continue;
+      const dets = cam.latest_snapshot.detections || [];
+      const zones = camZonesMap[v.camera_id] || [];
+      const stillThere = isVehicleInZone(dets, v.zone_id, zones);
+      if (stillThere === true) {
+        recoveredRef.current.add(v.id);
+        departedFlaggedRef.current.delete(v.id);
+        delete emptyStreakRef.current[v.id];
+        if (supabase) {
+          supabase.from('violations').update({
+            status: 'alerted', departed_at: null, empty_streak: 0
+          }).eq('id', v.id).then(() => {
+            console.log(`Auto-recovered false departure: ${v.id}, zone ${v.zone_id}`);
+            if (onAction) onAction();
+          });
+        }
+      }
+    }
+    // Clean recovered set for violations no longer in list
+    const allIds = new Set(violations.map(v => v.id));
+    for (const id of recoveredRef.current) { if (!allIds.has(id)) recoveredRef.current.delete(id); }
+  }, [violations, allCams, camZonesMap]);
+
   useEffect(() => {
     if (!active.length || !allCams.length) return;
     for (const v of active) {

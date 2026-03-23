@@ -95,14 +95,15 @@ REMINDER_DELAY_SECONDS = 1800
 #   window = [0.88, 0.0, 0.91, 0.87, 0.0, 0.90] → 0.59 → stays
 #
 # Consecutive streak is kept as a fast path for clear exits.
-EMPTY_STREAK_THRESHOLD = int(os.environ.get("EMPTY_STREAK_THRESHOLD", "5"))
+EMPTY_STREAK_THRESHOLD = int(os.environ.get("EMPTY_STREAK_THRESHOLD", "8"))
 
 # Sliding window size: how many recent snapshots to consider for departure.
-DEPARTURE_WINDOW_SIZE = int(os.environ.get("DEPARTURE_WINDOW_SIZE", "6"))
+DEPARTURE_WINDOW_SIZE = int(os.environ.get("DEPARTURE_WINDOW_SIZE", "8"))
 
 # Weighted presence threshold below which the car is considered gone.
-# 0.2 means the average confidence across the window is very low.
-DEPARTURE_PRESENCE_THRESHOLD = float(os.environ.get("DEPARTURE_PRESENCE_THRESHOLD", "0.20"))
+# 0.15 = very low average confidence across window before departing.
+# Lowered from 0.20 to reduce false departures from YOLO flickering.
+DEPARTURE_PRESENCE_THRESHOLD = float(os.environ.get("DEPARTURE_PRESENCE_THRESHOLD", "0.15"))
 
 # In-memory sliding window per zone: zone_id → list of floats (confidence scores).
 # 0.0 = no detection, >0 = detection confidence. Capped at DEPARTURE_WINDOW_SIZE.
