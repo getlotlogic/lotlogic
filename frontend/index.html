@@ -3226,23 +3226,17 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     }
   }, [deepLinkViolationId, violations, selectedViol]);
 
-  // Active jobs = pending/alerted/acknowledged/departed violations
-  // Departed violations sort to the bottom, rest sorted oldest-first (most urgent)
+  // Active jobs = only actionable violations (alerted/acknowledged)
+  // Departed/pending are excluded — departed goes to "Handled Today"
   const active = violations
-    .filter(v => ['pending', 'alerted', 'acknowledged', 'departed'].includes(v.status))
-    .sort((a, b) => {
-      const aDep = a.status === 'departed' || a.departed_at;
-      const bDep = b.status === 'departed' || b.departed_at;
-      if (aDep && !bDep) return 1;  // departed goes to bottom
-      if (!aDep && bDep) return -1;
-      return new Date(a.detected_at) - new Date(b.detected_at);
-    });
+    .filter(v => ['alerted', 'acknowledged'].includes(v.status))
+    .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at));
 
   // Recent = resolved/cleared today (calendar day)
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   const todayCutoff = todayStart.getTime();
   const recent = violations
-    .filter(v => ['resolved', 'cleared'].includes(v.status) && new Date(v.resolved_at || v.cleared_at || v.detected_at).getTime() >= todayCutoff)
+    .filter(v => ['resolved', 'cleared', 'departed'].includes(v.status) && new Date(v.resolved_at || v.departed_at || v.cleared_at || v.detected_at).getTime() >= todayCutoff)
     .sort((a, b) => new Date(b.resolved_at || b.departed_at || b.cleared_at || b.detected_at) - new Date(a.resolved_at || a.departed_at || a.cleared_at || a.detected_at));
 
   // KPIs
