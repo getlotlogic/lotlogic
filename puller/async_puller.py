@@ -223,12 +223,17 @@ class CameraTask:
                     except asyncio.TimeoutError:
                         continue
 
-                # Grab and send frame
-                frame = await self._grab_frame()
-                if frame is not None:
-                    await self._send_frame(frame)
-                else:
-                    self.frames_failed += 1
+                # Grab and send frame — catch per-iteration errors so one bad
+                # frame doesn't kill the entire task
+                try:
+                    frame = await self._grab_frame()
+                    if frame is not None:
+                        await self._send_frame(frame)
+                    else:
+                        self.frames_failed += 1
+                        self._apply_backoff()
+                except Exception as e:
+                    log.error("[%s] Frame cycle error: %s", self.name, e)
                     self._apply_backoff()
 
                 # Heartbeat (piggyback on frame cycle)
@@ -473,8 +478,17 @@ class PullerSupervisor:
             log.warning("Camera reload failed: %s", e)
             return
 
+        cam_by_id = {c["id"]: c for c in cameras}
         current_ids = set(self.tasks.keys())
-        new_ids = {c["id"] for c in cameras}
+        new_ids = set(cam_by_id.keys())
+
+        # Restart crashed or dead tasks
+        for cam_id, task in list(self.tasks.items()):
+            if task._task and task._task.done() and cam_id in new_ids:
+                log.warning("[%s] Task died — restarting", task.name)
+                new_task = CameraTask(cam_by_id[cam_id], session, dry_run=self.dry_run)
+                self.tasks[cam_id] = new_task
+                await new_task.start()
 
         # Start new cameras
         for cam in cameras:
