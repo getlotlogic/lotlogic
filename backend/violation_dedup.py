@@ -293,12 +293,14 @@ async def process_snapshot(
                 # Fall through to create a new violation for the new plate below
                 active = []
             else:
-                # Same car still there — reset empty streak and check for reminder
+                # Same car still there — reset empty streak and check for reminder.
+                # NOTE: Do NOT update snapshot_url here. The violation's snapshot_url
+                # is the ORIGINAL detection image and must be preserved so the UI can
+                # show "Detection" vs "Current Live" side-by-side. Overwriting it with
+                # the latest snapshot made both images identical.
                 update_fields = {}
                 if (violation.get("empty_streak") or 0) > 0:
                     update_fields["empty_streak"] = 0
-                if snapshot_url:
-                    update_fields["snapshot_url"] = snapshot_url
                 if update_fields:
                     sb.table("violations").update(update_fields).eq("id", violation["id"]).execute()
                 if (
