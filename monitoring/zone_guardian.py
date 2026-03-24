@@ -2,13 +2,14 @@
 """
 LotLogic Zone Guardian — Autonomous Zone Detection Agent
 
-Runs continuously across ALL lots and cameras. Detects when YOLO vehicle
-centroids fall through gaps in zone polygons and automatically fixes them.
+Runs continuously across ALL lots and cameras. Detects when vehicle bounding
+boxes have insufficient overlap with zone polygons, indicating zones that are
+too small, misaligned, or borderline.
 
-The #1 cause of silent zone failures: the backend uses CENTER-POINT-IN-POLYGON
-matching. A vehicle bbox can overlap a zone by 40%+ but if the centroid lands
-0.1% outside the polygon boundary, no violation is created. This agent catches
-those gaps before they become a problem.
+The backend uses IoU-style BOUNDING-BOX-TO-ZONE-POLYGON OVERLAP matching.
+A detection's bbox must overlap the zone polygon by at least 30% (configurable
+via ZONE_IOU_THRESHOLD) to count as a match. This agent monitors overlap
+quality and catches zones where vehicles are close to the threshold.
 
 Usage:
     # Single scan of all lots
@@ -27,6 +28,7 @@ Usage:
 import argparse
 import json
 import logging
+import os
 import signal
 import sys
 import time
@@ -48,6 +50,9 @@ logger = logging.getLogger("lotlogic.zone_guardian")
 
 _running = True
 
+# IoU overlap threshold — must match backend's ZONE_IOU_THRESHOLD
+IOU_THRESHOLD = float(os.environ.get("ZONE_IOU_THRESHOLD", "0.30"))
+
 
 def _handle_signal(signum, frame):
     global _running
@@ -68,25 +73,32 @@ def polygon_bounds(polygon):
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def point_in_polygon_approx(px, py, polygon):
-    """Approximate point-in-polygon using bounding box. Good enough for
-    rectangular parking zones. For complex polygons, use ray casting."""
+def bbox_zone_overlap(bbox, polygon):
+    """Calculate what percentage of bbox area overlaps the zone polygon.
+
+    This is the primary zone matching metric. The backend assigns a detection
+    to a zone when this overlap exceeds IOU_THRESHOLD (default 30%).
+
+    Args:
+        bbox: [x1, y1, x2, y2] normalized 0-1
+        polygon: list of [x, y] points, 0-1 normalized
+
+    Returns:
+        float: overlap percentage (0.0 to 1.0) relative to bbox area
+    """
+    x1, y1, x2, y2 = bbox
+    bbox_area = (x2 - x1) * (y2 - y1)
+    if bbox_area <= 0:
+        return 0.0
+
     min_x, min_y, max_x, max_y = polygon_bounds(polygon)
-    return min_x <= px <= max_x and min_y <= py <= max_y
+    overlap_x = max(0, min(x2, max_x) - max(x1, min_x))
+    overlap_y = max(0, min(y2, max_y) - max(y1, min_y))
 
+    if overlap_x <= 0 or overlap_y <= 0:
+        return 0.0
 
-def bbox_centroid(bbox):
-    """Get center point of a detection bbox [x1, y1, x2, y2]."""
-    return (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
-
-
-def centroid_miss_distance(cx, cy, polygon):
-    """Calculate how far a centroid misses a polygon boundary.
-    Returns (dx, dy) where negative means inside, positive means outside."""
-    min_x, min_y, max_x, max_y = polygon_bounds(polygon)
-    dx = max(min_x - cx, cx - max_x, 0)
-    dy = max(min_y - cy, cy - max_y, 0)
-    return dx, dy
+    return (overlap_x * overlap_y) / bbox_area
 
 
 def expand_polygon(polygon, padding):
@@ -121,13 +133,15 @@ def expand_polygon(polygon, padding):
 # ── Core Analysis ────────────────────────────────────────────────────────────
 
 def analyze_camera_zones(camera, snapshots, violations, config):
-    """Analyze all zones on a camera for centroid gaps.
+    """Analyze all zones on a camera for overlap issues.
 
-    Returns list of findings, each with:
-    - zone_id, camera info
-    - detected centroids that miss the zone
-    - recommended polygon fix
-    - severity (error/warning)
+    Uses IoU-style bounding box overlap to classify detections:
+    - >= IOU_THRESHOLD (30%): detection matches zone (healthy)
+    - 10-30%: borderline overlap — zone may need expansion
+    - > 0%: low overlap — zone likely misaligned
+    - 0%: no overlap — check for near-misses
+
+    Returns list of findings with severity and recommended fixes.
     """
     cid = camera["id"]
     cname = camera.get("name", "Unknown")
@@ -145,11 +159,8 @@ def analyze_camera_zones(camera, snapshots, violations, config):
         for d in dets:
             bbox = d.get("bbox") or d.get("bounding_box")
             if bbox and len(bbox) == 4:
-                cx, cy = bbox_centroid(bbox)
                 detections.append({
                     "bbox": bbox,
-                    "cx": cx,
-                    "cy": cy,
                     "conf": d.get("conf", d.get("confidence", 0)),
                 })
 
@@ -168,136 +179,108 @@ def analyze_camera_zones(camera, snapshots, violations, config):
         min_x, min_y, max_x, max_y = polygon_bounds(polygon)
         zone_area = (max_x - min_x) * (max_y - min_y)
 
-        # Classify each detection relative to this zone
-        centroids_inside = []
-        centroids_overlapping_but_outside = []
-        centroids_near = []
+        # Classify each detection by overlap with this zone
+        detections_matching = []       # >= IOU_THRESHOLD
+        detections_borderline = []     # 10% to IOU_THRESHOLD
+        detections_low_overlap = []    # > 0% but < 10%
+        detections_near = []           # 0% overlap but within 5% of zone
 
         for det in detections:
-            cx, cy = det["cx"], det["cy"]
             bbox = det["bbox"]
-
-            # Is centroid inside zone?
-            if point_in_polygon_approx(cx, cy, polygon):
-                centroids_inside.append(det)
+            x1, y1, x2, y2 = bbox
+            bbox_area = (x2 - x1) * (y2 - y1)
+            if bbox_area <= 0:
                 continue
 
-            # Does bbox overlap zone at all?
-            bx1, by1, bx2, by2 = bbox
-            overlap_x = max(0, min(bx2, max_x) - max(bx1, min_x))
-            overlap_y = max(0, min(by2, max_y) - max(by1, min_y))
-            bbox_area = (bx2 - bx1) * (by2 - by1)
+            overlap_pct = bbox_zone_overlap(bbox, polygon)
 
-            if overlap_x > 0 and overlap_y > 0 and bbox_area > 0:
-                overlap_pct = (overlap_x * overlap_y) / bbox_area * 100
-                if overlap_pct > 10:
-                    dx, dy = centroid_miss_distance(cx, cy, polygon)
-                    centroids_overlapping_but_outside.append({
-                        **det,
-                        "overlap_pct": round(overlap_pct, 1),
-                        "miss_dx": round(dx, 4),
-                        "miss_dy": round(dy, 4),
-                    })
-                    continue
-
-            # Is centroid near zone? (within 5% of frame)
-            dx, dy = centroid_miss_distance(cx, cy, polygon)
-            if dx < 0.05 and dy < 0.05:
-                centroids_near.append({
-                    **det,
-                    "miss_dx": round(dx, 4),
-                    "miss_dy": round(dy, 4),
-                })
+            if overlap_pct >= IOU_THRESHOLD:
+                detections_matching.append({**det, "overlap_pct": round(overlap_pct, 4)})
+            elif overlap_pct >= 0.10:
+                detections_borderline.append({**det, "overlap_pct": round(overlap_pct, 4)})
+            elif overlap_pct > 0:
+                detections_low_overlap.append({**det, "overlap_pct": round(overlap_pct, 4)})
+            else:
+                # Check if detection is near the zone (within 5% of frame)
+                bcx = (x1 + x2) / 2
+                bcy = (y1 + y2) / 2
+                dx = max(min_x - bcx, bcx - max_x, 0)
+                dy = max(min_y - bcy, bcy - max_y, 0)
+                if dx < 0.05 and dy < 0.05:
+                    detections_near.append(det)
 
         has_violations = zid in violation_zone_ids
 
-        # ── Finding: Centroid gap (the Z1 problem) ──
-        if centroids_overlapping_but_outside and not has_violations:
-            # Calculate exact fix: how much to expand polygon
-            max_miss_dx = max(d["miss_dx"] for d in centroids_overlapping_but_outside)
-            max_miss_dy = max(d["miss_dy"] for d in centroids_overlapping_but_outside)
-            # Add 2% safety margin so future slight shifts don't break it again
-            fix_padding = max(max_miss_dx, max_miss_dy) + 0.02
+        # ── Finding: Low overlap risk (vehicles at 10-30% overlap) ──
+        if detections_borderline and not has_violations:
+            avg_overlap = sum(d["overlap_pct"] for d in detections_borderline) / len(detections_borderline)
+            max_overlap = max(d["overlap_pct"] for d in detections_borderline)
 
+            # Estimate how much to expand polygon to bring borderline detections above threshold
+            expansion_needed = IOU_THRESHOLD - max_overlap
+            fix_padding = max(0.02, expansion_needed * 2)  # rough estimate
             fixed_polygon = expand_polygon(polygon, fix_padding)
-            fixed_bounds = polygon_bounds(fixed_polygon)
-
-            # Verify fix works — would the missed centroids now be inside?
-            would_fix = sum(
-                1 for d in centroids_overlapping_but_outside
-                if point_in_polygon_approx(d["cx"], d["cy"], fixed_polygon)
-            )
 
             findings.append({
                 "severity": "error",
-                "type": "centroid_gap",
+                "type": "low_overlap_risk",
                 "camera_id": cid,
                 "camera_name": cname,
                 "zone_id": zid,
                 "zone_type": zone.get("violation_type", "unknown"),
                 "current_polygon": polygon,
                 "recommended_polygon": fixed_polygon,
-                "current_bounds": {
-                    "x": [round(min_x, 4), round(max_x, 4)],
-                    "y": [round(min_y, 4), round(max_y, 4)],
-                },
-                "recommended_bounds": {
-                    "x": [round(fixed_bounds[0], 4), round(fixed_bounds[2], 4)],
-                    "y": [round(fixed_bounds[1], 4), round(fixed_bounds[3], 4)],
-                },
-                "vehicles_affected": len(centroids_overlapping_but_outside),
-                "max_miss": {
-                    "dx": max_miss_dx,
-                    "dy": max_miss_dy,
-                    "pct": f"{max(max_miss_dx, max_miss_dy) * 100:.2f}%",
-                },
-                "fix_would_resolve": f"{would_fix}/{len(centroids_overlapping_but_outside)}",
-                "fix_padding_applied": round(fix_padding, 4),
+                "vehicles_affected": len(detections_borderline),
+                "avg_overlap_pct": round(avg_overlap * 100, 1),
+                "max_overlap_pct": round(max_overlap * 100, 1),
+                "threshold_pct": round(IOU_THRESHOLD * 100, 1),
                 "message": (
-                    f"CENTROID GAP: Zone '{zid}' on '{cname}' — "
-                    f"{len(centroids_overlapping_but_outside)} vehicles overlap this zone but "
-                    f"their centroids miss by up to {max(max_miss_dx, max_miss_dy)*100:.2f}%. "
-                    f"Zone boundary needs to expand by ~{fix_padding*100:.1f}% to capture them. "
-                    f"Current Y range: [{min_y:.4f}-{max_y:.4f}], "
-                    f"recommended: [{fixed_bounds[1]:.4f}-{fixed_bounds[3]:.4f}]."
+                    f"LOW OVERLAP: Zone '{zid}' on '{cname}' — "
+                    f"{len(detections_borderline)} vehicles overlap this zone between "
+                    f"10-{IOU_THRESHOLD*100:.0f}% (avg {avg_overlap*100:.1f}%, max {max_overlap*100:.1f}%). "
+                    f"These vehicles are below the {IOU_THRESHOLD*100:.0f}% IoU threshold "
+                    f"and won't generate violations. Expanding the zone polygon would increase overlap."
                 ),
             })
 
-        # ── Finding: Zone working but near-misses detected ──
-        elif has_violations and centroids_overlapping_but_outside:
-            max_miss = max(
-                max(d["miss_dx"], d["miss_dy"])
-                for d in centroids_overlapping_but_outside
-            )
-            if max_miss < 0.01:  # Within 1% — dangerously close
+        # ── Finding: Threshold borderline (zone works but fragile) ──
+        elif has_violations and detections_matching:
+            # Check if any matching detections are close to the threshold
+            tight_detections = [
+                d for d in detections_matching
+                if d["overlap_pct"] < IOU_THRESHOLD + 0.05  # within 5% of threshold
+            ]
+            if tight_detections:
+                avg_tight = sum(d["overlap_pct"] for d in tight_detections) / len(tight_detections)
                 findings.append({
                     "severity": "warning",
-                    "type": "boundary_tight",
+                    "type": "threshold_borderline",
                     "camera_id": cid,
                     "camera_name": cname,
                     "zone_id": zid,
-                    "vehicles_at_risk": len(centroids_overlapping_but_outside),
-                    "closest_miss_pct": f"{max_miss * 100:.2f}%",
+                    "vehicles_at_risk": len(tight_detections),
+                    "avg_overlap_pct": round(avg_tight * 100, 1),
                     "message": (
-                        f"TIGHT BOUNDARY: Zone '{zid}' on '{cname}' is producing violations "
-                        f"but {len(centroids_overlapping_but_outside)} vehicle centroids are "
-                        f"within {max_miss*100:.2f}% of the zone boundary. A slight camera "
-                        f"shift could cause them to fall outside. Consider expanding the zone."
+                        f"BORDERLINE: Zone '{zid}' on '{cname}' is producing violations "
+                        f"but {len(tight_detections)} vehicles have overlap between "
+                        f"{IOU_THRESHOLD*100:.0f}-{(IOU_THRESHOLD+0.05)*100:.0f}% — "
+                        f"a minor camera shift could push them below threshold. "
+                        f"Consider expanding the zone."
                     ),
                 })
 
         # ── Finding: Near-miss vehicles not caught ──
-        elif centroids_near and not has_violations and not centroids_overlapping_but_outside:
+        elif detections_near and not has_violations and not detections_borderline:
             findings.append({
                 "severity": "warning",
                 "type": "near_miss",
                 "camera_id": cid,
                 "camera_name": cname,
                 "zone_id": zid,
-                "vehicles_near": len(centroids_near),
+                "vehicles_near": len(detections_near),
                 "message": (
                     f"NEAR MISS: Zone '{zid}' on '{cname}' — "
-                    f"{len(centroids_near)} vehicles detected near but not overlapping "
+                    f"{len(detections_near)} vehicles detected near but not overlapping "
                     f"this zone. Zone may need to be repositioned."
                 ),
             })
@@ -313,8 +296,8 @@ def analyze_camera_zones(camera, snapshots, violations, config):
                 "zone_area_pct": f"{zone_area * 100:.2f}%",
                 "message": (
                     f"SMALL ZONE: Zone '{zid}' on '{cname}' covers only "
-                    f"{zone_area*100:.2f}% of the frame. Small zones are fragile — "
-                    f"minor camera movements can cause centroid misses."
+                    f"{zone_area*100:.2f}% of the frame. Small zones produce low "
+                    f"overlap percentages and are fragile to camera movement."
                 ),
             })
 
@@ -336,7 +319,7 @@ def apply_zone_fix(config, camera_id, zones, finding):
             updated = dict(z)
             updated["polygon"] = finding["recommended_polygon"]
             updated_zones.append(updated)
-            logger.info("  Fixing zone %s: expanding polygon", zid)
+            logger.info("  Fixing zone %s: expanding polygon for better overlap", zid)
         else:
             updated_zones.append(z)
 
@@ -368,14 +351,11 @@ def format_finding_alert(finding):
     severity_icon = {"error": "🔴", "warning": "🟡"}.get(finding["severity"], "⚪")
     lines = [f"{severity_icon} *{finding['type'].upper()}*: {finding['message']}"]
 
-    if finding["type"] == "centroid_gap":
+    if finding["type"] == "low_overlap_risk":
         lines.append(f"  Vehicles affected: {finding['vehicles_affected']}")
-        lines.append(f"  Max centroid miss: {finding['max_miss']['pct']}")
-        lines.append(f"  Fix: expand polygon by {finding['fix_padding_applied']*100:.1f}%")
-        cb = finding["current_bounds"]
-        rb = finding["recommended_bounds"]
-        lines.append(f"  Current Y: [{cb['y'][0]:.4f} - {cb['y'][1]:.4f}]")
-        lines.append(f"  Fixed Y:   [{rb['y'][0]:.4f} - {rb['y'][1]:.4f}]")
+        lines.append(f"  Avg overlap: {finding['avg_overlap_pct']}%")
+        lines.append(f"  Max overlap: {finding['max_overlap_pct']}%")
+        lines.append(f"  Threshold: {finding['threshold_pct']}%")
 
     return "\n".join(lines)
 
@@ -397,7 +377,7 @@ def send_alert(config, subject, body):
 # ── Scan All Lots ────────────────────────────────────────────────────────────
 
 def scan_all(config, camera_filter=None, auto_fix=False):
-    """Scan all active cameras for zone centroid gaps.
+    """Scan all active cameras for zone overlap issues.
 
     Returns dict with all findings across all lots.
     """
@@ -479,7 +459,7 @@ def scan_all(config, camera_filter=None, auto_fix=False):
         for f in findings:
             logger.info("[%s] %s: %s", f["severity"].upper(), f["type"], f["message"])
 
-            if f["type"] == "centroid_gap" and auto_fix:
+            if f["type"] == "low_overlap_risk" and auto_fix:
                 logger.info("  Auto-fixing zone %s on %s...", f["zone_id"], cname)
                 success = apply_zone_fix(config, cid, zones, f)
                 if success:
@@ -501,8 +481,8 @@ def scan_all(config, camera_filter=None, auto_fix=False):
         "summary": {
             "errors": len(errors),
             "warnings": len(warnings),
-            "centroid_gaps": sum(1 for f in all_findings if f["type"] == "centroid_gap"),
-            "boundary_tight": sum(1 for f in all_findings if f["type"] == "boundary_tight"),
+            "low_overlap_risk": sum(1 for f in all_findings if f["type"] == "low_overlap_risk"),
+            "threshold_borderline": sum(1 for f in all_findings if f["type"] == "threshold_borderline"),
             "near_misses": sum(1 for f in all_findings if f["type"] == "near_miss"),
             "zones_too_small": sum(1 for f in all_findings if f["type"] == "zone_too_small"),
             "fixes_applied": fixes_applied,
@@ -515,8 +495,8 @@ def scan_all(config, camera_filter=None, auto_fix=False):
     print(f"{'='*60}")
     print(f"  Cameras scanned: {result['cameras_scanned']}")
     print(f"  Total zones: {result['total_zones']}")
-    print(f"  Centroid gaps: {result['summary']['centroid_gaps']}")
-    print(f"  Tight boundaries: {result['summary']['boundary_tight']}")
+    print(f"  Low overlap risk: {result['summary']['low_overlap_risk']}")
+    print(f"  Borderline zones: {result['summary']['threshold_borderline']}")
     print(f"  Near misses: {result['summary']['near_misses']}")
     if auto_fix:
         print(f"  Fixes applied: {fixes_applied}")
@@ -527,14 +507,14 @@ def scan_all(config, camera_filter=None, auto_fix=False):
         print(f"  [{icon}] {f['message']}")
 
     if not all_findings:
-        print("  All zones healthy — no centroid gaps detected")
+        print("  All zones healthy — no overlap issues detected")
 
     print()
 
     # Alert on errors
     if errors:
         alert_body = "\n\n".join(format_finding_alert(f) for f in errors)
-        send_alert(config, f"Zone Guardian: {len(errors)} centroid gap(s) detected", alert_body)
+        send_alert(config, f"Zone Guardian: {len(errors)} overlap issue(s) detected", alert_body)
 
     # Save report
     report_dir = config.report_dir
@@ -573,7 +553,7 @@ def run_daemon(config, auto_fix=False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="LotLogic Zone Guardian — Autonomous zone gap detection agent"
+        description="LotLogic Zone Guardian — Autonomous zone overlap monitoring agent"
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--scan", action="store_true",
@@ -582,7 +562,7 @@ def main():
                        help="Run continuously (every 10 minutes)")
 
     parser.add_argument("--auto-fix", action="store_true",
-                        help="Automatically fix centroid gaps by expanding zone polygons")
+                        help="Automatically fix low-overlap zones by expanding polygons")
     parser.add_argument("--camera-id", type=str, default=None,
                         help="Scan only this camera (UUID)")
 

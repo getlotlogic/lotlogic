@@ -319,6 +319,26 @@ async def notify_violation(
     return await notify(operator_phone or "", message, context)
 
 
+async def notify_departure(
+    operator_phone: str,
+    zone_name: str,
+    lot_name: str,
+    violation_id: str,
+):
+    """Send departure alert when vehicle leaves after driver acknowledged (en route)."""
+    message = (
+        f"CANCELLED — Vehicle left {zone_name or 'Unknown zone'} "
+        f"at {lot_name or 'Unknown lot'}. No action needed."
+    )
+    context = {
+        "type": "departure_alert",
+        "violation_id": violation_id,
+        "zone_name": zone_name,
+        "lot_name": lot_name,
+    }
+    return await notify(operator_phone or "", message, context)
+
+
 async def notify_reminder(
     operator_phone: str,
     zone_name: str,

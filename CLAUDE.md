@@ -44,7 +44,7 @@ lotlogic/
 ## Key Tables
 - `cameras` - IP cameras with RTSP URLs, zones (JSONB), resolution settings
 - `snapshots` - Camera captures with `raw_detections` JSONB and `vehicles_detected` count
-- `violations` - Detected violations with `confidence`, `plate_confidence`, `zone_id`, `camera_id`
+- `violations` - Detected violations with `confidence`, `plate_confidence`, `zone_id`, `camera_id`, `zone_overlap`
 - `lots` - Parking lots linked to owners and partners
 - `partners` - Enforcement operators with fee schedules and revenue share
 
@@ -58,41 +58,35 @@ lotlogic/
 4. **Resolution too low** - At 640x360 (default), plates become unreadable at distance. Plate Recognizer needs clear character rendering
 5. **Snapshot-to-violation gap** - Camera sees vehicles (vehicles_detected > 0 in snapshots) but violation engine doesn't create violations if zone overlap check fails
 
-### Critical Learning: Backend Uses CENTER-POINT-IN-POLYGON Matching (March 2025)
-**Root cause of zone 7 failure**: The backend violation engine matches detections to zones using
-the **center point of the bounding box**, NOT bounding box overlap percentage.
+### Zone Matching: IoU Bounding Box Overlap (Upgraded March 2025)
+The backend violation engine matches detections to zones using **IoU-style bounding box overlap**.
+A detection's bbox must overlap the zone polygon by at least **30%** (configurable via `ZONE_IOU_THRESHOLD`
+env var) to count as a match. If a detection overlaps multiple zones, it's assigned to the zone with
+the highest overlap percentage.
 
-This means:
-- A vehicle bbox can overlap a zone by 40%+ but if the bbox CENTER falls outside the zone, **no violation is created**
-- Example: Zone `zone_1_mmuxri9a` had a vehicle overlapping it by 47%, but the vehicle center was 0.003 above the zone top boundary → ZERO violations
-- Zones must be drawn **large enough that vehicle centers fall inside**, not just that vehicles visually overlap
-- Zones typically need to extend further toward the camera (lower Y values) because YOLO bbox centers tend to be higher than where the vehicle visually sits on the ground
+This replaced the previous center-point-in-polygon approach which caused repeated production failures
+(e.g., zone 7 had vehicles overlapping by 47% but centroid landing 0.003 outside the boundary).
 
-**Fix applied**: Cowork redrawn zones with new IDs (`mmux` prefix) and wider polygons. After redraw, zone 7 started producing violations.
+- **Overlap threshold**: 30% default (`ZONE_IOU_THRESHOLD` env var, 0-1 scale)
+- **`zone_overlap` column** on `violations` table stores the overlap percentage (0-1 scale)
+- The dedup system weights presence scoring by overlap — higher overlap = stronger presence signal
+- Zone polygons still use **0-1 normalized coords** in the DB
+- Detection bboxes still use **0-1 normalized** `[x1, y1, x2, y2]`
+- **Raw detections have `zone_id: none`** — zone matching happens in the violation engine, not at snapshot level
 
-**Raw detections have `zone_id: none`** — the backend does NOT assign zones at the snapshot/detection level. Zone matching happens separately in the violation engine.
+**Historical note**: The Z1/Z7 centroid gap issues (March 2025) are fully resolved by IoU matching —
+vehicles no longer need their exact center point inside the zone, just sufficient bounding box overlap.
 
-**Zone polygons use 0-1 normalized coords** in the DB — e.g. `[0.167, 0.645]` not `[16.7, 64.5]`
-
-### Issue: Z1 Polygon Boundary Miss (March 2025)
-**Exact root cause**: YOLO centroid for the car in Z1 was at y=66.77%, but Z1's top polygon edge
-started at y=66.91% — literally **0.14% too low**. The car was detected fine, it just fell through
-a tiny gap between zones. Fixed by extending Z1's top boundary from ~66.9% up to 64.5%.
-
-**Key insight**: Zone polygons need a **safety margin** (at least 2%) beyond where vehicle centroids
-actually appear. YOLO bbox centers shift slightly between frames, so a zone boundary that's perfectly
-flush with a centroid position will intermittently miss.
-
-### Zone Guardian Agent (Added March 2025)
+### Zone Guardian Agent (Updated March 2025)
 `monitoring/zone_guardian.py` — Autonomous agent that runs every 10 minutes, scans ALL cameras/lots,
-and detects centroid gap issues before they become problems:
-- **centroid_gap**: Vehicles overlap zone but centroids fall outside polygon (the Z1/Z7 problem)
-- **boundary_tight**: Zone works but centroids are within 1% of edge (future risk)
+and monitors IoU overlap quality for all zone-detection pairs:
+- **low_overlap_risk**: Vehicles overlap zone between 10-30% — below IoU threshold, no violations created
+- **threshold_borderline**: Vehicles at 30-35% overlap — zone works but fragile to camera shifts
 - **near_miss**: Vehicles detected near zone but not overlapping at all
-- **zone_too_small**: Zone polygon too small for reliable centroid matching
+- **zone_too_small**: Zone polygon too small for reliable overlap matching
 
 **Auto-fix mode**: `--auto-fix` flag automatically patches zone polygons via the backend API,
-expanding them with a 2% safety margin to capture missed centroids.
+expanding them to increase overlap above the 30% IoU threshold.
 
 **Usage**:
 - `python zone_guardian.py --scan` — single scan
@@ -110,11 +104,11 @@ expanding them with a 2% safety margin to capture missed centroids.
 - **Low resolution risk**: Camera resolution below 640x360 minimum
 - **No zones configured**: Camera online and taking snapshots but no zones defined
 
-### Auto-Diagnosis System (Added March 2025)
+### Auto-Diagnosis System (Updated March 2025)
 `monitoring/agent_tools.py` -> `diagnose_zone_issues()` goes deeper — compares actual detection
 bounding boxes against zone polygons from recent snapshots to find WHY zones fail:
-- **zone_matching_failure**: Vehicles overlap zone but backend doesn't assign zone_id (pipeline bug)
-- **low_overlap**: Vehicles barely touch zone polygon (zone too small or offset)
+- **low_overlap**: Vehicles overlap zone but below the 30% IoU threshold (zone too small or offset)
+- **overlap_borderline**: Vehicles at 30-40% overlap — zone works but fragile to camera changes
 - **zone_near_miss**: Vehicles detected NEAR zone but not overlapping (zone needs shifting)
 - **zone_no_vehicles**: Zone in area where no vehicles appear in frame
 - **zone_too_small**: Zone covers < 0.5% of frame, unreliable matching
@@ -128,6 +122,7 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 - Camera has `resolution_width`/`resolution_height` AND `snapshot_width`/`snapshot_height` columns
 
 ### Key Thresholds
+- **Zone IoU threshold**: 30% default (`ZONE_IOU_THRESHOLD` env var) — minimum bbox overlap to match a zone
 - Plate recognition alarm: < 20% = critical, < 50% = warning
 - Camera heartbeat staleness: 10 minutes
 - Confidence display: green > 0.8, yellow 0.5-0.8, red < 0.5
