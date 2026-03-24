@@ -254,6 +254,9 @@ def check_zone_detection_health(supabase_url: str, anon_key: str) -> dict:
     """Detect zones that aren't picking up violations — silent zones, confidence
     issues, camera-too-far problems, and detection dropoffs.
 
+    Zone matching uses IoU-style bounding box overlap (not centroid point-in-polygon).
+    A detection bbox must overlap the zone polygon by >= 30% (ZONE_IOU_THRESHOLD) to match.
+
     Checks performed:
     1. Silent zones: online cameras with zones configured but zero recent detections
     2. Confidence skew: zones where avg confidence is abnormally high (over-filtering)
@@ -558,7 +561,13 @@ def check_zone_detection_health(supabase_url: str, anon_key: str) -> dict:
 
 def _bbox_zone_overlap(bbox, zone_polygon):
     """Calculate overlap between a detection bbox [x1,y1,x2,y2] and a zone polygon.
-    Returns (overlap_pct, center_inside) where overlap_pct is relative to bbox area."""
+
+    This is the PRIMARY zone matching method. The backend assigns detections to zones
+    based on this overlap percentage (IoU-style). A detection matches a zone when
+    overlap_pct >= ZONE_IOU_THRESHOLD (default 30%).
+
+    Returns (overlap_pct, center_inside) where overlap_pct is relative to bbox area.
+    center_inside is retained for backward compatibility but is no longer used for matching."""
     if len(bbox) != 4 or len(zone_polygon) < 3:
         return 0.0, False
 
@@ -591,14 +600,13 @@ def diagnose_zone_issues(supabase_url: str, anon_key: str) -> dict:
     Goes beyond health checks — actually compares raw detection bounding boxes
     against zone polygons to find WHY zones aren't producing violations.
 
-    CRITICAL LEARNING: The backend uses CENTER-POINT-IN-POLYGON matching.
-    A vehicle's bounding box can overlap a zone by 40%+ but if the bbox center
-    point falls outside the zone polygon, NO violation is created. This is the
-    #1 cause of silent zone failures.
+    Zone matching uses IoU-style BOUNDING-BOX-TO-ZONE-POLYGON OVERLAP.
+    A detection's bbox must overlap the zone polygon by >= 30% (ZONE_IOU_THRESHOLD)
+    to count as a match. If overlap is below this threshold, no violation is created.
 
     Diagnoses:
-    1. center_outside_zone: Vehicles overlap zone but centers fall outside (most common)
-    2. low_overlap: Vehicles barely touch zone polygon
+    1. low_overlap: Vehicles overlap zone but below the 30% IoU threshold
+    2. overlap_borderline: Vehicles consistently at 30-40% overlap — zone works but fragile
     3. zone_near_miss: Vehicles detected near zone but not overlapping
     4. zone_no_vehicles: Zone in area where no vehicles appear in frame
     5. zone_too_small: Zone covers < 0.5% of frame
@@ -738,42 +746,40 @@ def diagnose_zone_issues(supabase_url: str, anon_key: str) -> dict:
 
                 # Diagnosis: zone has overlapping vehicles but no violations ever
                 if overlapping and not has_violations:
-                    centers_inside = sum(1 for o in overlapping if o["center_inside"])
-                    centers_outside = sum(1 for o in overlapping if not o["center_inside"])
                     avg_overlap = sum(o["overlap_pct"] for o in overlapping) / len(overlapping)
 
-                    # CRITICAL: Backend uses CENTER-POINT-IN-POLYGON matching.
-                    # A vehicle bbox can overlap a zone by 40%+ but if the center
-                    # point is outside the zone polygon, NO violation is created.
-                    if centers_outside > 0 and centers_inside == 0:
+                    # IoU matching: vehicles must overlap zone by >= 30% to match.
+                    # If avg overlap is below threshold, zone needs expansion.
+                    if avg_overlap < 30:
                         diagnoses.append({
                             "severity": "error",
-                            "camera": cname,
-                            "zone": zid,
-                            "diagnosis": "center_outside_zone",
-                            "vehicles_overlapping": len(overlapping),
-                            "centers_inside": centers_inside,
-                            "centers_outside": centers_outside,
-                            "avg_overlap_pct": round(avg_overlap, 1),
-                            "message": f"Zone '{zid}' on '{cname}': {len(overlapping)} vehicles overlap "
-                                       f"this zone (avg {avg_overlap:.0f}%) but ALL vehicle center points "
-                                       f"fall OUTSIDE the zone polygon. The backend uses center-point-in-"
-                                       "polygon matching, so bbox overlap alone is not enough. "
-                                       "FIX: Expand the zone polygon to cover where vehicle centers "
-                                       "actually appear — typically the zone needs to extend further "
-                                       "toward the camera (lower Y values in the frame).",
-                        })
-                    elif avg_overlap < 20:
-                        diagnoses.append({
-                            "severity": "warning",
                             "camera": cname,
                             "zone": zid,
                             "diagnosis": "low_overlap",
                             "vehicles_overlapping": len(overlapping),
                             "avg_overlap_pct": round(avg_overlap, 1),
-                            "message": f"Zone '{zid}' on '{cname}': vehicles overlap by only {avg_overlap:.0f}% "
-                                       "on average. Zone polygon may be too small or offset from actual "
-                                       "parking positions. Consider expanding the zone polygon.",
+                            "message": f"Zone '{zid}' on '{cname}': {len(overlapping)} vehicles overlap "
+                                       f"this zone but average overlap is only {avg_overlap:.0f}% — "
+                                       f"below the 30% IoU threshold required for violation creation. "
+                                       "FIX: Expand the zone polygon so vehicle bounding boxes have "
+                                       "greater overlap with the zone area.",
+                        })
+
+                # Diagnosis: zone produces violations but overlap is borderline
+                elif overlapping and has_violations:
+                    avg_overlap = sum(o["overlap_pct"] for o in overlapping) / len(overlapping)
+                    if 30 <= avg_overlap < 40:
+                        diagnoses.append({
+                            "severity": "warning",
+                            "camera": cname,
+                            "zone": zid,
+                            "diagnosis": "overlap_borderline",
+                            "vehicles_overlapping": len(overlapping),
+                            "avg_overlap_pct": round(avg_overlap, 1),
+                            "message": f"Zone '{zid}' on '{cname}': zone is producing violations but "
+                                       f"average overlap is only {avg_overlap:.0f}% — close to the 30% "
+                                       "IoU threshold. A minor camera shift could push vehicles below "
+                                       "threshold. Consider expanding the zone for better margin.",
                         })
 
                 # Diagnosis: no vehicles overlapping at all

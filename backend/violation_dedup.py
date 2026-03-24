@@ -190,6 +190,7 @@ async def process_snapshot(
     plate_confidence: float = None,
     vehicle_color: str = None,
     vehicle_type: str = None,
+    zone_overlap: float = None,
 ):
     """
     Main dedup entry point. Called every ~10-30s when a new snapshot arrives.
@@ -214,7 +215,16 @@ async def process_snapshot(
             zone_id, confidence, MIN_CONFIDENCE,
         )
         has_car = False
-    presence_score = (confidence if confidence is not None else 0.5) if has_car else 0.0
+    if has_car:
+        base_confidence = confidence if confidence is not None else 0.5
+        # Weight presence by zone overlap — a car with 80% overlap is more
+        # definitively "in the zone" than one with 31% overlap
+        if zone_overlap is not None and zone_overlap > 0:
+            presence_score = base_confidence * (0.5 + 0.5 * zone_overlap)
+        else:
+            presence_score = base_confidence
+    else:
+        presence_score = 0.0
 
     # Check for active (non-cleared) violation on this zone
     active_resp = (
@@ -455,6 +465,8 @@ async def process_snapshot(
             insert_data["vehicle_color"] = vehicle_color
         if vehicle_type:
             insert_data["vehicle_type"] = vehicle_type
+        if zone_overlap is not None:
+            insert_data["zone_overlap"] = round(zone_overlap, 4)
 
         try:
             result = sb.table("violations").insert(insert_data).execute()
