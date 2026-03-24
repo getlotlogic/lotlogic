@@ -160,12 +160,17 @@ class CameraTask:
         self._stop = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
 
+    # Known tunnel provider domains — matched against camera ip_address field
+    TUNNEL_DOMAINS = ("ngrok-free.dev", "ngrok.io", "ngrok-free.app", "trycloudflare.com")
+
     def _resolve_base_url(self, camera: dict) -> str:
         from urllib.parse import urlparse
-        # 1. Use ip_address as tunnel hostname (covers trycloudflare, named tunnels, any provider)
-        if camera.get("ip_address"):
-            ip = camera["ip_address"]
-            # If it looks like a hostname (has dots, not a bare IP on LAN), use HTTPS (tunnel)
+        # 1. Use ip_address — check for known tunnel domains first, then fall back to LAN
+        ip = camera.get("ip_address", "")
+        if ip:
+            if any(d in ip for d in self.TUNNEL_DOMAINS):
+                return f"https://{ip}"
+            # Non-tunnel hostname with dots (not LAN) → HTTPS
             if "." in ip and not ip.startswith("192.168.") and not ip.startswith("10.") and not ip.startswith("172."):
                 return f"https://{ip}"
             return f"http://{ip}"
@@ -265,8 +270,10 @@ class CameraTask:
         payload = [{"cmd": "Login", "param": {"User": {
             "Version": "0", "userName": CAMERA_USER, "password": CAMERA_PASS,
         }}}]
+        # ngrok free tier returns an HTML interstitial unless this header is present
+        hdrs = {"ngrok-skip-browser-warning": "true"}
         try:
-            async with self.session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT)) as r:
+            async with self.session.post(url, json=payload, headers=hdrs, timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT)) as r:
                 r.raise_for_status()
                 data = await r.json()
                 if data and data[0].get("code") == 0:
@@ -293,8 +300,9 @@ class CameraTask:
             return None
 
         url = f"{self.base_url}/cgi-bin/api.cgi?cmd=Snap&channel={self.channel}&rs=snap&token={self.token}"
+        hdrs = {"ngrok-skip-browser-warning": "true"}
         try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT)) as r:
+            async with self.session.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT)) as r:
                 r.raise_for_status()
 
                 content_type = r.headers.get("content-type", "")
