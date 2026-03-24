@@ -119,10 +119,11 @@ _zone_last_snapshot: dict[str, float] = {}  # zone_id → monotonic timestamp
 # Prevents "resolved → next snapshot → new violation" loop when car is still being towed.
 RESOLVED_COOLDOWN_SECONDS = 300  # 5 minutes
 
-# Shorter cooldown when plates aren't readable. If we can't identify the car,
-# we can't tell if it's the same one or a new one. Use a shorter cooldown so
-# we don't block new violations for 5 minutes on every zone cycle.
-PLATELESS_COOLDOWN_SECONDS = int(os.environ.get("PLATELESS_COOLDOWN_SECONDS", "90"))
+# Cooldown when plates aren't readable. Without plate identity we can't tell
+# if it's the same car or a new one. Previously 90s which caused rapid-cycle
+# flicker loops (detect → depart in 2min → cooldown expires → re-detect same car).
+# 15 minutes prevents the same parked car from generating repeated violations.
+PLATELESS_COOLDOWN_SECONDS = int(os.environ.get("PLATELESS_COOLDOWN_SECONDS", "900"))
 
 # Maximum time a violation can sit in 'alerted' without operator action before
 # auto-clearing. Prevents zones from being permanently locked by ignored violations.
@@ -409,14 +410,30 @@ async def process_snapshot(
                         )
                         return {"action": "cooldown", "zone_id": zone_id, "previous_id": prev["id"]}
                 else:
-                    # Can't read plates — use shorter cooldown so we don't block
-                    # new violations for 5 minutes when we can't even tell if it's
-                    # the same car. This was a major violation-killer: every plateless
-                    # detection was blocked for the full 5-minute cooldown.
-                    if elapsed < PLATELESS_COOLDOWN_SECONDS:
+                    # Can't read plates — use plateless cooldown (15min default).
+                    # Also detect rapid-cycle flicker: if 3+ departures on this zone
+                    # in the last hour, extend cooldown to 30 minutes to break the loop.
+                    effective_cooldown = PLATELESS_COOLDOWN_SECONDS
+                    if elapsed < 3600:  # only check for rapid cycling within last hour
+                        rapid_resp = (
+                            sb.table("violations")
+                            .select("id", count="exact")
+                            .eq("zone_id", zone_id)
+                            .eq("status", "departed")
+                            .gte("departed_at", (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
+                            .execute()
+                        )
+                        recent_departures = rapid_resp.count or 0
+                        if recent_departures >= 3:
+                            effective_cooldown = max(effective_cooldown, 1800)  # 30 min
+                            logger.warning(
+                                "Zone %s rapid-cycle detected: %d departures in last hour — cooldown extended to %ds",
+                                zone_id, recent_departures, effective_cooldown,
+                            )
+                    if elapsed < effective_cooldown:
                         logger.info(
                             "Zone %s in plateless cooldown (%ds/%ds ago) — skipping",
-                            zone_id, int(elapsed), PLATELESS_COOLDOWN_SECONDS,
+                            zone_id, int(elapsed), effective_cooldown,
                         )
                         return {"action": "cooldown", "zone_id": zone_id, "previous_id": prev["id"]}
 
