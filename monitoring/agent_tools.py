@@ -140,7 +140,7 @@ def check_detection_quality(supabase_url: str, anon_key: str) -> dict:
         # Get last 50 violations
         resp = requests.get(
             f"{supabase_url}/rest/v1/violations"
-            "?select=id,plate_text,vehicle_color,vehicle_type,created_at"
+            "?select=id,vehicle_color,vehicle_type,created_at"
             "&order=created_at.desc&limit=50",
             headers=headers,
             timeout=10,
@@ -153,28 +153,23 @@ def check_detection_quality(supabase_url: str, anon_key: str) -> dict:
             return {"status": "warning", "details": "No violations found", "data": {}}
 
         total = len(violations)
-        has_plate = sum(1 for v in violations if v.get("plate_text"))
         has_color = sum(1 for v in violations if v.get("vehicle_color") and v["vehicle_color"] != "gray")
         has_type = sum(1 for v in violations if v.get("vehicle_type") and v["vehicle_type"] != "car")
 
         metrics = {
             "total_recent": total,
-            "plate_recognition_rate": round(has_plate / total * 100, 1),
             "color_detection_rate": round(has_color / total * 100, 1),
             "vehicle_type_variety": round(has_type / total * 100, 1),
         }
 
-        # Determine overall quality
-        plate_rate = metrics["plate_recognition_rate"]
-        if plate_rate < 20:
-            status = "error"
-            detail = f"Critical: only {plate_rate}% plate recognition"
-        elif plate_rate < 50:
+        # Determine overall quality based on color detection
+        color_rate = metrics["color_detection_rate"]
+        if color_rate < 20:
             status = "warning"
-            detail = f"Low plate recognition: {plate_rate}%"
+            detail = f"Low color detection: {color_rate}%"
         else:
             status = "ok"
-            detail = f"Plate recognition at {plate_rate}%"
+            detail = f"Color detection at {color_rate}%"
 
         return {"status": status, "details": detail, "data": metrics}
 
@@ -263,7 +258,7 @@ def check_zone_detection_health(supabase_url: str, anon_key: str) -> dict:
        or abnormally low (bad angle/distance)
     3. Detection dropoff: zones that previously had detections but stopped
     4. Snapshot-to-violation ratio: cameras taking snapshots but creating no violations
-    5. Low-resolution risk: cameras with resolution too low for plate reading at distance
+    5. Low-resolution risk: cameras with resolution too low for reliable detection at distance
     """
     if not supabase_url or not anon_key:
         return {"status": "warning", "details": "Supabase not configured", "data": {}}
@@ -296,7 +291,7 @@ def check_zone_detection_health(supabase_url: str, anon_key: str) -> dict:
         viol_resp = requests.get(
             f"{supabase_url}/rest/v1/violations",
             params={
-                "select": "id,camera_id,zone_id,confidence,plate_confidence,detected_at",
+                "select": "id,camera_id,zone_id,confidence,detected_at",
                 "detected_at": f"gte.{since_24h}",
                 "order": "detected_at.desc",
                 "limit": "500",
