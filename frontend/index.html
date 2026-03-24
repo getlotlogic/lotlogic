@@ -791,9 +791,9 @@
     .ze-btn-primary { background: #3b82f6; color: #fff; }
     .ze-btn-danger { background: rgba(239,68,68,.15); color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
     .ze-btn-ghost { background: var(--bg-inset); color: var(--text-muted); }
-    .ze-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .ze-body { flex: 1; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
     .ze-canvas-wrap {
-      flex: 1; position: relative; overflow: hidden; cursor: crosshair; background: var(--snapshot-bg);
+      flex: 1; flex-shrink: 0; min-height: 55vh; position: relative; overflow: hidden; cursor: crosshair; background: var(--snapshot-bg);
     }
     .ze-canvas-wrap img { position: absolute; display: block; user-select: none; -webkit-user-drag: none; }
     .ze-svg { position: absolute; }
