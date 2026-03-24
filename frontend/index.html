@@ -3923,6 +3923,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                     {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                     {v.status === 'cleared' ? (
                       <span className="job-tag" style={{color:'#4ade80'}}>✅ <strong style={{color:'#4ade80'}}>Cleared</strong>{v.duration_seconds ? ` · ${Math.round(v.duration_seconds / 60)}m` : ''}</span>
+                    ) : (v.status === 'departed' || v.action_taken === 'already_gone') ? (
+                      <span className="job-tag" style={{color:'#6b7280'}}>🚫 <strong style={{color:'#6b7280'}}>Vehicle Left</strong></span>
                     ) : (
                       <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'handled').replace(/_/g, ' ')}</strong></span>
                     )}
