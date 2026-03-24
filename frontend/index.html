@@ -2559,7 +2559,7 @@ function ViolationModal({ violation, lot, onClose, onAction, onDelete, isOwner }
             <div className="viol-modal-stat">
               <div className="viol-modal-stat-label">Status</div>
               <div className="viol-modal-stat-val" style={{color: violation.status === 'acknowledged' ? '#f59e0b' : violation.status === 'departed' ? '#6b7280' : isPending ? 'var(--red)' : 'var(--green)'}}>
-                {violation.status === 'alerted' ? 'Active' : violation.status === 'acknowledged' ? 'Acknowledged' : violation.status === 'cleared' ? 'Cleared' : violation.status === 'departed' ? 'Departed' : isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
+                {violation.status === 'alerted' ? 'Active' : violation.status === 'acknowledged' ? 'Acknowledged' : violation.status === 'cleared' ? 'Cleared' : violation.status === 'departed' ? 'Cancelled — Vehicle Left' : isPending ? 'Pending' : (violation.action_taken || 'Resolved')}
               </div>
             </div>
             <div className="viol-modal-stat">
@@ -3315,7 +3315,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     acknowledged: { label: 'Acknowledged', color: '#f59e0b', bg: 'rgba(245,158,11,.12)', icon: '🟡' },
     cleared:      { label: 'Cleared',      color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
     resolved:     { label: 'Resolved',     color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
-    departed:     { label: 'Gone',         color: '#4ade80', bg: 'rgba(34,197,94,.15)', icon: '✓' },
+    departed:     { label: 'Cancelled — Vehicle Left', color: '#6b7280', bg: 'rgba(107,114,128,.12)', icon: '🚫' },
   };
 
   const [acking, setAcking] = useState(null);

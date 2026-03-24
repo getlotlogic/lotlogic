@@ -65,7 +65,7 @@ import time as _time
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 
-from notifications import notify_violation, notify_reminder
+from notifications import notify_violation, notify_reminder, notify_departure
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +250,7 @@ async def process_snapshot(
             else STALE_VIOLATION_SECONDS
         )
         if stale_limit > 0 and age_seconds > stale_limit:
+            was_acknowledged = violation["status"] == "acknowledged"
             sb.table("violations").update(
                 {
                     "status": "departed",
@@ -263,6 +264,13 @@ async def process_snapshot(
                 "Violation %s auto-cleared: %s for %.0f hours with no operator action — zone %s re-armed",
                 violation["id"], violation["status"], age_seconds / 3600, zone_id,
             )
+            if was_acknowledged and operator_phone:
+                await notify_departure(
+                    operator_phone=operator_phone,
+                    zone_name=zone_name,
+                    lot_name=lot_name,
+                    violation_id=violation["id"],
+                )
             active = []  # zone is now clear, fall through to create new if has_car
 
     # ── Update confidence-weighted sliding window ──
@@ -315,6 +323,7 @@ async def process_snapshot(
                     zone_id, violation["id"], violation_plate, normalized_plate,
                     plate_confidence or 0.0,
                 )
+                was_acknowledged = violation["status"] == "acknowledged"
                 sb.table("violations").update(
                     {
                         "status": "departed",
@@ -324,6 +333,13 @@ async def process_snapshot(
                 ).eq("id", violation["id"]).execute()
                 _zone_presence.pop(zone_id, None)
                 _zone_confirmations.pop(zone_id, None)
+                if was_acknowledged and operator_phone:
+                    await notify_departure(
+                        operator_phone=operator_phone,
+                        zone_name=zone_name,
+                        lot_name=lot_name,
+                        violation_id=violation["id"],
+                    )
                 # Fall through to create a new violation for the new plate below
                 active = []
             else:
@@ -524,6 +540,7 @@ async def process_snapshot(
             )
 
             if should_depart:
+                was_acknowledged = violation["status"] == "acknowledged"
                 sb.table("violations").update(
                     {
                         "status": "departed",
@@ -537,6 +554,13 @@ async def process_snapshot(
                     "Violation %s departed (streak=%d, presence=%.2f, window=%d) — zone %s re-armed",
                     violation["id"], new_streak, weighted_presence, len(window), zone_id,
                 )
+                if was_acknowledged and operator_phone:
+                    await notify_departure(
+                        operator_phone=operator_phone,
+                        zone_name=zone_name,
+                        lot_name=lot_name,
+                        violation_id=violation["id"],
+                    )
                 return {"action": "departed", "violation_id": violation["id"]}
             else:
                 sb.table("violations").update(
@@ -770,11 +794,11 @@ async def clear_stale_violations():
                 v["id"], v["zone_id"], v["detected_at"],
             )
 
-    # Clear stale 'acknowledged' violations
+    # Clear stale 'acknowledged' violations — notify driver since they were en route
     if STALE_ACKNOWLEDGED_SECONDS > 0:
         stale_acked = (
             sb.table("violations")
-            .select("id, zone_id, detected_at")
+            .select("id, zone_id, lot_id, operator_id, detected_at")
             .eq("status", "acknowledged")
             .lt("detected_at", ack_cutoff.isoformat())
             .limit(100)
@@ -791,6 +815,15 @@ async def clear_stale_violations():
                 "Stale cleanup: violation %s (zone %s) acknowledged since %s — auto-departed",
                 v["id"], v["zone_id"], v["detected_at"],
             )
+            # Notify driver that the vehicle left (they were en route)
+            phone, z_name, l_name = _resolve_context(sb, v)
+            if phone:
+                await notify_departure(
+                    operator_phone=phone,
+                    zone_name=z_name or v.get("zone_id", "Unknown"),
+                    lot_name=l_name,
+                    violation_id=v["id"],
+                )
 
     logger.info("clear_stale_violations: cleared %d stale violations", count)
     return count
