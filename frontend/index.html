@@ -3386,7 +3386,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
   // Flags as "departed" (stays on dashboard) — does NOT auto-resolve
   const departedFlaggedRef = useRef(new Set());     // violations already flagged as departed
   const emptyStreakRef = useRef({});                 // violationId -> { count, lastSnapshotTime }
-  const DEPARTED_STREAK = 8;                        // consecutive empty snapshots required (~4min at 30s intervals)
+  const DEPARTED_STREAK = 3;                        // consecutive empty snapshots required (~1.5min at 30s intervals)
 
   // Auto-recover false departures: if backend marked departed but car is still in zone, re-alert
   const recoveredRef = useRef(new Set());
@@ -3459,6 +3459,53 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
       if (!activeIds.has(id)) delete emptyStreakRef.current[id];
     }
   }, [active, allCams, camZonesMap]);
+
+  // Auto-dismiss stale violations:
+  // 1. Violations older than 2h with no acknowledgment → auto-depart
+  // 2. Violations already flagged as departed → auto-resolve after 30s grace period
+  const autoDismissedRef = useRef(new Set());
+  const STALE_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
+  const DEPARTED_AUTO_DISMISS_MS = 30 * 1000; // 30s after departure confirmed
+  const departedTimersRef = useRef({}); // violId -> timestamp when departure was first flagged
+
+  useEffect(() => {
+    if (!active.length) return;
+    const now = Date.now();
+    for (const v of active) {
+      if (autoDismissedRef.current.has(v.id)) continue;
+
+      // Age-based: alerted for 2+ hours with no acknowledgment
+      if (v.status === 'alerted' && !v.acknowledged_at) {
+        const age = now - new Date(v.detected_at).getTime();
+        if (age > STALE_AGE_MS) {
+          autoDismissedRef.current.add(v.id);
+          console.log(`Auto-dismissing stale violation ${v.id}: ${Math.round(age / 60000)}m old, no acknowledgment`);
+          db.markDeparted(v.id, 0);
+          continue;
+        }
+      }
+
+      // Departure-confirmed: auto-resolve 30s after departure flagged
+      const isDeparted = v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id);
+      if (isDeparted) {
+        if (!departedTimersRef.current[v.id]) {
+          departedTimersRef.current[v.id] = now;
+        } else if (now - departedTimersRef.current[v.id] > DEPARTED_AUTO_DISMISS_MS) {
+          autoDismissedRef.current.add(v.id);
+          delete departedTimersRef.current[v.id];
+          console.log(`Auto-resolving departed violation ${v.id} after grace period`);
+          db.recordAction(v.id, 'already_gone', {}).catch(e => console.warn('Auto-dismiss failed:', e));
+          continue;
+        }
+      } else {
+        delete departedTimersRef.current[v.id]; // Reset if vehicle came back
+      }
+    }
+    // Cleanup refs for removed violations
+    const activeIds = new Set(active.map(v => v.id));
+    for (const id of autoDismissedRef.current) { if (!activeIds.has(id)) autoDismissedRef.current.delete(id); }
+    for (const id of Object.keys(departedTimersRef.current)) { if (!activeIds.has(id)) delete departedTimersRef.current[id]; }
+  }, [active]);
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all'); // all | urgent | plates
