@@ -3824,7 +3824,7 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                     ) : (v.status === 'departed' || v.action_taken === 'already_gone') ? (
                       <span className="job-tag" style={{color:'#6b7280'}}>🚫 <strong style={{color:'#6b7280'}}>Vehicle Left</strong></span>
                     ) : (
-                      <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'handled').replace(/_/g, ' ')}</strong></span>
+                      <span className="job-tag" style={{color: col}}>✓ <strong style={{color: col}}>{(v.action_taken || 'vehicle left').replace(/_/g, ' ')}</strong></span>
                     )}
                   </div>
                 </div>
@@ -5592,7 +5592,7 @@ function OperatorActivityPage({ violations, lots }) {
                         <div style={{fontSize:12, color:'var(--text-faint)'}}>{fmtTime(v.resolved_at || v.detected_at)}</div>
                       </div>
                       <span style={{padding:'4px 10px', borderRadius:20, fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'.04em', color:col, background:col + '15', border:`1px solid ${col}33`}}>
-                        {(v.action_taken || 'handled').replace(/_/g, ' ')}
+                        {(v.action_taken || 'vehicle left').replace(/_/g, ' ')}
                       </span>
                     </div>
                     <div className="job-details">
