@@ -791,9 +791,9 @@
     .ze-btn-primary { background: #3b82f6; color: #fff; }
     .ze-btn-danger { background: rgba(239,68,68,.15); color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
     .ze-btn-ghost { background: var(--bg-inset); color: var(--text-muted); }
-    .ze-body { flex: 1; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
+    .ze-body { flex: 1; display: flex; flex-direction: row; overflow: hidden; }
     .ze-canvas-wrap {
-      flex: 1; flex-shrink: 0; min-height: 55vh; position: relative; overflow: hidden; cursor: crosshair; background: var(--snapshot-bg);
+      flex: 1; position: relative; overflow: hidden; cursor: crosshair; background: var(--snapshot-bg);
     }
     .ze-canvas-wrap img { position: absolute; display: block; user-select: none; -webkit-user-drag: none; }
     .ze-svg { position: absolute; }
@@ -806,8 +806,12 @@
     .ze-drawing-line { stroke: #3b82f6; stroke-width: 0.3; stroke-dasharray: 1 0.8; fill: none; }
     .ze-drawing-poly { fill: rgba(59,130,246,.1); stroke: #3b82f6; stroke-width: 0.3; }
 
+    .ze-sidebar {
+      width: 280px; flex-shrink: 0; display: flex; flex-direction: column;
+      border-left: 1px solid var(--border-subtle); background: var(--bg-card); overflow-y: auto;
+    }
     .ze-toolbar {
-      display: flex; gap: 6px; padding: 5px 12px; border-top: 1px solid var(--border-subtle);
+      display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle);
       background: var(--bg-card); flex-shrink: 0; flex-wrap: wrap; align-items: center;
     }
     .ze-zone-list {
@@ -820,7 +824,7 @@
     .ze-zone-chip.active { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.25); }
 
     .ze-panel {
-      padding: 6px 12px; border-top: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
+      padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
     }
     .ze-panel-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
     .ze-panel-row:last-child { margin-bottom: 0; }
@@ -837,7 +841,7 @@
     }
     .ze-panel-select:focus { border-color: var(--accent); }
     .ze-status { font-size: 10px; color: var(--text-faint); padding: 2px 0; }
-    .ze-hint { font-size: 10px; color: var(--text-ghost); text-align: center; padding: 4px; }
+    .ze-hint { font-size: 10px; color: var(--text-ghost); text-align: center; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); }
 
     /* ── Live feed controls ── */
     .ze-feed-controls {
@@ -878,8 +882,8 @@
 
     /* ── Detection sidebar panel ── */
     .ze-detections-panel {
-      border-top: 1px solid var(--border-subtle); background: var(--bg-card); flex-shrink: 0;
-      max-height: 120px; overflow-y: auto;
+      border-top: 1px solid var(--border-subtle); background: var(--bg-card);
+      flex: 1; overflow-y: auto; min-height: 0;
     }
     .ze-det-header {
       padding: 4px 12px; font-size: 10px; font-weight: 700; color: var(--text-muted);
@@ -1314,6 +1318,7 @@
     .theme-light .ze-header,
     .theme-light .ze-toolbar,
     .theme-light .ze-panel,
+    .theme-light .ze-sidebar,
     .theme-light .ze-feed-controls,
     .theme-light .ze-detections-panel,
     .theme-light .ze-det-header { background: #fff; }
@@ -4362,9 +4367,8 @@ function ZoneEditor({ cameraId, cameraName, existingZones, tunnelSnapshotUrl, on
         </div>
       </div>
 
+      {error && <div style={{padding:'8px 16px', background:'rgba(220,38,38,.1)', color:'#fca5a5', fontSize:13, flexShrink:0}}>{error}</div>}
       <div className="ze-body">
-        {error && <div style={{padding:'8px 16px', background:'rgba(220,38,38,.1)', color:'#fca5a5', fontSize:13}}>{error}</div>}
-
         <div ref={wrapRef} className="ze-canvas-wrap" onClick={handleCanvasClick} onDoubleClick={handleDoubleClick}>
           {frameUrl ? (
             <>
@@ -4428,6 +4432,8 @@ function ZoneEditor({ cameraId, cameraName, existingZones, tunnelSnapshotUrl, on
           )}
         </div>
 
+        {/* Sidebar: zone list, properties, detections */}
+        <div className="ze-sidebar">
         {/* Drawing hint */}
         {drawing && (
           <div className="ze-hint" style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:8}}>
@@ -4556,6 +4562,7 @@ function ZoneEditor({ cameraId, cameraName, existingZones, tunnelSnapshotUrl, on
             )}
           </div>
         )}
+        </div>{/* end ze-sidebar */}
       </div>
     </div>
   );
