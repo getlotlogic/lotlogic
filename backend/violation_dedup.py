@@ -122,20 +122,22 @@ RESOLVED_COOLDOWN_SECONDS = 300  # 5 minutes
 # Shorter cooldown when plates aren't readable. If we can't identify the car,
 # we can't tell if it's the same one or a new one. Use a shorter cooldown so
 # we don't block new violations for 5 minutes on every zone cycle.
-PLATELESS_COOLDOWN_SECONDS = int(os.environ.get("PLATELESS_COOLDOWN_SECONDS", "90"))
+# Lowered from 90s to 60s to reduce time zones are blocked after plateless cycles.
+PLATELESS_COOLDOWN_SECONDS = int(os.environ.get("PLATELESS_COOLDOWN_SECONDS", "60"))
 
 # Maximum time a violation can sit in 'alerted' without operator action before
 # auto-clearing. Prevents zones from being permanently locked by ignored violations.
-# Default: 4 hours. Set to 0 to disable.
-STALE_VIOLATION_SECONDS = int(os.environ.get("STALE_VIOLATION_SECONDS", "14400"))
+# Default: 2 hours (lowered from 4h for faster zone recovery). Set to 0 to disable.
+STALE_VIOLATION_SECONDS = int(os.environ.get("STALE_VIOLATION_SECONDS", "7200"))
 
 # Maximum time a violation can sit in 'acknowledged' without resolution.
-# Operator acknowledged but never booted/towed. Default: 8 hours.
-STALE_ACKNOWLEDGED_SECONDS = int(os.environ.get("STALE_ACKNOWLEDGED_SECONDS", "28800"))
+# Operator acknowledged but never booted/towed. Default: 4 hours (lowered from 8h).
+STALE_ACKNOWLEDGED_SECONDS = int(os.environ.get("STALE_ACKNOWLEDGED_SECONDS", "14400"))
 
 # Minimum YOLO confidence to accept a detection. Below this, the snapshot is
 # treated as "no car detected" to avoid false positives from shadows/reflections.
-MIN_CONFIDENCE = float(os.environ.get("MIN_DETECTION_CONFIDENCE", "0.35"))
+# Lowered from 0.35 to 0.30 to catch more borderline detections at distance.
+MIN_CONFIDENCE = float(os.environ.get("MIN_DETECTION_CONFIDENCE", "0.30"))
 
 # ── Arrival confirmation (sliding window) ──
 # Car must be detected in CONFIRMATION_REQUIRED of the last CONFIRMATION_WINDOW

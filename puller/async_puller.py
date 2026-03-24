@@ -71,9 +71,9 @@ CAMERA_RELOAD_INTERVAL = 60  # Check for new cameras every 60s
 HEARTBEAT_INTERVAL = 30
 INGEST_TIMEOUT = 30
 HTTP_TIMEOUT = 10
-MIN_FRAME_SIZE = 1000
+MIN_FRAME_SIZE = 5000  # Reject corrupted/low-quality frames (was 1000)
 MAX_BACKOFF = 300  # 5 minutes max backoff
-INGEST_RETRY_ATTEMPTS = 2
+INGEST_RETRY_ATTEMPTS = 3  # Extra retry for transient network failures (was 2)
 INGEST_RETRY_DELAY = 2  # seconds
 
 logging.basicConfig(
