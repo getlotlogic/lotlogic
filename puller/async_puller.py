@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LotLogic Async Snapshot Puller
+LotLogic Async Snapshot Puller v1.1 — restart 2026-03-24
 
 Each camera runs as an independent asyncio task with its own:
   - Polling interval (from DB config)
