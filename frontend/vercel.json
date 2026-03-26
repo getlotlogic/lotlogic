@@ -1,0 +1,14 @@
+{
+  "rewrites": [
+    { "source": "/visit/:path*", "destination": "/visit.html" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/visit/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    }
+  ]
+}

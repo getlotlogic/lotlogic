@@ -2186,6 +2186,212 @@ const db = {
   },
 
   // Realtime subscription for violations
+  // ── ALPR Parking Pass Data Layer ───────────────────────────
+  normalizePlate(plate) {
+    return (plate || '').toUpperCase().replace(/[\s\-\.]/g, '').trim();
+  },
+  async getProperties(partnerId) {
+    if (!supabase) return [];
+    let q = supabase.from('properties').select('*');
+    if (partnerId) q = q.eq('tow_company_id', partnerId);
+    q = q.order('created_at', { ascending: false });
+    const { data, error } = await q;
+    return error ? [] : data || [];
+  },
+  async getProperty(propertyId) {
+    if (!supabase) return null;
+    const { data } = await supabase.from('properties').select('*').eq('id', propertyId).single();
+    return data;
+  },
+  async createProperty(property) {
+    if (!supabase) throw new Error('Supabase not available');
+    const { data, error } = await supabase.from('properties').insert(property).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  async updateProperty(id, updates) {
+    if (!supabase) throw new Error('Supabase not available');
+    const { data, error } = await supabase.from('properties').update(updates).eq('id', id).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  async deleteProperty(id) {
+    if (!supabase) throw new Error('Supabase not available');
+    const { error } = await supabase.from('properties').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+  },
+  async getResidentPlates(propertyId) {
+    if (!supabase) return [];
+    const { data, error } = await supabase.from('resident_plates').select('*')
+      .eq('property_id', propertyId).eq('is_active', true)
+      .order('created_at', { ascending: false });
+    return error ? [] : data || [];
+  },
+  async addResidentPlate(plate) {
+    if (!supabase) throw new Error('Supabase not available');
+    plate.plate_number = this.normalizePlate(plate.plate_number);
+    const { data, error } = await supabase.from('resident_plates').insert(plate).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  async removeResidentPlate(plateId) {
+    if (!supabase) throw new Error('Supabase not available');
+    const { error } = await supabase.from('resident_plates').update({ is_active: false }).eq('id', plateId);
+    if (error) throw new Error(error.message);
+  },
+  async importResidentPlates(propertyId, plates) {
+    if (!supabase) throw new Error('Supabase not available');
+    const rows = plates.map(p => ({
+      property_id: propertyId,
+      plate_number: this.normalizePlate(p.plate_number),
+      unit_number: p.unit_number || null,
+      resident_name: p.resident_name || null,
+    })).filter(p => p.plate_number);
+    const { data, error } = await supabase.from('resident_plates').upsert(rows, {
+      onConflict: 'property_id,plate_number',
+    }).select();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  async getVisitorPasses(propertyId, status) {
+    if (!supabase) return [];
+    let q = supabase.from('visitor_passes').select('*').eq('property_id', propertyId);
+    if (status) q = q.eq('status', status);
+    q = q.order('created_at', { ascending: false }).limit(100);
+    const { data, error } = await q;
+    return error ? [] : data || [];
+  },
+  async getALPRCameras(propertyId) {
+    if (!supabase) return [];
+    const { data, error } = await supabase.from('alpr_cameras').select('*')
+      .eq('property_id', propertyId).order('created_at', { ascending: false });
+    return error ? [] : data || [];
+  },
+  async createALPRCamera(camera) {
+    if (!supabase) throw new Error('Supabase not available');
+    // Generate a random API key
+    const apiKey = 'alpr_' + crypto.randomUUID().replace(/-/g, '');
+    const { data, error } = await supabase.from('alpr_cameras')
+      .insert({ ...camera, api_key: apiKey }).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  async deleteALPRCamera(cameraId) {
+    if (!supabase) throw new Error('Supabase not available');
+    const { error } = await supabase.from('alpr_cameras').delete().eq('id', cameraId);
+    if (error) throw new Error(error.message);
+  },
+  async getPlateEvents(propertyId, limit = 50) {
+    if (!supabase) return [];
+    const { data, error } = await supabase.from('plate_events').select('*')
+      .eq('property_id', propertyId).order('timestamp', { ascending: false }).limit(limit);
+    return error ? [] : data || [];
+  },
+  async getALPRViolations(partnerId, status) {
+    if (!supabase) return [];
+    // Get violations for all properties owned by this tow company
+    let q = supabase.from('alpr_violations').select('*, properties!inner(name, address, tow_company_id)');
+    if (partnerId) q = q.eq('properties.tow_company_id', partnerId);
+    if (status) {
+      if (Array.isArray(status)) { q = q.in('status', status); }
+      else { q = q.eq('status', status); }
+    }
+    q = q.order('flagged_at', { ascending: false }).limit(200);
+    const { data, error } = await q;
+    return error ? [] : data || [];
+  },
+  async getALPRViolation(violationId) {
+    if (!supabase) return null;
+    const { data } = await supabase.from('alpr_violations')
+      .select('*, properties(name, address, tow_company_id, default_pass_duration_minutes), visitor_passes(*), plate_events(*)')
+      .eq('id', violationId).single();
+    return data;
+  },
+  async dispatchALPRViolation(violationId) {
+    if (!supabase) throw new Error('Supabase not available');
+    const { error } = await supabase.from('alpr_violations')
+      .update({ status: 'dispatched', dispatched_at: new Date().toISOString() })
+      .eq('id', violationId);
+    if (error) throw new Error(error.message);
+  },
+  async dismissALPRViolation(violationId, notes) {
+    if (!supabase) throw new Error('Supabase not available');
+    const { error } = await supabase.from('alpr_violations')
+      .update({ status: 'dismissed', resolved_at: new Date().toISOString(), notes: notes || null })
+      .eq('id', violationId);
+    if (error) throw new Error(error.message);
+  },
+  async updateALPRViolationNotes(violationId, notes) {
+    if (!supabase) throw new Error('Supabase not available');
+    const { error } = await supabase.from('alpr_violations').update({ notes }).eq('id', violationId);
+    if (error) throw new Error(error.message);
+  },
+  async recordTowJob(job) {
+    if (!supabase) throw new Error('Supabase not available');
+    const commissionAmount = (job.tow_fee * (job.commission_rate || 0.25)).toFixed(2);
+    const { data, error } = await supabase.from('tow_jobs').insert({
+      violation_id: job.violation_id,
+      property_id: job.property_id,
+      tow_company_id: job.tow_company_id,
+      plate_number: job.plate_number,
+      tow_fee: job.tow_fee,
+      commission_rate: job.commission_rate || 0.25,
+      commission_amount: commissionAmount,
+    }).select().single();
+    if (error) throw new Error(error.message);
+    // Mark violation as towed
+    await supabase.from('alpr_violations')
+      .update({ status: 'towed', resolved_at: new Date().toISOString() })
+      .eq('id', job.violation_id);
+    return data;
+  },
+  async getTowJobs(partnerId, dateRange) {
+    if (!supabase) return [];
+    let q = supabase.from('tow_jobs').select('*, properties(name, address)');
+    if (partnerId) q = q.eq('tow_company_id', partnerId);
+    if (dateRange?.start) q = q.gte('completed_at', dateRange.start);
+    if (dateRange?.end) q = q.lte('completed_at', dateRange.end);
+    q = q.order('completed_at', { ascending: false });
+    const { data, error } = await q;
+    return error ? [] : data || [];
+  },
+  async getALPRStats(partnerId) {
+    if (!supabase) return {};
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const [violations, passes, towJobs] = await Promise.all([
+      supabase.from('alpr_violations')
+        .select('id, status, properties!inner(tow_company_id)', { count: 'exact', head: true })
+        .eq('properties.tow_company_id', partnerId)
+        .in('status', ['pending', 'dispatched']),
+      supabase.from('visitor_passes')
+        .select('id, properties!inner(tow_company_id)', { count: 'exact', head: true })
+        .eq('properties.tow_company_id', partnerId)
+        .eq('status', 'active'),
+      supabase.from('tow_jobs').select('tow_fee, commission_amount')
+        .eq('tow_company_id', partnerId)
+        .eq('status', 'completed')
+        .gte('completed_at', monthStart),
+    ]);
+    const totalFees = (towJobs.data || []).reduce((sum, j) => sum + Number(j.tow_fee), 0);
+    const totalCommission = (towJobs.data || []).reduce((sum, j) => sum + Number(j.commission_amount), 0);
+    return {
+      activeViolations: violations.count || 0,
+      activePasses: passes.count || 0,
+      towJobsThisMonth: (towJobs.data || []).length,
+      totalFeesThisMonth: totalFees,
+      totalCommissionThisMonth: totalCommission,
+    };
+  },
+  subscribeALPRViolations(partnerId, callback) {
+    if (!supabase) return null;
+    const channel = supabase.channel('alpr-violations-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'alpr_violations' }, callback)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'plate_events' }, callback)
+      .subscribe();
+    return channel;
+  },
+
   subscribeViolations(lotIds, callback, onError) {
     if (!supabase) { if (onError) onError('Realtime not available'); return null; }
     const channel = supabase.channel('violations-realtime')

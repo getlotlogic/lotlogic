@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"/>
+  <title>Visitor Parking Pass</title>
+  <meta name="theme-color" content="#2563eb"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='14' fill='white' text-anchor='middle'%3ELL%3C/text%3E%3C/svg%3E"/>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --green: #16a34a;
+      --green-bg: #f0fdf4;
+      --red: #dc2626;
+      --red-bg: #fef2f2;
+      --bg: #f8f9fb;
+      --card: #fff;
+      --border: #e5e7eb;
+      --text: #1a1a2e;
+      --text-muted: #6b7280;
+      --text-faint: #9ca3af;
+      --radius: 12px;
+    }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      min-height: 100dvh;
+      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0;
+    }
+    .container {
+      max-width: 440px;
+      margin: 0 auto;
+      padding: 24px 20px 40px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+    .logo-icon {
+      width: 36px; height: 36px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 800; font-size: 14px;
+    }
+    .logo-text { font-weight: 700; font-size: 18px; color: var(--text); }
+
+    .property-header {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    .property-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+    .property-address { font-size: 14px; color: var(--text-muted); }
+    .property-badge {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 4px 12px;
+      background: #eff6ff;
+      color: var(--accent);
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .form-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px 20px;
+    }
+    .form-title { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+    .form-subtitle { font-size: 14px; color: var(--text-muted); margin-bottom: 20px; }
+
+    .field { margin-bottom: 16px; }
+    .field:last-of-type { margin-bottom: 24px; }
+    .field label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .field input, .field select {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      font-size: 16px;
+      font-family: inherit;
+      background: var(--bg);
+      color: var(--text);
+      transition: border-color 0.15s;
+      -webkit-appearance: none;
+    }
+    .field input:focus, .field select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    .field input.plate-input {
+      text-transform: uppercase;
+      font-weight: 700;
+      font-size: 20px;
+      letter-spacing: 2px;
+      text-align: center;
+      padding: 16px;
+    }
+    .field .hint {
+      font-size: 12px;
+      color: var(--text-faint);
+      margin-top: 4px;
+    }
+
+    .btn-submit {
+      width: 100%;
+      padding: 14px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn-submit:hover { background: var(--accent-hover); }
+    .btn-submit:active { transform: scale(0.98); }
+    .btn-submit:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Success state */
+    .success-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px 24px;
+      text-align: center;
+    }
+    .success-icon {
+      width: 64px; height: 64px;
+      background: var(--green-bg);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 16px;
+      font-size: 28px;
+    }
+    .success-title { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+    .success-subtitle { font-size: 14px; color: var(--text-muted); margin-bottom: 24px; }
+    .pass-details {
+      background: var(--bg);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 24px;
+      text-align: left;
+    }
+    .pass-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      font-size: 14px;
+    }
+    .pass-row .label { color: var(--text-muted); }
+    .pass-row .value { font-weight: 600; }
+    .countdown {
+      font-size: 32px;
+      font-weight: 800;
+      color: var(--accent);
+      margin-bottom: 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .countdown.warning { color: var(--red); }
+    .countdown-label { font-size: 13px; color: var(--text-muted); }
+
+    .btn-extend {
+      width: 100%;
+      padding: 12px;
+      background: transparent;
+      color: var(--accent);
+      border: 2px solid var(--accent);
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      margin-top: 12px;
+    }
+    .btn-new-pass {
+      width: 100%;
+      padding: 12px;
+      background: transparent;
+      color: var(--text-muted);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    /* Error / loading states */
+    .error-card {
+      background: var(--red-bg);
+      border: 1px solid #fecaca;
+      border-radius: var(--radius);
+      padding: 24px;
+      text-align: center;
+    }
+    .error-card h2 { color: var(--red); font-size: 18px; margin-bottom: 8px; }
+    .error-card p { color: #7f1d1d; font-size: 14px; }
+
+    .loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 300px;
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .form-error {
+      background: var(--red-bg);
+      color: var(--red);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 16px;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 32px;
+      font-size: 12px;
+      color: var(--text-faint);
+    }
+  </style>
+</head>
+<body>
+<div class="container" id="app"></div>
+
+<script>
+(function() {
+  // ── Supabase client ──
+  const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
+  const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
+  const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+  const app = document.getElementById('app');
+
+  // ── Plate normalization ──
+  function normalizePlate(plate) {
+    return (plate || '').toUpperCase().replace(/[\s\-\.]/g, '').trim();
+  }
+
+  // ── Extract QR code ID from URL ──
+  function getQrCodeId() {
+    const path = window.location.pathname;
+    const match = path.match(/^\/visit\/(.+)$/);
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+
+  // ── State ──
+  let state = { view: 'loading', property: null, pass: null, error: null, formError: null, submitting: false };
+  let countdownInterval = null;
+
+  function setState(updates) {
+    Object.assign(state, updates);
+    render();
+  }
+
+  // ── Load property ──
+  async function loadProperty() {
+    const qrId = getQrCodeId();
+    if (!qrId) {
+      setState({ view: 'error', error: 'Invalid QR code link. Please scan the QR code at the parking lot.' });
+      return;
+    }
+    if (!sb) {
+      setState({ view: 'error', error: 'Service unavailable. Please try again later.' });
+      return;
+    }
+    try {
+      const { data, error } = await sb
+        .from('properties')
+        .select('*')
+        .eq('qr_code_id', qrId)
+        .single();
+      if (error || !data) {
+        setState({ view: 'error', error: 'Property not found. This QR code may be invalid or expired.' });
+        return;
+      }
+      setState({ view: 'form', property: data });
+    } catch (e) {
+      setState({ view: 'error', error: 'Connection error. Please check your internet and try again.' });
+    }
+  }
+
+  // ── Submit pass ──
+  async function submitPass(e) {
+    e.preventDefault();
+    if (state.submitting) return;
+
+    const form = e.target;
+    const plate = normalizePlate(form.plate.value);
+    const name = form.visitor_name.value.trim();
+    const phone = form.phone.value.trim();
+    const unit = form.unit.value.trim();
+
+    if (!plate || plate.length < 2) {
+      setState({ formError: 'Please enter a valid license plate number.' });
+      return;
+    }
+    if (!name) { setState({ formError: 'Please enter your name.' }); return; }
+    if (!phone) { setState({ formError: 'Please enter your phone number.' }); return; }
+    if (!unit) { setState({ formError: 'Please enter the unit you are visiting.' }); return; }
+
+    setState({ submitting: true, formError: null });
+
+    try {
+      const duration = state.property.default_pass_duration_minutes || 60;
+      const expiresAt = new Date(Date.now() + duration * 60 * 1000).toISOString();
+
+      const { data, error } = await sb
+        .from('visitor_passes')
+        .insert({
+          property_id: state.property.id,
+          plate_number: plate,
+          visitor_name: name,
+          visitor_phone: phone,
+          unit_visiting: unit,
+          status: 'active',
+          expires_at: expiresAt
+        })
+        .select()
+        .single();
+
+      if (error) throw new Error(error.message);
+      setState({ view: 'success', pass: data, submitting: false });
+      startCountdown(data.expires_at);
+    } catch (err) {
+      setState({ submitting: false, formError: 'Failed to create pass. Please try again. ' + err.message });
+    }
+  }
+
+  // ── Extend pass ──
+  async function extendPass() {
+    if (!state.pass || !sb) return;
+    const duration = state.property.default_pass_duration_minutes || 60;
+    const newExpiry = new Date(Date.now() + duration * 60 * 1000).toISOString();
+    try {
+      const { error } = await sb
+        .from('visitor_passes')
+        .update({ expires_at: newExpiry, status: 'active' })
+        .eq('id', state.pass.id);
+      if (error) throw error;
+      state.pass.expires_at = newExpiry;
+      state.pass.status = 'active';
+      startCountdown(newExpiry);
+      render();
+    } catch (e) {
+      alert('Failed to extend pass. Please try again.');
+    }
+  }
+
+  // ── Countdown ──
+  function startCountdown(expiresAt) {
+    if (countdownInterval) clearInterval(countdownInterval);
+    countdownInterval = setInterval(function() {
+      render();
+      const remaining = new Date(expiresAt).getTime() - Date.now();
+      if (remaining <= 0) {
+        clearInterval(countdownInterval);
+        render();
+      }
+    }, 1000);
+  }
+
+  function formatCountdown(expiresAt) {
+    const remaining = new Date(expiresAt).getTime() - Date.now();
+    if (remaining <= 0) return { text: 'EXPIRED', warning: true };
+    const h = Math.floor(remaining / 3600000);
+    const m = Math.floor((remaining % 3600000) / 60000);
+    const s = Math.floor((remaining % 60000) / 1000);
+    const parts = [];
+    if (h > 0) parts.push(h + 'h');
+    parts.push(String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0'));
+    return { text: parts.join(' '), warning: remaining < 300000 };
+  }
+
+  function formatTime(iso) {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  // ── Render ──
+  function render() {
+    let html = '';
+
+    // Logo
+    html += '<div class="logo"><div class="logo-icon">LL</div><span class="logo-text">LotLogic</span></div>';
+
+    if (state.view === 'loading') {
+      html += '<div class="loading"><div class="spinner"></div>Loading property...</div>';
+    }
+
+    else if (state.view === 'error') {
+      html += '<div class="error-card"><h2>Oops</h2><p>' + escapeHtml(state.error) + '</p></div>';
+    }
+
+    else if (state.view === 'form') {
+      var p = state.property;
+      html += '<div class="property-header">';
+      html += '<div class="property-name">' + escapeHtml(p.name) + '</div>';
+      if (p.address) html += '<div class="property-address">' + escapeHtml(p.address) + '</div>';
+      html += '<div class="property-badge">Visitor Parking Pass</div>';
+      html += '</div>';
+
+      html += '<div class="form-card">';
+      html += '<div class="form-title">Register Your Vehicle</div>';
+      html += '<div class="form-subtitle">Enter your details to get a temporary parking pass.</div>';
+
+      if (state.formError) {
+        html += '<div class="form-error">' + escapeHtml(state.formError) + '</div>';
+      }
+
+      html += '<form id="passForm">';
+      html += '<div class="field"><label>License Plate</label>';
+      html += '<input type="text" name="plate" class="plate-input" placeholder="ABC1234" autocomplete="off" autocapitalize="characters" required/>';
+      html += '<div class="hint">Enter exactly as shown on your plate</div></div>';
+
+      html += '<div class="field"><label>Your Name</label>';
+      html += '<input type="text" name="visitor_name" placeholder="John Smith" autocomplete="name" required/></div>';
+
+      html += '<div class="field"><label>Phone Number</label>';
+      html += '<input type="tel" name="phone" placeholder="(555) 123-4567" autocomplete="tel" required/></div>';
+
+      html += '<div class="field"><label>Unit Visiting</label>';
+      html += '<input type="text" name="unit" placeholder="Apt 204" autocomplete="off" required/></div>';
+
+      html += '<button type="submit" class="btn-submit"' + (state.submitting ? ' disabled' : '') + '>';
+      html += state.submitting ? 'Creating Pass...' : 'Get Parking Pass';
+      html += '</button>';
+      html += '</form></div>';
+
+      html += '<div class="footer">Pass valid for ' + (p.default_pass_duration_minutes || 60) + ' minutes</div>';
+    }
+
+    else if (state.view === 'success') {
+      var pass = state.pass;
+      var cd = formatCountdown(pass.expires_at);
+
+      html += '<div class="success-card">';
+      html += '<div class="success-icon">&#10003;</div>';
+      html += '<div class="success-title">Pass Active!</div>';
+      html += '<div class="success-subtitle">Your vehicle is registered for visitor parking.</div>';
+
+      html += '<div class="countdown' + (cd.warning ? ' warning' : '') + '">' + cd.text + '</div>';
+      html += '<div class="countdown-label">' + (cd.text === 'EXPIRED' ? 'Your pass has expired' : 'Time remaining') + '</div>';
+
+      html += '<div class="pass-details">';
+      html += '<div class="pass-row"><span class="label">Plate</span><span class="value">' + escapeHtml(pass.plate_number) + '</span></div>';
+      html += '<div class="pass-row"><span class="label">Name</span><span class="value">' + escapeHtml(pass.visitor_name) + '</span></div>';
+      html += '<div class="pass-row"><span class="label">Unit</span><span class="value">' + escapeHtml(pass.unit_visiting) + '</span></div>';
+      html += '<div class="pass-row"><span class="label">Expires</span><span class="value">' + formatTime(pass.expires_at) + '</span></div>';
+      html += '</div>';
+
+      html += '<button class="btn-extend" id="extendBtn">Extend Pass (' + (state.property.default_pass_duration_minutes || 60) + ' min)</button>';
+      html += '<button class="btn-new-pass" id="newPassBtn">Register Another Vehicle</button>';
+      html += '</div>';
+
+      html += '<div class="footer">Property: ' + escapeHtml(state.property.name) + '</div>';
+    }
+
+    app.innerHTML = html;
+
+    // Bind events
+    var form = document.getElementById('passForm');
+    if (form) form.addEventListener('submit', submitPass);
+
+    var extendBtn = document.getElementById('extendBtn');
+    if (extendBtn) extendBtn.addEventListener('click', extendPass);
+
+    var newPassBtn = document.getElementById('newPassBtn');
+    if (newPassBtn) newPassBtn.addEventListener('click', function() {
+      if (countdownInterval) clearInterval(countdownInterval);
+      setState({ view: 'form', pass: null, formError: null });
+    });
+  }
+
+  function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
+  }
+
+  // ── Init ──
+  render();
+  loadProperty();
+})();
+</script>
+</body>
+</html>

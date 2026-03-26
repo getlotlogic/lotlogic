@@ -1,0 +1,11 @@
+[project]
+id = "nzdkoouoaedbbccraoti"
+
+[api]
+port = 54321
+
+[functions.alpr-webhook]
+verify_jwt = false
+
+[functions.check-violations]
+verify_jwt = false
