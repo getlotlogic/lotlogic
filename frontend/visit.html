@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Visitor Parking Pass</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e5e7eb;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 32px 24px;
+      max-width: 420px;
+      width: 100%;
+    }
+    .logo {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .logo .shield {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      border-radius: 12px;
+      font-weight: 900;
+      font-size: 18px;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .logo h1 {
+      font-size: 22px;
+      font-weight: 800;
+      color: #f9fafb;
+    }
+    .logo h1 span { color: #3b82f6; }
+    .property-name {
+      text-align: center;
+      font-size: 16px;
+      color: #9ca3af;
+      margin-bottom: 24px;
+    }
+    .property-name strong {
+      display: block;
+      font-size: 18px;
+      color: #e5e7eb;
+      margin-top: 4px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #9ca3af;
+      margin-bottom: 6px;
+      margin-top: 16px;
+    }
+    input {
+      width: 100%;
+      padding: 12px 14px;
+      background: #0f1117;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      color: #e5e7eb;
+      font-size: 16px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #3b82f6; }
+    input::placeholder { color: #4b5563; }
+    .plate-input { text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; font-size: 20px; text-align: center; }
+    .submit-btn {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 24px;
+      font-family: inherit;
+      transition: opacity 0.2s;
+    }
+    .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .submit-btn:hover:not(:disabled) { opacity: 0.9; }
+    .validity {
+      text-align: center;
+      font-size: 12px;
+      color: #6b7280;
+      margin-top: 12px;
+    }
+    .error {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: #f87171;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-top: 16px;
+      text-align: center;
+    }
+    .success-card {
+      text-align: center;
+    }
+    .success-icon {
+      width: 64px;
+      height: 64px;
+      background: rgba(74,222,128,0.1);
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+    .success-icon svg { width: 32px; height: 32px; stroke: #4ade80; fill: none; stroke-width: 2.5; }
+    .success-card h2 { font-size: 20px; color: #f9fafb; margin-bottom: 8px; }
+    .success-card p { font-size: 14px; color: #9ca3af; line-height: 1.5; }
+    .success-plate {
+      display: inline-block;
+      background: rgba(59,130,246,0.1);
+      border: 1px solid rgba(59,130,246,0.3);
+      color: #3b82f6;
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      margin: 16px 0;
+    }
+    .success-detail {
+      font-size: 13px;
+      color: #6b7280;
+      margin-top: 8px;
+    }
+    .loading-state {
+      text-align: center;
+      padding: 40px 0;
+      color: #6b7280;
+    }
+    .not-found {
+      text-align: center;
+      padding: 20px 0;
+    }
+    .not-found h2 { font-size: 18px; color: #f87171; margin-bottom: 8px; }
+    .not-found p { font-size: 14px; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <div class="card" id="app">
+    <div class="loading-state">Loading...</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script>
+    const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA3NTMyMDAsImV4cCI6MjA1NjMyOTIwMH0.se0cSBmBOSGOjJrJLUMcrN6YXWL7w_a5J1dHNi9g1gs';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const app = document.getElementById('app');
+
+    // Extract qr_code_id from URL path: /visit/{qr_code_id}
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    const qrCodeId = pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null;
+
+    let property = null;
+
+    async function init() {
+      if (!qrCodeId) {
+        showNotFound('Invalid Link', 'This visitor registration link is not valid.');
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('properties')
+        .select('id, name, address')
+        .eq('qr_code_id', qrCodeId)
+        .single();
+
+      if (error || !data) {
+        showNotFound('Property Not Found', 'This visitor registration link is not valid or has expired.');
+        return;
+      }
+
+      property = data;
+      showForm();
+    }
+
+    function showNotFound(title, message) {
+      app.innerHTML = `
+        <div class="logo">
+          <div class="shield">LL</div>
+          <h1>Lot<span>Logic</span></h1>
+        </div>
+        <div class="not-found">
+          <h2>${title}</h2>
+          <p>${message}</p>
+        </div>
+      `;
+    }
+
+    function showForm() {
+      app.innerHTML = `
+        <div class="logo">
+          <div class="shield">LL</div>
+          <h1>Lot<span>Logic</span></h1>
+        </div>
+        <div class="property-name">
+          Register Visitor Parking at
+          <strong>${escapeHtml(property.name)}</strong>
+        </div>
+        <form id="passForm">
+          <label for="plate">License Plate Number</label>
+          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
+
+          <label for="visitorName">Your Name</label>
+          <input type="text" id="visitorName" placeholder="Jane Smith" required>
+
+          <label for="hostUnit">Unit / Apartment Number</label>
+          <input type="text" id="hostUnit" placeholder="Unit 204" required>
+
+          <label for="hostName">Resident You're Visiting</label>
+          <input type="text" id="hostName" placeholder="John Doe" required>
+
+          <button type="submit" class="submit-btn" id="submitBtn">Register Parking Pass</button>
+          <div class="validity">Pass valid for 24 hours from registration</div>
+          <div id="errorMsg"></div>
+        </form>
+      `;
+
+      document.getElementById('passForm').addEventListener('submit', handleSubmit);
+    }
+
+    async function handleSubmit(e) {
+      e.preventDefault();
+      const btn = document.getElementById('submitBtn');
+      const errorDiv = document.getElementById('errorMsg');
+      errorDiv.innerHTML = '';
+      btn.disabled = true;
+      btn.textContent = 'Registering...';
+
+      const plateRaw = document.getElementById('plate').value.trim();
+      const plateText = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const visitorName = document.getElementById('visitorName').value.trim();
+      const hostUnit = document.getElementById('hostUnit').value.trim();
+      const hostName = document.getElementById('hostName').value.trim();
+
+      if (!plateText || plateText.length < 2) {
+        errorDiv.innerHTML = '<div class="error">Please enter a valid license plate number.</div>';
+        btn.disabled = false;
+        btn.textContent = 'Register Parking Pass';
+        return;
+      }
+
+      const validFrom = new Date();
+      const validUntil = new Date(validFrom.getTime() + 24 * 60 * 60 * 1000);
+
+      const { data, error } = await supabase
+        .from('visitor_passes')
+        .insert({
+          property_id: property.id,
+          plate_text: plateText,
+          visitor_name: visitorName,
+          host_unit: hostUnit,
+          host_name: hostName,
+          valid_from: validFrom.toISOString(),
+          valid_until: validUntil.toISOString(),
+          status: 'active',
+        })
+        .select()
+        .single();
+
+      if (error) {
+        errorDiv.innerHTML = '<div class="error">Failed to register pass. Please try again.</div>';
+        btn.disabled = false;
+        btn.textContent = 'Register Parking Pass';
+        return;
+      }
+
+      showSuccess(plateText, validUntil);
+    }
+
+    function showSuccess(plate, validUntil) {
+      const expiresStr = validUntil.toLocaleString('en-US', {
+        weekday: 'short', month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true,
+      });
+
+      app.innerHTML = `
+        <div class="success-card">
+          <div class="success-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </div>
+          <h2>Pass Registered!</h2>
+          <p>Your visitor parking pass for <strong>${escapeHtml(property.name)}</strong> has been registered.</p>
+          <div class="success-plate">${escapeHtml(plate)}</div>
+          <div class="success-detail">Valid until ${escapeHtml(expiresStr)}</div>
+        </div>
+      `;
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    init();
+  </script>
+</body>
+</html>

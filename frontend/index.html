@@ -2214,6 +2214,201 @@ const db = {
       });
     return channel;
   },
+
+  // ── ALPR Parking Pass System ─────────────────────────────────
+  async getProperties(towCompanyId) {
+    if (supabase) {
+      let q = supabase.from('properties').select('*');
+      if (towCompanyId) q = q.eq('tow_company_id', towCompanyId);
+      q = q.order('created_at', { ascending: false });
+      const { data, error } = await q;
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async getProperty(id) {
+    if (supabase) {
+      const { data, error } = await supabase.from('properties').select('*').eq('id', id).single();
+      if (!error && data) return data;
+    }
+    return null;
+  },
+  async createProperty(prop) {
+    if (supabase) {
+      const qrCode = prop.qr_code_id || (prop.name || 'prop').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20) + '-' + Math.random().toString(36).slice(2, 8);
+      const { data, error } = await supabase.from('properties').insert({ ...prop, qr_code_id: qrCode }).select().single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+    return null;
+  },
+  async updateProperty(id, updates) {
+    if (supabase) {
+      const { data, error } = await supabase.from('properties').update(updates).eq('id', id).select().single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+    return null;
+  },
+  async getResidentPlates(propertyId) {
+    if (supabase) {
+      const { data, error } = await supabase.from('resident_plates').select('*').eq('property_id', propertyId).eq('active', true).order('created_at', { ascending: false });
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async addResidentPlate(plate) {
+    if (supabase) {
+      const normalized = { ...plate, plate_text: (plate.plate_text || '').toUpperCase().replace(/[^A-Z0-9]/g, '') };
+      const { data, error } = await supabase.from('resident_plates').insert(normalized).select().single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+    return null;
+  },
+  async removeResidentPlate(id) {
+    if (supabase) {
+      const { error } = await supabase.from('resident_plates').update({ active: false }).eq('id', id);
+      if (error) throw new Error(error.message);
+      return { success: true };
+    }
+    return { success: true };
+  },
+  async getVisitorPasses(propertyId, opts = {}) {
+    if (supabase) {
+      let q = supabase.from('visitor_passes').select('*').eq('property_id', propertyId);
+      if (opts.status) q = q.eq('status', opts.status);
+      q = q.order('created_at', { ascending: false }).limit(opts.limit || 100);
+      const { data, error } = await q;
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async getALPRCameras(propertyId) {
+    if (supabase) {
+      const { data, error } = await supabase.from('alpr_cameras').select('*').eq('property_id', propertyId).order('created_at', { ascending: false });
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async registerALPRCamera(cam) {
+    if (supabase) {
+      const apiKey = 'alpr_' + crypto.randomUUID().replace(/-/g, '');
+      const { data, error } = await supabase.from('alpr_cameras').insert({ ...cam, api_key: apiKey }).select().single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+    return null;
+  },
+  async getALPRViolations(propertyId, status) {
+    if (supabase) {
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at)');
+      if (propertyId) q = q.eq('property_id', propertyId);
+      if (status) q = q.eq('status', status);
+      q = q.order('created_at', { ascending: false }).limit(200);
+      const { data, error } = await q;
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async getAllALPRViolations(towCompanyId, status) {
+    if (supabase) {
+      // Get properties for this tow company, then violations
+      const { data: props } = await supabase.from('properties').select('id').eq('tow_company_id', towCompanyId);
+      if (!props || props.length === 0) return [];
+      const propIds = props.map(p => p.id);
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at), properties(name, address)').in('property_id', propIds);
+      if (status) q = q.eq('status', status);
+      q = q.order('created_at', { ascending: false }).limit(200);
+      const { data, error } = await q;
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async updateALPRViolation(id, updates) {
+    if (supabase) {
+      const { data, error } = await supabase.from('alpr_violations').update(updates).eq('id', id).select().single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+    return null;
+  },
+  async dispatchALPRViolation(id) {
+    return this.updateALPRViolation(id, { status: 'dispatched', dispatched_at: new Date().toISOString() });
+  },
+  async dismissALPRViolation(id, notes) {
+    return this.updateALPRViolation(id, { status: 'dismissed', resolved_at: new Date().toISOString(), notes: notes || 'Dismissed by operator' });
+  },
+  async getTowJobs(opts = {}) {
+    if (supabase) {
+      let q = supabase.from('tow_jobs').select('*, properties(name), alpr_violations(plate_text)');
+      if (opts.propertyId) q = q.eq('property_id', opts.propertyId);
+      if (opts.towCompanyId) q = q.eq('tow_company_id', opts.towCompanyId);
+      if (opts.status) q = q.eq('status', opts.status);
+      q = q.order('created_at', { ascending: false }).limit(opts.limit || 100);
+      const { data, error } = await q;
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async recordTowJob(job) {
+    if (supabase) {
+      const fee = parseFloat(job.tow_fee) || 0;
+      const rate = job.commission_rate ?? 0.25;
+      const commission = Math.round(fee * rate * 100) / 100;
+      const { data, error } = await supabase.from('tow_jobs').insert({
+        ...job,
+        tow_fee: fee,
+        commission_rate: rate,
+        commission_amount: commission,
+        dispatched_at: new Date().toISOString(),
+      }).select().single();
+      if (error) throw new Error(error.message);
+      // Mark violation as resolved
+      if (job.violation_id) {
+        await supabase.from('alpr_violations').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('id', job.violation_id);
+      }
+      return data;
+    }
+    return null;
+  },
+  async getALPRStats(towCompanyId) {
+    if (supabase) {
+      const { data: props } = await supabase.from('properties').select('id').eq('tow_company_id', towCompanyId);
+      if (!props || props.length === 0) return { activeViolations: 0, activePasses: 0, towJobsMonth: 0, commissionMonth: 0, properties: 0 };
+      const propIds = props.map(p => p.id);
+      const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+      const now = new Date().toISOString();
+      const [viols, passes, jobs] = await Promise.all([
+        supabase.from('alpr_violations').select('id', { count: 'exact', head: true }).in('property_id', propIds).in('status', ['pending', 'dispatched']),
+        supabase.from('visitor_passes').select('id', { count: 'exact', head: true }).in('property_id', propIds).eq('status', 'active').gte('valid_until', now),
+        supabase.from('tow_jobs').select('commission_amount').in('property_id', propIds).gte('created_at', monthAgo),
+      ]);
+      const commission = (jobs.data || []).reduce((s, j) => s + (parseFloat(j.commission_amount) || 0), 0);
+      return {
+        activeViolations: viols.count || 0,
+        activePasses: passes.count || 0,
+        towJobsMonth: (jobs.data || []).length,
+        commissionMonth: commission,
+        properties: props.length,
+      };
+    }
+    return { activeViolations: 0, activePasses: 0, towJobsMonth: 0, commissionMonth: 0, properties: 0 };
+  },
+  subscribeALPRViolations(propertyIds, callback) {
+    if (!supabase || !propertyIds?.length) return null;
+    const channel = supabase.channel('alpr-violations-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'alpr_violations' }, payload => {
+        if (propertyIds.includes(payload.new?.property_id) || propertyIds.includes(payload.old?.property_id)) {
+          callback(payload);
+        }
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'plate_events' }, payload => {
+        if (propertyIds.includes(payload.new?.property_id)) callback(payload);
+      })
+      .subscribe();
+    return channel;
+  },
 };
 
 // ── Theme hook ────────────────────────────────────────────────
