@@ -2217,11 +2217,9 @@ const db = {
 
   // ── ALPR Parking Pass System ─────────────────────────────────
   async getProperties(towCompanyId) {
+    if (!towCompanyId) return [];
     if (supabase) {
-      let q = supabase.from('properties').select('*');
-      if (towCompanyId) q = q.eq('tow_company_id', towCompanyId);
-      q = q.order('created_at', { ascending: false });
-      const { data, error } = await q;
+      const { data, error } = await supabase.from('properties').select('*').eq('tow_company_id', towCompanyId).order('created_at', { ascending: false });
       if (!error && data) return data;
     }
     return [];
@@ -2235,7 +2233,7 @@ const db = {
   },
   async createProperty(prop) {
     if (supabase) {
-      const qrCode = prop.qr_code_id || (prop.name || 'prop').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20) + '-' + Math.random().toString(36).slice(2, 8);
+      const qrCode = prop.qr_code_id || (prop.name || 'prop').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20) + '-' + (crypto.randomUUID ? crypto.randomUUID().slice(0, 12) : Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
       const { data, error } = await supabase.from('properties').insert({ ...prop, qr_code_id: qrCode }).select().single();
       if (error) throw new Error(error.message);
       return data;
@@ -2364,9 +2362,9 @@ const db = {
         dispatched_at: new Date().toISOString(),
       }).select().single();
       if (error) throw new Error(error.message);
-      // Mark violation as resolved
+      // Mark violation as resolved (best-effort — tow job is already recorded)
       if (job.violation_id) {
-        await supabase.from('alpr_violations').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('id', job.violation_id);
+        try { await supabase.from('alpr_violations').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('id', job.violation_id); } catch (_) { console.error('Failed to resolve violation after tow job creation'); }
       }
       return data;
     }
@@ -6434,7 +6432,7 @@ function ALPRBillingPage({ user }) {
       const d = new Date(j.created_at).toLocaleDateString();
       const prop = j.properties?.name || '';
       const plate = j.plate_text || '';
-      return `${d},"${prop}",${plate},${j.tow_fee},${j.commission_amount},${j.status}`;
+      return `${d},"${prop.replace(/"/g, '""')}","${plate}",${j.tow_fee},${j.commission_amount},${j.status}`;
     }).join('\n');
     const blob = new Blob([header + rows], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -7000,6 +6998,7 @@ function App() {
   const [lots, setLots] = useState([]);
   const [lotStates, setLotStates] = useState({});
   const [violations, setViolations] = useState([]);
+  const [alprViolations, setAlprViolations] = useState([]);
   const [partners, setPartners] = useState([]);
   const [viewAs, setViewAs] = useState(null); // null = owner view, partner object = operator impersonation
   const [loading, setLoading] = useState(false);
@@ -7071,6 +7070,10 @@ function App() {
         items.forEach(v => flat.push({ ...v, lot_id: v.lot_id || lot.id }));
       });
       setViolations(flat);
+
+      // Load ALPR violations for the passes tab
+      db.getAllALPRViolations(o.id, 'pending').then(v => setAlprViolations(v)).catch(() => {});
+
       setLastRefresh(new Date());
     } catch (e) {
       console.error(e);
@@ -7090,7 +7093,8 @@ function App() {
     loadIdRef.current++; // Invalidate any in-flight loadData calls
     clearInterval(timerRef.current);
     if (realtimeRef.current) { supabase?.removeChannel(realtimeRef.current); realtimeRef.current = null; }
-    setOwner(null); setLots([]); setLotStates({}); setViolations([]); setPartners([]); setViewAs(null);
+    if (alprRealtimeRef.current) { supabase?.removeChannel(alprRealtimeRef.current); alprRealtimeRef.current = null; }
+    setOwner(null); setLots([]); setLotStates({}); setViolations([]); setAlprViolations([]); setPartners([]); setViewAs(null);
     setTab('jobs');
     try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
   }
@@ -7236,9 +7240,27 @@ function App() {
     return () => { if (channel) supabase?.removeChannel(channel); };
   }, [owner, lots.length, loadData, addToast]);
 
+  // Subscribe to ALPR violation changes
+  const alprRealtimeRef = useRef(null);
+  useEffect(() => {
+    if (!owner) return;
+    // Fetch property IDs for this user's ALPR subscriptions
+    db.getProperties(owner.id).then(props => {
+      if (!props || props.length === 0) return;
+      const propIds = props.map(p => p.id);
+      if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current);
+      const ch = db.subscribeALPRViolations(propIds, () => {
+        db.getAllALPRViolations(owner.id, 'pending').then(v => setAlprViolations(v)).catch(() => {});
+      });
+      alprRealtimeRef.current = ch;
+    }).catch(() => {});
+    return () => { if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current); };
+  }, [owner]);
+
   if (!owner) return <LoginPage onLogin={login} />;
 
   const pending = effectiveViolations.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status)).length;
+  const alprPending = alprViolations.filter(v => v.status === 'pending').length;
 
   // Handle "View as Operator" from Overview page
   function handleViewAs(partner) {
@@ -7261,14 +7283,14 @@ function App() {
   const navTabs = isOwner ? [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
-    { id: 'passes',   label: 'Passes',   badge: 0 },
+    { id: 'passes',   label: 'Passes',   badge: alprPending },
     { id: 'analytics',label: 'Analytics',badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
     { id: 'jobs',     label: 'Jobs',     badge: pending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
-    { id: 'passes',   label: 'Passes',   badge: 0 },
+    { id: 'passes',   label: 'Passes',   badge: alprPending },
     { id: 'activity', label: 'Activity', badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },

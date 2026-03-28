@@ -62,8 +62,31 @@ serve(async (req) => {
       .update({ last_seen_at: new Date().toISOString() })
       .eq("id", camera.id);
 
-    // Create plate event
+    // Normalize and validate plate text
     const normalizedPlate = plate_text.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (normalizedPlate.length < 2) {
+      return new Response(
+        JSON.stringify({ error: "plate_text too short after normalization" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Dedup: skip if same plate was seen at this property in the last 5 minutes
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const { data: recentEvent } = await supabase
+      .from("plate_events")
+      .select("id")
+      .eq("property_id", camera.property_id)
+      .eq("plate_text", normalizedPlate)
+      .gte("created_at", fiveMinAgo)
+      .limit(1);
+
+    if (recentEvent && recentEvent.length > 0) {
+      return new Response(
+        JSON.stringify({ status: "duplicate_skipped", plate_text: normalizedPlate }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
     const { data: plateEvent, error: eventErr } = await supabase
       .from("plate_events")
       .insert({

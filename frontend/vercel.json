@@ -1,7 +1,7 @@
 {
   "rewrites": [
     { "source": "/visit/:path*", "destination": "/visit.html" },
-    { "source": "/((?!visit\\.html|favicon\\.ico|assets/).*)", "destination": "/index.html" }
+    { "source": "/:path((?!visit\\.).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
