@@ -9,27 +9,35 @@ serve(async (req) => {
     );
 
     const now = new Date().toISOString();
+    let totalExpired = 0;
+    const batchSize = 500;
 
-    // Expire visitor passes that have passed their valid_until time
-    const { data: expired, error: expErr } = await supabase
-      .from("visitor_passes")
-      .update({ status: "expired" })
-      .eq("status", "active")
-      .lt("valid_until", now)
-      .select("id, property_id, plate_text");
+    // Expire visitor passes in batches to avoid timeouts on large datasets
+    while (true) {
+      const { data: batch, error: batchErr } = await supabase
+        .from("visitor_passes")
+        .update({ status: "expired" })
+        .eq("status", "active")
+        .lt("valid_until", now)
+        .select("id")
+        .limit(batchSize);
 
-    if (expErr) {
-      console.error("Error expiring passes:", expErr.message);
-      return new Response(
-        JSON.stringify({ error: "Failed to expire passes", detail: expErr.message }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+      if (batchErr) {
+        console.error("Error expiring passes:", batchErr.message);
+        return new Response(
+          JSON.stringify({ error: "Failed to expire passes", detail: batchErr.message, expired_so_far: totalExpired }),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      totalExpired += batch?.length ?? 0;
+      // If we got fewer than batchSize, we're done
+      if (!batch || batch.length < batchSize) break;
     }
 
     return new Response(
       JSON.stringify({
-        expired_count: expired?.length ?? 0,
-        expired_passes: expired ?? [],
+        expired_count: totalExpired,
         checked_at: now,
       }),
       { status: 200, headers: { "Content-Type": "application/json" } }
