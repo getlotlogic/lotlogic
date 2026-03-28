@@ -245,8 +245,11 @@
       document.getElementById('passForm').addEventListener('submit', handleSubmit);
     }
 
+    let submitting = false;
     async function handleSubmit(e) {
       e.preventDefault();
+      if (submitting) return;
+      submitting = true;
       const btn = document.getElementById('submitBtn');
       const errorDiv = document.getElementById('errorMsg');
       errorDiv.innerHTML = '';
@@ -263,6 +266,7 @@
         errorDiv.innerHTML = '<div class="error">Please enter a valid license plate number.</div>';
         btn.disabled = false;
         btn.textContent = 'Register Parking Pass';
+        submitting = false;
         return;
       }
 
@@ -288,6 +292,7 @@
         errorDiv.innerHTML = '<div class="error">Failed to register pass. Please try again.</div>';
         btn.disabled = false;
         btn.textContent = 'Register Parking Pass';
+        submitting = false;
         return;
       }
 

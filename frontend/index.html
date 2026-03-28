@@ -6488,6 +6488,7 @@ function ALPRBillingPage({ user }) {
 }
 
 function ALPRPropertyDetailPage({ propertyId, onBack }) {
+  const { addToast } = useToast();
   const [property, setProperty] = useState(null);
   const [plates, setPlates] = useState([]);
   const [cameras, setCameras] = useState([]);
@@ -6525,7 +6526,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
       setShowAddPlate(false);
       const pl = await db.getResidentPlates(propertyId);
       setPlates(pl);
-    } catch (err) { console.error(err); }
+    } catch (err) { addToast('Failed to add plate. ' + (err.message || ''), 'error'); }
     setSaving(false);
   }
 
@@ -6543,7 +6544,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
       setNewCam({ name: '', location_description: '' });
       const cams = await db.getALPRCameras(propertyId);
       setCameras(cams);
-    } catch (err) { console.error(err); }
+    } catch (err) { addToast('Failed to register camera. ' + (err.message || ''), 'error'); }
     setSaving(false);
   }
 
@@ -6636,6 +6637,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
 }
 
 function ALPRPropertiesPage({ user }) {
+  const { addToast } = useToast();
   const [properties, setProperties] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -6658,7 +6660,7 @@ function ALPRPropertiesPage({ user }) {
       setShowAdd(false);
       const p = await db.getProperties(user.id);
       setProperties(p);
-    } catch (err) { console.error(err); }
+    } catch (err) { addToast('Failed to create property. ' + (err.message || ''), 'error'); }
     setSaving(false);
   }
 
@@ -6704,6 +6706,7 @@ function ALPRPropertiesPage({ user }) {
 }
 
 function ALPRViolationDetailPage({ violation, onBack, onUpdate, user }) {
+  const { addToast } = useToast();
   const [notes, setNotes] = useState(violation?.notes || '');
   const [towFee, setTowFee] = useState('250');
   const [acting, setActing] = useState(false);
@@ -6715,13 +6718,13 @@ function ALPRViolationDetailPage({ violation, onBack, onUpdate, user }) {
 
   async function handleDispatch() {
     setActing(true);
-    try { await db.dispatchALPRViolation(violation.id); onUpdate(); } catch (e) { console.error(e); }
+    try { await db.dispatchALPRViolation(violation.id); onUpdate(); } catch (e) { addToast('Failed to dispatch. ' + (e.message || ''), 'error'); }
     setActing(false);
   }
 
   async function handleDismiss() {
     setActing(true);
-    try { await db.dismissALPRViolation(violation.id, notes); onUpdate(); } catch (e) { console.error(e); }
+    try { await db.dismissALPRViolation(violation.id, notes); onUpdate(); } catch (e) { addToast('Failed to dismiss. ' + (e.message || ''), 'error'); }
     setActing(false);
   }
 
@@ -6736,7 +6739,7 @@ function ALPRViolationDetailPage({ violation, onBack, onUpdate, user }) {
         tow_fee: parseFloat(towFee) || 0,
       });
       onUpdate();
-    } catch (e) { console.error(e); }
+    } catch (e) { addToast('Failed to record tow. ' + (e.message || ''), 'error'); }
     setActing(false);
   }
 
@@ -6803,6 +6806,7 @@ function ALPRViolationDetailPage({ violation, onBack, onUpdate, user }) {
 }
 
 function ALPRViolationsPage({ user }) {
+  const { addToast } = useToast();
   const [violations, setViolations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('pending');
@@ -6821,13 +6825,13 @@ function ALPRViolationsPage({ user }) {
 
   async function handleDispatch(id) {
     setActing(id);
-    try { await db.dispatchALPRViolation(id); await load(); } catch (e) { console.error(e); }
+    try { await db.dispatchALPRViolation(id); await load(); } catch (e) { addToast('Failed to dispatch. ' + (e.message || ''), 'error'); }
     setActing(null);
   }
 
   async function handleDismiss(id) {
     setActing(id);
-    try { await db.dismissALPRViolation(id); await load(); } catch (e) { console.error(e); }
+    try { await db.dismissALPRViolation(id); await load(); } catch (e) { addToast('Failed to dismiss. ' + (e.message || ''), 'error'); }
     setActing(null);
   }
 
@@ -7244,17 +7248,18 @@ function App() {
   const alprRealtimeRef = useRef(null);
   useEffect(() => {
     if (!owner) return;
-    // Fetch property IDs for this user's ALPR subscriptions
+    let active = true;
     db.getProperties(owner.id).then(props => {
-      if (!props || props.length === 0) return;
+      if (!active || !props || props.length === 0) return;
       const propIds = props.map(p => p.id);
       if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current);
       const ch = db.subscribeALPRViolations(propIds, () => {
-        db.getAllALPRViolations(owner.id, 'pending').then(v => setAlprViolations(v)).catch(() => {});
+        if (!active) return;
+        db.getAllALPRViolations(owner.id, 'pending').then(v => { if (active) setAlprViolations(v); }).catch(() => {});
       });
       alprRealtimeRef.current = ch;
     }).catch(() => {});
-    return () => { if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current); };
+    return () => { active = false; if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current); };
   }, [owner]);
 
   if (!owner) return <LoginPage onLogin={login} />;
