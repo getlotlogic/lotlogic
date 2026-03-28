@@ -2216,10 +2216,17 @@ const db = {
   },
 
   // ── ALPR Parking Pass System ─────────────────────────────────
-  async getProperties(towCompanyId) {
-    if (!towCompanyId) return [];
+  async getProperties(userId, role) {
+    if (!userId) return [];
     if (supabase) {
-      const { data, error } = await supabase.from('properties').select('*').eq('tow_company_id', towCompanyId).order('created_at', { ascending: false });
+      let q = supabase.from('properties').select('*');
+      if (role === 'partner') {
+        q = q.eq('tow_company_id', userId);
+      } else {
+        q = q.eq('owner_id', userId);
+      }
+      q = q.order('created_at', { ascending: false });
+      const { data, error } = await q;
       if (!error && data) return data;
     }
     return [];
@@ -2309,12 +2316,16 @@ const db = {
     }
     return [];
   },
-  async getAllALPRViolations(towCompanyId, status) {
+  async _getPropertyIds(userId, role) {
+    if (!supabase || !userId) return [];
+    const col = role === 'partner' ? 'tow_company_id' : 'owner_id';
+    const { data } = await supabase.from('properties').select('id').eq(col, userId);
+    return (data || []).map(p => p.id);
+  },
+  async getAllALPRViolations(userId, status, role) {
     if (supabase) {
-      // Get properties for this tow company, then violations
-      const { data: props } = await supabase.from('properties').select('id').eq('tow_company_id', towCompanyId);
-      if (!props || props.length === 0) return [];
-      const propIds = props.map(p => p.id);
+      const propIds = await this._getPropertyIds(userId, role);
+      if (propIds.length === 0) return [];
       let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at), properties(name, address)').in('property_id', propIds);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
@@ -2370,11 +2381,10 @@ const db = {
     }
     return null;
   },
-  async getALPRStats(towCompanyId) {
+  async getALPRStats(userId, role) {
     if (supabase) {
-      const { data: props } = await supabase.from('properties').select('id').eq('tow_company_id', towCompanyId);
-      if (!props || props.length === 0) return { activeViolations: 0, activePasses: 0, towJobsMonth: 0, commissionMonth: 0, properties: 0 };
-      const propIds = props.map(p => p.id);
+      const propIds = await this._getPropertyIds(userId, role);
+      if (propIds.length === 0) return { activeViolations: 0, activePasses: 0, towJobsMonth: 0, commissionMonth: 0, properties: 0 };
       const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
       const now = new Date().toISOString();
       const [viols, passes, jobs] = await Promise.all([
@@ -6648,17 +6658,20 @@ function ALPRPropertiesPage({ user }) {
   useEffect(() => {
     if (!user) return;
     setLoading(true);
-    db.getProperties(user.id).then(p => { setProperties(p); setLoading(false); }).catch(() => setLoading(false));
+    db.getProperties(user.id, user._role).then(p => { setProperties(p); setLoading(false); }).catch(() => setLoading(false));
   }, [user]);
 
   async function handleAdd(e) {
     e.preventDefault();
     setSaving(true);
     try {
-      await db.createProperty({ ...newProp, tow_company_id: user.id });
+      const propData = { ...newProp };
+      if (user._role === 'partner') propData.tow_company_id = user.id;
+      else propData.owner_id = user.id;
+      await db.createProperty(propData);
       setNewProp({ name: '', address: '' });
       setShowAdd(false);
-      const p = await db.getProperties(user.id);
+      const p = await db.getProperties(user.id, user._role);
       setProperties(p);
     } catch (err) { addToast('Failed to create property. ' + (err.message || ''), 'error'); }
     setSaving(false);
@@ -6816,7 +6829,7 @@ function ALPRViolationsPage({ user }) {
   const load = useCallback(async () => {
     if (!user) return;
     setLoading(true);
-    const v = await db.getAllALPRViolations(user.id, filter === 'all' ? null : filter);
+    const v = await db.getAllALPRViolations(user.id, filter === 'all' ? null : filter, user._role);
     setViolations(v);
     setLoading(false);
   }, [user, filter]);
@@ -6889,8 +6902,8 @@ function ALPROverviewPage({ user, onRefresh }) {
     if (!user) return;
     setLoading(true);
     Promise.all([
-      db.getALPRStats(user.id),
-      db.getAllALPRViolations(user.id, 'pending'),
+      db.getALPRStats(user.id, user._role),
+      db.getAllALPRViolations(user.id, 'pending', user._role),
     ]).then(([s, v]) => {
       setStats(s);
       setRecentViols(v.slice(0, 5));
@@ -7076,7 +7089,7 @@ function App() {
       setViolations(flat);
 
       // Load ALPR violations for the passes tab
-      db.getAllALPRViolations(o.id, 'pending').then(v => setAlprViolations(v)).catch(() => {});
+      db.getAllALPRViolations(o.id, 'pending', o._role).then(v => setAlprViolations(v)).catch(() => {});
 
       setLastRefresh(new Date());
     } catch (e) {
@@ -7249,13 +7262,13 @@ function App() {
   useEffect(() => {
     if (!owner) return;
     let active = true;
-    db.getProperties(owner.id).then(props => {
+    db.getProperties(owner.id, owner._role).then(props => {
       if (!active || !props || props.length === 0) return;
       const propIds = props.map(p => p.id);
       if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current);
       const ch = db.subscribeALPRViolations(propIds, () => {
         if (!active) return;
-        db.getAllALPRViolations(owner.id, 'pending').then(v => { if (active) setAlprViolations(v); }).catch(() => {});
+        db.getAllALPRViolations(owner.id, 'pending', owner._role).then(v => { if (active) setAlprViolations(v); }).catch(() => {});
       });
       alprRealtimeRef.current = ch;
     }).catch(() => {});
