@@ -2296,6 +2296,14 @@ const db = {
     }
     return [];
   },
+  async removeALPRCamera(id) {
+    if (supabase) {
+      const { error } = await supabase.from('alpr_cameras').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return { success: true };
+    }
+    return { success: true };
+  },
   async registerALPRCamera(cam) {
     if (supabase) {
       const apiKey = 'alpr_' + crypto.randomUUID().replace(/-/g, '');
@@ -6634,7 +6642,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
           <div key={c.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div style={{fontWeight:700,fontSize:14,color:'var(--text-primary)'}}>{c.name}</div>
-              <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:c.active?'rgba(74,222,128,.12)':'rgba(239,68,68,.12)',color:c.active?'#4ade80':'#ef4444'}}>{c.active ? 'Active' : 'Disabled'}</span>
+              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:c.active?'rgba(74,222,128,.12)':'rgba(239,68,68,.12)',color:c.active?'#4ade80':'#ef4444'}}>{c.active ? 'Active' : 'Disabled'}</span>
+                <button onClick={async () => { if (!confirm('Remove camera "' + c.name + '"?')) return; try { await db.removeALPRCamera(c.id); const cams = await db.getALPRCameras(propertyId); setCameras(cams); } catch (err) { addToast('Failed to remove camera. ' + (err.message || ''), 'error'); } }} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700,cursor:'pointer'}}>Remove</button>
+              </div>
             </div>
             {c.location_description && <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{c.location_description}</div>}
             {c.last_seen_at && <div style={{fontSize:11,color:'var(--text-faint)',marginTop:2}}>Last seen: {new Date(c.last_seen_at).toLocaleString()}</div>}
