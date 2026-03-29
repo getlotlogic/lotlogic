@@ -649,8 +649,8 @@
 
     /* ── Permits modal ── */
     .permits-overlay {
-      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100;
-      background: rgba(0,0,0,.7); backdrop-filter: blur(8px);
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1000;
+      background: rgba(0,0,0,.7); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
       display: flex; align-items: flex-end; justify-content: center;
       animation: fadeIn .2s ease;
     }
