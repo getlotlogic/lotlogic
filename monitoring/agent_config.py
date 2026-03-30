@@ -33,6 +33,7 @@ class AgentConfig:
     api_url: str = "https://lotlogic-backend-production.up.railway.app"
     supabase_url: str = "https://nzdkoouoaedbbccraoti.supabase.co"
     supabase_anon_key: str = ""
+    api_key: str = ""  # LOTLOGIC_API_KEY for backend API auth
     database_url: str = ""
     dashboard_url: str = ""
 
@@ -57,6 +58,7 @@ class AgentConfig:
         cfg = cls(
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             supabase_anon_key=os.getenv("SUPABASE_ANON_KEY", ""),
+            api_key=os.getenv("LOTLOGIC_API_KEY", ""),
             database_url=os.getenv("DATABASE_URL", ""),
             dashboard_url=os.getenv("DASHBOARD_URL", ""),
             slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL", ""),

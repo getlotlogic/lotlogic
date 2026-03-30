@@ -7,7 +7,7 @@
 -- ── Properties (residential/commercial properties managed by tow companies) ──
 CREATE TABLE IF NOT EXISTS properties (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tow_company_id UUID REFERENCES partners(id) ON DELETE CASCADE,
+  tow_company_id UUID REFERENCES enforcement_partners(id) ON DELETE CASCADE,
   owner_id UUID REFERENCES lot_owners(id),
   name TEXT NOT NULL,
   address TEXT,
@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS tow_jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   violation_id UUID REFERENCES alpr_violations(id),
   property_id UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-  tow_company_id UUID NOT NULL REFERENCES partners(id),
+  tow_company_id UUID NOT NULL REFERENCES enforcement_partners(id),
   plate_text TEXT NOT NULL,
   tow_fee NUMERIC(10,2) NOT NULL,
   commission_rate NUMERIC(5,4) NOT NULL DEFAULT 0.25,

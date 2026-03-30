@@ -7,4 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY *.py .
 
+RUN useradd --create-home appuser
+USER appuser
+
 CMD ["python", "-u", "async_puller.py"]

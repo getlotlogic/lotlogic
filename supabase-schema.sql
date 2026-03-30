@@ -4,7 +4,7 @@
 -- ============================================================
 
 -- ── Owners (lot owners) ──────────────────────────────────────
-CREATE TABLE IF NOT EXISTS owners (
+CREATE TABLE IF NOT EXISTS lot_owners (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email TEXT UNIQUE NOT NULL,
   contact_name TEXT,
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS owners (
 );
 
 -- ── Partners (enforcement operators) ─────────────────────────
-CREATE TABLE IF NOT EXISTS partners (
+CREATE TABLE IF NOT EXISTS enforcement_partners (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email TEXT UNIQUE NOT NULL,
   contact_name TEXT,
@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS partners (
 -- ── Lots (parking lots) ──────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID REFERENCES owners(id),
-  partner_id UUID REFERENCES partners(id),
+  owner_id UUID REFERENCES lot_owners(id),
+  partner_id UUID REFERENCES enforcement_partners(id),
   market_id TEXT,
   name TEXT NOT NULL,
   address TEXT,
@@ -122,7 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_captured ON snapshots(captured_at DESC)
 CREATE TABLE IF NOT EXISTS violations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   lot_id UUID REFERENCES lots(id) ON DELETE CASCADE,
-  partner_id UUID REFERENCES partners(id),
+  partner_id UUID REFERENCES enforcement_partners(id),
   camera_id UUID REFERENCES cameras(id),
   snapshot_id UUID REFERENCES snapshots(id),
   status TEXT DEFAULT 'alerted' CHECK (status IN ('alerted', 'acknowledged', 'cleared', 'departed', 'pending', 'resolved')),
@@ -259,7 +259,7 @@ SELECT
   l.id AS lot_id,
   l.name,
   COUNT(v.id) FILTER (WHERE v.status IN ('pending', 'alerted', 'acknowledged')) AS total_active_violations,
-  COUNT(DISTINCT c.id) FILTER (WHERE c.online = true) AS cameras_online,
+  COUNT(DISTINCT c.id) FILTER (WHERE c.active = true) AS cameras_online,
   COUNT(DISTINCT c.id) AS cameras_total
 FROM lots l
 LEFT JOIN violations v ON v.lot_id = l.id AND v.status IN ('pending', 'alerted', 'acknowledged')
@@ -274,8 +274,8 @@ ALTER PUBLICATION supabase_realtime ADD TABLE snapshots;
 
 -- ── Row Level Security (RLS) ─────────────────────────────────
 -- Enable RLS on all tables
-ALTER TABLE owners ENABLE ROW LEVEL SECURITY;
-ALTER TABLE partners ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lot_owners ENABLE ROW LEVEL SECURITY;
+ALTER TABLE enforcement_partners ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cameras ENABLE ROW LEVEL SECURITY;
 ALTER TABLE snapshots ENABLE ROW LEVEL SECURITY;
@@ -296,8 +296,8 @@ ALTER TABLE violations ENABLE ROW LEVEL SECURITY;
 -- request. The frontend also validates ownership before mutations.
 
 -- Allow public read for now (tighten later with Supabase Auth)
-CREATE POLICY "Public read owners" ON owners FOR SELECT USING (true);
-CREATE POLICY "Public read partners" ON partners FOR SELECT USING (true);
+CREATE POLICY "Public read lot_owners" ON lot_owners FOR SELECT USING (true);
+CREATE POLICY "Public read enforcement_partners" ON enforcement_partners FOR SELECT USING (true);
 CREATE POLICY "Public read lots" ON lots FOR SELECT USING (true);
 CREATE POLICY "Public read cameras" ON cameras FOR SELECT USING (true);
 CREATE POLICY "Public read snapshots" ON snapshots FOR SELECT USING (true);
@@ -316,8 +316,8 @@ CREATE TABLE IF NOT EXISTS action_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   violation_id UUID REFERENCES violations(id) ON DELETE SET NULL,
   lot_id UUID REFERENCES lots(id) ON DELETE CASCADE,
-  owner_id UUID REFERENCES owners(id),
-  partner_id UUID REFERENCES partners(id),
+  owner_id UUID REFERENCES lot_owners(id),
+  partner_id UUID REFERENCES enforcement_partners(id),
   action_type TEXT NOT NULL CHECK (action_type IN ('boot', 'tow')),
   performed_by TEXT NOT NULL CHECK (performed_by IN ('owner', 'partner')),
   performer_email TEXT,
@@ -348,8 +348,8 @@ CREATE TABLE IF NOT EXISTS invoices (
   due_date DATE,
   -- Who is this invoice for?
   bill_to_type TEXT NOT NULL CHECK (bill_to_type IN ('owner', 'partner')),
-  owner_id UUID REFERENCES owners(id),
-  partner_id UUID REFERENCES partners(id),
+  owner_id UUID REFERENCES lot_owners(id),
+  partner_id UUID REFERENCES enforcement_partners(id),
   -- Totals
   subtotal INTEGER NOT NULL DEFAULT 0,   -- dollars
   tax INTEGER DEFAULT 0,
@@ -397,7 +397,7 @@ CREATE INDEX IF NOT EXISTS idx_line_items_invoice ON invoice_line_items(invoice_
 -- ── QuickBooks Integration Settings ───────────────────────────
 CREATE TABLE IF NOT EXISTS qb_settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID REFERENCES owners(id) UNIQUE,
+  owner_id UUID REFERENCES lot_owners(id) UNIQUE,
   realm_id TEXT,               -- QuickBooks company ID
   access_token TEXT,
   refresh_token TEXT,

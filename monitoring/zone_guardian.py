@@ -309,7 +309,7 @@ def analyze_camera_zones(camera, snapshots, violations, config):
 def apply_zone_fix(config, camera_id, zones, finding):
     """Apply a zone polygon fix via the backend API."""
     api_url = config.api_url
-    api_key = "UJn9mwti15jbhgRUnhw6-VOk3TAt1VJAK3VNCIdAHa8"
+    api_key = config.api_key
 
     # Update the specific zone's polygon in the zones array
     updated_zones = []

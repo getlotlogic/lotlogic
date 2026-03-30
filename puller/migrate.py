@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """One-shot migration: add missing columns to cameras table."""
 import os
+import subprocess
 import sys
 
 def main():
     try:
         import psycopg2
     except ImportError:
-        os.system("pip install psycopg2-binary")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "psycopg2-binary"])
         import psycopg2
 
     db_url = os.environ.get("DATABASE_URL", "")
@@ -19,7 +20,7 @@ def main():
     db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
 
     print(f"Connecting to database...")
-    conn = psycopg2.connect(db_url)
+    conn = psycopg2.connect(db_url, sslmode="require")
     cur = conn.cursor()
 
     migrations = [
