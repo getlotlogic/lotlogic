@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Visitor Parking Pass</title>
+  <title>Resident Registration</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -68,7 +68,7 @@
       margin-top: 16px;
     }
     label .required { color: #ef4444; margin-left: 2px; }
-    input, select {
+    input {
       width: 100%;
       padding: 12px 14px;
       background: #0f1117;
@@ -80,10 +80,8 @@
       outline: none;
       transition: border-color 0.2s;
     }
-    input:focus, select:focus { border-color: #3b82f6; }
+    input:focus { border-color: #3b82f6; }
     input::placeholder { color: #4b5563; }
-    select { appearance: none; cursor: pointer; }
-    select option { background: #1a1d27; color: #e5e7eb; }
     .plate-input { text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; font-size: 20px; text-align: center; }
     .file-upload {
       position: relative;
@@ -123,7 +121,7 @@
     }
     .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .submit-btn:hover:not(:disabled) { opacity: 0.9; }
-    .validity {
+    .hint {
       text-align: center;
       font-size: 12px;
       color: #6b7280;
@@ -170,6 +168,17 @@
       color: #6b7280;
       margin-top: 8px;
     }
+    .pending-badge {
+      display: inline-block;
+      background: rgba(251,191,36,0.1);
+      border: 1px solid rgba(251,191,36,0.3);
+      color: #fbbf24;
+      padding: 6px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-top: 12px;
+    }
     .loading-state {
       text-align: center;
       padding: 40px 0;
@@ -199,11 +208,12 @@
     const qrCodeId = pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null;
 
     let property = null;
-    let idPhotoFile = null;
+    let platePhotoFile = null;
+    let leaseFile = null;
 
     async function init() {
       if (!qrCodeId) {
-        showNotFound('Invalid Link', 'This visitor registration link is not valid.');
+        showNotFound('Invalid Link', 'This resident registration link is not valid.');
         return;
       }
 
@@ -214,7 +224,7 @@
         .single();
 
       if (error || !data) {
-        showNotFound('Property Not Found', 'This visitor registration link is not valid or has expired.');
+        showNotFound('Property Not Found', 'This registration link is not valid or has expired.');
         return;
       }
 
@@ -242,39 +252,37 @@
           <h1>Lot<span>Logic</span></h1>
         </div>
         <div class="property-name">
-          Register Visitor Parking at
+          Resident Vehicle Registration
           <strong>${escapeHtml(property.name)}</strong>
         </div>
-        <form id="passForm">
-          <label for="visitorName">Full Name <span class="required">*</span></label>
-          <input type="text" id="visitorName" placeholder="Jane Smith" required>
+        <form id="regForm">
+          <label for="holderName">Full Name <span class="required">*</span></label>
+          <input type="text" id="holderName" placeholder="John Doe" required>
 
-          <label for="parkingSpot">Parking Spot Number</label>
-          <input type="text" id="parkingSpot" placeholder="A-12">
+          <label for="unitNumber">Unit Number <span class="required">*</span></label>
+          <input type="text" id="unitNumber" placeholder="Unit 204" required>
 
-          <label for="plate">Tag / License Plate Number <span class="required">*</span></label>
+          <label for="plate">License Plate <span class="required">*</span></label>
           <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
 
-          <label for="tagExpiration">Tag Expiration Date</label>
-          <input type="date" id="tagExpiration">
+          <label for="plateExpiration">Plate / Tag Expiration Date <span class="required">*</span></label>
+          <input type="date" id="plateExpiration" required>
 
-          <label>Picture of ID</label>
-          <div class="file-upload" id="idUploadZone">
-            <input type="file" id="idPhoto" accept="image/*" capture="environment">
+          <label>Picture of License Plate <span class="required">*</span></label>
+          <div class="file-upload" id="plateUploadZone">
+            <input type="file" id="platePhoto" accept="image/*" capture="environment">
             <div class="file-upload-icon">&#128247;</div>
             <div class="file-upload-text">Tap to take photo or choose file</div>
-            <div class="file-upload-name" id="idFileName"></div>
+            <div class="file-upload-name" id="plateFileName"></div>
           </div>
 
-          <label for="hostUnit">Unit Number You're Visiting <span class="required">*</span></label>
-          <input type="text" id="hostUnit" placeholder="Unit 204" required>
-
-          <label for="stayDays">Extent of Stay <span class="required">*</span></label>
-          <select id="stayDays" required>
-            <option value="1">1 Day</option>
-            <option value="2">2 Days</option>
-            <option value="3">3 Days (Maximum)</option>
-          </select>
+          <label>Copy of Lease <span class="required">*</span></label>
+          <div class="file-upload" id="leaseUploadZone">
+            <input type="file" id="leaseDoc" accept="image/*,.pdf,.doc,.docx">
+            <div class="file-upload-icon">&#128196;</div>
+            <div class="file-upload-text">Upload lease document (PDF, image, or Word)</div>
+            <div class="file-upload-name" id="leaseFileName"></div>
+          </div>
 
           <div class="row">
             <div>
@@ -283,27 +291,43 @@
             </div>
             <div>
               <label for="email">Email <span class="required">*</span></label>
-              <input type="email" id="email" placeholder="jane@email.com" required>
+              <input type="email" id="email" placeholder="john@email.com" required>
             </div>
           </div>
 
-          <button type="submit" class="submit-btn" id="submitBtn">Register Visitor Pass</button>
-          <div class="validity">Maximum stay: 3 days from registration</div>
+          <button type="submit" class="submit-btn" id="submitBtn">Register Vehicle</button>
+          <div class="hint">Registration requires leasing office approval</div>
           <div id="errorMsg"></div>
         </form>
       `;
 
-      document.getElementById('passForm').addEventListener('submit', handleSubmit);
-      document.getElementById('idPhoto').addEventListener('change', function(e) {
+      document.getElementById('regForm').addEventListener('submit', handleSubmit);
+
+      document.getElementById('platePhoto').addEventListener('change', function(e) {
         const file = e.target.files[0];
-        const zone = document.getElementById('idUploadZone');
-        const nameEl = document.getElementById('idFileName');
+        const zone = document.getElementById('plateUploadZone');
+        const nameEl = document.getElementById('plateFileName');
         if (file) {
-          idPhotoFile = file;
+          platePhotoFile = file;
           zone.classList.add('has-file');
           nameEl.textContent = file.name;
         } else {
-          idPhotoFile = null;
+          platePhotoFile = null;
+          zone.classList.remove('has-file');
+          nameEl.textContent = '';
+        }
+      });
+
+      document.getElementById('leaseDoc').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        const zone = document.getElementById('leaseUploadZone');
+        const nameEl = document.getElementById('leaseFileName');
+        if (file) {
+          leaseFile = file;
+          zone.classList.add('has-file');
+          nameEl.textContent = file.name;
+        } else {
+          leaseFile = null;
           zone.classList.remove('has-file');
           nameEl.textContent = '';
         }
@@ -331,68 +355,67 @@
       btn.textContent = 'Registering...';
 
       try {
+        const holderName = document.getElementById('holderName').value.trim();
+        const unitNumber = document.getElementById('unitNumber').value.trim();
         const plateRaw = document.getElementById('plate').value.trim();
         const plateText = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
-        const visitorName = document.getElementById('visitorName').value.trim();
-        const parkingSpot = document.getElementById('parkingSpot').value.trim() || null;
-        const tagExpiration = document.getElementById('tagExpiration').value || null;
-        const hostUnit = document.getElementById('hostUnit').value.trim();
-        const stayDays = parseInt(document.getElementById('stayDays').value, 10);
+        const plateExpiration = document.getElementById('plateExpiration').value;
         const phone = document.getElementById('phone').value.trim();
         const email = document.getElementById('email').value.trim();
 
         if (!plateText || plateText.length < 2) {
           throw new Error('Please enter a valid license plate number.');
         }
-
-        let idPhotoUrl = null;
-        if (idPhotoFile) {
-          btn.textContent = 'Uploading ID...';
-          idPhotoUrl = await uploadFile('visitor-ids', idPhotoFile, property.id);
+        if (!platePhotoFile) {
+          throw new Error('Please upload a picture of your license plate.');
+        }
+        if (!leaseFile) {
+          throw new Error('Please upload a copy of your lease.');
         }
 
-        btn.textContent = 'Registering...';
-        const validFrom = new Date();
-        const validUntil = new Date(validFrom.getTime() + stayDays * 24 * 60 * 60 * 1000);
+        btn.textContent = 'Uploading plate photo...';
+        const platePhotoUrl = await uploadFile('resident-plates', platePhotoFile, property.id);
 
+        btn.textContent = 'Uploading lease...';
+        const leaseDocUrl = await uploadFile('resident-leases', leaseFile, property.id);
+
+        btn.textContent = 'Registering...';
         const { data, error } = await supabase
-          .from('visitor_passes')
+          .from('resident_plates')
           .insert({
             property_id: property.id,
             plate_text: plateText,
-            visitor_name: visitorName,
-            host_unit: hostUnit,
-            host_name: '',
-            valid_from: validFrom.toISOString(),
-            valid_until: validUntil.toISOString(),
-            status: 'active',
-            parking_spot: parkingSpot,
-            tag_expiration: tagExpiration,
-            id_photo_url: idPhotoUrl,
-            stay_days: stayDays,
+            unit_number: unitNumber,
+            holder_name: holderName,
+            vehicle_description: '',
+            active: true,
+            plate_expiration: plateExpiration,
+            plate_photo_url: platePhotoUrl,
+            lease_doc_url: leaseDocUrl,
             phone: phone,
             email: email,
+            status: 'pending',
           })
           .select()
           .single();
 
-        if (error) throw new Error('Failed to register pass. Please try again.');
+        if (error) {
+          if (error.code === '23505') {
+            throw new Error('This license plate is already registered at this property.');
+          }
+          throw new Error('Failed to register. Please try again.');
+        }
 
-        showSuccess(plateText, validUntil, stayDays);
+        showSuccess(plateText);
       } catch (err) {
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
         btn.disabled = false;
-        btn.textContent = 'Register Visitor Pass';
+        btn.textContent = 'Register Vehicle';
         submitting = false;
       }
     }
 
-    function showSuccess(plate, validUntil, stayDays) {
-      const expiresStr = validUntil.toLocaleString('en-US', {
-        weekday: 'short', month: 'short', day: 'numeric',
-        hour: 'numeric', minute: '2-digit', hour12: true,
-      });
-
+    function showSuccess(plate) {
       app.innerHTML = `
         <div class="success-card">
           <div class="success-icon">
@@ -400,10 +423,11 @@
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
           </div>
-          <h2>Visitor Pass Registered!</h2>
-          <p>Your visitor parking pass for <strong>${escapeHtml(property.name)}</strong> has been registered.</p>
+          <h2>Registration Submitted!</h2>
+          <p>Your vehicle has been registered at <strong>${escapeHtml(property.name)}</strong>.</p>
           <div class="success-plate">${escapeHtml(plate)}</div>
-          <div class="success-detail">Valid for ${stayDays} day${stayDays > 1 ? 's' : ''} &mdash; until ${escapeHtml(expiresStr)}</div>
+          <div class="pending-badge">Pending Leasing Office Approval</div>
+          <div class="success-detail">You will be notified once your registration is approved.</div>
         </div>
       `;
     }

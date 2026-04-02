@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>LotLogic - Leasing Office</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0c0e14;
+      color: #e5e7eb;
+      min-height: 100vh;
+    }
+
+    /* ── Login ── */
+    .login-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .login-card {
+      background: #13151d;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 32px 24px;
+      max-width: 400px;
+      width: 100%;
+    }
+    .logo {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .logo .shield {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      border-radius: 12px;
+      font-weight: 900;
+      font-size: 18px;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .logo h1 { font-size: 22px; font-weight: 800; color: #f9fafb; }
+    .logo h1 span { color: #3b82f6; }
+    .logo p { font-size: 14px; color: #6b7280; margin-top: 4px; }
+
+    /* ── Forms ── */
+    label { display: block; font-size: 13px; font-weight: 600; color: #9ca3af; margin-bottom: 6px; margin-top: 16px; }
+    label .req { color: #ef4444; margin-left: 2px; }
+    input, select, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      background: #0c0e14;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      color: #e5e7eb;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: #3b82f6; }
+    input::placeholder, textarea::placeholder { color: #4b5563; }
+    select { appearance: none; cursor: pointer; }
+    select option { background: #13151d; color: #e5e7eb; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 18px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; }
+    .btn-success { background: #16a34a; color: #fff; }
+    .btn-danger { background: #dc2626; color: #fff; }
+    .btn-ghost { background: rgba(255,255,255,0.06); color: #9ca3af; }
+    .btn-warn { background: #d97706; color: #fff; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .btn-block { width: 100%; margin-top: 20px; }
+
+    .error-msg {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: #f87171;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-top: 16px;
+      text-align: center;
+    }
+
+    /* ── Shell ── */
+    .shell { display: none; flex-direction: column; min-height: 100vh; }
+    .shell.active { display: flex; }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: #13151d;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+    .topbar-left .shield-sm {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      border-radius: 8px;
+      font-weight: 900;
+      font-size: 12px;
+      color: #fff;
+    }
+    .topbar-left .prop-name { font-size: 15px; font-weight: 700; color: #f3f4f6; }
+    .topbar-right { display: flex; align-items: center; gap: 8px; }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      gap: 0;
+      background: #13151d;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding: 0 20px;
+    }
+    .tab-btn {
+      padding: 12px 20px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #6b7280;
+      border: none;
+      background: none;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      font-family: inherit;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .tab-btn:hover { color: #9ca3af; }
+    .tab-btn.active { color: #3b82f6; border-bottom-color: #3b82f6; }
+
+    /* ── Content ── */
+    .content { flex: 1; padding: 20px; max-width: 900px; margin: 0 auto; width: 100%; }
+
+    .alert-banner {
+      background: rgba(251,191,36,0.1);
+      border: 1px solid rgba(251,191,36,0.3);
+      color: #fbbf24;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .alert-banner strong { font-weight: 700; }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .section-header h2 { font-size: 18px; font-weight: 700; color: #f3f4f6; }
+
+    .table-card {
+      background: #13151d;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .table-card table { width: 100%; border-collapse: collapse; }
+    .table-card th {
+      text-align: left;
+      padding: 10px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .table-card td {
+      padding: 10px 14px;
+      font-size: 13px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      vertical-align: middle;
+    }
+    .table-card tr:last-child td { border-bottom: none; }
+    .table-card tr:hover td { background: rgba(255,255,255,0.02); }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-pending { background: rgba(251,191,36,0.15); color: #fbbf24; }
+    .badge-approved { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .badge-rejected { background: rgba(239,68,68,0.15); color: #f87171; }
+    .badge-active { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .badge-expired { background: rgba(107,114,128,0.2); color: #9ca3af; }
+    .badge-revoked { background: rgba(239,68,68,0.15); color: #f87171; }
+
+    .plate-text { font-weight: 700; letter-spacing: 0.04em; font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .empty-state { text-align: center; padding: 40px 20px; color: #6b7280; font-size: 14px; }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: #13151d;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px;
+      padding: 24px;
+      max-width: 440px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .modal h3 { font-size: 18px; font-weight: 700; color: #f3f4f6; margin-bottom: 16px; }
+    .modal-actions { display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; }
+
+    .doc-link { color: #3b82f6; text-decoration: none; font-size: 12px; }
+    .doc-link:hover { text-decoration: underline; }
+
+    @media (max-width: 640px) {
+      .tabs { overflow-x: auto; padding: 0 12px; }
+      .tab-btn { padding: 10px 14px; font-size: 12px; white-space: nowrap; }
+      .content { padding: 16px 12px; }
+      .table-card { font-size: 12px; }
+      .table-card th, .table-card td { padding: 8px 10px; }
+      .hide-mobile { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Login Screen -->
+  <div class="login-wrap" id="loginScreen">
+    <div class="login-card">
+      <div class="logo">
+        <div class="shield">LL</div>
+        <h1>Lot<span>Logic</span></h1>
+        <p>Leasing Office Portal</p>
+      </div>
+      <form id="loginForm">
+        <label for="loginEmail">Email Address</label>
+        <input type="email" id="loginEmail" placeholder="leasing@property.com" required autofocus>
+        <button type="submit" class="btn btn-primary btn-block" id="loginBtn">Sign In</button>
+        <div id="loginError"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div class="shell" id="appShell">
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="shield-sm">LL</div>
+        <span class="prop-name" id="propertyName"></span>
+      </div>
+      <div class="topbar-right">
+        <button class="btn btn-ghost btn-sm" id="logoutBtn">Sign Out</button>
+      </div>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="residents">Residents</button>
+      <button class="tab-btn" data-tab="visitors">Visitors</button>
+      <button class="tab-btn" data-tab="tags">Tags</button>
+    </div>
+    <div class="content" id="tabContent"></div>
+  </div>
+
+  <!-- Add Resident Modal -->
+  <div class="modal-overlay" id="addResidentModal">
+    <div class="modal">
+      <h3>Add Resident</h3>
+      <form id="addResidentForm">
+        <label>Name <span class="req">*</span></label>
+        <input type="text" id="arName" required placeholder="John Doe">
+        <label>Unit Number <span class="req">*</span></label>
+        <input type="text" id="arUnit" required placeholder="Unit 204">
+        <label>License Plate <span class="req">*</span></label>
+        <input type="text" id="arPlate" required placeholder="ABC1234" maxlength="10" style="text-transform:uppercase;font-weight:700;letter-spacing:0.04em;">
+        <label>Plate Expiration</label>
+        <input type="date" id="arExpiration">
+        <label>Phone</label>
+        <input type="tel" id="arPhone" placeholder="(555) 123-4567">
+        <label>Email</label>
+        <input type="email" id="arEmail" placeholder="john@email.com">
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('addResidentModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add Resident</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Add Visitor Modal -->
+  <div class="modal-overlay" id="addVisitorModal">
+    <div class="modal">
+      <h3>Add Visitor Pass</h3>
+      <form id="addVisitorForm">
+        <label>Visitor Name <span class="req">*</span></label>
+        <input type="text" id="avName" required placeholder="Jane Smith">
+        <label>License Plate <span class="req">*</span></label>
+        <input type="text" id="avPlate" required placeholder="ABC1234" maxlength="10" style="text-transform:uppercase;font-weight:700;letter-spacing:0.04em;">
+        <label>Unit Visiting <span class="req">*</span></label>
+        <input type="text" id="avUnit" required placeholder="Unit 204">
+        <label>Duration</label>
+        <select id="avDays">
+          <option value="1">1 Day</option>
+          <option value="2">2 Days</option>
+          <option value="3">3 Days</option>
+        </select>
+        <label>Phone</label>
+        <input type="tel" id="avPhone" placeholder="(555) 123-4567">
+        <label>Email</label>
+        <input type="email" id="avEmail" placeholder="jane@email.com">
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('addVisitorModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Pass</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Extend Visitor Modal -->
+  <div class="modal-overlay" id="extendVisitorModal">
+    <div class="modal">
+      <h3>Extend Visitor Pass</h3>
+      <p style="font-size:13px;color:#9ca3af;margin-bottom:16px;">Extend the parking pass for <strong id="extPlate" style="color:#3b82f6;"></strong></p>
+      <label>Extend By</label>
+      <select id="extDays">
+        <option value="1">1 Day</option>
+        <option value="2">2 Days</option>
+        <option value="3">3 Days</option>
+      </select>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('extendVisitorModal')">Cancel</button>
+        <button type="button" class="btn btn-primary" id="extConfirmBtn">Extend</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Temp Tag Modal -->
+  <div class="modal-overlay" id="tempTagModal">
+    <div class="modal">
+      <h3>Issue Temporary Tag</h3>
+      <form id="tempTagForm">
+        <label>Resident Name <span class="req">*</span></label>
+        <input type="text" id="ttName" required placeholder="John Doe">
+        <label>Unit Number <span class="req">*</span></label>
+        <input type="text" id="ttUnit" required placeholder="Unit 204">
+        <label>Temporary Plate <span class="req">*</span></label>
+        <input type="text" id="ttPlate" required placeholder="TEMP1234" maxlength="10" style="text-transform:uppercase;font-weight:700;letter-spacing:0.04em;">
+        <label>Valid Until <span class="req">*</span></label>
+        <input type="date" id="ttExpiration" required>
+        <label>Phone</label>
+        <input type="tel" id="ttPhone" placeholder="(555) 123-4567">
+        <label>Email</label>
+        <input type="email" id="ttEmail" placeholder="john@email.com">
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('tempTagModal')">Cancel</button>
+          <button type="submit" class="btn btn-warn">Issue Temp Tag</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script>
+    const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let currentOffice = null;   // leasing_offices row
+    let currentProperty = null; // properties row
+    let residents = [];
+    let visitors = [];
+    let activeTab = 'residents';
+    let extendingPassId = null;
+
+    // ── Utilities ──
+    function esc(str) {
+      const d = document.createElement('div');
+      d.textContent = str || '';
+      return d.innerHTML;
+    }
+
+    function fmtDate(d) {
+      if (!d) return '—';
+      return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function fmtDateTime(d) {
+      if (!d) return '—';
+      return new Date(d).toLocaleString('en-US', {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
+      });
+    }
+
+    function isExpiringSoon(dateStr) {
+      if (!dateStr) return false;
+      const exp = new Date(dateStr);
+      const now = new Date();
+      const diff = exp.getTime() - now.getTime();
+      return diff > 0 && diff <= 72 * 60 * 60 * 1000;
+    }
+
+    function isExpired(dateStr) {
+      if (!dateStr) return false;
+      return new Date(dateStr) < new Date();
+    }
+
+    // ── Session ──
+    function saveSession() {
+      localStorage.setItem('ll_leasing_session', JSON.stringify({
+        office: currentOffice,
+        property: currentProperty,
+        ts: Date.now()
+      }));
+    }
+
+    function loadSession() {
+      try {
+        const raw = localStorage.getItem('ll_leasing_session');
+        if (!raw) return null;
+        const s = JSON.parse(raw);
+        if (Date.now() - s.ts > 7 * 24 * 60 * 60 * 1000) return null;
+        return s;
+      } catch { return null; }
+    }
+
+    function clearSession() {
+      localStorage.removeItem('ll_leasing_session');
+      currentOffice = null;
+      currentProperty = null;
+      document.getElementById('appShell').classList.remove('active');
+      document.getElementById('loginScreen').style.display = '';
+    }
+
+    // ── Login ──
+    document.getElementById('loginForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const btn = document.getElementById('loginBtn');
+      const errDiv = document.getElementById('loginError');
+      errDiv.innerHTML = '';
+      btn.disabled = true;
+      btn.textContent = 'Signing in...';
+
+      const email = document.getElementById('loginEmail').value.trim().toLowerCase();
+
+      const { data, error } = await sb
+        .from('leasing_offices')
+        .select('*, properties(*)')
+        .eq('email', email)
+        .single();
+
+      if (error || !data) {
+        errDiv.innerHTML = '<div class="error-msg">No leasing office account found for this email.</div>';
+        btn.disabled = false;
+        btn.textContent = 'Sign In';
+        return;
+      }
+
+      currentOffice = data;
+      currentProperty = data.properties;
+      saveSession();
+      enterApp();
+    });
+
+    // ── Init ──
+    async function init() {
+      const session = loadSession();
+      if (session) {
+        currentOffice = session.office;
+        currentProperty = session.property;
+        enterApp();
+      }
+    }
+
+    function enterApp() {
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('appShell').classList.add('active');
+      document.getElementById('propertyName').textContent = currentProperty.name;
+      loadData();
+    }
+
+    document.getElementById('logoutBtn').addEventListener('click', clearSession);
+
+    // ── Tabs ──
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', function() {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        activeTab = this.dataset.tab;
+        renderTab();
+      });
+    });
+
+    // ── Data Loading ──
+    async function loadData() {
+      const [resResult, visResult] = await Promise.all([
+        sb.from('resident_plates').select('*').eq('property_id', currentProperty.id).order('created_at', { ascending: false }),
+        sb.from('visitor_passes').select('*').eq('property_id', currentProperty.id).order('created_at', { ascending: false }),
+      ]);
+      residents = resResult.data || [];
+      visitors = visResult.data || [];
+      renderTab();
+    }
+
+    // ── Tab Rendering ──
+    function renderTab() {
+      const el = document.getElementById('tabContent');
+      if (activeTab === 'residents') renderResidents(el);
+      else if (activeTab === 'visitors') renderVisitors(el);
+      else if (activeTab === 'tags') renderTags(el);
+    }
+
+    function renderResidents(el) {
+      const expiringSoon = residents.filter(r => r.active && isExpiringSoon(r.plate_expiration));
+      const banner = expiringSoon.length > 0
+        ? `<div class="alert-banner"><strong>&#9888;</strong> ${expiringSoon.length} resident(s) with plates expiring within 72 hours</div>`
+        : '';
+
+      const rows = residents.map(r => `
+        <tr>
+          <td><span class="plate-text">${esc(r.plate_text)}</span></td>
+          <td>${esc(r.holder_name)}</td>
+          <td>${esc(r.unit_number)}</td>
+          <td>${fmtDate(r.plate_expiration)}${isExpired(r.plate_expiration) ? ' <span style="color:#ef4444;font-size:11px;">EXPIRED</span>' : isExpiringSoon(r.plate_expiration) ? ' <span style="color:#fbbf24;font-size:11px;">EXPIRING</span>' : ''}</td>
+          <td><span class="badge badge-${r.status || 'approved'}">${esc(r.status || 'approved')}</span></td>
+          <td class="hide-mobile">${esc(r.phone || '—')}</td>
+          <td>
+            <div class="actions">
+              ${r.status === 'pending' ? `<button class="btn btn-success btn-sm" onclick="approveResident('${r.id}')">Approve</button><button class="btn btn-danger btn-sm" onclick="rejectResident('${r.id}')">Reject</button>` : ''}
+              ${r.active ? `<button class="btn btn-danger btn-sm" onclick="removeResident('${r.id}')">Remove</button>` : '<span style="color:#6b7280;font-size:12px;">Inactive</span>'}
+              ${r.lease_doc_url ? `<a href="${esc(r.lease_doc_url)}" target="_blank" class="doc-link">Lease</a>` : ''}
+              ${r.plate_photo_url ? `<a href="${esc(r.plate_photo_url)}" target="_blank" class="doc-link">Photo</a>` : ''}
+            </div>
+          </td>
+        </tr>
+      `).join('');
+
+      el.innerHTML = `
+        ${banner}
+        <div class="section-header">
+          <h2>Residents</h2>
+          <button class="btn btn-primary btn-sm" onclick="openModal('addResidentModal')">+ Add Resident</button>
+        </div>
+        <div class="table-card">
+          ${residents.length === 0 ? '<div class="empty-state">No residents registered yet.</div>' : `
+          <table>
+            <thead><tr>
+              <th>Plate</th><th>Name</th><th>Unit</th><th>Expiration</th><th>Status</th><th class="hide-mobile">Phone</th><th>Actions</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>`}
+        </div>
+      `;
+    }
+
+    function renderVisitors(el) {
+      const rows = visitors.map(v => `
+        <tr>
+          <td><span class="plate-text">${esc(v.plate_text)}</span></td>
+          <td>${esc(v.visitor_name)}</td>
+          <td>${esc(v.host_unit)}</td>
+          <td>${fmtDateTime(v.valid_until)}</td>
+          <td><span class="badge badge-${v.status}">${esc(v.status)}</span></td>
+          <td>
+            <div class="actions">
+              ${v.status === 'active' ? `
+                <button class="btn btn-primary btn-sm" onclick="openExtendModal('${v.id}', '${esc(v.plate_text)}')">Extend</button>
+                <button class="btn btn-danger btn-sm" onclick="revokeVisitor('${v.id}')">Revoke</button>
+              ` : ''}
+            </div>
+          </td>
+        </tr>
+      `).join('');
+
+      el.innerHTML = `
+        <div class="section-header">
+          <h2>Visitor Passes</h2>
+          <button class="btn btn-primary btn-sm" onclick="openModal('addVisitorModal')">+ Add Visitor</button>
+        </div>
+        <div class="table-card">
+          ${visitors.length === 0 ? '<div class="empty-state">No visitor passes yet.</div>' : `
+          <table>
+            <thead><tr>
+              <th>Plate</th><th>Visitor</th><th>Unit</th><th>Valid Until</th><th>Status</th><th>Actions</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>`}
+        </div>
+      `;
+    }
+
+    function renderTags(el) {
+      const expired = residents.filter(r => r.active && isExpired(r.plate_expiration));
+      const expiring = residents.filter(r => r.active && isExpiringSoon(r.plate_expiration));
+      const tempTags = residents.filter(r => r.active && r.plate_text && r.plate_text.startsWith('TEMP'));
+
+      el.innerHTML = `
+        ${expired.length > 0 ? `<div class="alert-banner" style="border-color:rgba(239,68,68,0.3);color:#f87171;background:rgba(239,68,68,0.1);"><strong>&#9888;</strong> ${expired.length} resident(s) with <strong>expired</strong> plates</div>` : ''}
+        ${expiring.length > 0 ? `<div class="alert-banner"><strong>&#9888;</strong> ${expiring.length} resident(s) with plates expiring within 72 hours</div>` : ''}
+
+        <div class="section-header">
+          <h2>Tag Management</h2>
+          <button class="btn btn-warn btn-sm" onclick="openModal('tempTagModal')">+ Issue Temp Tag</button>
+        </div>
+
+        <h3 style="font-size:14px;color:#9ca3af;margin:20px 0 10px;">Expired Tags</h3>
+        <div class="table-card">
+          ${expired.length === 0 ? '<div class="empty-state">No expired tags.</div>' : `
+          <table>
+            <thead><tr><th>Plate</th><th>Name</th><th>Unit</th><th>Expired On</th><th>Actions</th></tr></thead>
+            <tbody>${expired.map(r => `
+              <tr>
+                <td><span class="plate-text">${esc(r.plate_text)}</span></td>
+                <td>${esc(r.holder_name)}</td>
+                <td>${esc(r.unit_number)}</td>
+                <td style="color:#ef4444;">${fmtDate(r.plate_expiration)}</td>
+                <td><button class="btn btn-danger btn-sm" onclick="removeResident('${r.id}')">Remove</button></td>
+              </tr>
+            `).join('')}</tbody>
+          </table>`}
+        </div>
+
+        <h3 style="font-size:14px;color:#9ca3af;margin:20px 0 10px;">Expiring Soon (72h)</h3>
+        <div class="table-card">
+          ${expiring.length === 0 ? '<div class="empty-state">No tags expiring soon.</div>' : `
+          <table>
+            <thead><tr><th>Plate</th><th>Name</th><th>Unit</th><th>Expires On</th><th>Contact</th></tr></thead>
+            <tbody>${expiring.map(r => `
+              <tr>
+                <td><span class="plate-text">${esc(r.plate_text)}</span></td>
+                <td>${esc(r.holder_name)}</td>
+                <td>${esc(r.unit_number)}</td>
+                <td style="color:#fbbf24;">${fmtDate(r.plate_expiration)}</td>
+                <td>${esc(r.email || r.phone || '—')}</td>
+              </tr>
+            `).join('')}</tbody>
+          </table>`}
+        </div>
+
+        <h3 style="font-size:14px;color:#9ca3af;margin:20px 0 10px;">Active Temporary Tags</h3>
+        <div class="table-card">
+          ${tempTags.length === 0 ? '<div class="empty-state">No temporary tags issued.</div>' : `
+          <table>
+            <thead><tr><th>Temp Plate</th><th>Name</th><th>Unit</th><th>Valid Until</th><th>Actions</th></tr></thead>
+            <tbody>${tempTags.map(r => `
+              <tr>
+                <td><span class="plate-text">${esc(r.plate_text)}</span></td>
+                <td>${esc(r.holder_name)}</td>
+                <td>${esc(r.unit_number)}</td>
+                <td>${fmtDate(r.plate_expiration)}</td>
+                <td><button class="btn btn-danger btn-sm" onclick="removeResident('${r.id}')">Remove</button></td>
+              </tr>
+            `).join('')}</tbody>
+          </table>`}
+        </div>
+      `;
+    }
+
+    // ── Actions ──
+    async function approveResident(id) {
+      await sb.from('resident_plates').update({ status: 'approved' }).eq('id', id);
+      loadData();
+    }
+
+    async function rejectResident(id) {
+      if (!confirm('Reject this resident registration?')) return;
+      await sb.from('resident_plates').update({ status: 'rejected', active: false }).eq('id', id);
+      loadData();
+    }
+
+    async function removeResident(id) {
+      if (!confirm('Remove this resident? They will need to re-register.')) return;
+      await sb.from('resident_plates').update({ active: false }).eq('id', id);
+      loadData();
+    }
+
+    async function revokeVisitor(id) {
+      if (!confirm('Revoke this visitor pass?')) return;
+      await sb.from('visitor_passes').update({ status: 'revoked' }).eq('id', id);
+      loadData();
+    }
+
+    function openExtendModal(passId, plate) {
+      extendingPassId = passId;
+      document.getElementById('extPlate').textContent = plate;
+      document.getElementById('extDays').value = '1';
+      openModal('extendVisitorModal');
+    }
+
+    document.getElementById('extConfirmBtn').addEventListener('click', async function() {
+      if (!extendingPassId) return;
+      const days = parseInt(document.getElementById('extDays').value, 10);
+      const pass = visitors.find(v => v.id === extendingPassId);
+      if (!pass) return;
+
+      const currentEnd = new Date(pass.valid_until);
+      const base = currentEnd > new Date() ? currentEnd : new Date();
+      const newEnd = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+
+      await sb.from('visitor_passes').update({
+        valid_until: newEnd.toISOString(),
+        status: 'active'
+      }).eq('id', extendingPassId);
+
+      closeModal('extendVisitorModal');
+      extendingPassId = null;
+      loadData();
+    });
+
+    // ── Add Resident Form ──
+    document.getElementById('addResidentForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const plate = document.getElementById('arPlate').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!plate) return;
+
+      await sb.from('resident_plates').insert({
+        property_id: currentProperty.id,
+        plate_text: plate,
+        holder_name: document.getElementById('arName').value.trim(),
+        unit_number: document.getElementById('arUnit').value.trim(),
+        vehicle_description: '',
+        active: true,
+        status: 'approved',
+        plate_expiration: document.getElementById('arExpiration').value || null,
+        phone: document.getElementById('arPhone').value.trim() || null,
+        email: document.getElementById('arEmail').value.trim() || null,
+      });
+
+      closeModal('addResidentModal');
+      this.reset();
+      loadData();
+    });
+
+    // ── Add Visitor Form ──
+    document.getElementById('addVisitorForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const plate = document.getElementById('avPlate').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!plate) return;
+      const days = parseInt(document.getElementById('avDays').value, 10);
+      const now = new Date();
+      const until = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+
+      await sb.from('visitor_passes').insert({
+        property_id: currentProperty.id,
+        plate_text: plate,
+        visitor_name: document.getElementById('avName').value.trim(),
+        host_unit: document.getElementById('avUnit').value.trim(),
+        host_name: '',
+        valid_from: now.toISOString(),
+        valid_until: until.toISOString(),
+        status: 'active',
+        stay_days: days,
+        phone: document.getElementById('avPhone').value.trim() || null,
+        email: document.getElementById('avEmail').value.trim() || null,
+      });
+
+      closeModal('addVisitorModal');
+      this.reset();
+      loadData();
+    });
+
+    // ── Temp Tag Form ──
+    document.getElementById('tempTagForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const plate = document.getElementById('ttPlate').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!plate) return;
+
+      await sb.from('resident_plates').insert({
+        property_id: currentProperty.id,
+        plate_text: plate,
+        holder_name: document.getElementById('ttName').value.trim(),
+        unit_number: document.getElementById('ttUnit').value.trim(),
+        vehicle_description: 'Temporary tag',
+        active: true,
+        status: 'approved',
+        plate_expiration: document.getElementById('ttExpiration').value,
+        phone: document.getElementById('ttPhone').value.trim() || null,
+        email: document.getElementById('ttEmail').value.trim() || null,
+      });
+
+      closeModal('tempTagModal');
+      this.reset();
+      loadData();
+    });
+
+    // ── Modals ──
+    function openModal(id) { document.getElementById(id).classList.add('active'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+    document.querySelectorAll('.modal-overlay').forEach(overlay => {
+      overlay.addEventListener('click', function(e) {
+        if (e.target === this) closeModal(this.id);
+      });
+    });
+
+    // ── Start ──
+    init();
+  </script>
+</body>
+</html>
