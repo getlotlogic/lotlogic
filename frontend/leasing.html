@@ -306,7 +306,7 @@
   </div>
 
   <!-- Add Resident Modal -->
-  <div class="modal-overlay" id="addResidentModal">
+  <div class="modal-overlay" id="addResidentModal" role="dialog" aria-modal="true">
     <div class="modal">
       <h3>Add Resident</h3>
       <form id="addResidentForm">
@@ -331,7 +331,7 @@
   </div>
 
   <!-- Add Visitor Modal -->
-  <div class="modal-overlay" id="addVisitorModal">
+  <div class="modal-overlay" id="addVisitorModal" role="dialog" aria-modal="true">
     <div class="modal">
       <h3>Add Visitor Pass</h3>
       <form id="addVisitorForm">
@@ -360,7 +360,7 @@
   </div>
 
   <!-- Extend Visitor Modal -->
-  <div class="modal-overlay" id="extendVisitorModal">
+  <div class="modal-overlay" id="extendVisitorModal" role="dialog" aria-modal="true">
     <div class="modal">
       <h3>Extend Visitor Pass</h3>
       <p style="font-size:13px;color:#9ca3af;margin-bottom:16px;">Extend the parking pass for <strong id="extPlate" style="color:#3b82f6;"></strong></p>
@@ -378,7 +378,7 @@
   </div>
 
   <!-- Temp Tag Modal -->
-  <div class="modal-overlay" id="tempTagModal">
+  <div class="modal-overlay" id="tempTagModal" role="dialog" aria-modal="true">
     <div class="modal">
       <h3>Issue Temporary Tag</h3>
       <form id="tempTagForm">
@@ -402,7 +402,6 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script>
     const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
@@ -468,6 +467,7 @@
     }
 
     function clearSession() {
+      if (realtimeChannel) { sb.removeChannel(realtimeChannel); realtimeChannel = null; }
       localStorage.removeItem('ll_leasing_session');
       currentOffice = null;
       currentProperty = null;
@@ -515,11 +515,22 @@
       }
     }
 
+    let realtimeChannel = null;
+
     function enterApp() {
       document.getElementById('loginScreen').style.display = 'none';
       document.getElementById('appShell').classList.add('active');
       document.getElementById('propertyName').textContent = currentProperty.name;
       loadData();
+      subscribeRealtime();
+    }
+
+    function subscribeRealtime() {
+      if (realtimeChannel) sb.removeChannel(realtimeChannel);
+      realtimeChannel = sb.channel('leasing-' + currentProperty.id)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'resident_plates', filter: 'property_id=eq.' + currentProperty.id }, () => loadData())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'visitor_passes', filter: 'property_id=eq.' + currentProperty.id }, () => loadData())
+        .subscribe();
     }
 
     document.getElementById('logoutBtn').addEventListener('click', clearSession);
@@ -569,8 +580,8 @@
           <td class="hide-mobile">${esc(r.phone || '—')}</td>
           <td>
             <div class="actions">
-              ${r.status === 'pending' ? `<button class="btn btn-success btn-sm" onclick="approveResident('${r.id}')">Approve</button><button class="btn btn-danger btn-sm" onclick="rejectResident('${r.id}')">Reject</button>` : ''}
-              ${r.active ? `<button class="btn btn-danger btn-sm" onclick="removeResident('${r.id}')">Remove</button>` : '<span style="color:#6b7280;font-size:12px;">Inactive</span>'}
+              ${r.status === 'pending' ? `<button class="btn btn-success btn-sm" onclick="approveResident('${esc(r.id)}')">Approve</button><button class="btn btn-danger btn-sm" onclick="rejectResident('${esc(r.id)}')">Reject</button>` : ''}
+              ${r.active ? `<button class="btn btn-danger btn-sm" onclick="removeResident('${esc(r.id)}')">Remove</button>` : '<span style="color:#6b7280;font-size:12px;">Inactive</span>'}
               ${r.lease_doc_url ? `<a href="${esc(r.lease_doc_url)}" target="_blank" class="doc-link">Lease</a>` : ''}
               ${r.plate_photo_url ? `<a href="${esc(r.plate_photo_url)}" target="_blank" class="doc-link">Photo</a>` : ''}
             </div>
@@ -607,8 +618,8 @@
           <td>
             <div class="actions">
               ${v.status === 'active' ? `
-                <button class="btn btn-primary btn-sm" onclick="openExtendModal('${v.id}', '${esc(v.plate_text)}')">Extend</button>
-                <button class="btn btn-danger btn-sm" onclick="revokeVisitor('${v.id}')">Revoke</button>
+                <button class="btn btn-primary btn-sm" onclick="openExtendModal('${esc(v.id)}', '${esc(v.plate_text)}')">Extend</button>
+                <button class="btn btn-danger btn-sm" onclick="revokeVisitor('${esc(v.id)}')">Revoke</button>
               ` : ''}
             </div>
           </td>
@@ -657,7 +668,7 @@
                 <td>${esc(r.holder_name)}</td>
                 <td>${esc(r.unit_number)}</td>
                 <td style="color:#ef4444;">${fmtDate(r.plate_expiration)}</td>
-                <td><button class="btn btn-danger btn-sm" onclick="removeResident('${r.id}')">Remove</button></td>
+                <td><button class="btn btn-danger btn-sm" onclick="removeResident('${esc(r.id)}')">Remove</button></td>
               </tr>
             `).join('')}</tbody>
           </table>`}
@@ -691,7 +702,7 @@
                 <td>${esc(r.holder_name)}</td>
                 <td>${esc(r.unit_number)}</td>
                 <td>${fmtDate(r.plate_expiration)}</td>
-                <td><button class="btn btn-danger btn-sm" onclick="removeResident('${r.id}')">Remove</button></td>
+                <td><button class="btn btn-danger btn-sm" onclick="removeResident('${esc(r.id)}')">Remove</button></td>
               </tr>
             `).join('')}</tbody>
           </table>`}
@@ -699,28 +710,40 @@
       `;
     }
 
-    // ── Actions ──
+    // ── Actions (all wrapped in try/catch for error feedback) ──
     async function approveResident(id) {
-      await sb.from('resident_plates').update({ status: 'approved' }).eq('id', id);
-      loadData();
+      try {
+        const { error } = await sb.from('resident_plates').update({ status: 'approved' }).eq('id', id);
+        if (error) throw error;
+        loadData();
+      } catch (err) { alert('Failed to approve: ' + (err.message || err)); }
     }
 
     async function rejectResident(id) {
       if (!confirm('Reject this resident registration?')) return;
-      await sb.from('resident_plates').update({ status: 'rejected', active: false }).eq('id', id);
-      loadData();
+      try {
+        const { error } = await sb.from('resident_plates').update({ status: 'rejected', active: false }).eq('id', id);
+        if (error) throw error;
+        loadData();
+      } catch (err) { alert('Failed to reject: ' + (err.message || err)); }
     }
 
     async function removeResident(id) {
       if (!confirm('Remove this resident? They will need to re-register.')) return;
-      await sb.from('resident_plates').update({ active: false }).eq('id', id);
-      loadData();
+      try {
+        const { error } = await sb.from('resident_plates').update({ active: false }).eq('id', id);
+        if (error) throw error;
+        loadData();
+      } catch (err) { alert('Failed to remove: ' + (err.message || err)); }
     }
 
     async function revokeVisitor(id) {
       if (!confirm('Revoke this visitor pass?')) return;
-      await sb.from('visitor_passes').update({ status: 'revoked' }).eq('id', id);
-      loadData();
+      try {
+        const { error } = await sb.from('visitor_passes').update({ status: 'revoked' }).eq('id', id);
+        if (error) throw error;
+        loadData();
+      } catch (err) { alert('Failed to revoke: ' + (err.message || err)); }
     }
 
     function openExtendModal(passId, plate) {
@@ -732,46 +755,53 @@
 
     document.getElementById('extConfirmBtn').addEventListener('click', async function() {
       if (!extendingPassId) return;
-      const days = parseInt(document.getElementById('extDays').value, 10);
-      const pass = visitors.find(v => v.id === extendingPassId);
-      if (!pass) return;
+      try {
+        const days = parseInt(document.getElementById('extDays').value, 10);
+        const pass = visitors.find(v => v.id === extendingPassId);
+        if (!pass) return;
 
-      const currentEnd = new Date(pass.valid_until);
-      const base = currentEnd > new Date() ? currentEnd : new Date();
-      const newEnd = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+        const now = new Date();
+        const currentEnd = new Date(pass.valid_until);
+        const base = currentEnd > now ? currentEnd : now;
+        const newEnd = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
 
-      await sb.from('visitor_passes').update({
-        valid_until: newEnd.toISOString(),
-        status: 'active'
-      }).eq('id', extendingPassId);
+        const { error } = await sb.from('visitor_passes').update({
+          valid_until: newEnd.toISOString(),
+          status: 'active'
+        }).eq('id', extendingPassId);
+        if (error) throw error;
 
-      closeModal('extendVisitorModal');
-      extendingPassId = null;
-      loadData();
+        closeModal('extendVisitorModal');
+        extendingPassId = null;
+        loadData();
+      } catch (err) { alert('Failed to extend pass: ' + (err.message || err)); }
     });
 
-    // ── Add Resident Form ──
+    // ── Add Resident Form (leasing office adds directly as approved) ──
     document.getElementById('addResidentForm').addEventListener('submit', async function(e) {
       e.preventDefault();
       const plate = document.getElementById('arPlate').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
       if (!plate) return;
 
-      await sb.from('resident_plates').insert({
-        property_id: currentProperty.id,
-        plate_text: plate,
-        holder_name: document.getElementById('arName').value.trim(),
-        unit_number: document.getElementById('arUnit').value.trim(),
-        vehicle_description: '',
-        active: true,
-        status: 'approved',
-        plate_expiration: document.getElementById('arExpiration').value || null,
-        phone: document.getElementById('arPhone').value.trim() || null,
-        email: document.getElementById('arEmail').value.trim() || null,
-      });
+      try {
+        const { error } = await sb.from('resident_plates').insert({
+          property_id: currentProperty.id,
+          plate_text: plate,
+          holder_name: document.getElementById('arName').value.trim(),
+          unit_number: document.getElementById('arUnit').value.trim(),
+          vehicle_description: '',
+          active: true,
+          status: 'approved',
+          plate_expiration: document.getElementById('arExpiration').value || null,
+          phone: document.getElementById('arPhone').value.trim() || null,
+          email: document.getElementById('arEmail').value.trim() || null,
+        });
+        if (error) throw error;
 
-      closeModal('addResidentModal');
-      this.reset();
-      loadData();
+        closeModal('addResidentModal');
+        this.reset();
+        loadData();
+      } catch (err) { alert('Failed to add resident: ' + (err.message || err)); }
     });
 
     // ── Add Visitor Form ──
@@ -783,23 +813,26 @@
       const now = new Date();
       const until = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 
-      await sb.from('visitor_passes').insert({
-        property_id: currentProperty.id,
-        plate_text: plate,
-        visitor_name: document.getElementById('avName').value.trim(),
-        host_unit: document.getElementById('avUnit').value.trim(),
-        host_name: '',
-        valid_from: now.toISOString(),
-        valid_until: until.toISOString(),
-        status: 'active',
-        stay_days: days,
-        phone: document.getElementById('avPhone').value.trim() || null,
-        email: document.getElementById('avEmail').value.trim() || null,
-      });
+      try {
+        const { error } = await sb.from('visitor_passes').insert({
+          property_id: currentProperty.id,
+          plate_text: plate,
+          visitor_name: document.getElementById('avName').value.trim(),
+          host_unit: document.getElementById('avUnit').value.trim(),
+          host_name: '',
+          valid_from: now.toISOString(),
+          valid_until: until.toISOString(),
+          status: 'active',
+          stay_days: days,
+          phone: document.getElementById('avPhone').value.trim() || null,
+          email: document.getElementById('avEmail').value.trim() || null,
+        });
+        if (error) throw error;
 
-      closeModal('addVisitorModal');
-      this.reset();
-      loadData();
+        closeModal('addVisitorModal');
+        this.reset();
+        loadData();
+      } catch (err) { alert('Failed to create visitor pass: ' + (err.message || err)); }
     });
 
     // ── Temp Tag Form ──
@@ -807,23 +840,31 @@
       e.preventDefault();
       const plate = document.getElementById('ttPlate').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
       if (!plate) return;
+      const expiration = document.getElementById('ttExpiration').value;
+      if (new Date(expiration) <= new Date()) {
+        alert('Expiration date must be in the future.');
+        return;
+      }
 
-      await sb.from('resident_plates').insert({
-        property_id: currentProperty.id,
-        plate_text: plate,
-        holder_name: document.getElementById('ttName').value.trim(),
-        unit_number: document.getElementById('ttUnit').value.trim(),
-        vehicle_description: 'Temporary tag',
-        active: true,
-        status: 'approved',
-        plate_expiration: document.getElementById('ttExpiration').value,
-        phone: document.getElementById('ttPhone').value.trim() || null,
-        email: document.getElementById('ttEmail').value.trim() || null,
-      });
+      try {
+        const { error } = await sb.from('resident_plates').insert({
+          property_id: currentProperty.id,
+          plate_text: plate,
+          holder_name: document.getElementById('ttName').value.trim(),
+          unit_number: document.getElementById('ttUnit').value.trim(),
+          vehicle_description: 'Temporary tag',
+          active: true,
+          status: 'approved',
+          plate_expiration: expiration,
+          phone: document.getElementById('ttPhone').value.trim() || null,
+          email: document.getElementById('ttEmail').value.trim() || null,
+        });
+        if (error) throw error;
 
-      closeModal('tempTagModal');
-      this.reset();
-      loadData();
+        closeModal('tempTagModal');
+        this.reset();
+        loadData();
+      } catch (err) { alert('Failed to issue temp tag: ' + (err.message || err)); }
     });
 
     // ── Modals ──

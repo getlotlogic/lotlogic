@@ -335,6 +335,7 @@
     }
 
     async function uploadFile(bucket, file, prefix) {
+      if (file.size > 10 * 1024 * 1024) throw new Error('File must be under 10MB.');
       const ext = file.name.split('.').pop();
       const path = prefix + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
       const { data, error } = await supabase.storage.from(bucket).upload(path, file);

@@ -2265,7 +2265,7 @@ const db = {
   },
   async getResidentPlates(propertyId) {
     if (supabase) {
-      const { data, error } = await supabase.from('resident_plates').select('*').eq('property_id', propertyId).eq('active', true).order('created_at', { ascending: false });
+      const { data, error } = await supabase.from('resident_plates').select('*').eq('property_id', propertyId).eq('active', true).or('status.eq.approved,status.is.null').order('created_at', { ascending: false });
       if (!error && data) return data;
     }
     return [];
@@ -6616,6 +6616,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
           <div key={p.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
             <div>
               <span style={{fontWeight:800,fontSize:15,color:'var(--text-primary)',letterSpacing:'.03em'}}>{p.plate_text}</span>
+              {p.status === 'pending' && <span style={{fontSize:10,fontWeight:600,color:'#fbbf24',background:'rgba(251,191,36,.12)',padding:'2px 6px',borderRadius:4,marginLeft:6}}>PENDING</span>}
               <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>{p.unit_number ? `Unit ${p.unit_number}` : ''} {p.holder_name || ''}</span>
             </div>
             <button onClick={() => handleRemovePlate(p.id)} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>Remove</button>

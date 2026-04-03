@@ -2,14 +2,17 @@
 // Runs daily via cron. Emails residents whose plates expire within 72 hours.
 // Requires RESEND_API_KEY env var and SUPABASE_SERVICE_ROLE_KEY.
 
+import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "noreply@lotlogic.com";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
 
 interface ResidentPlate {
   id: string;
@@ -21,10 +24,11 @@ interface ResidentPlate {
   property_id: string;
 }
 
-async function sendEmail(to: string, subject: string, html: string) {
+async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
   if (!RESEND_API_KEY) {
     console.log(`[DRY RUN] Would email ${to}: ${subject}`);
-    return true;
+    // Return false so we don't mark as notified when no email was actually sent
+    return false;
   }
 
   const res = await fetch("https://api.resend.com/emails", {
@@ -52,6 +56,8 @@ function buildEmailHtml(resident: ResidentPlate, propertyName: string): string {
     day: "numeric",
   });
 
+  const unitLabel = resident.unit_number ? `Unit ${resident.unit_number}` : "your unit";
+
   return `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 500px; margin: 0 auto; padding: 32px 24px; background: #f9fafb; border-radius: 12px;">
       <div style="text-align: center; margin-bottom: 24px;">
@@ -60,11 +66,11 @@ function buildEmailHtml(resident: ResidentPlate, propertyName: string): string {
       </div>
       <h2 style="font-size: 18px; color: #1a1a2e; text-align: center;">Vehicle Registration Expiring Soon</h2>
       <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-        Hi ${resident.holder_name},
+        Hi ${resident.holder_name || "Resident"},
       </p>
       <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
         Your vehicle registration for plate <strong style="color: #1a1a2e; font-family: monospace; letter-spacing: 0.05em;">${resident.plate_text}</strong>
-        at <strong>${propertyName}</strong> (Unit ${resident.unit_number}) is expiring on:
+        at <strong>${propertyName}</strong> (${unitLabel}) is expiring on:
       </p>
       <div style="text-align: center; margin: 20px 0;">
         <div style="display: inline-block; background: rgba(251,191,36,0.15); border: 1px solid rgba(251,191,36,0.3); color: #92400e; padding: 12px 24px; border-radius: 10px; font-size: 16px; font-weight: 700;">
@@ -83,7 +89,7 @@ function buildEmailHtml(resident: ResidentPlate, propertyName: string): string {
   `;
 }
 
-Deno.serve(async (_req: Request) => {
+serve(async (_req: Request) => {
   try {
     const now = new Date();
     const in72h = new Date(now.getTime() + 72 * 60 * 60 * 1000);
@@ -102,19 +108,29 @@ Deno.serve(async (_req: Request) => {
 
     if (fetchErr) {
       console.error("Fetch error:", fetchErr);
-      return new Response(JSON.stringify({ error: fetchErr.message }), { status: 500 });
+      return new Response(
+        JSON.stringify({ error: fetchErr.message }),
+        { status: 500, headers: JSON_HEADERS }
+      );
     }
 
     if (!expiring || expiring.length === 0) {
-      return new Response(JSON.stringify({ message: "No expiring plates to notify", count: 0 }));
+      return new Response(
+        JSON.stringify({ message: "No expiring plates to notify", count: 0 }),
+        { headers: JSON_HEADERS }
+      );
     }
 
     // Load property names for the email body
     const propertyIds = [...new Set(expiring.map((r: ResidentPlate) => r.property_id))];
-    const { data: properties } = await supabase
+    const { data: properties, error: propErr } = await supabase
       .from("properties")
       .select("id, name")
       .in("id", propertyIds);
+
+    if (propErr) {
+      console.error("Properties fetch error:", propErr);
+    }
 
     const propMap: Record<string, string> = {};
     (properties || []).forEach((p: { id: string; name: string }) => {
@@ -122,6 +138,7 @@ Deno.serve(async (_req: Request) => {
     });
 
     let sentCount = 0;
+    let skippedCount = 0;
     for (const resident of expiring as ResidentPlate[]) {
       const propertyName = propMap[resident.property_id] || "your property";
       const html = buildEmailHtml(resident, propertyName);
@@ -137,15 +154,25 @@ Deno.serve(async (_req: Request) => {
           .update({ expiry_notified_at: now.toISOString() })
           .eq("id", resident.id);
         sentCount++;
+      } else {
+        skippedCount++;
       }
     }
 
     return new Response(
-      JSON.stringify({ message: `Notified ${sentCount} resident(s)`, count: sentCount }),
-      { headers: { "Content-Type": "application/json" } }
+      JSON.stringify({
+        message: `Notified ${sentCount} resident(s)`,
+        count: sentCount,
+        skipped: skippedCount,
+        dry_run: !RESEND_API_KEY,
+      }),
+      { headers: JSON_HEADERS }
     );
   } catch (err) {
     console.error("Unexpected error:", err);
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500 });
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: JSON_HEADERS }
+    );
   }
 });
