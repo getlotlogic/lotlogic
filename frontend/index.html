@@ -6578,6 +6578,8 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   if (!property) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Property not found</div></div>;
 
   const visitUrl = `${window.location.origin}/visit/${property.qr_code_id}`;
+  const registerUrl = `${window.location.origin}/register/${property.qr_code_id}`;
+  const leasingUrl = `${window.location.origin}/leasing`;
 
   return (
     <div className="page-enter">
@@ -6593,6 +6595,21 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         <div style={{fontSize:12,fontWeight:700,color:'#3b82f6',marginBottom:6}}>VISITOR REGISTRATION LINK</div>
         <div style={{fontSize:13,color:'var(--text-primary)',wordBreak:'break-all',fontFamily:'monospace'}}>{visitUrl}</div>
         <button onClick={() => { navigator.clipboard.writeText(visitUrl); }} style={{marginTop:8,background:'rgba(59,130,246,.15)',color:'#3b82f6',border:'1px solid rgba(59,130,246,.3)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Copy Link</button>
+      </div>
+
+      {/* Resident Registration Link */}
+      <div style={{background:'rgba(74,222,128,.06)',border:'1px solid rgba(74,222,128,.2)',borderRadius:10,padding:'14px',marginBottom:16}}>
+        <div style={{fontSize:12,fontWeight:700,color:'#4ade80',marginBottom:6}}>RESIDENT REGISTRATION LINK</div>
+        <div style={{fontSize:13,color:'var(--text-primary)',wordBreak:'break-all',fontFamily:'monospace'}}>{registerUrl}</div>
+        <button onClick={() => { navigator.clipboard.writeText(registerUrl); }} style={{marginTop:8,background:'rgba(74,222,128,.15)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Copy Link</button>
+      </div>
+
+      {/* Leasing Office Portal */}
+      <div style={{background:'rgba(251,191,36,.06)',border:'1px solid rgba(251,191,36,.2)',borderRadius:10,padding:'14px',marginBottom:16}}>
+        <div style={{fontSize:12,fontWeight:700,color:'#fbbf24',marginBottom:6}}>LEASING OFFICE PORTAL</div>
+        <div style={{fontSize:13,color:'var(--text-muted)',marginBottom:8}}>Manage residents, visitor passes, and tags</div>
+        <button onClick={() => { window.open(leasingUrl, '_blank'); }} style={{background:'rgba(251,191,36,.15)',color:'#fbbf24',border:'1px solid rgba(251,191,36,.3)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Open Portal</button>
+        <button onClick={() => { navigator.clipboard.writeText(leasingUrl); }} style={{marginLeft:8,background:'rgba(255,255,255,.06)',color:'var(--text-muted)',border:'1px solid var(--border)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Copy Link</button>
       </div>
 
       {/* Resident Plates */}
