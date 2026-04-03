@@ -108,13 +108,14 @@ serve(async (req) => {
       );
     }
 
-    // Check against resident plates
+    // Check against approved resident plates (pending registrations are not authorized)
     const { data: residentMatch } = await supabase
       .from("resident_plates")
       .select("id")
       .eq("property_id", camera.property_id)
       .eq("plate_text", normalizedPlate)
       .eq("active", true)
+      .eq("status", "approved")
       .limit(1);
 
     if (residentMatch && residentMatch.length > 0) {
