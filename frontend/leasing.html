@@ -507,11 +507,15 @@
 
     // ── Init ──
     async function init() {
-      const session = loadSession();
-      if (session) {
-        currentOffice = session.office;
-        currentProperty = session.property;
-        enterApp();
+      try {
+        const session = loadSession();
+        if (session) {
+          currentOffice = session.office;
+          currentProperty = session.property;
+          enterApp();
+        }
+      } catch (err) {
+        console.error('init error:', err);
       }
     }
 
@@ -547,13 +551,18 @@
 
     // ── Data Loading ──
     async function loadData() {
-      const [resResult, visResult] = await Promise.all([
-        sb.from('resident_plates').select('*').eq('property_id', currentProperty.id).order('created_at', { ascending: false }),
-        sb.from('visitor_passes').select('*').eq('property_id', currentProperty.id).order('created_at', { ascending: false }),
-      ]);
-      residents = resResult.data || [];
-      visitors = visResult.data || [];
-      renderTab();
+      try {
+        const [resResult, visResult] = await Promise.all([
+          sb.from('resident_plates').select('*').eq('property_id', currentProperty.id).order('created_at', { ascending: false }),
+          sb.from('visitor_passes').select('*').eq('property_id', currentProperty.id).order('created_at', { ascending: false }),
+        ]);
+        residents = resResult.data || [];
+        visitors = visResult.data || [];
+        renderTab();
+      } catch (err) {
+        console.error('loadData error:', err);
+        document.getElementById('tabContent').innerHTML = '<div class="empty-state">Failed to load data. Please refresh the page.</div>';
+      }
     }
 
     // ── Tab Rendering ──
