@@ -212,24 +212,29 @@
     let leaseFile = null;
 
     async function init() {
-      if (!qrCodeId) {
-        showNotFound('Invalid Link', 'This resident registration link is not valid.');
-        return;
+      try {
+        if (!qrCodeId) {
+          showNotFound('Invalid Link', 'This resident registration link is not valid.');
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('properties')
+          .select('id, name, address')
+          .eq('qr_code_id', qrCodeId)
+          .single();
+
+        if (error || !data) {
+          showNotFound('Property Not Found', 'This registration link is not valid or has expired.');
+          return;
+        }
+
+        property = data;
+        showForm();
+      } catch (err) {
+        showNotFound('Connection Error', 'Unable to connect. Please check your internet and try again.');
+        console.error('init error:', err);
       }
-
-      const { data, error } = await supabase
-        .from('properties')
-        .select('id, name, address')
-        .eq('qr_code_id', qrCodeId)
-        .single();
-
-      if (error || !data) {
-        showNotFound('Property Not Found', 'This registration link is not valid or has expired.');
-        return;
-      }
-
-      property = data;
-      showForm();
     }
 
     function showNotFound(title, message) {
