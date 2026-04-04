@@ -2265,7 +2265,7 @@ const db = {
   },
   async getResidentPlates(propertyId) {
     if (supabase) {
-      const { data, error } = await supabase.from('resident_plates').select('*').eq('property_id', propertyId).eq('active', true).or('status.eq.approved,status.is.null').order('created_at', { ascending: false });
+      const { data, error } = await supabase.from('resident_plates').select('*').eq('property_id', propertyId).eq('active', true).order('created_at', { ascending: false });
       if (!error && data) return data;
     }
     return [];
