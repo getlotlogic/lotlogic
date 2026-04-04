@@ -3395,7 +3395,7 @@ function LoginPage({ onLogin }) {
 }
 
 // ── Jobs tab (current violations) ─────────────────────────────
-function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, deepLinkViolationId, user }) {
+function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, onAction, isOwner, deepLinkViolationId, user }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
   const [selectedViol, setSelectedViol] = useState(null);
 
@@ -3416,16 +3416,39 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
     }
   }, [deepLinkViolationId, violations, selectedViol]);
 
+  // Map ALPR parking pass violations into a format compatible with violation cards
+  const mappedAlpr = alprViolations.map(av => ({
+    ...av,
+    _isALPR: true,
+    detected_at: av.created_at,
+    status: av.status === 'pending' ? 'alerted' : av.status === 'dispatched' ? 'acknowledged' : 'resolved',
+    _origStatus: av.status,
+    lot_id: null,
+    _lot_name: av.properties?.name || 'Unknown Property',
+    _snapshot_url: av.plate_events?.image_url || null,
+    _detections: null,
+    plate_text: av.plate_text,
+    vehicle_color: null, vehicle_type: null, vehicle_make: null, vehicle_model: null,
+    violation_type: 'parking_pass',
+    zone_id: null, space_number: null, camera_id: null,
+    confidence: av.plate_events?.confidence || null,
+    our_revenue: 0, gross_revenue: 0,
+    sms_sent_at: null, sms_delivered: null, reminder_sent_at: null,
+    resolved_at: av.resolved_at || null, departed_at: null, cleared_at: null,
+    action_taken: av._origStatus === 'dispatched' ? 'tow' : av._origStatus === 'resolved' ? 'dismissed' : null,
+  }));
+  const allViolations = [...violations, ...mappedAlpr];
+
   // Active jobs = only actionable violations (alerted/acknowledged)
   // Departed/pending are excluded — departed goes to "Handled Today"
-  const active = violations
+  const active = allViolations
     .filter(v => ['alerted', 'acknowledged'].includes(v.status))
     .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at));
 
   // Recent = resolved/cleared today (calendar day)
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   const todayCutoff = todayStart.getTime();
-  const recent = violations
+  const recent = allViolations
     .filter(v => ['resolved', 'cleared', 'departed'].includes(v.status) && new Date(v.resolved_at || v.departed_at || v.cleared_at || v.detected_at).getTime() >= todayCutoff)
     .sort((a, b) => new Date(b.resolved_at || b.departed_at || b.cleared_at || b.detected_at) - new Date(a.resolved_at || a.departed_at || a.cleared_at || a.detected_at));
 
@@ -3888,16 +3911,23 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               })()}
               {/* Vehicle summary bar — quick-glance info for the tow operator */}
               <div className="vehicle-summary">
-                <span className="vs-item">
-                  {displayColor(v.vehicle_color) ? (
-                    <>
-                      <span style={{width:10, height:10, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(128,128,128,.3)', flexShrink:0}} />
-                      <span style={{textTransform:'capitalize'}}>{[v.vehicle_color, v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : null, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</span>
-                    </>
-                  ) : (
-                    <span style={{color:'var(--text-muted)', textTransform:'capitalize'}}>{[v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : 'Vehicle', v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</span>
-                  )}
-                </span>
+                {v._isALPR ? (
+                  <span className="vs-item">
+                    <span style={{fontWeight:800, letterSpacing:'.04em', fontFamily:'SFMono-Regular, Consolas, monospace'}}>{v.plate_text}</span>
+                    <span style={{color:'var(--text-muted)', marginLeft:6}}>Unregistered plate</span>
+                  </span>
+                ) : (
+                  <span className="vs-item">
+                    {displayColor(v.vehicle_color) ? (
+                      <>
+                        <span style={{width:10, height:10, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(128,128,128,.3)', flexShrink:0}} />
+                        <span style={{textTransform:'capitalize'}}>{[v.vehicle_color, v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : null, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</span>
+                      </>
+                    ) : (
+                      <span style={{color:'var(--text-muted)', textTransform:'capitalize'}}>{[v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : 'Vehicle', v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}</span>
+                    )}
+                  </span>
+                )}
                 {v.zone_id && <><span className="vs-divider" /><span className="vs-item" style={{color:'var(--text-muted)'}}>Zone {v.zone_id}</span></>}
                 {v.space_number && <><span className="vs-divider" /><span className="vs-item" style={{color:'var(--text-muted)'}}>#{v.space_number}</span></>}
               </div>
@@ -3905,7 +3935,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 16px'}}>
                 <div style={{flex:1, minWidth:0}}>
                   <div className="job-lot-name" style={{fontSize:14, display:'flex', alignItems:'center', gap:8}}>
-                    {lot?.name || 'Unknown Lot'}
+                    {v._isALPR ? v._lot_name : (lot?.name || 'Unknown Lot')}
+                    {v._isALPR && <span style={{fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:6, background:'rgba(167,139,250,.15)', color:'#a78bfa', whiteSpace:'nowrap'}}>PARKING PASS</span>}
                     {/* Status badge */}
                     {(() => {
                       const badge = statusBadge[v.status] || statusBadge.pending;
@@ -3942,6 +3973,19 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
               </div>
               {/* Primary actions — hidden for departed violations (dismiss from banner instead) */}
               {!(v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) && (<>
+              {v._isALPR ? (
+              <>
+              <div className="job-actions-row" role="group" aria-label="Enforcement actions" style={{gap:8, padding:'10px 12px'}}>
+                <button className="action-btn tow" disabled={anyActing} onClick={async () => { setActing(v.id); try { await db.dispatchALPRViolation(v.id); addToast('Tow dispatched', 'success'); if (onAction) onAction(); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Dispatch tow" style={{padding:'12px 6px', fontSize:13}}>
+                  {isActing ? '…' : 'Dispatch Tow'}
+                </button>
+                <button className="action-btn dismiss" disabled={anyActing} onClick={async () => { setActing(v.id); try { await db.dismissALPRViolation(v.id); addToast('Violation dismissed', 'success'); if (onAction) onAction(); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Dismiss violation" style={{padding:'12px 6px', fontSize:13}}>
+                  {isActing ? '…' : 'Dismiss'}
+                </button>
+              </div>
+              </>
+              ) : (
+              <>
               <div className="job-actions-row" role="group" aria-label="Enforcement actions" style={{gap:8, padding:'10px 12px'}}>
                 <button className="action-btn boot" disabled={anyActing} onClick={() => requestAction(v.id, 'boot')} aria-label={`Boot vehicle for $${user?.boot_fee || 75}`} style={{padding:'12px 6px', fontSize:13}}>
                   {isActing ? '…' : `Boot · $${user?.boot_fee || 75}`}
@@ -3975,6 +4019,8 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                   </a>
                 )}
               </div>
+              </>
+              )}
               </>)}
             </div>
           );
@@ -4021,7 +4067,10 @@ function JobsPage({ lots, violations, loading, lotStates, onAction, isOwner, dee
                 <div className="job-body">
                   <div className="job-top">
                     <div>
-                      <div className="job-lot-name" style={{fontSize:14}}>{lot?.name || 'Unknown Lot'}</div>
+                      <div className="job-lot-name" style={{fontSize:14, display:'flex', alignItems:'center', gap:6}}>
+                        {v._isALPR ? v._lot_name : (lot?.name || 'Unknown Lot')}
+                        {v._isALPR && <span style={{fontSize:9, fontWeight:700, padding:'2px 6px', borderRadius:4, background:'rgba(167,139,250,.15)', color:'#a78bfa'}}>PARKING PASS</span>}
+                      </div>
                       <div className="job-lot-addr">{smartDate(v.detected_at)} · {fmtTime(v.detected_at)}</div>
                     </div>
                     {v.our_revenue > 0 && (
@@ -7128,8 +7177,8 @@ function App() {
       });
       setViolations(flat);
 
-      // Load ALPR violations for the passes tab
-      db.getAllALPRViolations(o.id, 'pending', o._role).then(v => setAlprViolations(v)).catch(() => {});
+      // Load ALPR violations (all statuses for Jobs page + Passes tab)
+      db.getAllALPRViolations(o.id, null, o._role).then(v => setAlprViolations(v)).catch(() => {});
 
       setLastRefresh(new Date());
     } catch (e) {
@@ -7308,7 +7357,7 @@ function App() {
       if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current);
       const ch = db.subscribeALPRViolations(propIds, () => {
         if (!active) return;
-        db.getAllALPRViolations(owner.id, 'pending', owner._role).then(v => { if (active) setAlprViolations(v); }).catch(() => {});
+        db.getAllALPRViolations(owner.id, null, owner._role).then(v => { if (active) setAlprViolations(v); }).catch(() => {});
       });
       alprRealtimeRef.current = ch;
     }).catch(() => {});
@@ -7339,14 +7388,14 @@ function App() {
   const NavIconAnalytics = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('line', {x1:'18',y1:'20',x2:'18',y2:'10'}), React.createElement('line', {x1:'12',y1:'20',x2:'12',y2:'4'}), React.createElement('line', {x1:'6',y1:'20',x2:'6',y2:'14'}));
   const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, passes: NavIconPasses };
   const navTabs = isOwner ? [
-    { id: 'jobs',     label: 'Jobs',     badge: pending },
+    { id: 'jobs',     label: 'Jobs',     badge: pending + alprPending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'passes',   label: 'Passes',   badge: alprPending },
     { id: 'analytics',label: 'Analytics',badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
-    { id: 'jobs',     label: 'Jobs',     badge: pending },
+    { id: 'jobs',     label: 'Jobs',     badge: pending + alprPending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'passes',   label: 'Passes',   badge: alprPending },
     { id: 'activity', label: 'Activity', badge: 0 },
@@ -7422,7 +7471,7 @@ function App() {
 
         <div key={tab + (viewAs?.id || '')} className="page-slide">
           {tab === 'overview' && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
-          {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} />}
+          {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} />}
           {tab === 'lots' && <LotsPage lots={effectiveLots} lotStates={effectiveLotStates} loading={loading} ownerRole={effectiveUser._role} onZonesSaved={() => loadData(owner, true)} />}
           {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} isOwner={isOwner} onNavigate={setTab} />}
