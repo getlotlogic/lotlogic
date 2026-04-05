@@ -277,6 +277,10 @@
         <h1>Lot<span>Logic</span></h1>
         <p>Leasing Office Portal</p>
       </div>
+      <div id="loginPropertyName" style="display:none;text-align:center;margin-bottom:16px;">
+        <div style="font-size:13px;color:#6b7280;">Property</div>
+        <div id="loginPropertyLabel" style="font-size:16px;font-weight:700;color:#f3f4f6;margin-top:2px;"></div>
+      </div>
       <form id="loginForm">
         <label for="loginEmail">Email Address</label>
         <input type="email" id="loginEmail" placeholder="leasing@property.com" required autofocus>
@@ -408,6 +412,11 @@
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+    // Extract property qr_code_id from URL path: /leasing/{qr_code_id}
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    const qrCodeId = pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null;
+    let preloadedPropertyId = null;
+
     let currentOffice = null;   // leasing_offices row
     let currentProperty = null; // properties row
     let residents = [];
@@ -447,9 +456,11 @@
       return new Date(dateStr) < new Date();
     }
 
-    // ── Session ──
+    // ── Session (keyed per property so different URLs don't share sessions) ──
+    const sessionKey = 'll_leasing_session_' + (qrCodeId || 'default');
+
     function saveSession() {
-      localStorage.setItem('ll_leasing_session', JSON.stringify({
+      localStorage.setItem(sessionKey, JSON.stringify({
         office: currentOffice,
         property: currentProperty,
         ts: Date.now()
@@ -458,7 +469,7 @@
 
     function loadSession() {
       try {
-        const raw = localStorage.getItem('ll_leasing_session');
+        const raw = localStorage.getItem(sessionKey);
         if (!raw) return null;
         const s = JSON.parse(raw);
         if (Date.now() - s.ts > 7 * 24 * 60 * 60 * 1000) return null;
@@ -468,12 +479,26 @@
 
     function clearSession() {
       if (realtimeChannel) { sb.removeChannel(realtimeChannel); realtimeChannel = null; }
-      localStorage.removeItem('ll_leasing_session');
+      localStorage.removeItem(sessionKey);
       currentOffice = null;
       currentProperty = null;
       document.getElementById('appShell').classList.remove('active');
       document.getElementById('loginScreen').style.display = '';
     }
+
+    // ── Preload property name from URL ──
+    async function preloadProperty() {
+      if (!qrCodeId) return;
+      try {
+        const { data } = await sb.from('properties').select('id, name, address').eq('qr_code_id', qrCodeId).single();
+        if (data) {
+          preloadedPropertyId = data.id;
+          document.getElementById('loginPropertyLabel').textContent = data.name;
+          document.getElementById('loginPropertyName').style.display = '';
+        }
+      } catch {}
+    }
+    preloadProperty();
 
     // ── Login ──
     document.getElementById('loginForm').addEventListener('submit', async function(e) {
@@ -486,14 +511,12 @@
 
       const email = document.getElementById('loginEmail').value.trim().toLowerCase();
 
-      const { data, error } = await sb
-        .from('leasing_offices')
-        .select('*, properties(*)')
-        .eq('email', email)
-        .single();
+      let q = sb.from('leasing_offices').select('*, properties(*)').eq('email', email);
+      if (preloadedPropertyId) q = q.eq('property_id', preloadedPropertyId);
+      const { data, error } = await q.single();
 
       if (error || !data) {
-        errDiv.innerHTML = '<div class="error-msg">No leasing office account found for this email.</div>';
+        errDiv.innerHTML = '<div class="error-msg">No leasing office account found for this email' + (preloadedPropertyId ? ' at this property' : '') + '.</div>';
         btn.disabled = false;
         btn.textContent = 'Sign In';
         return;
