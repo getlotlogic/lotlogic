@@ -6628,7 +6628,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
 
   const visitUrl = `${window.location.origin}/visit/${property.qr_code_id}`;
   const registerUrl = `${window.location.origin}/register/${property.qr_code_id}`;
-  const leasingUrl = `${window.location.origin}/leasing`;
+  const leasingUrl = `${window.location.origin}/leasing/${property.qr_code_id}`;
 
   return (
     <div className="page-enter">
