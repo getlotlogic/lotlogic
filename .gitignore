@@ -28,3 +28,7 @@ Thumbs.db
 # Docker
 *.tar
 docker-compose.override.yml
+
+# Lead gen
+leadgen/leads.db
+leadgen/.env

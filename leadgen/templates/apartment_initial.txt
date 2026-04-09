@@ -1,0 +1,21 @@
+Subject: Free camera system + digital parking passes for your communities
+
+Hi,
+
+Unauthorized vehicles in resident parking is one of those complaints that never goes away. And managing stickers, hangtags, or gate cards across multiple communities is a headache nobody wants.
+
+We built LotLogic to solve both — and it doesn't cost the property anything.
+
+Here's how it works: we install a solar-powered camera at the entrance at no cost to the community. Residents register their plate in 30 seconds to get a digital parking pass — no stickers, no cards, no app download. The camera reads every plate that enters. When an unregistered vehicle overstays, the towing partner gets an SMS with the plate photo, location, and timestamp.
+
+Residents can even issue temporary guest passes with auto-expiry — no more calling the management office.
+
+The community gets a free camera system, better entrance security, and fully automated parking enforcement. Residents stop complaining about strangers taking their spots. And nobody on your team has to manage any of it.
+
+We're running a free pilot in {{ city }}. We install the hardware, set up the digital passes, and connect your existing towing partner. It runs itself from day one.
+
+Worth a 15-minute demo?
+
+Gabriel Bowen-Slott
+CEO, LotLogic LLC
+lotlogicai@gmail.com

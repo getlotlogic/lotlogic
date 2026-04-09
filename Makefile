@@ -39,6 +39,14 @@ migrate: ## Run database migrations
 	docker build -t lotlogic-migrate -f puller/Dockerfile.migrate puller/
 	docker run --rm --env-file puller/.env lotlogic-migrate
 
+# ── Lead Gen ───────────────────────────────────────────
+
+run-leadgen: ## Run lead gen CLI (pass ARGS="stats" etc.)
+	python -m leadgen.cli $(ARGS)
+
+install-leadgen: ## Install lead gen Python dependencies
+	pip install -r leadgen/requirements.txt
+
 # ── Status ─────────────────────────────────────────────
 
 status: ## Show git status and branch info
