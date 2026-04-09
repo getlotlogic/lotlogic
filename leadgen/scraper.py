@@ -1,11 +1,14 @@
-"""Scrape leads from Google Maps Places API and SerpAPI."""
+"""Scrape leads from Apify Google Maps actor, with SerpAPI and Google Maps API fallbacks."""
 
+import re
 import time
-from urllib.parse import urlparse
 
 import requests
 
 from . import config, db
+
+# Apify Google Maps Scraper actor ID
+APIFY_GOOGLE_MAPS_ACTOR = "compass/crawler-google-places"
 
 # Rotate user agents for direct HTTP requests
 USER_AGENTS = [
@@ -23,91 +26,68 @@ def _next_ua() -> str:
     return ua
 
 
-def _parse_address_components(components: list[dict]) -> dict:
-    """Parse Google Maps address components into city/state/zip."""
-    result = {"city": None, "state": None, "zip": None}
-    for comp in components:
-        types = comp.get("types", [])
-        if "locality" in types:
-            result["city"] = comp["long_name"]
-        elif "administrative_area_level_1" in types:
-            result["state"] = comp["short_name"]
-        elif "postal_code" in types:
-            result["zip"] = comp["long_name"]
-    return result
+def _extract_zip(address: str) -> str | None:
+    """Extract zip code from an address string."""
+    if not address:
+        return None
+    match = re.search(r"\b(\d{5}(?:-\d{4})?)\b", address)
+    return match.group(1) if match else None
 
 
-def search_google_maps(
-    conn, query: str, city: str, state: str, lead_type: str
-) -> int:
-    """Search Google Maps Places API (New) for businesses. Returns count of new leads inserted."""
-    api_key = config.GOOGLE_MAPS_API_KEY
+def search_apify(conn, query: str, city: str, state: str, lead_type: str) -> int:
+    """Use Apify Google Maps scraper to find businesses. Returns count of new leads inserted."""
+    api_key = config.APIFY_API_KEY
     if not api_key:
         return 0
 
-    try:
-        import googlemaps
-    except ImportError:
-        print("  googlemaps package not installed, skipping Google Maps API")
-        return 0
-
-    client = googlemaps.Client(key=api_key)
     full_query = query.format(city=f"{city}, {state}")
-    count = 0
+
+    # Run the actor synchronously (waits for results)
+    run_url = f"https://api.apify.com/v2/acts/{APIFY_GOOGLE_MAPS_ACTOR}/run-sync-get-dataset-items"
 
     try:
-        results = client.places(query=full_query)
+        resp = requests.post(
+            run_url,
+            params={"token": api_key},
+            json={
+                "searchStringsArray": [full_query],
+                "maxCrawledPlacesPerSearch": config.MAX_RESULTS_PER_QUERY,
+                "language": "en",
+                "deeperCityScrape": False,
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=300,  # Actor runs can take a few minutes
+        )
+        resp.raise_for_status()
+        results = resp.json()
+    except requests.exceptions.Timeout:
+        print(f"  Apify timeout (query may still be running on Apify)")
+        return 0
     except Exception as e:
-        print(f"  Google Maps API error: {e}")
+        print(f"  Apify error: {e}")
         return 0
 
-    while True:
-        for place in results.get("results", []):
-            lead_data = {
-                "type": lead_type,
-                "company_name": place.get("name", ""),
-                "address": place.get("formatted_address"),
-                "city": city,
-                "state": state,
-                "rating": place.get("rating"),
-                "review_count": place.get("user_ratings_total"),
-                "source": "google_maps",
-                "google_maps_url": f"https://www.google.com/maps/place/?q=place_id:{place.get('place_id', '')}",
-            }
+    count = 0
+    for place in results:
+        address = place.get("address") or place.get("street")
+        lead_data = {
+            "type": lead_type,
+            "company_name": place.get("title") or place.get("name", ""),
+            "address": address,
+            "city": place.get("city") or city,
+            "state": place.get("state") or state,
+            "zip": place.get("postalCode") or _extract_zip(address or ""),
+            "phone": place.get("phone") or place.get("phoneUnformatted"),
+            "website": place.get("website"),
+            "google_maps_url": place.get("url") or place.get("placeUrl"),
+            "rating": place.get("totalScore") or place.get("rating"),
+            "review_count": place.get("reviewsCount") or place.get("reviewCount"),
+            "source": "apify",
+        }
 
-            # Get details for phone and website
-            place_id = place.get("place_id")
-            if place_id:
-                try:
-                    details = client.place(place_id, fields=["formatted_phone_number", "website"])
-                    detail = details.get("result", {})
-                    lead_data["phone"] = detail.get("formatted_phone_number")
-                    lead_data["website"] = detail.get("website")
-                    time.sleep(0.5)  # Rate limit detail requests
-                except Exception:
-                    pass
-
-            # Parse address components if available
-            addr_comps = place.get("address_components")
-            if addr_comps:
-                parsed = _parse_address_components(addr_comps)
-                lead_data["city"] = parsed["city"] or city
-                lead_data["state"] = parsed["state"] or state
-                lead_data["zip"] = parsed["zip"]
-
-            lead_id = db.insert_lead(conn, **lead_data)
-            if lead_id:
-                count += 1
-
-        # Check for more pages
-        next_token = results.get("next_page_token")
-        if not next_token:
-            break
-        time.sleep(2)  # Required delay before using next_page_token
-        try:
-            results = client.places(query=full_query, page_token=next_token)
-        except Exception:
-            break
+        lead_id = db.insert_lead(conn, **lead_data)
+        if lead_id:
+            count += 1
 
     return count
 
@@ -146,28 +126,20 @@ def search_serpapi(conn, query: str, city: str, state: str, lead_type: str) -> i
             break
 
         for place in results:
-            website = place.get("website")
             lead_data = {
                 "type": lead_type,
                 "company_name": place.get("title", ""),
                 "address": place.get("address"),
                 "city": city,
                 "state": state,
+                "zip": _extract_zip(place.get("address", "")),
                 "phone": place.get("phone"),
-                "website": website,
+                "website": place.get("website"),
                 "google_maps_url": place.get("place_id_search"),
                 "rating": place.get("rating"),
                 "review_count": place.get("reviews"),
                 "source": "serpapi",
             }
-
-            # Try to extract zip from address
-            address = place.get("address", "")
-            if address:
-                import re
-                zip_match = re.search(r"\b(\d{5}(?:-\d{4})?)\b", address)
-                if zip_match:
-                    lead_data["zip"] = zip_match.group(1)
 
             lead_id = db.insert_lead(conn, **lead_data)
             if lead_id:
@@ -179,8 +151,74 @@ def search_serpapi(conn, query: str, city: str, state: str, lead_type: str) -> i
     return count
 
 
+def search_google_maps(
+    conn, query: str, city: str, state: str, lead_type: str
+) -> int:
+    """Search Google Maps Places API for businesses. Returns count of new leads inserted."""
+    api_key = config.GOOGLE_MAPS_API_KEY
+    if not api_key:
+        return 0
+
+    try:
+        import googlemaps
+    except ImportError:
+        print("  googlemaps package not installed, skipping Google Maps API")
+        return 0
+
+    client = googlemaps.Client(key=api_key)
+    full_query = query.format(city=f"{city}, {state}")
+    count = 0
+
+    try:
+        results = client.places(query=full_query)
+    except Exception as e:
+        print(f"  Google Maps API error: {e}")
+        return 0
+
+    while True:
+        for place in results.get("results", []):
+            lead_data = {
+                "type": lead_type,
+                "company_name": place.get("name", ""),
+                "address": place.get("formatted_address"),
+                "city": city,
+                "state": state,
+                "rating": place.get("rating"),
+                "review_count": place.get("user_ratings_total"),
+                "source": "google_maps",
+                "google_maps_url": f"https://www.google.com/maps/place/?q=place_id:{place.get('place_id', '')}",
+            }
+
+            place_id = place.get("place_id")
+            if place_id:
+                try:
+                    details = client.place(place_id, fields=["formatted_phone_number", "website"])
+                    detail = details.get("result", {})
+                    lead_data["phone"] = detail.get("formatted_phone_number")
+                    lead_data["website"] = detail.get("website")
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+
+            lead_id = db.insert_lead(conn, **lead_data)
+            if lead_id:
+                count += 1
+
+        next_token = results.get("next_page_token")
+        if not next_token:
+            break
+        time.sleep(2)
+        try:
+            results = client.places(query=full_query, page_token=next_token)
+        except Exception:
+            break
+
+    return count
+
+
 def scrape_city(conn, city: str, state: str, lead_type: str) -> int:
-    """Run all search queries for a city and lead type. Returns total new leads."""
+    """Run all search queries for a city and lead type. Returns total new leads.
+    Priority: Apify > SerpAPI > Google Maps API."""
     queries = config.SEARCH_QUERIES.get(lead_type, [])
     total = 0
 
@@ -188,10 +226,12 @@ def scrape_city(conn, city: str, state: str, lead_type: str) -> int:
         formatted = query.format(city=f"{city}, {state}")
         print(f"  Searching: {formatted}")
 
-        # Try Google Maps API first, then SerpAPI
-        count = search_google_maps(conn, query, city, state, lead_type)
+        # Try Apify first, then SerpAPI, then Google Maps API
+        count = search_apify(conn, query, city, state, lead_type)
         if count == 0:
             count = search_serpapi(conn, query, city, state, lead_type)
+        if count == 0:
+            count = search_google_maps(conn, query, city, state, lead_type)
 
         print(f"    Found {count} new leads")
         total += count

@@ -23,9 +23,9 @@ def cli():
 @click.option("--city", required=True, help="City name (e.g. Charlotte)")
 @click.option("--state", required=True, help="State abbreviation (e.g. NC)")
 def scrape(lead_type, city, state):
-    """Scrape leads from Google Maps / SerpAPI."""
-    if not config.GOOGLE_MAPS_API_KEY and not config.SERPAPI_KEY:
-        click.echo("ERROR: Set GOOGLE_MAPS_API_KEY or SERPAPI_KEY in .env")
+    """Scrape leads via Apify, SerpAPI, or Google Maps API."""
+    if not config.APIFY_API_KEY and not config.SERPAPI_KEY and not config.GOOGLE_MAPS_API_KEY:
+        click.echo("ERROR: Set APIFY_API_KEY, SERPAPI_KEY, or GOOGLE_MAPS_API_KEY in .env")
         sys.exit(1)
 
     conn = get_conn()

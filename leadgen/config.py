@@ -10,7 +10,8 @@ load_dotenv()
 GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS", "lotlogicai@gmail.com")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 
-# API keys (optional, improves results)
+# API keys
+APIFY_API_KEY = os.getenv("APIFY_API_KEY", "")  # Primary scraper
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
