@@ -7,8 +7,8 @@ import requests
 
 from . import config, db
 
-# Apify Google Maps Scraper actor ID
-APIFY_GOOGLE_MAPS_ACTOR = "compass/crawler-google-places"
+# Apify Google Maps Scraper actor ID (tilde format for API URL)
+APIFY_GOOGLE_MAPS_ACTOR = "compass~crawler-google-places"
 
 # Rotate user agents for direct HTTP requests
 USER_AGENTS = [
