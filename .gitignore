@@ -31,4 +31,6 @@ docker-compose.override.yml
 
 # Lead gen
 leadgen/leads.db
+leadgen/leads.db-shm
+leadgen/leads.db-wal
 leadgen/.env
