@@ -32,7 +32,6 @@ def scrape(lead_type, city, state):
     click.echo(f"Scraping {lead_type} leads in {city}, {state}...")
     total = scraper.scrape_city(conn, city, state, lead_type)
     click.echo(f"\nDone! {total} new leads added.")
-    conn.close()
 
 
 @cli.command()
@@ -44,7 +43,6 @@ def enrich(lead_type):
     click.echo(f"Enriching {len(leads)} {lead_type} leads without contacts...")
     total = enricher.enrich_all(conn, lead_type)
     click.echo(f"\nDone! {total} new contacts found.")
-    conn.close()
 
 
 @cli.command()
@@ -58,7 +56,6 @@ def preview(lead_type, template, limit):
 
     if not contacts:
         click.echo("No contacts to preview.")
-        conn.close()
         return
 
     for i, contact in enumerate(contacts[:limit]):
@@ -79,7 +76,6 @@ def preview(lead_type, template, limit):
     if remaining > 0:
         click.echo(f"\n... and {remaining} more contacts")
 
-    conn.close()
 
 
 @cli.command()
@@ -97,7 +93,6 @@ def send(lead_type, template, max_count, force):
     conn = get_conn()
     count = emailer.send_batch(conn, lead_type, template, max_count, force=force)
     click.echo(f"\nSent {count} emails.")
-    conn.close()
 
 
 @cli.command("queue-followups")
@@ -106,7 +101,6 @@ def queue_followups():
     conn = get_conn()
     count = emailer.queue_followups(conn)
     click.echo(f"Queued {count} follow-up emails.")
-    conn.close()
 
 
 @cli.command("send-followups")
@@ -120,7 +114,6 @@ def send_followups(force):
     conn = get_conn()
     count = emailer.send_followups(conn, force=force)
     click.echo(f"\nSent {count} follow-up emails.")
-    conn.close()
 
 
 @cli.command()
@@ -142,7 +135,6 @@ def stats():
     click.echo(f"Emails Sent Today: {s['sent_today']}/{s['max_per_day']}")
     click.echo(f"Follow-ups Queued: {s['followups_queued']}")
     click.echo()
-    conn.close()
 
 
 @cli.command()
@@ -150,28 +142,20 @@ def stats():
 def export(output):
     """Export leads and contacts to CSV."""
     conn = get_conn()
-    rows = conn.execute(
-        """SELECT l.type, l.company_name, l.address, l.city, l.state, l.zip,
-                  l.phone, l.website, l.rating, l.review_count, l.source,
-                  c.email, c.name as contact_name, c.role, c.source as email_source,
-                  c.verified
-           FROM leads l
-           LEFT JOIN contacts c ON c.lead_id = l.id
-           ORDER BY l.type, l.city, l.company_name"""
-    ).fetchall()
+    rows = db.export_all(conn)
 
+    columns = [
+        "type", "company_name", "address", "city", "state", "zip",
+        "phone", "website", "rating", "review_count", "source",
+        "email", "contact_name", "role", "email_source", "verified",
+    ]
     with open(output, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "type", "company_name", "address", "city", "state", "zip",
-            "phone", "website", "rating", "review_count", "source",
-            "email", "contact_name", "role", "email_source", "verified",
-        ])
+        writer.writerow(columns)
         for row in rows:
-            writer.writerow(list(row))
+            writer.writerow([row.get(col) for col in columns])
 
     click.echo(f"Exported {len(rows)} rows to {output}")
-    conn.close()
 
 
 if __name__ == "__main__":

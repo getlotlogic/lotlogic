@@ -47,6 +47,23 @@ run-leadgen: ## Run lead gen CLI (pass ARGS="stats" etc.)
 install-leadgen: ## Install lead gen Python dependencies
 	pip install -r leadgen/requirements.txt
 
+# ── Agent ──────────────────────────────────────────────
+
+install-agent: ## Install agent Python dependencies
+	pip install -r agent/requirements.txt -r leadgen/requirements.txt
+
+run-agent-dry: ## Run the lead gen agent in dry-run mode (no emails, no writes)
+	DRY_RUN=true python -m agent.run
+
+run-agent: ## Run the lead gen agent (live mode)
+	python -m agent.run
+
+migrate-leadgen: ## Migrate local SQLite leads.db to Supabase
+	python -m leadgen.db_migrate
+
+build-agent: ## Build the agent Docker image
+	docker build -t lotlogic-agent -f agent/Dockerfile .
+
 # ── Status ─────────────────────────────────────────────
 
 status: ## Show git status and branch info

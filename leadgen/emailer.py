@@ -140,15 +140,17 @@ def queue_followups(conn) -> int:
     now = datetime.now(timezone.utc)
 
     # Get all sent initial emails
-    sent = conn.execute(
-        """SELECT es.contact_id, es.sent_at, es.template_name
-           FROM emails_sent es
-           WHERE es.template_name IN ('apartment_initial', 'tow_initial')"""
-    ).fetchall()
+    sent = db.get_sent_initial_emails(conn)
 
     for row in sent:
         contact_id = row["contact_id"]
-        sent_at = datetime.fromisoformat(row["sent_at"]).replace(tzinfo=timezone.utc) if row["sent_at"] else now
+        if row.get("sent_at"):
+            raw = row["sent_at"].replace("Z", "+00:00") if isinstance(row["sent_at"], str) else row["sent_at"]
+            sent_at = datetime.fromisoformat(raw) if isinstance(raw, str) else raw
+            if sent_at.tzinfo is None:
+                sent_at = sent_at.replace(tzinfo=timezone.utc)
+        else:
+            sent_at = now
 
         # Queue followup_1 (FOLLOWUP_1_DAYS after initial)
         followup_1_time = sent_at + timedelta(days=config.FOLLOWUP_1_DAYS)

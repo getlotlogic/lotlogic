@@ -3,6 +3,7 @@ beautifulsoup4>=4.12.0
 jinja2>=3.1.0
 click>=8.1.0
 python-dotenv>=1.0.0
+supabase>=2.0.0
 
 # Optional: for Google Maps Places API scraping
 # googlemaps>=4.10.0
