@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LotLogic for Property Managers — Free Camera Security + Digital Parking Passes</title>
+  <meta name="description" content="Free solar-powered entrance cameras, automated parking enforcement, and digital parking passes for residents. Zero cost to your community.">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e5e7eb;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+
+    /* Hero */
+    .hero {
+      padding: 80px 0 60px;
+      text-align: center;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 32px;
+    }
+    .logo .shield {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 16px; color: #fff;
+    }
+    .logo h1 {
+      font-size: 20px;
+      font-weight: 800;
+      color: #f9fafb;
+    }
+    .logo h1 span { color: #3b82f6; }
+    .hero h2 {
+      font-size: clamp(28px, 5vw, 44px);
+      font-weight: 800;
+      color: #f9fafb;
+      margin-bottom: 20px;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+    }
+    .hero h2 .accent { color: #3b82f6; }
+    .hero .subtitle {
+      font-size: clamp(16px, 2.5vw, 19px);
+      color: #9ca3af;
+      max-width: 680px;
+      margin: 0 auto 36px;
+    }
+    .hero .cta {
+      display: inline-block;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      color: #fff;
+      padding: 14px 28px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 16px;
+      transition: transform 0.15s;
+    }
+    .hero .cta:hover { transform: translateY(-1px); }
+    .hero .cost-badge {
+      display: inline-block;
+      background: rgba(74,222,128,0.1);
+      border: 1px solid rgba(74,222,128,0.3);
+      color: #4ade80;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }
+
+    /* Sections */
+    section { padding: 60px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    section h3 {
+      font-size: clamp(24px, 4vw, 32px);
+      font-weight: 800;
+      color: #f9fafb;
+      margin-bottom: 16px;
+      letter-spacing: -0.01em;
+    }
+    section .lead {
+      font-size: 17px;
+      color: #9ca3af;
+      margin-bottom: 36px;
+      max-width: 720px;
+    }
+
+    /* Pain points grid */
+    .pain-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .pain-card {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 24px;
+    }
+    .pain-card .x {
+      display: inline-block;
+      width: 28px; height: 28px;
+      background: rgba(239,68,68,0.15);
+      border-radius: 8px;
+      color: #ef4444;
+      font-weight: 900;
+      text-align: center;
+      line-height: 28px;
+      margin-bottom: 12px;
+    }
+    .pain-card h4 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #f9fafb;
+      margin-bottom: 6px;
+    }
+    .pain-card p { font-size: 14px; color: #9ca3af; }
+
+    /* How it works steps */
+    .steps {
+      display: grid;
+      gap: 20px;
+    }
+    .step {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 24px 28px;
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+    .step-num {
+      flex-shrink: 0;
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      color: #fff;
+      border-radius: 10px;
+      font-weight: 900;
+      font-size: 18px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .step-body h4 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #f9fafb;
+      margin-bottom: 6px;
+    }
+    .step-body p { font-size: 15px; color: #9ca3af; }
+
+    /* Benefits */
+    .benefits-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .benefit {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 24px;
+    }
+    .benefit .check {
+      display: inline-block;
+      width: 32px; height: 32px;
+      background: rgba(74,222,128,0.15);
+      border-radius: 8px;
+      color: #4ade80;
+      font-weight: 900;
+      font-size: 18px;
+      text-align: center;
+      line-height: 32px;
+      margin-bottom: 14px;
+    }
+    .benefit h4 {
+      font-size: 17px;
+      font-weight: 700;
+      color: #f9fafb;
+      margin-bottom: 8px;
+    }
+    .benefit p { font-size: 14px; color: #9ca3af; }
+
+    /* Cost section */
+    .cost-table {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 32px;
+      max-width: 560px;
+    }
+    .cost-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 14px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      font-size: 16px;
+    }
+    .cost-row:last-child { border-bottom: none; }
+    .cost-row .label { color: #e5e7eb; }
+    .cost-row .value { color: #4ade80; font-weight: 700; }
+    .cost-row .value.free { font-size: 18px; }
+
+    /* Final CTA */
+    .final-cta {
+      text-align: center;
+      padding: 80px 0;
+    }
+    .final-cta h3 { margin-bottom: 16px; }
+    .final-cta p { color: #9ca3af; margin-bottom: 28px; font-size: 17px; }
+    .final-cta .cta {
+      display: inline-block;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      color: #fff;
+      padding: 16px 36px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 17px;
+      transition: transform 0.15s;
+    }
+    .final-cta .cta:hover { transform: translateY(-1px); }
+    .contact {
+      margin-top: 24px;
+      color: #6b7280;
+      font-size: 14px;
+    }
+    .contact a { color: #3b82f6; text-decoration: none; }
+
+    /* Footer */
+    footer {
+      padding: 32px 0;
+      text-align: center;
+      color: #4b5563;
+      font-size: 13px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="logo">
+        <div class="shield">LL</div>
+        <h1>Lot<span>Logic</span></h1>
+      </div>
+      <div class="cost-badge">$0 UPFRONT · $0 MONTHLY · $0 TO YOU</div>
+      <h2>Free camera security <span class="accent">and</span> automated parking enforcement for your communities.</h2>
+      <p class="subtitle">LotLogic installs solar-powered ALPR cameras at your entrances at no cost to the community. Residents get digital parking passes. Unregistered vehicles get flagged and towed automatically. You get peace of mind without lifting a finger.</p>
+      <a href="mailto:lotlogicai@gmail.com?subject=LotLogic%20demo%20request" class="cta">Book a 15-min demo →</a>
+    </div>
+  </section>
+
+  <!-- Pain Points -->
+  <section>
+    <div class="container">
+      <h3>Parking is quietly costing your communities</h3>
+      <p class="lead">Every property manager deals with this. Resident complaints, sticker management, strangers in the lot — it never ends. And nobody has time to run enforcement.</p>
+      <div class="pain-grid">
+        <div class="pain-card">
+          <div class="x">✕</div>
+          <h4>Endless resident complaints</h4>
+          <p>"Someone's in my spot again." Calls to the office, emails, tickets — every single week.</p>
+        </div>
+        <div class="pain-card">
+          <div class="x">✕</div>
+          <h4>Sticker & hangtag chaos</h4>
+          <p>Printing, distributing, replacing, tracking. Multiply that across every community you manage.</p>
+        </div>
+        <div class="pain-card">
+          <div class="x">✕</div>
+          <h4>Zero entrance security</h4>
+          <p>No record of who comes and goes. When something happens, there's no footage. No accountability.</p>
+        </div>
+        <div class="pain-card">
+          <div class="x">✕</div>
+          <h4>Tow calls eat staff time</h4>
+          <p>Staff walks the lot, takes photos, calls the tow company, fields follow-up questions. Hours per week.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section>
+    <div class="container">
+      <h3>How LotLogic works</h3>
+      <p class="lead">Hardware, software, and enforcement — all handled. You don't touch anything.</p>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <h4>We install a solar-powered camera at the entrance</h4>
+            <p>No wiring, no trenching, no monthly fees. We handle permits, mounting, and the whole install. It's invisible infrastructure that runs itself.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <h4>Residents register their plates in 30 seconds</h4>
+            <p>A simple link. No app download, no card to carry, no sticker to peel. They add their vehicles and get a digital parking pass. Done.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <h4>The camera reads every plate that enters</h4>
+            <p>Registered vehicles are logged as residents. Guests get temporary passes that expire automatically. Strangers are flagged.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <h4>Unregistered vehicles get towed automatically</h4>
+            <p>When a vehicle overstays, the system sends the towing partner an SMS with plate photo, location, and timestamp. No calls to your office. No staff time.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Benefits -->
+  <section>
+    <div class="container">
+      <h3>What your community gets</h3>
+      <p class="lead">Free hardware, free security, and the parking problem finally solved.</p>
+      <div class="benefits-grid">
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Free entrance camera</h4>
+          <p>Solar-powered ALPR camera installed at the entrance. Would cost $3,500+ to buy and install. Yours at zero cost.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Every plate logged, forever</h4>
+          <p>Every vehicle entering and exiting is timestamped and photographed. If anything happens — theft, incident, dispute — you have the footage.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Digital guest passes</h4>
+          <p>Residents issue their own temporary visitor passes with auto-expiry. No more calls to the management office at 11pm.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Automated enforcement</h4>
+          <p>Unauthorized vehicles are flagged and dispatched to your tow partner. Zero staff involvement after setup.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Higher resident satisfaction</h4>
+          <p>Residents stop complaining about strangers taking their spots. Their parking situation just... works.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Zero tech burden on staff</h4>
+          <p>No new software for your team to learn. No dashboard to babysit. You approve us once, we run forever.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Cost -->
+  <section>
+    <div class="container">
+      <h3>What it costs the community</h3>
+      <p class="lead">We partner with your towing company — they pay us a revenue share on each enforcement. The community never sees a bill.</p>
+      <div class="cost-table">
+        <div class="cost-row"><span class="label">Camera hardware</span><span class="value free">FREE</span></div>
+        <div class="cost-row"><span class="label">Installation & permits</span><span class="value free">FREE</span></div>
+        <div class="cost-row"><span class="label">Software & enforcement</span><span class="value free">FREE</span></div>
+        <div class="cost-row"><span class="label">Monthly fees</span><span class="value free">$0</span></div>
+        <div class="cost-row"><span class="label">Resident fees</span><span class="value free">$0</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Final CTA -->
+  <section class="final-cta">
+    <div class="container">
+      <h3>Worth a 15-minute demo?</h3>
+      <p>We're running a free pilot in Charlotte. One call, and we walk you through a live system and start the install.</p>
+      <a href="mailto:lotlogicai@gmail.com?subject=LotLogic%20demo%20request" class="cta">Email us →</a>
+      <div class="contact">
+        Gabriel Bowen-Slott · CEO, LotLogic LLC<br>
+        <a href="mailto:lotlogicai@gmail.com">lotlogicai@gmail.com</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    © 2026 LotLogic LLC · AI-powered parking enforcement
+  </footer>
+
+</body>
+</html>

@@ -14,6 +14,8 @@ The apartment complexes love it because they get a free camera system, better se
 
 We're looking for one tow company in {{ city }} to partner with on our pilot. No cost to you — just show up when the alerts come in.
 
+Here's the 2-minute overview: https://lotlogic-beta.vercel.app/pitch-tow.html
+
 Worth a 10-minute call this week?
 
 Gabriel Bowen-Slott

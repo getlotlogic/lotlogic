@@ -14,6 +14,8 @@ The community gets a free camera system, better entrance security, and fully aut
 
 We're running a free pilot in {{ city }}. We install the hardware, set up the digital passes, and connect your existing towing partner. It runs itself from day one.
 
+Here's the 2-minute overview: https://lotlogic-beta.vercel.app/pitch-apartments.html
+
 Worth a 15-minute demo?
 
 Gabriel Bowen-Slott
