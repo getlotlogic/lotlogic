@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LotLogic for Tow Companies — Verified Violations Delivered to Your Phone</title>
+  <meta name="description" content="Stop patrolling lots. Get SMS alerts with plate photos, location, and timestamps the second a violation happens. Plus free contracts with apartment complexes.">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e5e7eb;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+
+    /* Hero */
+    .hero {
+      padding: 80px 0 60px;
+      text-align: center;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 32px;
+    }
+    .logo .shield {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 16px; color: #fff;
+    }
+    .logo h1 {
+      font-size: 20px;
+      font-weight: 800;
+      color: #f9fafb;
+    }
+    .logo h1 span { color: #f97316; }
+    .hero h2 {
+      font-size: clamp(28px, 5vw, 44px);
+      font-weight: 800;
+      color: #f9fafb;
+      margin-bottom: 20px;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+    }
+    .hero h2 .accent { color: #f97316; }
+    .hero .subtitle {
+      font-size: clamp(16px, 2.5vw, 19px);
+      color: #9ca3af;
+      max-width: 680px;
+      margin: 0 auto 36px;
+    }
+    .hero .cta {
+      display: inline-block;
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      color: #fff;
+      padding: 14px 28px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 16px;
+      transition: transform 0.15s;
+    }
+    .hero .cta:hover { transform: translateY(-1px); }
+    .hero .stat-badge {
+      display: inline-block;
+      background: rgba(249,115,22,0.1);
+      border: 1px solid rgba(249,115,22,0.3);
+      color: #f97316;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }
+
+    /* Sections */
+    section { padding: 60px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    section h3 {
+      font-size: clamp(24px, 4vw, 32px);
+      font-weight: 800;
+      color: #f9fafb;
+      margin-bottom: 16px;
+      letter-spacing: -0.01em;
+    }
+    section .lead {
+      font-size: 17px;
+      color: #9ca3af;
+      margin-bottom: 36px;
+      max-width: 720px;
+    }
+
+    /* Pain points grid */
+    .pain-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .pain-card {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 24px;
+    }
+    .pain-card .x {
+      display: inline-block;
+      width: 28px; height: 28px;
+      background: rgba(239,68,68,0.15);
+      border-radius: 8px;
+      color: #ef4444;
+      font-weight: 900;
+      text-align: center;
+      line-height: 28px;
+      margin-bottom: 12px;
+    }
+    .pain-card h4 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #f9fafb;
+      margin-bottom: 6px;
+    }
+    .pain-card p { font-size: 14px; color: #9ca3af; }
+
+    /* SMS demo */
+    .sms-demo {
+      max-width: 380px;
+      margin: 32px auto 0;
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      padding: 24px;
+    }
+    .sms-bubble {
+      background: #0f1117;
+      border: 1px solid rgba(249,115,22,0.3);
+      border-radius: 14px;
+      padding: 16px 18px;
+      font-size: 14px;
+      color: #e5e7eb;
+      font-family: 'Menlo', 'Monaco', monospace;
+      line-height: 1.5;
+    }
+    .sms-bubble .from {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-family: -apple-system, sans-serif;
+    }
+    .sms-bubble .plate {
+      display: inline-block;
+      background: #f97316;
+      color: #0f1117;
+      padding: 2px 10px;
+      border-radius: 4px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      margin: 4px 0;
+    }
+    .sms-time {
+      text-align: center;
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 10px;
+      font-family: -apple-system, sans-serif;
+    }
+
+    /* How it works steps */
+    .steps {
+      display: grid;
+      gap: 20px;
+    }
+    .step {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 24px 28px;
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+    .step-num {
+      flex-shrink: 0;
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      color: #fff;
+      border-radius: 10px;
+      font-weight: 900;
+      font-size: 18px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .step-body h4 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #f9fafb;
+      margin-bottom: 6px;
+    }
+    .step-body p { font-size: 15px; color: #9ca3af; }
+
+    /* Benefits */
+    .benefits-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .benefit {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 24px;
+    }
+    .benefit .check {
+      display: inline-block;
+      width: 32px; height: 32px;
+      background: rgba(249,115,22,0.15);
+      border-radius: 8px;
+      color: #f97316;
+      font-weight: 900;
+      font-size: 18px;
+      text-align: center;
+      line-height: 32px;
+      margin-bottom: 14px;
+    }
+    .benefit h4 {
+      font-size: 17px;
+      font-weight: 700;
+      color: #f9fafb;
+      margin-bottom: 8px;
+    }
+    .benefit p { font-size: 14px; color: #9ca3af; }
+
+    /* Revenue comparison */
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 640px) { .comparison { grid-template-columns: 1fr; } }
+    .compare-card {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 28px;
+    }
+    .compare-card.bad { border-color: rgba(239,68,68,0.3); }
+    .compare-card.good { border-color: rgba(249,115,22,0.4); }
+    .compare-card h4 {
+      font-size: 17px;
+      font-weight: 800;
+      margin-bottom: 16px;
+    }
+    .compare-card.bad h4 { color: #ef4444; }
+    .compare-card.good h4 { color: #f97316; }
+    .compare-card ul { list-style: none; padding: 0; }
+    .compare-card li {
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      font-size: 14px;
+      color: #d1d5db;
+    }
+    .compare-card li:last-child { border-bottom: none; }
+
+    /* Final CTA */
+    .final-cta {
+      text-align: center;
+      padding: 80px 0;
+    }
+    .final-cta h3 { margin-bottom: 16px; }
+    .final-cta p { color: #9ca3af; margin-bottom: 28px; font-size: 17px; max-width: 580px; margin-left: auto; margin-right: auto; }
+    .final-cta .cta {
+      display: inline-block;
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      color: #fff;
+      padding: 16px 36px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 17px;
+      transition: transform 0.15s;
+    }
+    .final-cta .cta:hover { transform: translateY(-1px); }
+    .contact {
+      margin-top: 24px;
+      color: #6b7280;
+      font-size: 14px;
+    }
+    .contact a { color: #f97316; text-decoration: none; }
+
+    /* Footer */
+    footer {
+      padding: 32px 0;
+      text-align: center;
+      color: #4b5563;
+      font-size: 13px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="logo">
+        <div class="shield">LL</div>
+        <h1>Lot<span>Logic</span></h1>
+      </div>
+      <div class="stat-badge">MORE TOWS · LESS DRIVING · NEW CONTRACTS</div>
+      <h2>Stop patrolling lots. <span class="accent">Start closing jobs.</span></h2>
+      <p class="subtitle">LotLogic sends you SMS alerts with photo proof the moment a violation happens — plus we hand you free contracts with apartment complexes you don't have to chase.</p>
+      <a href="mailto:lotlogicai@gmail.com?subject=LotLogic%20partner%20inquiry" class="cta">Become a partner →</a>
+    </div>
+  </section>
+
+  <!-- Pain Points -->
+  <section>
+    <div class="container">
+      <h3>Private property towing is broken</h3>
+      <p class="lead">You know it. Every tow company does. The economics barely work.</p>
+      <div class="pain-grid">
+        <div class="pain-card">
+          <div class="x">✕</div>
+          <h4>Wasted patrol runs</h4>
+          <p>Sending drivers to circle lots hoping to catch a violation. Fuel, wages, and hours — mostly for nothing.</p>
+        </div>
+        <div class="pain-card">
+          <div class="x">✕</div>
+          <h4>Reactive call-outs</h4>
+          <p>Waiting for a property manager to call you after they've already spent an hour fielding resident complaints.</p>
+        </div>
+        <div class="pain-card">
+          <div class="x">✕</div>
+          <h4>"He said, she said" disputes</h4>
+          <p>Without photo evidence, you're stuck arguing with vehicle owners, property managers, and sometimes the police.</p>
+        </div>
+        <div class="pain-card">
+          <div class="x">✕</div>
+          <h4>Contracts are hard to get</h4>
+          <p>Apartment complexes already have tow companies. Breaking in requires cold calls and discounted pricing.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SMS demo -->
+  <section>
+    <div class="container">
+      <h3>What a LotLogic alert looks like</h3>
+      <p class="lead">Every violation is delivered to your phone the second it's detected. Plate photo, location, timestamp — documented and legally defensible.</p>
+      <div class="sms-demo">
+        <div class="sms-bubble">
+          <div class="from">LotLogic Alert · +1 (704) 555-0142</div>
+          🚨 Violation detected<br><br>
+          <span class="plate">KLP 4827</span><br>
+          2019 Honda Civic, Gray<br><br>
+          📍 Parkside Commons Apts<br>
+          1820 Elm St, Charlotte NC<br><br>
+          ⏱ Entered: 2:14 PM<br>
+          Now: 4:47 PM (2h 33m)<br><br>
+          [View photo] [Dispatch]
+        </div>
+        <div class="sms-time">Delivered 4:47 PM</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section>
+    <div class="container">
+      <h3>How the system works</h3>
+      <p class="lead">We handle everything upstream. You handle the tow.</p>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <h4>We install free ALPR cameras at apartment complexes</h4>
+            <p>The properties we partner with get a solar-powered camera at their entrance at no cost. That's our hook — and it means they say yes fast.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <h4>Residents register their plates digitally</h4>
+            <p>Every resident at every partner property gets a digital parking pass in 30 seconds. Our system knows who belongs and who doesn't.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <h4>You get SMS alerts the moment a violation happens</h4>
+            <p>The second an unregistered vehicle overstays, you receive an alert with the plate, vehicle description, location, and photo. Documented proof.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <h4>You dispatch a truck. You collect the fee.</h4>
+            <p>No patrols, no guessing, no "the property manager called us" delays. Every tow is pre-verified before you drive out.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Old vs New -->
+  <section>
+    <div class="container">
+      <h3>Your operation, before and after LotLogic</h3>
+      <p class="lead">More tows, lower overhead, and contracts that come to you instead of the other way around.</p>
+      <div class="comparison">
+        <div class="compare-card bad">
+          <h4>Without LotLogic</h4>
+          <ul>
+            <li>Drivers burn fuel patrolling lots</li>
+            <li>Most patrols return empty-handed</li>
+            <li>You wait for property manager calls</li>
+            <li>No proof when owners dispute</li>
+            <li>Hard to sign new apartment contracts</li>
+            <li>Revenue per driver-hour: low</li>
+          </ul>
+        </div>
+        <div class="compare-card good">
+          <h4>With LotLogic</h4>
+          <ul>
+            <li>Zero patrolling — alerts come to you</li>
+            <li>Every dispatch is a verified violation</li>
+            <li>Real-time SMS the moment it happens</li>
+            <li>Photo evidence on every single tow</li>
+            <li>We hand you new property contracts</li>
+            <li>Revenue per driver-hour: way up</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Benefits -->
+  <section>
+    <div class="container">
+      <h3>Why partnering with LotLogic is a no-brainer</h3>
+      <div class="benefits-grid">
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Steady stream of verified tows</h4>
+          <p>Every alert is a documented violation ready to dispatch. No cold leads, no guessing, no wasted runs.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Legally defensible evidence</h4>
+          <p>Photo of the plate, photo of the vehicle, exact entry and detection timestamps. Disputes end fast.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Free apartment contracts</h4>
+          <p>We do the sales work with property managers. When they sign, you become the enforcement partner by default.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>No hardware to buy</h4>
+          <p>Cameras, software, SMS infrastructure — all ours. You just run your trucks the way you already do.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Dashboard tracking every lot</h4>
+          <p>See which properties generate the most jobs, track response times, and measure revenue per lot.</p>
+        </div>
+        <div class="benefit">
+          <div class="check">✓</div>
+          <h4>Zero cost to participate</h4>
+          <p>No monthly fees, no setup costs, no subscription. We earn revenue share from the tow fees we route to you.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Final CTA -->
+  <section class="final-cta">
+    <div class="container">
+      <h3>Looking for one tow partner in Charlotte</h3>
+      <p>We're running a free pilot and need one tow company to take the alerts. If that's you, let's talk — 10 minutes to walk through the system and go from there.</p>
+      <a href="mailto:lotlogicai@gmail.com?subject=LotLogic%20tow%20partner" class="cta">Email us →</a>
+      <div class="contact">
+        Gabriel Bowen-Slott · CEO, LotLogic LLC<br>
+        <a href="mailto:lotlogicai@gmail.com">lotlogicai@gmail.com</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    © 2026 LotLogic LLC · AI-powered parking enforcement
+  </footer>
+
+</body>
+</html>
