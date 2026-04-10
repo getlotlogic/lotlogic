@@ -1,0 +1,9 @@
+[build]
+dockerfilePath = "agent/Dockerfile"
+
+[deploy]
+# Cron-triggered job service.
+# Note: the schedule itself is configured in Railway's "Cron Schedule" field
+# on the service settings page. Mon-Fri at 14:00 UTC = 9am-10am ET.
+# Set cronSchedule = "0 14 * * 1-5" in the Railway dashboard.
+restartPolicyType = "NEVER"

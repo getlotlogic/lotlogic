@@ -34,3 +34,6 @@ leadgen/leads.db
 leadgen/leads.db-shm
 leadgen/leads.db-wal
 leadgen/.env
+
+# Agent
+agent/.env

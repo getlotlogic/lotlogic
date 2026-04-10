@@ -1,60 +1,25 @@
-"""SQLite database models and helpers for the lead generation pipeline."""
+"""Supabase-backed data layer for the lead generation pipeline.
 
+Replaces the previous SQLite implementation. Function signatures are preserved
+so scraper, enricher, emailer, and cli don't need to change beyond imports.
+All functions accept a Supabase Client as the first argument (named `conn`
+for historical reasons) and return dicts or lists of dicts.
+"""
+
+import os
 import re
-import sqlite3
 from datetime import datetime, timezone
+from typing import Any, Optional
+
+from supabase import Client, create_client
 
 from . import config
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS leads (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    type TEXT NOT NULL,
-    company_name TEXT NOT NULL,
-    address TEXT,
-    city TEXT,
-    state TEXT,
-    zip TEXT,
-    phone TEXT,
-    website TEXT,
-    google_maps_url TEXT,
-    rating REAL,
-    review_count INTEGER,
-    source TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_name, city, state)
-);
-
-CREATE TABLE IF NOT EXISTS contacts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    lead_id INTEGER REFERENCES leads(id),
-    name TEXT,
-    email TEXT NOT NULL,
-    role TEXT,
-    source TEXT,
-    verified BOOLEAN DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS emails_sent (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    contact_id INTEGER REFERENCES contacts(id),
-    template_name TEXT NOT NULL,
-    subject TEXT NOT NULL,
-    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status TEXT DEFAULT 'sent',
-    message_id TEXT
-);
-
-CREATE TABLE IF NOT EXISTS email_queue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    contact_id INTEGER REFERENCES contacts(id),
-    template_name TEXT NOT NULL,
-    scheduled_for TIMESTAMP NOT NULL,
-    status TEXT DEFAULT 'pending',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-"""
+# Table names (all prefixed to avoid collision with main app tables)
+LEADS = "leadgen_leads"
+CONTACTS = "leadgen_contacts"
+EMAILS_SENT = "leadgen_emails_sent"
+EMAIL_QUEUE = "leadgen_email_queue"
 
 # Suffixes to strip when normalizing company names
 _STRIP_SUFFIXES = re.compile(
@@ -72,226 +37,465 @@ def normalize_company_name(name: str) -> str:
     return name
 
 
-def get_db(db_path: str | None = None) -> sqlite3.Connection:
-    """Get a database connection, creating tables if needed."""
-    path = db_path or config.DB_PATH
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
-    return conn
-
-
-def insert_lead(conn: sqlite3.Connection, **kwargs) -> int | None:
-    """Insert a lead, deduplicating on (company_name, city, state). Returns lead id or None if duplicate."""
-    name = normalize_company_name(kwargs["company_name"])
-    try:
-        cur = conn.execute(
-            """INSERT INTO leads (type, company_name, address, city, state, zip,
-               phone, website, google_maps_url, rating, review_count, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                kwargs["type"],
-                name,
-                kwargs.get("address"),
-                kwargs.get("city"),
-                kwargs.get("state"),
-                kwargs.get("zip"),
-                kwargs.get("phone"),
-                kwargs.get("website"),
-                kwargs.get("google_maps_url"),
-                kwargs.get("rating"),
-                kwargs.get("review_count"),
-                kwargs.get("source", "google_maps"),
-            ),
+def get_db(_unused: Optional[str] = None) -> Client:
+    """Return a Supabase client. The `_unused` param is kept for signature
+    compatibility with the old SQLite get_db(db_path) API."""
+    url = os.environ.get("SUPABASE_URL", "https://nzdkoouoaedbbccraoti.supabase.co")
+    key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_KEY", "")
+    if not key:
+        raise RuntimeError(
+            "SUPABASE_SERVICE_KEY not set — add it to leadgen/.env or export it"
         )
-        conn.commit()
-        return cur.lastrowid
-    except sqlite3.IntegrityError:
-        return None
+    return create_client(url, key)
 
 
-def insert_contact(
-    conn: sqlite3.Connection,
-    lead_id: int,
-    email: str,
-    name: str | None = None,
-    role: str | None = None,
-    source: str = "website_scrape",
-    verified: bool = False,
-) -> int | None:
-    """Insert a contact for a lead. Skips if same email already exists for this lead."""
-    existing = conn.execute(
-        "SELECT id FROM contacts WHERE lead_id = ? AND email = ?",
-        (lead_id, email.lower()),
-    ).fetchone()
-    if existing:
-        return None
-    cur = conn.execute(
-        """INSERT INTO contacts (lead_id, name, email, role, source, verified)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (lead_id, name, email.lower(), role, source, int(verified)),
+# ────────────────────────────────────────────────────────────
+# Leads
+# ────────────────────────────────────────────────────────────
+
+def insert_lead(conn: Client, **kwargs: Any) -> Optional[int]:
+    """Insert a lead, deduplicating on (company_name, city, state).
+    Returns lead id or None if duplicate."""
+    name = normalize_company_name(kwargs["company_name"])
+
+    # Check for duplicate (Postgres UNIQUE constraint would raise — we pre-check for speed)
+    existing = (
+        conn.table(LEADS)
+        .select("id")
+        .eq("company_name", name)
+        .eq("city", kwargs.get("city") or "")
+        .eq("state", kwargs.get("state") or "")
+        .limit(1)
+        .execute()
     )
-    conn.commit()
-    return cur.lastrowid
+    if existing.data:
+        return None
+
+    row = {
+        "type": kwargs["type"],
+        "company_name": name,
+        "address": kwargs.get("address"),
+        "city": kwargs.get("city"),
+        "state": kwargs.get("state"),
+        "zip": kwargs.get("zip"),
+        "phone": kwargs.get("phone"),
+        "website": kwargs.get("website"),
+        "google_maps_url": kwargs.get("google_maps_url"),
+        "rating": kwargs.get("rating"),
+        "review_count": kwargs.get("review_count"),
+        "source": kwargs.get("source", "google_maps"),
+    }
+    try:
+        result = conn.table(LEADS).insert(row).execute()
+    except Exception:
+        # Race on UNIQUE constraint — another writer beat us
+        return None
+    return result.data[0]["id"] if result.data else None
 
 
 def get_leads(
-    conn: sqlite3.Connection,
-    lead_type: str | None = None,
-    has_email: bool | None = None,
-    city: str | None = None,
-) -> list[sqlite3.Row]:
-    """Get leads with optional filters."""
-    query = "SELECT l.* FROM leads l"
-    conditions = []
-    params = []
+    conn: Client,
+    lead_type: Optional[str] = None,
+    has_email: Optional[bool] = None,
+    city: Optional[str] = None,
+) -> list[dict]:
+    """Get leads with optional filters.
 
-    if has_email is True:
-        query += " INNER JOIN contacts c ON c.lead_id = l.id"
-    elif has_email is False:
-        query += " LEFT JOIN contacts c ON c.lead_id = l.id"
-        conditions.append("c.id IS NULL")
-
+    If has_email is True/False, we filter by whether any contact exists.
+    Implemented as two queries (can't do LEFT JOIN in PostgREST easily)."""
+    query = conn.table(LEADS).select("*")
     if lead_type:
-        conditions.append("l.type = ?")
-        params.append(lead_type)
+        query = query.eq("type", lead_type)
     if city:
-        conditions.append("l.city = ?")
-        params.append(city)
+        query = query.eq("city", city)
+    all_leads = query.execute().data
 
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
+    if has_email is None:
+        return all_leads
 
-    if has_email is True:
-        query += " GROUP BY l.id"
+    # Fetch all lead IDs that have contacts
+    lead_ids_with_contacts = set()
+    offset = 0
+    while True:
+        batch = (
+            conn.table(CONTACTS)
+            .select("lead_id")
+            .range(offset, offset + 999)
+            .execute()
+            .data
+        )
+        if not batch:
+            break
+        lead_ids_with_contacts.update(row["lead_id"] for row in batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
 
-    return conn.execute(query, params).fetchall()
+    if has_email:
+        return [l for l in all_leads if l["id"] in lead_ids_with_contacts]
+    return [l for l in all_leads if l["id"] not in lead_ids_with_contacts]
+
+
+# ────────────────────────────────────────────────────────────
+# Contacts
+# ────────────────────────────────────────────────────────────
+
+def insert_contact(
+    conn: Client,
+    lead_id: int,
+    email: str,
+    name: Optional[str] = None,
+    role: Optional[str] = None,
+    source: str = "website_scrape",
+    verified: bool = False,
+) -> Optional[int]:
+    """Insert a contact for a lead. Skips if same email already exists for this lead."""
+    email = email.lower()
+    existing = (
+        conn.table(CONTACTS)
+        .select("id")
+        .eq("lead_id", lead_id)
+        .eq("email", email)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        return None
+    row = {
+        "lead_id": lead_id,
+        "name": name,
+        "email": email,
+        "role": role,
+        "source": source,
+        "verified": verified,
+    }
+    try:
+        result = conn.table(CONTACTS).insert(row).execute()
+    except Exception:
+        return None
+    return result.data[0]["id"] if result.data else None
 
 
 def get_unemailed_contacts(
-    conn: sqlite3.Connection, lead_type: str, template_name: str
-) -> list[sqlite3.Row]:
-    """Get contacts for a lead type that haven't been sent a specific template."""
-    return conn.execute(
-        """SELECT c.*, l.city, l.company_name, l.type as lead_type
-           FROM contacts c
-           JOIN leads l ON l.id = c.lead_id
-           WHERE l.type = ?
-             AND c.id NOT IN (
-                 SELECT contact_id FROM emails_sent WHERE template_name = ?
-             )""",
-        (lead_type, template_name),
-    ).fetchall()
+    conn: Client, lead_type: str, template_name: str
+) -> list[dict]:
+    """Get contacts for a lead type that haven't been sent a specific template.
+    Filters out bounced, unsubscribed, and replied contacts.
+    Returns dicts with c.* plus denormalized l.city, l.company_name, l.type."""
+    # 1. Get all contacts that have already received this template
+    already_sent = (
+        conn.table(EMAILS_SENT)
+        .select("contact_id")
+        .eq("template_name", template_name)
+        .execute()
+        .data
+    )
+    already_sent_ids = {row["contact_id"] for row in already_sent}
 
+    # 2. Get all leads of this type
+    leads = conn.table(LEADS).select("id,city,company_name,type").eq("type", lead_type).execute().data
+    leads_by_id = {l["id"]: l for l in leads}
+    if not leads_by_id:
+        return []
+
+    # 3. Get contacts for those leads that are not excluded
+    contacts: list[dict] = []
+    lead_id_list = list(leads_by_id.keys())
+    # Chunk in groups of 200 to stay under PostgREST URL limits
+    for i in range(0, len(lead_id_list), 200):
+        chunk = lead_id_list[i : i + 200]
+        batch = (
+            conn.table(CONTACTS)
+            .select("*")
+            .in_("lead_id", chunk)
+            .eq("bounced", False)
+            .eq("unsubscribed", False)
+            .eq("replied", False)
+            .execute()
+            .data
+        )
+        contacts.extend(batch)
+
+    # 4. Filter out already-sent and denormalize lead fields
+    result = []
+    for c in contacts:
+        if c["id"] in already_sent_ids:
+            continue
+        lead = leads_by_id.get(c["lead_id"])
+        if not lead:
+            continue
+        c["city"] = lead["city"]
+        c["company_name"] = lead["company_name"]
+        c["lead_type"] = lead["type"]
+        result.append(c)
+    return result
+
+
+def mark_contact_bounced(conn: Client, contact_id: int) -> None:
+    conn.table(CONTACTS).update({"bounced": True}).eq("id", contact_id).execute()
+
+
+def mark_contact_unsubscribed(conn: Client, contact_id: int) -> None:
+    conn.table(CONTACTS).update({"unsubscribed": True}).eq("id", contact_id).execute()
+
+
+def mark_contact_replied(conn: Client, contact_id: int) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    conn.table(CONTACTS).update(
+        {"replied": True, "last_reply_at": now}
+    ).eq("id", contact_id).execute()
+    # Cancel any pending followups for this contact
+    conn.table(EMAIL_QUEUE).update({"status": "cancelled"}).eq(
+        "contact_id", contact_id
+    ).eq("status", "pending").execute()
+
+
+# ────────────────────────────────────────────────────────────
+# Emails sent
+# ────────────────────────────────────────────────────────────
 
 def log_email_sent(
-    conn: sqlite3.Connection,
+    conn: Client,
     contact_id: int,
     template_name: str,
     subject: str,
-    message_id: str | None = None,
-) -> int:
+    message_id: Optional[str] = None,
+) -> Optional[int]:
     """Record a sent email."""
-    cur = conn.execute(
-        """INSERT INTO emails_sent (contact_id, template_name, subject, message_id)
-           VALUES (?, ?, ?, ?)""",
-        (contact_id, template_name, subject, message_id),
-    )
-    conn.commit()
-    return cur.lastrowid
+    row = {
+        "contact_id": contact_id,
+        "template_name": template_name,
+        "subject": subject,
+        "message_id": message_id,
+    }
+    result = conn.table(EMAILS_SENT).insert(row).execute()
+    return result.data[0]["id"] if result.data else None
 
+
+def get_sent_initial_emails(conn: Client) -> list[dict]:
+    """Return all initial outreach emails (used to schedule follow-ups)."""
+    all_rows: list[dict] = []
+    offset = 0
+    while True:
+        batch = (
+            conn.table(EMAILS_SENT)
+            .select("contact_id,sent_at,template_name")
+            .in_("template_name", ["apartment_initial", "tow_initial"])
+            .range(offset, offset + 999)
+            .execute()
+            .data
+        )
+        if not batch:
+            break
+        all_rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return all_rows
+
+
+def get_emails_sent_today(conn: Client) -> int:
+    """Count emails sent today (UTC date)."""
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    result = (
+        conn.table(EMAILS_SENT)
+        .select("id", count="exact")
+        .gte("sent_at", today_start.isoformat())
+        .execute()
+    )
+    return result.count or 0
+
+
+def get_original_subject(conn: Client, contact_id: int) -> Optional[str]:
+    """Get the subject of the first email sent to a contact (for Re: threading)."""
+    result = (
+        conn.table(EMAILS_SENT)
+        .select("subject")
+        .eq("contact_id", contact_id)
+        .order("sent_at", desc=False)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0]["subject"] if result.data else None
+
+
+# ────────────────────────────────────────────────────────────
+# Email queue (follow-ups)
+# ────────────────────────────────────────────────────────────
 
 def queue_followup(
-    conn: sqlite3.Connection,
+    conn: Client,
     contact_id: int,
     template_name: str,
     scheduled_for: datetime,
-) -> int | None:
-    """Queue a follow-up email. Skips if already queued for this contact/template."""
-    existing = conn.execute(
-        "SELECT id FROM email_queue WHERE contact_id = ? AND template_name = ? AND status = 'pending'",
-        (contact_id, template_name),
-    ).fetchone()
-    if existing:
-        return None
-    cur = conn.execute(
-        """INSERT INTO email_queue (contact_id, template_name, scheduled_for)
-           VALUES (?, ?, ?)""",
-        (contact_id, template_name, scheduled_for.isoformat()),
+) -> Optional[int]:
+    """Queue a follow-up email. Skips if already queued."""
+    existing = (
+        conn.table(EMAIL_QUEUE)
+        .select("id")
+        .eq("contact_id", contact_id)
+        .eq("template_name", template_name)
+        .eq("status", "pending")
+        .limit(1)
+        .execute()
     )
-    conn.commit()
-    return cur.lastrowid
+    if existing.data:
+        return None
+    row = {
+        "contact_id": contact_id,
+        "template_name": template_name,
+        "scheduled_for": scheduled_for.isoformat(),
+    }
+    try:
+        result = conn.table(EMAIL_QUEUE).insert(row).execute()
+    except Exception:
+        return None
+    return result.data[0]["id"] if result.data else None
 
 
-def get_due_followups(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Get queued follow-ups that are due to be sent."""
+def get_due_followups(conn: Client) -> list[dict]:
+    """Get queued follow-ups that are due. Denormalizes email + lead info."""
     now = datetime.now(timezone.utc).isoformat()
-    return conn.execute(
-        """SELECT eq.*, c.email, c.name as contact_name, l.city, l.company_name, l.type as lead_type
-           FROM email_queue eq
-           JOIN contacts c ON c.id = eq.contact_id
-           JOIN leads l ON l.id = c.lead_id
-           WHERE eq.status = 'pending' AND eq.scheduled_for <= ?""",
-        (now,),
-    ).fetchall()
+    queue_rows = (
+        conn.table(EMAIL_QUEUE)
+        .select("*")
+        .eq("status", "pending")
+        .lte("scheduled_for", now)
+        .execute()
+        .data
+    )
+    if not queue_rows:
+        return []
+
+    contact_ids = list({r["contact_id"] for r in queue_rows})
+    contacts: dict[int, dict] = {}
+    # Chunk to stay under URL limits
+    for i in range(0, len(contact_ids), 200):
+        chunk = contact_ids[i : i + 200]
+        batch = (
+            conn.table(CONTACTS)
+            .select("*")
+            .in_("id", chunk)
+            .eq("bounced", False)
+            .eq("unsubscribed", False)
+            .eq("replied", False)
+            .execute()
+            .data
+        )
+        for c in batch:
+            contacts[c["id"]] = c
+
+    lead_ids = list({c["lead_id"] for c in contacts.values()})
+    leads: dict[int, dict] = {}
+    for i in range(0, len(lead_ids), 200):
+        chunk = lead_ids[i : i + 200]
+        batch = (
+            conn.table(LEADS)
+            .select("id,city,company_name,type")
+            .in_("id", chunk)
+            .execute()
+            .data
+        )
+        for l in batch:
+            leads[l["id"]] = l
+
+    result = []
+    for q in queue_rows:
+        c = contacts.get(q["contact_id"])
+        if not c:
+            continue  # contact was filtered (bounced/unsub/replied)
+        l = leads.get(c["lead_id"])
+        if not l:
+            continue
+        result.append({
+            **q,
+            "email": c["email"],
+            "contact_name": c.get("name"),
+            "city": l["city"],
+            "company_name": l["company_name"],
+            "lead_type": l["type"],
+        })
+    return result
 
 
-def mark_queue_sent(conn: sqlite3.Connection, queue_id: int) -> None:
+def mark_queue_sent(conn: Client, queue_id: int) -> None:
     """Mark a queued item as sent."""
-    conn.execute("UPDATE email_queue SET status = 'sent' WHERE id = ?", (queue_id,))
-    conn.commit()
+    conn.table(EMAIL_QUEUE).update({"status": "sent"}).eq("id", queue_id).execute()
 
 
-def get_emails_sent_today(conn: sqlite3.Connection) -> int:
-    """Count emails sent today."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    row = conn.execute(
-        "SELECT COUNT(*) as cnt FROM emails_sent WHERE date(sent_at) = ?",
-        (today,),
-    ).fetchone()
-    return row["cnt"]
+# ────────────────────────────────────────────────────────────
+# Stats and export
+# ────────────────────────────────────────────────────────────
 
-
-def get_original_subject(conn: sqlite3.Connection, contact_id: int) -> str | None:
-    """Get the subject of the first email sent to a contact (for Re: threading)."""
-    row = conn.execute(
-        "SELECT subject FROM emails_sent WHERE contact_id = ? ORDER BY sent_at ASC LIMIT 1",
-        (contact_id,),
-    ).fetchone()
-    return row["subject"] if row else None
-
-
-def get_stats(conn: sqlite3.Connection) -> dict:
+def get_stats(conn: Client) -> dict:
     """Get aggregate pipeline statistics."""
-    stats = {}
+    stats: dict = {}
+
     for lead_type in ("apartment", "tow"):
-        total = conn.execute(
-            "SELECT COUNT(*) as cnt FROM leads WHERE type = ?", (lead_type,)
-        ).fetchone()["cnt"]
+        total = (
+            conn.table(LEADS)
+            .select("id", count="exact")
+            .eq("type", lead_type)
+            .execute()
+            .count
+            or 0
+        )
 
-        with_email = conn.execute(
-            """SELECT COUNT(DISTINCT l.id) as cnt FROM leads l
-               JOIN contacts c ON c.lead_id = l.id WHERE l.type = ?""",
-            (lead_type,),
-        ).fetchone()["cnt"]
+        # Lead IDs for this type
+        type_leads = (
+            conn.table(LEADS).select("id").eq("type", lead_type).execute().data
+        )
+        lead_id_set = {l["id"] for l in type_leads}
 
-        emailed = conn.execute(
-            """SELECT COUNT(DISTINCT c.id) as cnt FROM contacts c
-               JOIN leads l ON l.id = c.lead_id
-               JOIN emails_sent es ON es.contact_id = c.id
-               WHERE l.type = ?""",
-            (lead_type,),
-        ).fetchone()["cnt"]
+        # Contacts belonging to those leads
+        contact_ids_for_type: set[int] = set()
+        leads_with_email_set: set[int] = set()
+        if lead_id_set:
+            lead_ids = list(lead_id_set)
+            for i in range(0, len(lead_ids), 200):
+                chunk = lead_ids[i : i + 200]
+                batch = (
+                    conn.table(CONTACTS)
+                    .select("id,lead_id")
+                    .in_("lead_id", chunk)
+                    .execute()
+                    .data
+                )
+                for c in batch:
+                    contact_ids_for_type.add(c["id"])
+                    leads_with_email_set.add(c["lead_id"])
 
-        replied = conn.execute(
-            """SELECT COUNT(DISTINCT c.id) as cnt FROM contacts c
-               JOIN leads l ON l.id = c.lead_id
-               JOIN emails_sent es ON es.contact_id = c.id
-               WHERE l.type = ? AND es.status = 'replied'""",
-            (lead_type,),
-        ).fetchone()["cnt"]
+        with_email = len(leads_with_email_set)
+
+        # Emailed contacts = contacts_for_type ∩ contacts with at least one emails_sent row
+        emailed = 0
+        replied = 0
+        if contact_ids_for_type:
+            contact_ids = list(contact_ids_for_type)
+            emailed_ids: set[int] = set()
+            for i in range(0, len(contact_ids), 200):
+                chunk = contact_ids[i : i + 200]
+                batch = (
+                    conn.table(EMAILS_SENT)
+                    .select("contact_id")
+                    .in_("contact_id", chunk)
+                    .execute()
+                    .data
+                )
+                emailed_ids.update(r["contact_id"] for r in batch)
+            emailed = len(emailed_ids)
+
+            # Replied = contacts marked replied=true
+            replied_rows = (
+                conn.table(CONTACTS)
+                .select("id", count="exact")
+                .eq("replied", True)
+                .in_("id", contact_ids[:200])  # Approximate for stats
+                .execute()
+            )
+            replied = replied_rows.count or 0
 
         stats[lead_type] = {
             "total": total,
@@ -303,9 +507,80 @@ def get_stats(conn: sqlite3.Connection) -> dict:
     stats["sent_today"] = get_emails_sent_today(conn)
     stats["max_per_day"] = config.MAX_EMAILS_PER_DAY
 
-    followups = conn.execute(
-        "SELECT COUNT(*) as cnt FROM email_queue WHERE status = 'pending'"
-    ).fetchone()["cnt"]
-    stats["followups_queued"] = followups
+    queued = (
+        conn.table(EMAIL_QUEUE)
+        .select("id", count="exact")
+        .eq("status", "pending")
+        .execute()
+        .count
+        or 0
+    )
+    stats["followups_queued"] = queued
 
     return stats
+
+
+def export_all(conn: Client) -> list[dict]:
+    """Return all leads joined with contacts for CSV export."""
+    leads = conn.table(LEADS).select("*").execute().data
+    if not leads:
+        return []
+
+    leads_by_id = {l["id"]: l for l in leads}
+    lead_ids = list(leads_by_id.keys())
+
+    all_contacts: list[dict] = []
+    for i in range(0, len(lead_ids), 200):
+        chunk = lead_ids[i : i + 200]
+        batch = (
+            conn.table(CONTACTS).select("*").in_("lead_id", chunk).execute().data
+        )
+        all_contacts.extend(batch)
+
+    contacts_by_lead: dict[int, list[dict]] = {}
+    for c in all_contacts:
+        contacts_by_lead.setdefault(c["lead_id"], []).append(c)
+
+    rows = []
+    for lead in leads:
+        lead_contacts = contacts_by_lead.get(lead["id"], [])
+        if not lead_contacts:
+            rows.append({
+                "type": lead["type"],
+                "company_name": lead["company_name"],
+                "address": lead["address"],
+                "city": lead["city"],
+                "state": lead["state"],
+                "zip": lead["zip"],
+                "phone": lead["phone"],
+                "website": lead["website"],
+                "rating": lead["rating"],
+                "review_count": lead["review_count"],
+                "source": lead["source"],
+                "email": None,
+                "contact_name": None,
+                "role": None,
+                "email_source": None,
+                "verified": None,
+            })
+        else:
+            for c in lead_contacts:
+                rows.append({
+                    "type": lead["type"],
+                    "company_name": lead["company_name"],
+                    "address": lead["address"],
+                    "city": lead["city"],
+                    "state": lead["state"],
+                    "zip": lead["zip"],
+                    "phone": lead["phone"],
+                    "website": lead["website"],
+                    "rating": lead["rating"],
+                    "review_count": lead["review_count"],
+                    "source": lead["source"],
+                    "email": c["email"],
+                    "contact_name": c.get("name"),
+                    "role": c.get("role"),
+                    "email_source": c.get("source"),
+                    "verified": c.get("verified"),
+                })
+    return rows

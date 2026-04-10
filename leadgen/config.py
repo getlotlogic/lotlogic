@@ -16,6 +16,16 @@ GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
 
+# Supabase (backend uses SERVICE key for writes)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nzdkoouoaedbbccraoti.supabase.co")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+
+# Anthropic (agent)
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+# Alert recipient
+ALERT_EMAIL = os.getenv("ALERT_EMAIL", "gabebs1@gmail.com")
+
 # Target cities
 TARGET_CITIES = [
     ("Charlotte", "NC"),
@@ -45,7 +55,7 @@ SEND_START_HOUR = 8
 SEND_END_HOUR = 16
 SEND_DAYS = [0, 1, 2, 3, 4]  # Mon-Fri
 
-# Database
+# Database (legacy SQLite path, kept for one-shot migration script)
 DB_PATH = os.path.join(os.path.dirname(__file__), "leads.db")
 
 # Search queries by lead type
