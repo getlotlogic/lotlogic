@@ -26,6 +26,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # Alert recipient
 ALERT_EMAIL = os.getenv("ALERT_EMAIL", "gabebs1@gmail.com")
 
+# Reddit API (for social media monitoring)
+REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
+REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "LotLogic:leadgen:v1.0 (by /u/lotlogic)")
+
 # Target cities
 TARGET_CITIES = [
     ("Charlotte", "NC"),

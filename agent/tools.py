@@ -8,7 +8,7 @@ result strings that Claude can reason about.
 import os
 from typing import Any, Callable
 
-from leadgen import config, db, emailer, enricher, scraper
+from leadgen import blog, config, db, emailer, enricher, reddit_monitor, scraper
 from . import reply_reader, summary as summary_mod
 
 
@@ -154,6 +154,98 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
             "required": ["subject", "body", "priority"],
         },
     },
+    # ── Marketing / SEO / Reddit tools ──
+    {
+        "name": "scan_reddit",
+        "description": (
+            "Scan target subreddits (r/propertymanagement, r/landlord, r/HOA, "
+            "r/Towing, etc.) for posts about parking enforcement. Stores relevant "
+            "posts as Reddit leads. Run this weekly to keep the social pipeline full."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "type": "string",
+                    "enum": ["apartment", "tow", "general"],
+                    "description": "Filter by audience type, or omit to scan all",
+                },
+            },
+        },
+    },
+    {
+        "name": "get_reddit_leads",
+        "description": (
+            "Get the top undrafted Reddit leads sorted by relevance. "
+            "Returns post title, subreddit, URL, and relevance score."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+            },
+        },
+    },
+    {
+        "name": "draft_reddit_reply",
+        "description": (
+            "Draft a helpful, non-spammy reply to a Reddit post that naturally "
+            "mentions LotLogic. Provide the reddit_lead_id and your drafted reply "
+            "text. The draft gets saved for Gabriel to manually post."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reddit_lead_id": {"type": "integer"},
+                "draft": {
+                    "type": "string",
+                    "description": "The reply text. Must be genuinely helpful first, with a soft LotLogic mention.",
+                },
+            },
+            "required": ["reddit_lead_id", "draft"],
+        },
+    },
+    {
+        "name": "write_blog_post",
+        "description": (
+            "Generate an SEO-optimized blog post targeting a specific keyword "
+            "and audience. The post is saved as a static HTML file in frontend/blog/ "
+            "and tracked in Supabase. Call get_unwritten_keywords first to pick one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "Target SEO keyword"},
+                "audience": {
+                    "type": "string",
+                    "enum": ["apartment", "tow", "general"],
+                },
+                "title": {"type": "string", "description": "Blog post title (SEO-optimized, 50-70 chars)"},
+                "meta_description": {"type": "string", "description": "Meta description (120-155 chars)"},
+                "body_html": {
+                    "type": "string",
+                    "description": "Full article body as HTML (use <h2>, <h3>, <p>, <ul>, <strong>). 800-1500 words.",
+                },
+            },
+            "required": ["keyword", "audience", "title", "meta_description", "body_html"],
+        },
+    },
+    {
+        "name": "get_unwritten_keywords",
+        "description": (
+            "Get SEO keywords that don't have a blog post yet. Use this to decide "
+            "what to write next. Returns keyword + target audience."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_marketing_stats",
+        "description": (
+            "Get marketing pipeline stats: blog posts published, Reddit leads "
+            "by status (new/drafted/replied/skipped)."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -288,6 +380,98 @@ def tool_alert_human(subject: str, body: str, priority: str) -> str:
     return f"Alert sent to {config.ALERT_EMAIL} (priority={priority})."
 
 
+# ── Marketing / SEO / Reddit handlers ──
+
+def tool_scan_reddit(audience: str | None = None) -> str:
+    if DRY_RUN:
+        return f"DRY_RUN: would scan Reddit for {audience or 'all'} audiences"
+    conn = db.get_db()
+    count = reddit_monitor.scan_subreddits(conn, audience=audience)
+    return f"Found {count} new relevant Reddit posts."
+
+
+def tool_get_reddit_leads(limit: int = 10) -> str:
+    conn = db.get_db()
+    leads = reddit_monitor.get_pending_reddit_leads(conn, limit=limit)
+    if not leads:
+        return "No pending Reddit leads."
+    lines = [f"{len(leads)} pending Reddit leads:"]
+    for r in leads:
+        lines.append(
+            f"- id={r['id']} r/{r['subreddit']} score={r['score']} "
+            f"relevance={r.get('relevance_score', 0):.1f} "
+            f"title={r['title'][:80]!r}"
+        )
+    return "\n".join(lines)
+
+
+def tool_draft_reddit_reply(reddit_lead_id: int, draft: str) -> str:
+    if DRY_RUN:
+        return f"DRY_RUN: would save draft reply for reddit lead {reddit_lead_id}"
+    conn = db.get_db()
+    reddit_monitor.save_draft_reply(conn, reddit_lead_id, draft)
+    return f"Draft reply saved for Reddit lead {reddit_lead_id}. Gabriel will review and post manually."
+
+
+def tool_write_blog_post(
+    keyword: str,
+    audience: str,
+    title: str,
+    meta_description: str,
+    body_html: str,
+) -> str:
+    if DRY_RUN:
+        return f"DRY_RUN: would write blog post for keyword={keyword!r}"
+    conn = db.get_db()
+    slug = blog.slugify(title)
+    post_id = blog.save_blog_post(
+        conn,
+        slug=slug,
+        title=title,
+        meta_description=meta_description,
+        target_keyword=keyword,
+        target_audience=audience,
+        body_html=body_html,
+    )
+    if post_id is None:
+        return f"ERROR: could not save blog post (slug {slug!r} may already exist)"
+    # Rebuild the blog index
+    blog.rebuild_index(conn)
+    return (
+        f"Blog post published: /blog/{slug}.html (id={post_id}). "
+        f"Index rebuilt. Will be live on Vercel after next deploy."
+    )
+
+
+def tool_get_unwritten_keywords() -> str:
+    conn = db.get_db()
+    unwritten = blog.get_unwritten_keywords(conn)
+    if not unwritten:
+        return "All target keywords have blog posts."
+    lines = [f"{len(unwritten)} keywords without posts:"]
+    for kw in unwritten[:15]:
+        lines.append(f"- [{kw['audience']}] {kw['keyword']}")
+    if len(unwritten) > 15:
+        lines.append(f"  ... and {len(unwritten) - 15} more")
+    return "\n".join(lines)
+
+
+def tool_get_marketing_stats() -> str:
+    conn = db.get_db()
+    # Blog stats
+    published = conn.table("blog_posts").select("id", count="exact").eq("published", True).execute()
+    blog_count = published.count or 0
+    # Reddit stats
+    reddit_stats = reddit_monitor.get_reddit_stats(conn)
+    return (
+        f"Blog posts published: {blog_count}\n"
+        f"Reddit leads: {reddit_stats.get('new', 0)} new, "
+        f"{reddit_stats.get('drafted', 0)} with draft replies, "
+        f"{reddit_stats.get('replied', 0)} posted, "
+        f"{reddit_stats.get('skipped', 0)} skipped"
+    )
+
+
 # ────────────────────────────────────────────────────────────
 # Dispatch
 # ────────────────────────────────────────────────────────────
@@ -303,6 +487,12 @@ _HANDLERS: dict[str, Callable[..., str]] = {
     "enrich_leads": tool_enrich_leads,
     "send_batch": tool_send_batch,
     "alert_human": tool_alert_human,
+    "scan_reddit": tool_scan_reddit,
+    "get_reddit_leads": tool_get_reddit_leads,
+    "draft_reddit_reply": tool_draft_reddit_reply,
+    "write_blog_post": tool_write_blog_post,
+    "get_unwritten_keywords": tool_get_unwritten_keywords,
+    "get_marketing_stats": tool_get_marketing_stats,
 }
 
 

@@ -3,7 +3,7 @@
     { "source": "/visit/:path*", "destination": "/visit.html" },
     { "source": "/register/:path*", "destination": "/resident.html" },
     { "source": "/leasing/:path*", "destination": "/leasing.html" },
-    { "source": "/:path((?!visit\\.|resident\\.|leasing\\.|pitch-).*)", "destination": "/index.html" }
+    { "source": "/:path((?!visit\\.|resident\\.|leasing\\.|pitch-|blog|robots\\.txt|sitemap\\.xml).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
