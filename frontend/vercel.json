@@ -1,9 +1,12 @@
 {
   "rewrites": [
+    { "source": "/", "destination": "/home.html" },
     { "source": "/visit/:path*", "destination": "/visit.html" },
     { "source": "/register/:path*", "destination": "/resident.html" },
     { "source": "/leasing/:path*", "destination": "/leasing.html" },
-    { "source": "/:path((?!visit\\.|resident\\.|leasing\\.|pitch-|blog|robots\\.txt|sitemap\\.xml).*)", "destination": "/index.html" }
+    { "source": "/app", "destination": "/index.html" },
+    { "source": "/app/:path*", "destination": "/index.html" },
+    { "source": "/:path((?!home\\.html|visit\\.|resident\\.|leasing\\.|pitch-|blog|robots\\.txt|sitemap\\.xml|app).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
