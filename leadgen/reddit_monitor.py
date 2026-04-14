@@ -27,13 +27,18 @@ SUBREDDITS = {
         "apartments",
         "CommercialRealEstate",
         "PropertyManagement",
+        "Charlotte",
+        "CharlotteNC",
     ],
     "tow": [
         "Towing",
+        "Charlotte",
     ],
     "general": [
         "RealEstate",
         "securitycameras",
+        "Charlotte",
+        "CharlotteNC",
     ],
 }
 
@@ -63,6 +68,14 @@ KEYWORDS = [
     "towing service",
     "apartment parking",
     "HOA parking",
+    # Charlotte-specific
+    "Charlotte parking",
+    "Charlotte towing",
+    "Charlotte apartment parking",
+    "uptown Charlotte parking",
+    "South End parking",
+    "NoDa parking",
+    "parking Charlotte NC",
 ]
 
 # Reddit OAuth token URL
