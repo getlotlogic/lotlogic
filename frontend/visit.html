@@ -156,8 +156,6 @@
     .not-found { text-align: center; padding: 20px 0; }
     .not-found h2 { font-size: 18px; color: #f87171; margin-bottom: 8px; }
     .not-found p { font-size: 14px; color: #6b7280; }
-    .row { display: flex; gap: 12px; }
-    .row > * { flex: 1; min-width: 0; }
   </style>
 </head>
 <body>
@@ -284,16 +282,8 @@
             <option value="48">48 hours (maximum)</option>
           </select>
 
-          <div class="row">
-            <div>
-              <label for="phone">Phone Number <span class="required">*</span></label>
-              <input type="tel" id="phone" placeholder="(555) 123-4567" required>
-            </div>
-            <div>
-              <label for="email">Email <span class="required">*</span></label>
-              <input type="email" id="email" placeholder="jane@email.com" required>
-            </div>
-          </div>
+          <label for="phone">Phone Number <span class="required">*</span></label>
+          <input type="tel" id="phone" placeholder="(555) 123-4567" required>
 
           <button type="submit" class="submit-btn" id="submitBtn">Register Visitor Pass</button>
           <div class="validity">Maximum stay: 48 hours from registration</div>
@@ -321,7 +311,6 @@
         const visitorName = document.getElementById('visitorName').value.trim();
         const stayHours = parseInt(document.getElementById('stayHours').value, 10);
         const phone = document.getElementById('phone').value.trim();
-        const email = document.getElementById('email').value.trim();
 
         if (!plateText || plateText.length < 2) {
           throw new Error('Please enter a valid license plate number.');
@@ -353,7 +342,6 @@
               id_photo_url: null,
               stay_days: stayDays,
               phone: phone,
-              email: email,
             }),
           });
         } catch (err) {
