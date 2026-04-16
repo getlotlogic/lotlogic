@@ -85,28 +85,6 @@
     select { appearance: none; cursor: pointer; }
     select option { background: #1a1d27; color: #e5e7eb; }
     .plate-input { text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; font-size: 20px; text-align: center; }
-    .file-upload {
-      position: relative;
-      width: 100%;
-      padding: 16px 14px;
-      background: #0f1117;
-      border: 2px dashed rgba(255,255,255,0.12);
-      border-radius: 10px;
-      text-align: center;
-      cursor: pointer;
-      transition: border-color 0.2s, background 0.2s;
-    }
-    .file-upload:hover { border-color: #3b82f6; background: rgba(59,130,246,0.05); }
-    .file-upload.has-file { border-color: #4ade80; border-style: solid; }
-    .file-upload input[type="file"] {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
-      cursor: pointer;
-    }
-    .file-upload-icon { font-size: 24px; margin-bottom: 4px; color: #6b7280; }
-    .file-upload-text { font-size: 13px; color: #6b7280; }
-    .file-upload-name { font-size: 13px; color: #4ade80; font-weight: 600; margin-top: 4px; }
     .submit-btn {
       width: 100%;
       padding: 14px;
@@ -221,39 +199,12 @@
       } finally { clearTimeout(t); }
     }
 
-    async function uploadToStorage(bucket, file, prefix, timeoutMs = 30000) {
-      if (file.size > 10 * 1024 * 1024) throw new Error('File must be under 10MB.');
-      const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
-      const path = prefix + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), timeoutMs);
-      try {
-        const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucket}/${encodeURIComponent(path)}`, {
-          method: 'POST',
-          signal: ctrl.signal,
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
-            'Content-Type': file.type || 'application/octet-stream',
-            'x-upsert': 'false',
-          },
-          body: file,
-        });
-        if (!res.ok) {
-          const body = await res.text();
-          throw new Error('Upload failed: ' + (body || res.status));
-        }
-        return `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
-      } finally { clearTimeout(t); }
-    }
-
     const app = document.getElementById('app');
 
     const pathParts = window.location.pathname.split('/').filter(Boolean);
     const qrCodeId = pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null;
 
     let property = null;
-    let idPhotoFile = null;
 
     async function init() {
       if (!qrCodeId) {
@@ -320,31 +271,17 @@
           <label for="visitorName">Full Name <span class="required">*</span></label>
           <input type="text" id="visitorName" placeholder="Jane Smith" required>
 
-          <label for="parkingSpot">Parking Spot Number</label>
-          <input type="text" id="parkingSpot" placeholder="A-12">
-
           <label for="plate">Tag / License Plate Number <span class="required">*</span></label>
           <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
 
-          <label for="tagExpiration">Tag Expiration Date</label>
-          <input type="date" id="tagExpiration">
-
-          <label>Picture of ID</label>
-          <div class="file-upload" id="idUploadZone">
-            <input type="file" id="idPhoto" accept="image/*" capture="environment">
-            <div class="file-upload-icon">&#128247;</div>
-            <div class="file-upload-text">Tap to take photo or choose file</div>
-            <div class="file-upload-name" id="idFileName"></div>
-          </div>
-
-          <label for="hostUnit">Unit Number You're Visiting <span class="required">*</span></label>
-          <input type="text" id="hostUnit" placeholder="Unit 204" required>
-
-          <label for="stayDays">Extent of Stay <span class="required">*</span></label>
-          <select id="stayDays" required>
-            <option value="1">1 Day</option>
-            <option value="2">2 Days</option>
-            <option value="3">3 Days (Maximum)</option>
+          <label for="stayHours">How long will you be here? <span class="required">*</span></label>
+          <select id="stayHours" required>
+            <option value="2">2 hours</option>
+            <option value="4">4 hours</option>
+            <option value="8">8 hours</option>
+            <option value="12">12 hours</option>
+            <option value="24" selected>24 hours</option>
+            <option value="48">48 hours (maximum)</option>
           </select>
 
           <div class="row">
@@ -359,30 +296,12 @@
           </div>
 
           <button type="submit" class="submit-btn" id="submitBtn">Register Visitor Pass</button>
-          <div class="validity">Maximum stay: 3 days from registration</div>
+          <div class="validity">Maximum stay: 48 hours from registration</div>
           <div id="errorMsg"></div>
         </form>
       `;
 
       document.getElementById('passForm').addEventListener('submit', handleSubmit);
-      document.getElementById('idPhoto').addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        const zone = document.getElementById('idUploadZone');
-        const nameEl = document.getElementById('idFileName');
-        if (file) {
-          idPhotoFile = file;
-          zone.classList.add('has-file');
-          nameEl.textContent = file.name;
-        } else {
-          idPhotoFile = null;
-          zone.classList.remove('has-file');
-          nameEl.textContent = '';
-        }
-      });
-    }
-
-    async function uploadFile(bucket, file, prefix) {
-      return await uploadToStorage(bucket, file, prefix);
     }
 
     let submitting = false;
@@ -400,26 +319,21 @@
         const plateRaw = document.getElementById('plate').value.trim();
         const plateText = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
         const visitorName = document.getElementById('visitorName').value.trim();
-        const parkingSpot = document.getElementById('parkingSpot').value.trim() || null;
-        const tagExpiration = document.getElementById('tagExpiration').value || null;
-        const hostUnit = document.getElementById('hostUnit').value.trim();
-        const stayDays = parseInt(document.getElementById('stayDays').value, 10);
+        const stayHours = parseInt(document.getElementById('stayHours').value, 10);
         const phone = document.getElementById('phone').value.trim();
         const email = document.getElementById('email').value.trim();
 
         if (!plateText || plateText.length < 2) {
           throw new Error('Please enter a valid license plate number.');
         }
-
-        let idPhotoUrl = null;
-        if (idPhotoFile) {
-          btn.textContent = 'Uploading ID...';
-          idPhotoUrl = await uploadFile('visitor-ids', idPhotoFile, property.id);
+        if (!stayHours || stayHours > 48) {
+          throw new Error('Choose how long you will be parked (max 48 hours).');
         }
 
-        btn.textContent = 'Registering...';
         const validFrom = new Date();
-        const validUntil = new Date(validFrom.getTime() + stayDays * 24 * 60 * 60 * 1000);
+        const validUntil = new Date(validFrom.getTime() + stayHours * 60 * 60 * 1000);
+        // stay_days is legacy on this row; derive the closest whole-day equivalent.
+        const stayDays = Math.max(1, Math.ceil(stayHours / 24));
 
         try {
           await pgRest('/visitor_passes', {
@@ -429,14 +343,14 @@
               property_id: property.id,
               plate_text: plateText,
               visitor_name: visitorName,
-              host_unit: hostUnit,
+              host_unit: '',
               host_name: '',
               valid_from: validFrom.toISOString(),
               valid_until: validUntil.toISOString(),
               status: 'active',
-              parking_spot: parkingSpot,
-              tag_expiration: tagExpiration,
-              id_photo_url: idPhotoUrl,
+              parking_spot: null,
+              tag_expiration: null,
+              id_photo_url: null,
               stay_days: stayDays,
               phone: phone,
               email: email,
@@ -446,7 +360,7 @@
           throw new Error('Failed to register pass. ' + (err.message || 'Please try again.'));
         }
 
-        showSuccess(plateText, validUntil, stayDays);
+        showSuccess(plateText, validUntil, stayHours);
       } catch (err) {
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
         btn.disabled = false;
@@ -455,7 +369,7 @@
       }
     }
 
-    function showSuccess(plate, validUntil, stayDays) {
+    function showSuccess(plate, validUntil, stayHours) {
       const expiresStr = validUntil.toLocaleString('en-US', {
         weekday: 'short', month: 'short', day: 'numeric',
         hour: 'numeric', minute: '2-digit', hour12: true,
@@ -471,7 +385,7 @@
           <h2>Visitor Pass Registered!</h2>
           <p>Your visitor parking pass for <strong>${escapeHtml(property.name)}</strong> has been registered.</p>
           <div class="success-plate">${escapeHtml(plate)}</div>
-          <div class="success-detail">Valid for ${stayDays} day${stayDays > 1 ? 's' : ''} &mdash; until ${escapeHtml(expiresStr)}</div>
+          <div class="success-detail">Valid for ${stayHours} hour${stayHours !== 1 ? 's' : ''} &mdash; until ${escapeHtml(expiresStr)}</div>
         </div>
       `;
     }
