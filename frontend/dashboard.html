@@ -659,6 +659,8 @@
       background: var(--bg-card); border-radius: 20px 20px 0 0; width: 100%; max-width: 640px;
       max-height: 90vh; overflow-y: auto; animation: slideUp .3s ease;
       border: 1px solid var(--border); border-bottom: none;
+      padding-bottom: env(safe-area-inset-bottom);
+      overscroll-behavior: contain;
     }
     .permits-header {
       display: flex; align-items: center; justify-content: space-between;
@@ -1572,6 +1574,53 @@
 
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+
+// ── Shared helpers (parking passes) ──────────────────────────
+// Format a millisecond duration as "Xh Ym left" / "Zm left" / "<1m left" / "Expired"
+function fmtPassRemaining(ms) {
+  if (ms <= 0) return 'Expired';
+  const sec = Math.floor(ms / 1000);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h >= 1) return `${h}h ${m}m left`;
+  if (m >= 1) return `${m}m left`;
+  return '<1m left';
+}
+
+// Return a debounced version of fn that coalesces calls within `wait` ms.
+// Useful for realtime callbacks that can fire in bursts.
+function makeDebounced(fn, wait) {
+  let t = null;
+  return function debounced(...args) {
+    if (t) clearTimeout(t);
+    t = setTimeout(() => { t = null; fn(...args); }, wait);
+  };
+}
+
+// Keep a dashboard-wide ticker so every "time-left" label counts down in lockstep
+// without each component setting its own interval.
+const NOW_TICK_LISTENERS = new Set();
+let NOW_TICK_INTERVAL = null;
+function useNowTick(everyMs = 30000) {
+  const [t, setT] = useState(() => Date.now());
+  useEffect(() => {
+    const cb = () => setT(Date.now());
+    NOW_TICK_LISTENERS.add(cb);
+    if (!NOW_TICK_INTERVAL) {
+      NOW_TICK_INTERVAL = setInterval(() => {
+        NOW_TICK_LISTENERS.forEach(l => l());
+      }, everyMs);
+    }
+    return () => {
+      NOW_TICK_LISTENERS.delete(cb);
+      if (NOW_TICK_LISTENERS.size === 0 && NOW_TICK_INTERVAL) {
+        clearInterval(NOW_TICK_INTERVAL);
+        NOW_TICK_INTERVAL = null;
+      }
+    };
+  }, [everyMs]);
+  return t;
+}
 
 // ── Supabase client ──────────────────────────────────────────
 const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
@@ -4942,22 +4991,26 @@ function PermitsModal({ lotId, lotName, onClose }) {
   const [holderName, setHolderName] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
   const [saving, setSaving] = useState(false);
-  const [nowTick, setNowTick] = useState(Date.now());
+  const nowTick = useNowTick();
   const canvasRef = useRef(null);
   const { addToast } = useToast();
 
   const target = `${window.location.origin}/park?lot=${encodeURIComponent(lotId)}`;
 
   const refreshRegs = useCallback(() => {
-    db.getParkingRegistrations(lotId).then(setRegs).catch(() => {});
+    let cancelled = false;
+    db.getParkingRegistrations(lotId).then(data => { if (!cancelled) setRegs(data); }).catch(() => {});
+    return () => { cancelled = true; };
   }, [lotId]);
 
-  // Initial load: permits + QR registrations in parallel
+  // Initial load: permits + QR registrations in parallel. Guard against unmount.
   useEffect(() => {
+    let cancelled = false;
     Promise.all([
-      db.getPermits(lotId).then(setPermits).catch(() => {}),
-      db.getParkingRegistrations(lotId).then(setRegs).catch(() => {}),
-    ]).finally(() => setLoading(false));
+      db.getPermits(lotId).then(data => { if (!cancelled) setPermits(data); }).catch(() => {}),
+      db.getParkingRegistrations(lotId).then(data => { if (!cancelled) setRegs(data); }).catch(() => {}),
+    ]).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [lotId]);
 
   // Render the QR onto the canvas once it's mounted
@@ -4969,20 +5022,31 @@ function PermitsModal({ lotId, lotName, onClose }) {
     }, err => { if (err) console.error('qr render:', err); });
   }, [target]);
 
-  // Realtime: the moment a driver submits the /park form, the row appears here
+  // Realtime: the moment a driver submits the /park form, the row appears here.
+  // Filter by lot_id server-side so we only get events for this lot, and debounce
+  // client-side so a burst of events coalesces into one refetch.
   useEffect(() => {
     if (!supabase) return;
+    const debouncedRefresh = makeDebounced(() => refreshRegs(), 250);
     const channel = supabase.channel('passes-modal-' + lotId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations', filter: 'lot_id=eq.' + lotId }, () => refreshRegs())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations', filter: 'lot_id=eq.' + lotId }, debouncedRefresh)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [lotId, refreshRegs]);
 
-  // Tick every 30s so "time left" counts down without a refetch
+  // Refetch when tab becomes visible again after being backgrounded
   useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), 30000);
-    return () => clearInterval(id);
-  }, []);
+    const onVis = () => { if (document.visibilityState === 'visible') refreshRegs(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refreshRegs]);
+
+  // Close on Escape — matches the pattern used by other modals in this file
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
 
   async function addPermit(e) {
     e.preventDefault();
@@ -5028,27 +5092,17 @@ function PermitsModal({ lotId, lotName, onClose }) {
   const expired = p => p.expires_at && new Date(p.expires_at) < new Date();
   const activeRegs = regs.filter(r => r.status === 'active' && new Date(r.expires_at).getTime() > nowTick);
 
-  function fmtRemaining(ms) {
-    if (ms <= 0) return 'Expired';
-    const sec = Math.floor(ms / 1000);
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    if (h >= 1) return `${h}h ${m}m left`;
-    if (m >= 1) return `${m}m left`;
-    return '<1m left';
-  }
-
   return (
     <div className="permits-overlay" onClick={onClose}>
-      <div className="permits-sheet" onClick={e => e.stopPropagation()}>
+      <div className="permits-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Passes">
         <div className="permits-header">
-          <div>
+          <div style={{minWidth:0, flex:1}}>
             <div className="permits-title">Passes</div>
-            <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2}}>
+            <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
               {lotName} — {permits.length} permit{permits.length !== 1 ? 's' : ''} · {activeRegs.length} QR active
             </div>
           </div>
-          <button onClick={onClose} style={{background:'var(--bg-inset)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 14px', fontSize:12, fontWeight:700, color:'var(--text-muted)', cursor:'pointer', fontFamily:'inherit'}}>Close</button>
+          <button onClick={onClose} aria-label="Close" style={{background:'var(--bg-inset)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 14px', fontSize:12, fontWeight:700, color:'var(--text-muted)', cursor:'pointer', fontFamily:'inherit', flexShrink:0, marginLeft:8}}>Close</button>
         </div>
 
         {/* ─── QR self-registration ─────────────────────────────── */}
@@ -5101,7 +5155,7 @@ function PermitsModal({ lotId, lotName, onClose }) {
                     background: urgent ? 'rgba(251,191,36,.12)' : 'rgba(74,222,128,.12)',
                     color: urgent ? '#fbbf24' : '#4ade80',
                     border: urgent ? '1px solid rgba(251,191,36,.25)' : '1px solid rgba(74,222,128,.25)',
-                  }}>{fmtRemaining(remainMs)}</span>
+                  }}>{fmtPassRemaining(remainMs)}</span>
                 </div>
               );
             })}
@@ -5444,15 +5498,16 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   const [addingCamera, setAddingCamera] = useState(null); // lot id
   const [managingPermits, setManagingPermits] = useState(null); // {lotId, lotName}
   const [activeRegsByLot, setActiveRegsByLot] = useState({}); // {lotId: [reg, ...]}
-  const [nowTick, setNowTick] = useState(Date.now());
+  const nowTick = useNowTick();
   const { addToast } = useToast();
 
   // Fetch + keep live the count of active QR passes for every lot on the page.
-  // Realtime + 20s poll + 30s nowTick so chips on each card reflect reality.
-  const lotIds = lots.map(l => l.id);
-  const lotIdsKey = lotIds.join(',');
+  // Realtime + 20s poll + shared nowTick so chips on each card reflect reality.
+  const lotIdsKey = lots.map(l => l.id).join(',');
+  const lotIdSet = useMemo(() => new Set(lotIdsKey ? lotIdsKey.split(',') : []), [lotIdsKey]);
   const refreshActiveRegs = useCallback(() => {
-    if (!lotIds.length) return;
+    if (!lotIdsKey) return;
+    const lotIds = lotIdsKey.split(',');
     db.getActiveParkingRegistrationsForLots(lotIds).then(rows => {
       const byLot = {};
       for (const r of rows) { (byLot[r.lot_id] = byLot[r.lot_id] || []).push(r); }
@@ -5461,21 +5516,29 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   }, [lotIdsKey]);
   useEffect(() => { refreshActiveRegs(); }, [refreshActiveRegs]);
   useEffect(() => {
-    if (!lotIds.length) return;
+    if (!lotIdsKey) return;
     const id = setInterval(refreshActiveRegs, 20000);
     return () => clearInterval(id);
   }, [refreshActiveRegs, lotIdsKey]);
   useEffect(() => {
-    if (!supabase || !lotIds.length) return;
+    if (!supabase || !lotIdsKey) return;
+    const debouncedRefresh = makeDebounced(refreshActiveRegs, 300);
     const channel = supabase.channel('lots-parking-regs')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations' }, () => refreshActiveRegs())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations' }, payload => {
+        // Ignore events for lots the current user can't see
+        const lotId = payload?.new?.lot_id || payload?.old?.lot_id;
+        if (lotId && !lotIdSet.has(lotId)) return;
+        debouncedRefresh();
+      })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [refreshActiveRegs, lotIdsKey]);
+  }, [refreshActiveRegs, lotIdSet, lotIdsKey]);
+  // Refetch on tab visibility restore — catches anything realtime missed while backgrounded
   useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), 30000);
-    return () => clearInterval(id);
-  }, []);
+    const onVis = () => { if (document.visibilityState === 'visible') refreshActiveRegs(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refreshActiveRegs]);
 
   if (loading && lots.length === 0) {
     return <div className="page-enter"><SkeletonKPIs /><SkeletonCards count={3} /></div>;
@@ -6837,7 +6900,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const [newApiKey, setNewApiKey] = useState(null);
   const [saving, setSaving] = useState(false);
   const [parkingRegs, setParkingRegs] = useState([]);
-  const [nowTick, setNowTick] = useState(Date.now());
+  const nowTick = useNowTick();
 
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
@@ -6873,33 +6936,33 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     return () => clearInterval(id);
   }, [refreshParkingRegs, property?.owner_id]);
 
-  // Supabase realtime: instant updates the moment a driver scans the QR
+  // Supabase realtime: instant updates the moment a driver scans the QR.
+  // Can't filter server-side by owner (no owner_id column on parking_registrations),
+  // so filter client-side: we know which lot_ids belong to our owner from the last fetch.
+  const ownedLotIds = useMemo(() => new Set(parkingRegs.map(r => r.lot_id)), [parkingRegs]);
   useEffect(() => {
     if (!supabase || !property?.owner_id) return;
+    const debouncedRefresh = makeDebounced(refreshParkingRegs, 300);
     const channel = supabase.channel('parking-regs-' + propertyId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations' }, () => {
-        refreshParkingRegs();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations' }, payload => {
+        // Only refetch when an event is for a lot we already know about.
+        // First-ever registration at a new lot still comes in via the 20s poll.
+        const lotId = payload?.new?.lot_id || payload?.old?.lot_id;
+        if (lotId && ownedLotIds.size > 0 && !ownedLotIds.has(lotId)) return;
+        debouncedRefresh();
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [propertyId, property?.owner_id, refreshParkingRegs]);
+  }, [propertyId, property?.owner_id, refreshParkingRegs, ownedLotIds]);
 
-  // Tick every 30s so "time remaining" counts down without a refetch
+  // Refetch on tab visibility restore
   useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), 30000);
-    return () => clearInterval(id);
-  }, []);
+    const onVis = () => { if (document.visibilityState === 'visible') refreshParkingRegs(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refreshParkingRegs]);
 
   const activeRegs = parkingRegs.filter(r => r.status === 'active' && new Date(r.expires_at).getTime() > nowTick);
-  function fmtRemaining(ms) {
-    if (ms <= 0) return 'Expired';
-    const sec = Math.floor(ms / 1000);
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    if (h >= 1) return `${h}h ${m}m left`;
-    if (m >= 1) return `${m}m left`;
-    return '<1m left';
-  }
 
   async function handleAddPlate(e) {
     e.preventDefault();
@@ -7039,7 +7102,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
                 color: urgent ? '#fbbf24' : '#4ade80',
                 border: urgent ? '1px solid rgba(251,191,36,.25)' : '1px solid rgba(74,222,128,.25)',
                 whiteSpace:'nowrap',
-              }}>{fmtRemaining(remainMs)}</span>
+              }}>{fmtPassRemaining(remainMs)}</span>
             </div>
           );
         })}
