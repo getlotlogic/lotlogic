@@ -4,6 +4,7 @@
     { "source": "/register/:path*", "destination": "/resident.html" },
     { "source": "/leasing/:path*", "destination": "/leasing.html" },
     { "source": "/park", "destination": "/qr-park.html" },
+    { "source": "/park/qr", "destination": "/qr-park-print.html" },
     { "source": "/app", "destination": "/dashboard.html" },
     { "source": "/app/:path*", "destination": "/dashboard.html" }
   ],
