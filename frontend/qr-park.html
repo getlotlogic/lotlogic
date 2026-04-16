@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Park Your Vehicle</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e5e7eb;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: #1a1d27;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 32px 24px;
+      max-width: 420px;
+      width: 100%;
+    }
+    .logo { text-align: center; margin-bottom: 24px; }
+    .logo .shield {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      border-radius: 12px;
+      font-weight: 900;
+      font-size: 18px;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .logo h1 { font-size: 22px; font-weight: 800; color: #f9fafb; }
+    .logo h1 span { color: #3b82f6; }
+    .property-name { text-align: center; font-size: 16px; color: #9ca3af; margin-bottom: 24px; }
+    .property-name strong { display: block; font-size: 18px; color: #e5e7eb; margin-top: 4px; }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #9ca3af;
+      margin-bottom: 8px;
+      margin-top: 18px;
+    }
+    label .required { color: #ef4444; margin-left: 2px; }
+    input, select {
+      width: 100%;
+      padding: 12px 14px;
+      background: #0f1117;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      color: #e5e7eb;
+      font-size: 16px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: #3b82f6; }
+    input::placeholder { color: #4b5563; }
+    .plate-input {
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      font-size: 24px;
+      text-align: center;
+    }
+    .duration-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .duration-btn {
+      padding: 16px 8px;
+      background: #0f1117;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      color: #e5e7eb;
+      font-size: 16px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .duration-btn:hover { border-color: rgba(59,130,246,0.5); }
+    .duration-btn.selected {
+      background: rgba(59,130,246,0.15);
+      border-color: #3b82f6;
+      color: #fff;
+    }
+    .submit-btn {
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 28px;
+      font-family: inherit;
+      transition: opacity 0.2s;
+    }
+    .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .submit-btn:hover:not(:disabled) { opacity: 0.9; }
+    .hint { text-align: center; font-size: 12px; color: #6b7280; margin-top: 12px; }
+    .error {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: #f87171;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-top: 16px;
+      text-align: center;
+    }
+    .success-card { text-align: center; }
+    .success-icon {
+      width: 64px;
+      height: 64px;
+      background: rgba(74,222,128,0.1);
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+    .success-icon svg { width: 32px; height: 32px; stroke: #4ade80; fill: none; stroke-width: 2.5; }
+    .success-card h2 { font-size: 22px; color: #f9fafb; margin-bottom: 4px; }
+    .success-card p { font-size: 14px; color: #9ca3af; line-height: 1.6; margin-top: 4px; }
+    .success-plate {
+      display: inline-block;
+      background: rgba(59,130,246,0.1);
+      border: 1px solid rgba(59,130,246,0.3);
+      color: #3b82f6;
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      margin: 18px 0;
+    }
+    .expiration-time {
+      display: inline-block;
+      background: rgba(251,191,36,0.1);
+      border: 1px solid rgba(251,191,36,0.3);
+      color: #fbbf24;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      margin: 10px 0;
+    }
+    .success-detail { font-size: 13px; color: #6b7280; margin-top: 12px; }
+    .loading-state { text-align: center; padding: 40px 0; color: #6b7280; }
+    .not-found { text-align: center; padding: 20px 0; }
+    .not-found h2 { font-size: 20px; color: #f87171; margin-bottom: 12px; }
+    .not-found p { font-size: 14px; color: #9ca3af; line-height: 1.6; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="card" id="app">
+    <div class="loading-state">Loading...</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script>
+    const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const app = document.getElementById('app');
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    const qs = new URLSearchParams(window.location.search);
+    const lotId = qs.get('lot');
+
+    let lot = null;
+    let selectedHours = null;
+    let submitting = false;
+
+    async function init() {
+      if (!lotId || !UUID_RE.test(lotId)) { showInvalidQR(); return; }
+      try {
+        const { data, error } = await supabase
+          .from('lots')
+          .select('id, name, active')
+          .eq('id', lotId)
+          .single();
+        if (error || !data || data.active === false) { showInvalidQR(); return; }
+        lot = data;
+        showForm();
+      } catch (err) {
+        console.error('init:', err);
+        showInvalidQR();
+      }
+    }
+
+    function showInvalidQR() {
+      app.innerHTML = `
+        <div class="logo"><div class="shield">LL</div><h1>Lot<span>Logic</span></h1></div>
+        <div class="not-found">
+          <h2>Invalid QR Code</h2>
+          <p>Please scan the code posted at the lot, or ask the lot attendant for help.</p>
+        </div>
+      `;
+    }
+
+    function showForm() {
+      const durations = [2, 4, 8, 12, 24, 48];
+      app.innerHTML = `
+        <div class="logo"><div class="shield">LL</div><h1>Lot<span>Logic</span></h1></div>
+        <div class="property-name">
+          Register Your Vehicle
+          <strong>${escapeHtml(lot.name)}</strong>
+        </div>
+        <form id="regForm">
+          <label for="plate">License Plate <span class="required">*</span></label>
+          <input type="text" id="plate" class="plate-input" placeholder="ABC1234" required maxlength="8" autocomplete="off" inputmode="text">
+
+          <label>How long will you be here? <span class="required">*</span></label>
+          <div class="duration-grid">
+            ${durations.map(h => `<button type="button" class="duration-btn" data-hours="${h}">${h} hr</button>`).join('')}
+          </div>
+
+          <label for="vehicleType">Vehicle Type</label>
+          <select id="vehicleType">
+            <option value="">\u2014</option>
+            <option value="semi">Semi / Truck</option>
+            <option value="pickup">Pickup</option>
+            <option value="car">Car</option>
+            <option value="other">Other</option>
+          </select>
+
+          <button type="submit" class="submit-btn" id="submitBtn" disabled>Register</button>
+          <div class="hint">Max stay: 48 hours</div>
+          <div id="errorMsg"></div>
+        </form>
+      `;
+
+      const plateInput = document.getElementById('plate');
+      plateInput.addEventListener('input', e => {
+        e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      });
+
+      document.querySelectorAll('.duration-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          selectedHours = parseInt(btn.dataset.hours, 10);
+          document.querySelectorAll('.duration-btn').forEach(b => b.classList.remove('selected'));
+          btn.classList.add('selected');
+          document.getElementById('submitBtn').disabled = false;
+        });
+      });
+
+      document.getElementById('regForm').addEventListener('submit', handleSubmit);
+    }
+
+    async function handleSubmit(e) {
+      e.preventDefault();
+      if (submitting) return;
+      submitting = true;
+      const btn = document.getElementById('submitBtn');
+      const errorDiv = document.getElementById('errorMsg');
+      errorDiv.innerHTML = '';
+      btn.disabled = true;
+      btn.textContent = 'Registering...';
+
+      try {
+        const plate = document.getElementById('plate').value.trim();
+        const vehicleType = document.getElementById('vehicleType').value || null;
+
+        if (!/^[A-Z0-9]{2,8}$/.test(plate)) {
+          throw new Error('Enter a valid license plate (2 to 8 letters or numbers).');
+        }
+        if (!selectedHours) {
+          throw new Error('Choose how long you will be parked.');
+        }
+
+        const nowMs = Date.now();
+        const expiresAt = new Date(nowMs + selectedHours * 3600 * 1000);
+        const cooldownUntil = new Date(expiresAt.getTime() + 24 * 3600 * 1000);
+
+        const { error } = await supabase
+          .from('parking_registrations')
+          .insert({
+            lot_id: lot.id,
+            plate_number: plate,
+            vehicle_type: vehicleType,
+            expires_at: expiresAt.toISOString(),
+            cooldown_until: cooldownUntil.toISOString(),
+          });
+
+        if (error) {
+          if (error.code === 'P0001' && /cooldown/i.test(error.message || '')) {
+            showCooldown(error.details || '');
+            return;
+          }
+          if (error.code === 'P0001' && /already_active/i.test(error.message || '')) {
+            showAlreadyActive(error.details || '', plate);
+            return;
+          }
+          if (error.code === '23503') { showInvalidQR(); return; }
+          throw new Error(error.message || 'Registration failed. Please try again.');
+        }
+
+        showSuccess(plate, expiresAt);
+      } catch (err) {
+        errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+        btn.disabled = false;
+        btn.textContent = 'Register';
+        submitting = false;
+      }
+    }
+
+    function formatTime(input) {
+      if (!input) return '';
+      const d = input instanceof Date ? input : new Date(input);
+      if (isNaN(d)) return String(input);
+      return d.toLocaleString(undefined, {
+        weekday: 'short', month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit',
+        timeZoneName: 'short',
+      });
+    }
+
+    function showSuccess(plate, expiresAt) {
+      app.innerHTML = `
+        <div class="success-card">
+          <div class="success-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          </div>
+          <h2>You're registered</h2>
+          <p>at <strong>${escapeHtml(lot.name)}</strong></p>
+          <div class="success-plate">${escapeHtml(plate)}</div>
+          <p>Move your vehicle before</p>
+          <div class="expiration-time">${escapeHtml(formatTime(expiresAt))}</div>
+          <div class="success-detail">Staying past that time may result in a violation.</div>
+        </div>
+      `;
+    }
+
+    function showAlreadyActive(expiresIso, plate) {
+      app.innerHTML = `
+        <div class="success-card">
+          <div class="success-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          </div>
+          <h2>Already registered</h2>
+          <p>at <strong>${escapeHtml(lot.name)}</strong></p>
+          <div class="success-plate">${escapeHtml(plate)}</div>
+          <p>Move your vehicle before</p>
+          <div class="expiration-time">${escapeHtml(formatTime(expiresIso))}</div>
+        </div>
+      `;
+    }
+
+    function showCooldown(cooldownIso) {
+      app.innerHTML = `
+        <div class="logo"><div class="shield">LL</div><h1>Lot<span>Logic</span></h1></div>
+        <div class="not-found">
+          <h2>Not eligible yet</h2>
+          <p>This vehicle recently parked at <strong>${escapeHtml(lot.name)}</strong>.</p>
+          <p>You can re-register after</p>
+          <div class="expiration-time">${escapeHtml(formatTime(cooldownIso))}</div>
+        </div>
+      `;
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    init();
+  </script>
+</body>
+</html>
