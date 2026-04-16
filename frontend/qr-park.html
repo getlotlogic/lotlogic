@@ -171,11 +171,45 @@
     <div class="loading-state">Loading...</div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script>
+    // ── Raw fetch against Supabase PostgREST ──
+    // Deliberately NOT loading supabase-js — that SDK auto-opens a realtime
+    // WebSocket on createClient() which can hang indefinitely on networks with
+    // blockers, strict proxies, or extensions. These public pages only need two
+    // REST calls (one SELECT, one INSERT); raw fetch is more reliable and ~50KB
+    // smaller than pulling in the SDK.
     const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    async function pgRest(path, init = {}, timeoutMs = 10000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(SUPABASE_URL + '/rest/v1' + path, {
+          ...init,
+          signal: ctrl.signal,
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+            'Content-Type': 'application/json',
+            ...(init.headers || {}),
+          },
+        });
+        const text = await res.text();
+        const body = text ? JSON.parse(text) : null;
+        if (!res.ok) {
+          const err = new Error((body && body.message) || ('HTTP ' + res.status));
+          err.code = body && body.code;
+          err.details = body && body.details;
+          err.hint = body && body.hint;
+          err.status = res.status;
+          throw err;
+        }
+        return body;
+      } finally {
+        clearTimeout(t);
+      }
+    }
 
     const app = document.getElementById('app');
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -190,17 +224,14 @@
     async function init() {
       if (!lotId || !UUID_RE.test(lotId)) { showInvalidQR(); return; }
       try {
-        const { data, error } = await supabase
-          .from('lots')
-          .select('id, name, active')
-          .eq('id', lotId)
-          .single();
-        if (error || !data || data.active === false) { showInvalidQR(); return; }
+        const rows = await pgRest(`/lots?select=id,name,active&id=eq.${encodeURIComponent(lotId)}&limit=1`);
+        const data = Array.isArray(rows) ? rows[0] : null;
+        if (!data || data.active === false) { showInvalidQR(); return; }
         lot = data;
         showForm();
       } catch (err) {
         console.error('init:', err);
-        showInvalidQR();
+        showConnectionError(err);
       }
     }
 
@@ -212,6 +243,24 @@
           <p>Please scan the code posted at the lot, or ask the lot attendant for help.</p>
         </div>
       `;
+    }
+
+    function showConnectionError(err) {
+      const detail = err && (err.name === 'AbortError' ? 'Request timed out.' : (err.message || 'Network error.'));
+      app.innerHTML = `
+        <div class="logo"><div class="shield">LL</div><h1>Lot<span>Logic</span></h1></div>
+        <div class="not-found">
+          <h2>Can't reach server</h2>
+          <p>${escapeHtml(detail)}</p>
+          <p>Check your connection, then try again.</p>
+          <button id="retryBtn" class="submit-btn" style="margin-top:18px">Try again</button>
+        </div>
+      `;
+      const btn = document.getElementById('retryBtn');
+      if (btn) btn.addEventListener('click', () => {
+        app.innerHTML = '<div class="loading-state">Loading...</div>';
+        init();
+      });
     }
 
     function showForm() {
@@ -288,21 +337,22 @@
         const expiresAt = new Date(nowMs + selectedHours * 3600 * 1000);
         const cooldownUntil = new Date(expiresAt.getTime() + 24 * 3600 * 1000);
 
-        const { error } = await supabase
-          .from('parking_registrations')
-          .insert({
-            lot_id: lot.id,
-            plate_number: plate,
-            vehicle_type: vehicleType,
-            expires_at: expiresAt.toISOString(),
-            cooldown_until: cooldownUntil.toISOString(),
+        try {
+          await pgRest('/parking_registrations', {
+            method: 'POST',
+            headers: { Prefer: 'return=minimal' },
+            body: JSON.stringify({
+              lot_id: lot.id,
+              plate_number: plate,
+              vehicle_type: vehicleType,
+              expires_at: expiresAt.toISOString(),
+              cooldown_until: cooldownUntil.toISOString(),
+            }),
           });
-
-        if (error) {
-          // Trigger raises P0001 with DETAIL = ISO-8601 UTC timestamp. Some
-          // Supabase error shapes put that in `details`, others in `hint`, and
-          // a few only include it inside `message`. Extract from wherever we
-          // can find it so the driver always sees a usable retry time.
+        } catch (error) {
+          // Trigger raises P0001 with DETAIL = ISO-8601 UTC timestamp. Different
+          // Supabase error shapes put that in `details`, `hint`, or `message`;
+          // extract it from wherever it lives so the driver sees a retry time.
           const combined = [error.details, error.hint, error.message].filter(Boolean).join(' ');
           const isoMatch = combined.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/);
           const iso = isoMatch ? isoMatch[0] : '';
