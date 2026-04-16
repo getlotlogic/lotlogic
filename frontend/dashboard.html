@@ -2448,6 +2448,18 @@ const db = {
     }
     return [];
   },
+  async getRecentPlateEvents(propertyId, limit = 50) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('plate_events')
+        .select('id, plate_text, confidence, image_url, event_type, camera_id, created_at')
+        .eq('property_id', propertyId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (!error && data) return data;
+    }
+    return [];
+  },
   async removeALPRCamera(id) {
     if (supabase) {
       const { error } = await supabase.from('alpr_cameras').delete().eq('id', id);
@@ -5649,6 +5661,8 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                   const snap = cam.latest_snapshot;
                   const snapVehicles = snap?.vehicles_detected || snap?.vehicle_count || 0;
                   const snapPeople = snap?.people_detected || snap?.person_count || snap?.humans_detected || 0;
+                  const snapPlates = snap?.plates_read || 0;
+                  const snapPlateReadings = snap?.plate_readings || [];
 
                   return (
                     <div key={cam.camera_id} className="cam-row">
@@ -5693,12 +5707,33 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                           {snapPeople > 0 && (
                             <span className="cam-det-chip"><span className="det-dot people" /> {snapPeople} {snapPeople === 1 ? 'person' : 'people'}</span>
                           )}
-                          {snapVehicles === 0 && snapPeople === 0 && (
+                          {snapPlates > 0 && (
+                            <span className="cam-det-chip" style={{color:'#fbbf24', background:'rgba(251,191,36,.1)', border:'1px solid rgba(251,191,36,.25)'}}>
+                              <span style={{width:6, height:6, borderRadius:'50%', background:'#fbbf24', display:'inline-block', marginRight:6}} />
+                              {snapPlates} plate{snapPlates !== 1 ? 's' : ''} read
+                            </span>
+                          )}
+                          {snapVehicles === 0 && snapPeople === 0 && snapPlates === 0 && (
                             <span className="cam-det-chip" style={{color:'var(--text-ghost)'}}>No detections</span>
                           )}
                           {cam.zones && cam.zones.length > 0 && (
                             <span className="cam-det-chip">{cam.zones.length} zone{cam.zones.length > 1 ? 's' : ''}</span>
                           )}
+                        </div>
+                      )}
+
+                      {/* Plate readings from this snapshot — render each plate so operators see ALPR working live */}
+                      {snapPlateReadings.length > 0 && (
+                        <div style={{display:'flex', gap:4, flexWrap:'wrap', marginTop:6}} title="Plates read by ALPR on the most recent snapshot">
+                          {snapPlateReadings.map((p, i) => (
+                            <span key={i} style={{
+                              fontFamily: "'Courier New', monospace",
+                              background: '#fef3c7', color: '#1c1009',
+                              border: '1.5px solid #fbbf24',
+                              fontWeight: 800, letterSpacing: '.08em',
+                              fontSize: 11, padding: '3px 9px', borderRadius: 4,
+                            }}>{p}</span>
+                          ))}
                         </div>
                       )}
 
@@ -6905,14 +6940,16 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
     setLoading(true);
-    const [prop, pl, cam] = await Promise.all([
+    const [prop, pl, cam, ev] = await Promise.all([
       db.getProperty(propertyId),
       db.getResidentPlates(propertyId),
       db.getALPRCameras(propertyId),
+      db.getRecentPlateEvents(propertyId, 50),
     ]);
     setProperty(prop);
     setPlates(pl);
     setCameras(cam);
+    setEvents(ev);
     if (prop?.owner_id) {
       const regs = await db.getParkingRegistrationsByOwner(prop.owner_id);
       setParkingRegs(regs);
@@ -6962,6 +6999,36 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     return () => document.removeEventListener('visibilitychange', onVis);
   }, [refreshParkingRegs]);
 
+  // ── Recent plate detections (ALPR) ──
+  // Keep this list fresh the same way as parking regs: realtime + 20s poll + visibility.
+  const refreshEvents = useCallback(async () => {
+    if (!propertyId) return;
+    const ev = await db.getRecentPlateEvents(propertyId, 50);
+    setEvents(ev);
+  }, [propertyId]);
+  useEffect(() => {
+    if (!propertyId) return;
+    const id = setInterval(refreshEvents, 20000);
+    return () => clearInterval(id);
+  }, [refreshEvents]);
+  useEffect(() => {
+    if (!supabase || !propertyId) return;
+    const debouncedRefresh = makeDebounced(refreshEvents, 200);
+    const channel = supabase.channel('plate-events-' + propertyId)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'plate_events',
+        filter: 'property_id=eq.' + propertyId,
+      }, debouncedRefresh)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [propertyId, refreshEvents]);
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible') refreshEvents(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refreshEvents]);
+
+  const cameraById = useMemo(() => Object.fromEntries((cameras || []).map(c => [c.id, c])), [cameras]);
   const activeRegs = parkingRegs.filter(r => r.status === 'active' && new Date(r.expires_at).getTime() > nowTick);
 
   async function handleAddPlate(e) {
@@ -7144,6 +7211,47 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
           </div>
         ))}
         {cameras.length === 0 && <div style={{textAlign:'center',padding:16,color:'var(--text-muted)',fontSize:13}}>No cameras registered</div>}
+      </div>
+
+      {/* Recent plate detections (live ALPR feed) */}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,marginTop:20}}>
+        <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>
+          Plate Detections ({events.length})
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text-faint)'}}>
+          <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
+          Live
+        </div>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:20}}>
+        {events.length === 0 ? (
+          <div style={{textAlign:'center',padding:16,color:'var(--text-muted)',fontSize:13}}>
+            No plate detections yet. Once your ALPR cameras read a plate, it appears here in real time.
+          </div>
+        ) : events.map(ev => {
+          const cam = cameraById[ev.camera_id];
+          const conf = typeof ev.confidence === 'number' ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) : null;
+          const evType = ev.event_type || 'patrol';
+          const evColor = evType === 'entry' ? '#4ade80' : (evType === 'exit' ? '#f59e0b' : '#60a5fa');
+          return (
+            <div key={ev.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
+              {ev.image_url && (
+                <img src={ev.image_url} alt="plate" loading="lazy"
+                  style={{width:52,height:40,objectFit:'cover',borderRadius:6,border:'1px solid var(--border-subtle)',flexShrink:0,background:'var(--bg-inset)'}} />
+              )}
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                  <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{ev.plate_text}</span>
+                  <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${evColor}20`,color:evColor,border:`1px solid ${evColor}40`}}>{evType}</span>
+                  {conf != null && <span style={{fontSize:11,color:'var(--text-faint)'}}>{conf}%</span>}
+                </div>
+                <div style={{fontSize:11,color:'var(--text-muted)',marginTop:3,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                  {cam ? cam.name : 'Camera'}{cam?.location_description ? ` · ${cam.location_description}` : ''} · {new Date(ev.created_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
