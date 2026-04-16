@@ -299,16 +299,24 @@
           });
 
         if (error) {
-          if (error.code === 'P0001' && /cooldown/i.test(error.message || '')) {
-            showCooldown(error.details || '');
+          // Trigger raises P0001 with DETAIL = ISO-8601 UTC timestamp. Some
+          // Supabase error shapes put that in `details`, others in `hint`, and
+          // a few only include it inside `message`. Extract from wherever we
+          // can find it so the driver always sees a usable retry time.
+          const combined = [error.details, error.hint, error.message].filter(Boolean).join(' ');
+          const isoMatch = combined.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/);
+          const iso = isoMatch ? isoMatch[0] : '';
+          const msg = error.message || '';
+          if (error.code === 'P0001' && /cooldown/i.test(msg)) {
+            showCooldown(iso);
             return;
           }
-          if (error.code === 'P0001' && /already_active/i.test(error.message || '')) {
-            showAlreadyActive(error.details || '', plate);
+          if (error.code === 'P0001' && /already_active/i.test(msg)) {
+            showAlreadyActive(iso, plate);
             return;
           }
           if (error.code === '23503') { showInvalidQR(); return; }
-          throw new Error(error.message || 'Registration failed. Please try again.');
+          throw new Error(msg || 'Registration failed. Please try again.');
         }
 
         showSuccess(plate, expiresAt);
@@ -356,8 +364,12 @@
           <h2>Already registered</h2>
           <p>at <strong>${escapeHtml(lot.name)}</strong></p>
           <div class="success-plate">${escapeHtml(plate)}</div>
-          <p>Move your vehicle before</p>
-          <div class="expiration-time">${escapeHtml(formatTime(expiresIso))}</div>
+          ${expiresIso ? `
+            <p>Move your vehicle before</p>
+            <div class="expiration-time">${escapeHtml(formatTime(expiresIso))}</div>
+          ` : `
+            <p>Your active registration is still in effect. Check the expiration on your confirmation, or ask the lot attendant.</p>
+          `}
         </div>
       `;
     }
@@ -368,8 +380,12 @@
         <div class="not-found">
           <h2>Not eligible yet</h2>
           <p>This vehicle recently parked at <strong>${escapeHtml(lot.name)}</strong>.</p>
-          <p>You can re-register after</p>
-          <div class="expiration-time">${escapeHtml(formatTime(cooldownIso))}</div>
+          ${cooldownIso ? `
+            <p>You can re-register after</p>
+            <div class="expiration-time">${escapeHtml(formatTime(cooldownIso))}</div>
+          ` : `
+            <p>A 24-hour waiting period applies after your last stay expires before re-registering at this lot.</p>
+          `}
         </div>
       `;
     }
