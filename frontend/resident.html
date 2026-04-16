@@ -83,28 +83,6 @@
     input:focus { border-color: #3b82f6; }
     input::placeholder { color: #4b5563; }
     .plate-input { text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; font-size: 20px; text-align: center; }
-    .file-upload {
-      position: relative;
-      width: 100%;
-      padding: 16px 14px;
-      background: #0f1117;
-      border: 2px dashed rgba(255,255,255,0.12);
-      border-radius: 10px;
-      text-align: center;
-      cursor: pointer;
-      transition: border-color 0.2s, background 0.2s;
-    }
-    .file-upload:hover { border-color: #3b82f6; background: rgba(59,130,246,0.05); }
-    .file-upload.has-file { border-color: #4ade80; border-style: solid; }
-    .file-upload input[type="file"] {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
-      cursor: pointer;
-    }
-    .file-upload-icon { font-size: 24px; margin-bottom: 4px; color: #6b7280; }
-    .file-upload-text { font-size: 13px; color: #6b7280; }
-    .file-upload-name { font-size: 13px; color: #4ade80; font-weight: 600; margin-top: 4px; }
     .submit-btn {
       width: 100%;
       padding: 14px;
@@ -187,8 +165,6 @@
     .not-found { text-align: center; padding: 20px 0; }
     .not-found h2 { font-size: 18px; color: #f87171; margin-bottom: 8px; }
     .not-found p { font-size: 14px; color: #6b7280; }
-    .row { display: flex; gap: 12px; }
-    .row > * { flex: 1; min-width: 0; }
   </style>
 </head>
 <body>
@@ -196,11 +172,39 @@
     <div class="loading-state">Loading...</div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script>
+    // Raw fetch against Supabase PostgREST — matches /park and /visit. The
+    // supabase-js SDK opens a realtime WebSocket on createClient() that can
+    // hang on strict networks and leave the page stuck on "Loading...".
     const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    async function pgRest(path, init = {}, timeoutMs = 10000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(SUPABASE_URL + '/rest/v1' + path, {
+          ...init,
+          signal: ctrl.signal,
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+            'Content-Type': 'application/json',
+            ...(init.headers || {}),
+          },
+        });
+        const text = await res.text();
+        const body = text ? JSON.parse(text) : null;
+        if (!res.ok) {
+          const err = new Error((body && body.message) || ('HTTP ' + res.status));
+          err.code = body && body.code;
+          err.details = body && body.details;
+          err.status = res.status;
+          throw err;
+        }
+        return body;
+      } finally { clearTimeout(t); }
+    }
 
     const app = document.getElementById('app');
 
@@ -208,33 +212,43 @@
     const qrCodeId = pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null;
 
     let property = null;
-    let platePhotoFile = null;
-    let leaseFile = null;
 
     async function init() {
+      if (!qrCodeId) {
+        showNotFound('Invalid Link', 'This resident registration link is not valid.');
+        return;
+      }
       try {
-        if (!qrCodeId) {
-          showNotFound('Invalid Link', 'This resident registration link is not valid.');
-          return;
-        }
-
-        const { data, error } = await supabase
-          .from('properties')
-          .select('id, name, address')
-          .eq('qr_code_id', qrCodeId)
-          .single();
-
-        if (error || !data) {
+        const rows = await pgRest(`/properties?select=id,name,address&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`);
+        const data = Array.isArray(rows) ? rows[0] : null;
+        if (!data) {
           showNotFound('Property Not Found', 'This registration link is not valid or has expired.');
           return;
         }
-
         property = data;
         showForm();
       } catch (err) {
-        showNotFound('Connection Error', 'Unable to connect. Please check your internet and try again.');
         console.error('init error:', err);
+        showConnectionError(err);
       }
+    }
+
+    function showConnectionError(err) {
+      const detail = err && (err.name === 'AbortError' ? 'Request timed out.' : (err.message || 'Network error.'));
+      app.innerHTML = `
+        <div class="logo"><div class="shield">LL</div><h1>Lot<span>Logic</span></h1></div>
+        <div class="not-found">
+          <h2>Can't reach server</h2>
+          <p>${escapeHtml(detail)}</p>
+          <p>Check your connection, then try again.</p>
+          <button id="retryBtn" class="submit-btn" style="margin-top:18px">Try again</button>
+        </div>
+      `;
+      const btn = document.getElementById('retryBtn');
+      if (btn) btn.addEventListener('click', () => {
+        app.innerHTML = '<div class="loading-state">Loading...</div>';
+        init();
+      });
     }
 
     function showNotFound(title, message) {
@@ -264,41 +278,11 @@
           <label for="holderName">Full Name <span class="required">*</span></label>
           <input type="text" id="holderName" placeholder="John Doe" required>
 
-          <label for="unitNumber">Unit Number <span class="required">*</span></label>
-          <input type="text" id="unitNumber" placeholder="Unit 204" required>
-
           <label for="plate">License Plate <span class="required">*</span></label>
           <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
 
-          <label for="plateExpiration">Plate / Tag Expiration Date <span class="required">*</span></label>
-          <input type="date" id="plateExpiration" required>
-
-          <label>Picture of License Plate <span class="required">*</span></label>
-          <div class="file-upload" id="plateUploadZone">
-            <input type="file" id="platePhoto" accept="image/*" capture="environment">
-            <div class="file-upload-icon">&#128247;</div>
-            <div class="file-upload-text">Tap to take photo or choose file</div>
-            <div class="file-upload-name" id="plateFileName"></div>
-          </div>
-
-          <label>Copy of Lease <span class="required">*</span></label>
-          <div class="file-upload" id="leaseUploadZone">
-            <input type="file" id="leaseDoc" accept="image/*,.pdf,.doc,.docx">
-            <div class="file-upload-icon">&#128196;</div>
-            <div class="file-upload-text">Upload lease document (PDF, image, or Word)</div>
-            <div class="file-upload-name" id="leaseFileName"></div>
-          </div>
-
-          <div class="row">
-            <div>
-              <label for="phone">Phone Number <span class="required">*</span></label>
-              <input type="tel" id="phone" placeholder="(555) 123-4567" required>
-            </div>
-            <div>
-              <label for="email">Email <span class="required">*</span></label>
-              <input type="email" id="email" placeholder="john@email.com" required>
-            </div>
-          </div>
+          <label for="phone">Phone Number <span class="required">*</span></label>
+          <input type="tel" id="phone" placeholder="(555) 123-4567" required>
 
           <button type="submit" class="submit-btn" id="submitBtn">Register Vehicle</button>
           <div class="hint">Registration requires leasing office approval</div>
@@ -307,46 +291,6 @@
       `;
 
       document.getElementById('regForm').addEventListener('submit', handleSubmit);
-
-      document.getElementById('platePhoto').addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        const zone = document.getElementById('plateUploadZone');
-        const nameEl = document.getElementById('plateFileName');
-        if (file) {
-          platePhotoFile = file;
-          zone.classList.add('has-file');
-          nameEl.textContent = file.name;
-        } else {
-          platePhotoFile = null;
-          zone.classList.remove('has-file');
-          nameEl.textContent = '';
-        }
-      });
-
-      document.getElementById('leaseDoc').addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        const zone = document.getElementById('leaseUploadZone');
-        const nameEl = document.getElementById('leaseFileName');
-        if (file) {
-          leaseFile = file;
-          zone.classList.add('has-file');
-          nameEl.textContent = file.name;
-        } else {
-          leaseFile = null;
-          zone.classList.remove('has-file');
-          nameEl.textContent = '';
-        }
-      });
-    }
-
-    async function uploadFile(bucket, file, prefix) {
-      if (file.size > 10 * 1024 * 1024) throw new Error('File must be under 10MB.');
-      const ext = file.name.split('.').pop();
-      const path = prefix + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
-      const { data, error } = await supabase.storage.from(bucket).upload(path, file);
-      if (error) throw new Error('Upload failed: ' + error.message);
-      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
-      return urlData.publicUrl;
     }
 
     let submitting = false;
@@ -362,54 +306,33 @@
 
       try {
         const holderName = document.getElementById('holderName').value.trim();
-        const unitNumber = document.getElementById('unitNumber').value.trim();
         const plateRaw = document.getElementById('plate').value.trim();
         const plateText = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
-        const plateExpiration = document.getElementById('plateExpiration').value;
         const phone = document.getElementById('phone').value.trim();
-        const email = document.getElementById('email').value.trim();
 
         if (!plateText || plateText.length < 2) {
           throw new Error('Please enter a valid license plate number.');
         }
-        if (!platePhotoFile) {
-          throw new Error('Please upload a picture of your license plate.');
-        }
-        if (!leaseFile) {
-          throw new Error('Please upload a copy of your lease.');
-        }
 
-        btn.textContent = 'Uploading plate photo...';
-        const platePhotoUrl = await uploadFile('resident-plates', platePhotoFile, property.id);
-
-        btn.textContent = 'Uploading lease...';
-        const leaseDocUrl = await uploadFile('resident-leases', leaseFile, property.id);
-
-        btn.textContent = 'Registering...';
-        const { data, error } = await supabase
-          .from('resident_plates')
-          .insert({
-            property_id: property.id,
-            plate_text: plateText,
-            unit_number: unitNumber,
-            holder_name: holderName,
-            vehicle_description: '',
-            active: true,
-            plate_expiration: plateExpiration,
-            plate_photo_url: platePhotoUrl,
-            lease_doc_url: leaseDocUrl,
-            phone: phone,
-            email: email,
-            status: 'pending',
-          })
-          .select()
-          .single();
-
-        if (error) {
+        try {
+          await pgRest('/resident_plates', {
+            method: 'POST',
+            headers: { Prefer: 'return=minimal' },
+            body: JSON.stringify({
+              property_id: property.id,
+              plate_text: plateText,
+              holder_name: holderName,
+              vehicle_description: '',
+              active: true,
+              phone: phone,
+              status: 'pending',
+            }),
+          });
+        } catch (error) {
           if (error.code === '23505') {
             throw new Error('This license plate is already registered at this property.');
           }
-          throw new Error('Failed to register. Please try again.');
+          throw new Error('Failed to register. ' + (error.message || 'Please try again.'));
         }
 
         showSuccess(plateText);
