@@ -2121,6 +2121,23 @@ const db = {
     }
     return [];
   },
+  async getParkingRegistrationsByOwner(ownerId) {
+    if (!supabase || !ownerId) return [];
+    const { data: lots, error: lotErr } = await supabase
+      .from('lots')
+      .select('id, name')
+      .eq('owner_id', ownerId)
+      .eq('active', true);
+    if (lotErr || !lots || lots.length === 0) return [];
+    const lotMap = Object.fromEntries(lots.map(l => [l.id, l.name]));
+    const { data, error } = await supabase
+      .from('parking_registrations')
+      .select('id, lot_id, plate_number, vehicle_type, registered_at, expires_at, cooldown_until, status')
+      .in('lot_id', lots.map(l => l.id))
+      .order('registered_at', { ascending: false });
+    if (error || !data) return [];
+    return data.map(r => ({ ...r, lot_name: lotMap[r.lot_id] || null }));
+  },
 
   async deleteViolation(violId) {
     if (supabase) {
@@ -6765,6 +6782,8 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const [newCam, setNewCam] = useState({ name: '', location_description: '' });
   const [newApiKey, setNewApiKey] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [parkingRegs, setParkingRegs] = useState([]);
+  const [nowTick, setNowTick] = useState(Date.now());
 
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
@@ -6777,10 +6796,56 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     setProperty(prop);
     setPlates(pl);
     setCameras(cam);
+    if (prop?.owner_id) {
+      const regs = await db.getParkingRegistrationsByOwner(prop.owner_id);
+      setParkingRegs(regs);
+    }
     setLoading(false);
   }, [propertyId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Refresh parking registrations — keep the Passes tab fresh with no reload
+  const refreshParkingRegs = useCallback(async () => {
+    if (!property?.owner_id) return;
+    const regs = await db.getParkingRegistrationsByOwner(property.owner_id);
+    setParkingRegs(regs);
+  }, [property?.owner_id]);
+
+  // Poll every 20s as a safety net if realtime misses an event
+  useEffect(() => {
+    if (!property?.owner_id) return;
+    const id = setInterval(refreshParkingRegs, 20000);
+    return () => clearInterval(id);
+  }, [refreshParkingRegs, property?.owner_id]);
+
+  // Supabase realtime: instant updates the moment a driver scans the QR
+  useEffect(() => {
+    if (!supabase || !property?.owner_id) return;
+    const channel = supabase.channel('parking-regs-' + propertyId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations' }, () => {
+        refreshParkingRegs();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [propertyId, property?.owner_id, refreshParkingRegs]);
+
+  // Tick every 30s so "time remaining" counts down without a refetch
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  const activeRegs = parkingRegs.filter(r => r.status === 'active' && new Date(r.expires_at).getTime() > nowTick);
+  function fmtRemaining(ms) {
+    if (ms <= 0) return 'Expired';
+    const sec = Math.floor(ms / 1000);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    if (h >= 1) return `${h}h ${m}m left`;
+    if (m >= 1) return `${m}m left`;
+    return '<1m left';
+  }
 
   async function handleAddPlate(e) {
     e.preventDefault();
@@ -6879,6 +6944,51 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
           </div>
         ))}
         {plates.length === 0 && <div style={{textAlign:'center',padding:16,color:'var(--text-muted)',fontSize:13}}>No resident plates registered</div>}
+      </div>
+
+      {/* Parking Registrations (QR self-registrations) */}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>
+          Parking Registrations ({activeRegs.length})
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text-faint)'}}>
+          <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
+          Live · via QR
+        </div>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:20}}>
+        {activeRegs.length === 0 ? (
+          <div style={{textAlign:'center',padding:16,color:'var(--text-muted)',fontSize:13}}>
+            No active parking registrations. Drivers who scan a lot's QR code will appear here.
+          </div>
+        ) : activeRegs.map(r => {
+          const remainMs = new Date(r.expires_at).getTime() - nowTick;
+          const urgent = remainMs < 60 * 60 * 1000; // < 1h
+          return (
+            <div key={r.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                  <span style={{fontWeight:800,fontSize:15,color:'var(--text-primary)',letterSpacing:'.03em',fontFamily:"'Courier New',monospace"}}>{r.plate_number}</span>
+                  {r.vehicle_type && <span style={{fontSize:11,color:'var(--text-muted)',background:'var(--bg-inset)',padding:'2px 7px',borderRadius:4,textTransform:'capitalize'}}>{r.vehicle_type}</span>}
+                  {r.lot_name && <span style={{fontSize:11,color:'var(--text-faint)'}}>· {r.lot_name}</span>}
+                </div>
+                <div style={{fontSize:11,color:'var(--text-faint)',marginTop:3}}>
+                  Expires {new Date(r.expires_at).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
+                </div>
+              </div>
+              <span style={{
+                fontSize:11,
+                fontWeight:700,
+                padding:'4px 10px',
+                borderRadius:20,
+                background: urgent ? 'rgba(251,191,36,.12)' : 'rgba(74,222,128,.12)',
+                color: urgent ? '#fbbf24' : '#4ade80',
+                border: urgent ? '1px solid rgba(251,191,36,.25)' : '1px solid rgba(74,222,128,.25)',
+                whiteSpace:'nowrap',
+              }}>{fmtRemaining(remainMs)}</span>
+            </div>
+          );
+        })}
       </div>
 
       {/* Cameras */}
