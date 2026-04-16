@@ -2138,6 +2138,19 @@ const db = {
     if (error || !data) return [];
     return data.map(r => ({ ...r, lot_name: lotMap[r.lot_id] || null }));
   },
+  async getActiveParkingRegistrationsForLots(lotIds) {
+    if (!supabase || !lotIds || lotIds.length === 0) return [];
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('parking_registrations')
+      .select('id, lot_id, plate_number, vehicle_type, expires_at, cooldown_until, status')
+      .in('lot_id', lotIds)
+      .eq('status', 'active')
+      .gt('expires_at', nowIso)
+      .order('expires_at', { ascending: true });
+    if (error || !data) return [];
+    return data;
+  },
 
   async deleteViolation(violId) {
     if (supabase) {
@@ -4924,31 +4937,52 @@ function PermitsModal({ lotId, lotName, onClose }) {
   const [permits, setPermits] = useState([]);
   const [regs, setRegs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [regsLoading, setRegsLoading] = useState(true);
   const [plate, setPlate] = useState('');
   const [permitType, setPermitType] = useState('whitelist');
   const [holderName, setHolderName] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState('permits'); // 'permits' | 'qr'
-  const [regFilter, setRegFilter] = useState('active'); // 'active' | 'all'
+  const [nowTick, setNowTick] = useState(Date.now());
   const canvasRef = useRef(null);
   const { addToast } = useToast();
 
   const target = `${window.location.origin}/park?lot=${encodeURIComponent(lotId)}`;
 
-  useEffect(() => {
-    db.getPermits(lotId).then(data => { setPermits(data); setLoading(false); }).catch(() => setLoading(false));
-    db.getParkingRegistrations(lotId).then(data => { setRegs(data); setRegsLoading(false); }).catch(() => setRegsLoading(false));
+  const refreshRegs = useCallback(() => {
+    db.getParkingRegistrations(lotId).then(setRegs).catch(() => {});
   }, [lotId]);
 
+  // Initial load: permits + QR registrations in parallel
   useEffect(() => {
-    if (tab !== 'qr' || !canvasRef.current || typeof QRCode === 'undefined') return;
+    Promise.all([
+      db.getPermits(lotId).then(setPermits).catch(() => {}),
+      db.getParkingRegistrations(lotId).then(setRegs).catch(() => {}),
+    ]).finally(() => setLoading(false));
+  }, [lotId]);
+
+  // Render the QR onto the canvas once it's mounted
+  useEffect(() => {
+    if (!canvasRef.current || typeof QRCode === 'undefined') return;
     QRCode.toCanvas(canvasRef.current, target, {
-      width: 400, margin: 1, errorCorrectionLevel: 'M',
+      width: 360, margin: 1, errorCorrectionLevel: 'M',
       color: { dark: '#0f172a', light: '#ffffff' },
     }, err => { if (err) console.error('qr render:', err); });
-  }, [tab, target]);
+  }, [target]);
+
+  // Realtime: the moment a driver submits the /park form, the row appears here
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase.channel('passes-modal-' + lotId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations', filter: 'lot_id=eq.' + lotId }, () => refreshRegs())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [lotId, refreshRegs]);
+
+  // Tick every 30s so "time left" counts down without a refetch
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   async function addPermit(e) {
     e.preventDefault();
@@ -4992,32 +5026,16 @@ function PermitsModal({ lotId, lotName, onClose }) {
   }
 
   const expired = p => p.expires_at && new Date(p.expires_at) < new Date();
+  const activeRegs = regs.filter(r => r.status === 'active' && new Date(r.expires_at).getTime() > nowTick);
 
-  const nowMs = Date.now();
-  const statusOfReg = r => {
-    if (r.status === 'cancelled') return 'cancelled';
-    if (r.expires_at && new Date(r.expires_at).getTime() > nowMs && r.status === 'active') return 'active';
-    if (r.cooldown_until && new Date(r.cooldown_until).getTime() > nowMs) return 'cooldown';
-    return 'expired';
-  };
-  const activeRegCount = regs.filter(r => statusOfReg(r) === 'active').length;
-  const filteredRegs = regFilter === 'active'
-    ? regs.filter(r => statusOfReg(r) === 'active')
-    : regs;
-
-  function fmtRel(iso) {
-    if (!iso) return '';
-    const diff = (nowMs - new Date(iso).getTime()) / 1000;
-    if (diff < 60) return `${Math.floor(diff)}s ago`;
-    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
-    return `${Math.floor(diff/86400)}d ago`;
-  }
-  function fmtAbs(iso) {
-    if (!iso) return '—';
-    return new Date(iso).toLocaleString(undefined, {
-      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-    });
+  function fmtRemaining(ms) {
+    if (ms <= 0) return 'Expired';
+    const sec = Math.floor(ms / 1000);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    if (h >= 1) return `${h}h ${m}m left`;
+    if (m >= 1) return `${m}m left`;
+    return '<1m left';
   }
 
   return (
@@ -5027,140 +5045,129 @@ function PermitsModal({ lotId, lotName, onClose }) {
           <div>
             <div className="permits-title">Passes</div>
             <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2}}>
-              {lotName} — {permits.length} permit{permits.length !== 1 ? 's' : ''} · {activeRegCount} QR active
+              {lotName} — {permits.length} permit{permits.length !== 1 ? 's' : ''} · {activeRegs.length} QR active
             </div>
           </div>
           <button onClick={onClose} style={{background:'var(--bg-inset)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 14px', fontSize:12, fontWeight:700, color:'var(--text-muted)', cursor:'pointer', fontFamily:'inherit'}}>Close</button>
         </div>
 
-        {/* Tabs */}
-        <div className="parking-filter">
-          <button className={tab === 'permits' ? 'active' : ''} onClick={() => setTab('permits')}>
-            Permits ({permits.length})
-          </button>
-          <button className={tab === 'qr' ? 'active' : ''} onClick={() => setTab('qr')}>
-            QR Pass ({activeRegCount})
-          </button>
+        {/* ─── QR self-registration ─────────────────────────────── */}
+        <div className="parking-qr-block">
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:'.08em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:10}}>
+            Scan-to-register QR
+          </div>
+          <div className="parking-qr-tile"><canvas ref={canvasRef} /></div>
+          <div className="parking-qr-url">{target}</div>
+          <button className="parking-qr-copy" onClick={copyLink}>Copy link</button>
+          <div style={{fontSize:11, color:'var(--text-faint)', marginTop:10}}>
+            Print this code and post at the lot. Drivers scan to self-register — acts like a temporary permit.
+          </div>
         </div>
 
-        {tab === 'permits' ? (
-          <>
-            {/* Add permit form */}
-            <form className="permit-add-form" onSubmit={addPermit}>
-              <div className="permit-form-row">
-                <input className="field-input" value={plate} onChange={e => setPlate(e.target.value)}
-                  placeholder="Plate number" style={{textTransform:'uppercase', fontFamily:"'Courier New', monospace", fontWeight:700, letterSpacing:'.08em'}} autoFocus />
-                <select value={permitType} onChange={e => setPermitType(e.target.value)}>
-                  <option value="whitelist">Whitelist</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="temporary">Temporary</option>
-                  <option value="employee">Employee</option>
-                </select>
-              </div>
-              <div className="permit-form-row">
-                <input className="field-input" value={holderName} onChange={e => setHolderName(e.target.value)}
-                  placeholder="Name (optional)" />
-                {permitType !== 'whitelist' && (
-                  <input className="field-input" type="date" value={expiresAt} onChange={e => setExpiresAt(e.target.value)}
-                    placeholder="Expires" style={{maxWidth:160}} />
-                )}
-              </div>
-              <button className="login-btn" type="submit" disabled={saving} style={{marginTop:8}}>
-                {saving ? 'Adding…' : 'Add Permit'}
-              </button>
-            </form>
-
-            {/* Permit list */}
-            {loading ? (
-              <div className="loader"><span className="spin" /> Loading permits…</div>
-            ) : permits.length === 0 ? (
-              <div className="empty-state" style={{padding:'32px 20px'}}>
-                <div className="empty-title">No permits yet</div>
-                <div className="empty-body">Add plate numbers above to whitelist vehicles at this lot</div>
-              </div>
-            ) : (
-              <div>
-                {permits.map(p => (
-                  <div key={p.id} className="permit-card" style={expired(p) ? {opacity:.5} : undefined}>
-                    <div style={{display:'flex', alignItems:'center', gap:10}}>
-                      <span className="permit-plate">{p.plate_text}</span>
-                      <div>
-                        <span className={`permit-type-badge ${p.permit_type}`}>{p.permit_type}</span>
-                        {p.holder_name && <div style={{fontSize:12, color:'var(--text-muted)', marginTop:2}}>{p.holder_name}</div>}
-                        {p.expires_at && (
-                          <div style={{fontSize:10, color: expired(p) ? '#ef4444' : 'var(--text-faint)', marginTop:2}}>
-                            {expired(p) ? 'Expired' : 'Expires'}: {new Date(p.expires_at).toLocaleDateString()}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <button onClick={() => removePermit(p.id, p.plate_text)}
-                      style={{background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, padding:'5px 10px', fontSize:11, fontWeight:700, color:'#ef4444', cursor:'pointer', fontFamily:'inherit'}}>
-                      Remove
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
+        {/* ─── Active QR passes (live) ─────────────────────────── */}
+        <div style={{padding:'14px 16px 6px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:'.08em',color:'var(--text-muted)',textTransform:'uppercase'}}>
+            Active QR passes
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text-faint)'}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
+            Live
+          </div>
+        </div>
+        {activeRegs.length === 0 ? (
+          <div style={{padding:'10px 16px 18px',fontSize:13,color:'var(--text-muted)',textAlign:'center'}}>
+            No active QR passes. Rows appear here the second a driver submits.
+          </div>
         ) : (
-          <>
-            {/* QR code + shareable link */}
-            <div className="parking-qr-block">
-              <div className="parking-qr-tile"><canvas ref={canvasRef} /></div>
-              <div className="parking-qr-url">{target}</div>
-              <button className="parking-qr-copy" onClick={copyLink}>Copy link</button>
-              <div style={{fontSize:11, color:'var(--text-faint)', marginTop:10}}>
-                Print this code and post at the lot. Drivers scan to self-register — acts like a temporary permit for the stay they select.
-              </div>
-            </div>
-
-            {/* Active / All filter */}
-            <div className="parking-filter">
-              <button className={regFilter === 'active' ? 'active' : ''} onClick={() => setRegFilter('active')}>
-                Active ({activeRegCount})
-              </button>
-              <button className={regFilter === 'all' ? 'active' : ''} onClick={() => setRegFilter('all')}>
-                All ({regs.length})
-              </button>
-            </div>
-
-            {/* Registration list */}
-            {regsLoading ? (
-              <div className="loader"><span className="spin" /> Loading registrations…</div>
-            ) : filteredRegs.length === 0 ? (
-              <div className="empty-state" style={{padding:'28px 20px'}}>
-                <div className="empty-title">{regFilter === 'active' ? 'No active QR passes' : 'No QR registrations yet'}</div>
-                <div className="empty-body">Passes appear here when drivers scan the QR code.</div>
-              </div>
-            ) : (
-              <div>
-                {filteredRegs.map(r => {
-                  const s = statusOfReg(r);
-                  return (
-                    <div key={r.id} className="parking-reg-row">
-                      <div style={{display:'flex', alignItems:'center', gap:10, flex:1, minWidth:0}}>
-                        <span className="parking-reg-plate">{r.plate_number}</span>
-                        <div style={{minWidth:0}}>
-                          <div style={{fontSize:12, color:'var(--text-primary)', fontWeight:600}}>
-                            {r.vehicle_type ? r.vehicle_type : 'Vehicle'}
-                            <span style={{color:'var(--text-faint)', fontWeight:400}}> · registered {fmtRel(r.registered_at)}</span>
-                          </div>
-                          <div className="parking-reg-meta">
-                            {s === 'active' && <>Expires {fmtAbs(r.expires_at)}</>}
-                            {s === 'cooldown' && <>Cooldown until {fmtAbs(r.cooldown_until)}</>}
-                            {s === 'expired' && <>Expired {fmtAbs(r.expires_at)}</>}
-                            {s === 'cancelled' && <>Cancelled</>}
-                          </div>
-                        </div>
+          <div style={{paddingBottom:4}}>
+            {activeRegs.map(r => {
+              const remainMs = new Date(r.expires_at).getTime() - nowTick;
+              const urgent = remainMs < 60 * 60 * 1000;
+              return (
+                <div key={r.id} className="parking-reg-row">
+                  <div style={{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}}>
+                    <span className="parking-reg-plate">{r.plate_number}</span>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:12,color:'var(--text-primary)',fontWeight:600,textTransform:'capitalize'}}>
+                        {r.vehicle_type || 'Vehicle'}
                       </div>
-                      <span className={`parking-reg-badge ${s}`}>{s}</span>
+                      <div className="parking-reg-meta">
+                        Expires {new Date(r.expires_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                  <span style={{
+                    fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:20,whiteSpace:'nowrap',
+                    background: urgent ? 'rgba(251,191,36,.12)' : 'rgba(74,222,128,.12)',
+                    color: urgent ? '#fbbf24' : '#4ade80',
+                    border: urgent ? '1px solid rgba(251,191,36,.25)' : '1px solid rgba(74,222,128,.25)',
+                  }}>{fmtRemaining(remainMs)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ─── Manual permits (add + list) ──────────────────────── */}
+        <div style={{padding:'14px 16px 6px'}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:'.08em',color:'var(--text-muted)',textTransform:'uppercase'}}>
+            Manual permits
+          </div>
+        </div>
+        <form className="permit-add-form" onSubmit={addPermit}>
+          <div className="permit-form-row">
+            <input className="field-input" value={plate} onChange={e => setPlate(e.target.value)}
+              placeholder="Plate number" style={{textTransform:'uppercase', fontFamily:"'Courier New', monospace", fontWeight:700, letterSpacing:'.08em'}} />
+            <select value={permitType} onChange={e => setPermitType(e.target.value)}>
+              <option value="whitelist">Whitelist</option>
+              <option value="monthly">Monthly</option>
+              <option value="temporary">Temporary</option>
+              <option value="employee">Employee</option>
+            </select>
+          </div>
+          <div className="permit-form-row">
+            <input className="field-input" value={holderName} onChange={e => setHolderName(e.target.value)}
+              placeholder="Name (optional)" />
+            {permitType !== 'whitelist' && (
+              <input className="field-input" type="date" value={expiresAt} onChange={e => setExpiresAt(e.target.value)}
+                placeholder="Expires" style={{maxWidth:160}} />
             )}
-          </>
+          </div>
+          <button className="login-btn" type="submit" disabled={saving} style={{marginTop:8}}>
+            {saving ? 'Adding…' : 'Add Permit'}
+          </button>
+        </form>
+
+        {loading ? (
+          <div className="loader"><span className="spin" /> Loading permits…</div>
+        ) : permits.length === 0 ? (
+          <div className="empty-state" style={{padding:'28px 20px'}}>
+            <div className="empty-title">No permits yet</div>
+            <div className="empty-body">Add plate numbers above to whitelist vehicles at this lot</div>
+          </div>
+        ) : (
+          <div>
+            {permits.map(p => (
+              <div key={p.id} className="permit-card" style={expired(p) ? {opacity:.5} : undefined}>
+                <div style={{display:'flex', alignItems:'center', gap:10}}>
+                  <span className="permit-plate">{p.plate_text}</span>
+                  <div>
+                    <span className={`permit-type-badge ${p.permit_type}`}>{p.permit_type}</span>
+                    {p.holder_name && <div style={{fontSize:12, color:'var(--text-muted)', marginTop:2}}>{p.holder_name}</div>}
+                    {p.expires_at && (
+                      <div style={{fontSize:10, color: expired(p) ? '#ef4444' : 'var(--text-faint)', marginTop:2}}>
+                        {expired(p) ? 'Expired' : 'Expires'}: {new Date(p.expires_at).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button onClick={() => removePermit(p.id, p.plate_text)}
+                  style={{background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, padding:'5px 10px', fontSize:11, fontWeight:700, color:'#ef4444', cursor:'pointer', fontFamily:'inherit'}}>
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -5436,7 +5443,39 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   const [editingZones, setEditingZones] = useState(null);
   const [addingCamera, setAddingCamera] = useState(null); // lot id
   const [managingPermits, setManagingPermits] = useState(null); // {lotId, lotName}
+  const [activeRegsByLot, setActiveRegsByLot] = useState({}); // {lotId: [reg, ...]}
+  const [nowTick, setNowTick] = useState(Date.now());
   const { addToast } = useToast();
+
+  // Fetch + keep live the count of active QR passes for every lot on the page.
+  // Realtime + 20s poll + 30s nowTick so chips on each card reflect reality.
+  const lotIds = lots.map(l => l.id);
+  const lotIdsKey = lotIds.join(',');
+  const refreshActiveRegs = useCallback(() => {
+    if (!lotIds.length) return;
+    db.getActiveParkingRegistrationsForLots(lotIds).then(rows => {
+      const byLot = {};
+      for (const r of rows) { (byLot[r.lot_id] = byLot[r.lot_id] || []).push(r); }
+      setActiveRegsByLot(byLot);
+    }).catch(() => {});
+  }, [lotIdsKey]);
+  useEffect(() => { refreshActiveRegs(); }, [refreshActiveRegs]);
+  useEffect(() => {
+    if (!lotIds.length) return;
+    const id = setInterval(refreshActiveRegs, 20000);
+    return () => clearInterval(id);
+  }, [refreshActiveRegs, lotIdsKey]);
+  useEffect(() => {
+    if (!supabase || !lotIds.length) return;
+    const channel = supabase.channel('lots-parking-regs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations' }, () => refreshActiveRegs())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [refreshActiveRegs, lotIdsKey]);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   if (loading && lots.length === 0) {
     return <div className="page-enter"><SkeletonKPIs /><SkeletonCards count={3} /></div>;
@@ -5469,6 +5508,14 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
         const totalVehicles = (state?.cameras || []).reduce((s, c) => s + (c.latest_snapshot?.vehicles_detected || c.latest_snapshot?.vehicle_count || 0), 0);
         const totalPeople = (state?.cameras || []).reduce((s, c) => s + (c.latest_snapshot?.people_detected || c.latest_snapshot?.person_count || c.latest_snapshot?.humans_detected || 0), 0);
 
+        // Live QR active pass count + soonest expiry (pruned client-side by nowTick)
+        const lotRegs = (activeRegsByLot[lot.id] || []).filter(r => new Date(r.expires_at).getTime() > nowTick);
+        const qrActive = lotRegs.length;
+        const soonestMs = qrActive ? new Date(lotRegs[0].expires_at).getTime() - nowTick : 0;
+        const soonestLabel = qrActive
+          ? (soonestMs < 3600000 ? `${Math.max(1, Math.floor(soonestMs/60000))}m` : `${Math.floor(soonestMs/3600000)}h`)
+          : null;
+
         return (
           <div key={lot.id} className="lot-card">
             <div className="lot-card-top">
@@ -5492,14 +5539,21 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
                     <div className="lot-num-label">Spaces</div>
                   </div>
                 </div>
-                {/* Detection summary chips */}
-                {(totalVehicles > 0 || totalPeople > 0) && (
+                {/* Detection + live-pass chips */}
+                {(totalVehicles > 0 || totalPeople > 0 || qrActive > 0) && (
                   <div className="cam-det-summary" style={{marginTop:8}}>
                     {totalVehicles > 0 && (
                       <span className="cam-det-chip"><span className="det-dot vehicles" /> {totalVehicles} vehicle{totalVehicles !== 1 ? 's' : ''}</span>
                     )}
                     {totalPeople > 0 && (
                       <span className="cam-det-chip"><span className="det-dot people" /> {totalPeople} {totalPeople === 1 ? 'person' : 'people'}</span>
+                    )}
+                    {qrActive > 0 && (
+                      <span className="cam-det-chip" style={{color:'#4ade80',background:'rgba(74,222,128,.1)',border:'1px solid rgba(74,222,128,.25)'}}
+                        title="Drivers with an active QR-registered parking pass">
+                        <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',display:'inline-block',marginRight:6,animation:'pulse-dot 1.5s infinite'}} />
+                        {qrActive} QR pass{qrActive !== 1 ? 'es' : ''} · next in {soonestLabel}
+                      </span>
                     )}
                   </div>
                 )}
