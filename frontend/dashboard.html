@@ -699,14 +699,14 @@
 
     /* ── Parking registrations (inside permits-sheet) ── */
     .parking-qr-block {
-      padding: 20px 16px; border-bottom: 1px solid var(--border-subtle);
+      padding: 16px 16px 14px; border-bottom: 1px solid var(--border-subtle);
       text-align: center; background: var(--bg-inset);
     }
     .parking-qr-tile {
-      display: inline-block; padding: 14px; background: #fff; border-radius: 12px;
-      margin-bottom: 10px;
+      display: inline-block; padding: 10px; background: #fff; border-radius: 10px;
+      margin-bottom: 8px;
     }
-    .parking-qr-tile canvas { display: block; width: 200px; height: 200px; }
+    .parking-qr-tile canvas { display: block; width: 160px; height: 160px; }
     .parking-qr-url {
       font-family: 'Courier New', monospace; font-size: 11px; color: var(--text-muted);
       word-break: break-all; margin: 4px auto 10px; max-width: 420px;
@@ -748,6 +748,50 @@
     .parking-reg-badge.expired { background: rgba(107,114,128,.12); color: var(--text-muted); border: 1px solid var(--border); }
     .parking-reg-badge.cooldown { background: rgba(251,191,36,.12); color: #fbbf24; border: 1px solid rgba(251,191,36,.2); }
     .parking-reg-badge.cancelled { background: rgba(239,68,68,.12); color: #ef4444; border: 1px solid rgba(239,68,68,.2); }
+
+    /* ── Property detail (Passes tab) shared styles ── */
+    .pd-share-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 4px 14px; margin-bottom: 16px;
+    }
+    .pd-share-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 0; border-bottom: 1px solid var(--border-subtle);
+    }
+    .pd-share-row:last-child { border-bottom: none; }
+    .pd-share-label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+      min-width: 78px; flex-shrink: 0;
+    }
+    .pd-share-url {
+      flex: 1; min-width: 0; font-size: 12px; color: var(--text-muted); font-family: monospace;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .pd-share-btn {
+      background: var(--bg-inset); color: var(--text-muted);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: inherit;
+      flex-shrink: 0;
+    }
+    .pd-share-btn:hover { color: var(--text-primary); border-color: var(--text-faint); }
+    .pd-section-head {
+      display: flex; justify-content: space-between; align-items: center;
+      margin: 20px 0 8px; gap: 8px;
+    }
+    .pd-section-title {
+      font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .pd-section-count {
+      font-size: 11px; color: var(--text-faint); font-weight: 600;
+    }
+    .pd-section-meta {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 10px; color: var(--text-faint); letter-spacing: .04em;
+    }
+    .pd-empty {
+      text-align: center; padding: 16px; color: var(--text-faint); font-size: 12px;
+    }
 
     /* ── Analytics ── */
     .analytics-card {
@@ -5119,31 +5163,24 @@ function PermitsModal({ lotId, lotName, onClose }) {
 
         {/* ─── QR self-registration ─────────────────────────────── */}
         <div className="parking-qr-block">
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:'.08em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:10}}>
-            Scan-to-register QR
-          </div>
           <div className="parking-qr-tile"><canvas ref={canvasRef} /></div>
           <div className="parking-qr-url">{target}</div>
           <button className="parking-qr-copy" onClick={copyLink}>Copy link</button>
-          <div style={{fontSize:11, color:'var(--text-faint)', marginTop:10}}>
-            Print this code and post at the lot. Drivers scan to self-register — acts like a temporary permit.
-          </div>
         </div>
 
         {/* ─── Active QR passes (live) ─────────────────────────── */}
-        <div style={{padding:'14px 16px 6px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:'.08em',color:'var(--text-muted)',textTransform:'uppercase'}}>
-            Active QR passes
+        <div className="pd-section-head" style={{margin:'14px 16px 6px'}}>
+          <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+            <span className="pd-section-title">Active QR passes</span>
+            <span className="pd-section-count">{activeRegs.length}</span>
           </div>
-          <div style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text-faint)'}}>
+          <div className="pd-section-meta">
             <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
             Live
           </div>
         </div>
         {activeRegs.length === 0 ? (
-          <div style={{padding:'10px 16px 18px',fontSize:13,color:'var(--text-muted)',textAlign:'center'}}>
-            No active QR passes. Rows appear here the second a driver submits.
-          </div>
+          <div className="pd-empty" style={{padding:'6px 16px 14px'}}>No active passes</div>
         ) : (
           <div style={{paddingBottom:4}}>
             {activeRegs.map(r => {
@@ -5175,9 +5212,10 @@ function PermitsModal({ lotId, lotName, onClose }) {
         )}
 
         {/* ─── Manual permits (add + list) ──────────────────────── */}
-        <div style={{padding:'14px 16px 6px'}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:'.08em',color:'var(--text-muted)',textTransform:'uppercase'}}>
-            Manual permits
+        <div className="pd-section-head" style={{margin:'14px 16px 6px'}}>
+          <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+            <span className="pd-section-title">Manual permits</span>
+            <span className="pd-section-count">{permits.length}</span>
           </div>
         </div>
         <form className="permit-add-form" onSubmit={addPermit}>
@@ -5207,10 +5245,7 @@ function PermitsModal({ lotId, lotName, onClose }) {
         {loading ? (
           <div className="loader"><span className="spin" /> Loading permits…</div>
         ) : permits.length === 0 ? (
-          <div className="empty-state" style={{padding:'28px 20px'}}>
-            <div className="empty-title">No permits yet</div>
-            <div className="empty-body">Add plate numbers above to whitelist vehicles at this lot</div>
-          </div>
+          <div className="pd-empty" style={{padding:'14px 16px 18px'}}>No permits yet — add one above to whitelist a vehicle</div>
         ) : (
           <div>
             {permits.map(p => (
@@ -7078,32 +7113,33 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         <div style={{fontSize:13,color:'var(--text-muted)',marginTop:2}}>{property.address || 'No address'}</div>
       </div>
 
-      {/* QR Code Link */}
-      <div style={{background:'rgba(59,130,246,.06)',border:'1px solid rgba(59,130,246,.2)',borderRadius:10,padding:'14px',marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:'#3b82f6',marginBottom:6}}>VISITOR REGISTRATION LINK</div>
-        <div style={{fontSize:13,color:'var(--text-primary)',wordBreak:'break-all',fontFamily:'monospace'}}>{visitUrl}</div>
-        <button onClick={() => { navigator.clipboard.writeText(visitUrl); }} style={{marginTop:8,background:'rgba(59,130,246,.15)',color:'#3b82f6',border:'1px solid rgba(59,130,246,.3)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Copy Link</button>
-      </div>
-
-      {/* Resident Registration Link */}
-      <div style={{background:'rgba(74,222,128,.06)',border:'1px solid rgba(74,222,128,.2)',borderRadius:10,padding:'14px',marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:'#4ade80',marginBottom:6}}>RESIDENT REGISTRATION LINK</div>
-        <div style={{fontSize:13,color:'var(--text-primary)',wordBreak:'break-all',fontFamily:'monospace'}}>{registerUrl}</div>
-        <button onClick={() => { navigator.clipboard.writeText(registerUrl); }} style={{marginTop:8,background:'rgba(74,222,128,.15)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Copy Link</button>
-      </div>
-
-      {/* Leasing Office Portal */}
-      <div style={{background:'rgba(251,191,36,.06)',border:'1px solid rgba(251,191,36,.2)',borderRadius:10,padding:'14px',marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:'#fbbf24',marginBottom:6}}>LEASING OFFICE PORTAL</div>
-        <div style={{fontSize:13,color:'var(--text-muted)',marginBottom:8}}>Manage residents, visitor passes, and tags</div>
-        <button onClick={() => { window.open(leasingUrl, '_blank'); }} style={{background:'rgba(251,191,36,.15)',color:'#fbbf24',border:'1px solid rgba(251,191,36,.3)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Open Portal</button>
-        <button onClick={() => { navigator.clipboard.writeText(leasingUrl); }} style={{marginLeft:8,background:'rgba(255,255,255,.06)',color:'var(--text-muted)',border:'1px solid var(--border)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Copy Link</button>
+      {/* Share links (visitor / resident / leasing) */}
+      <div className="pd-share-card">
+        <div className="pd-share-row">
+          <span className="pd-share-label" style={{color:'#3b82f6'}}>Visitors</span>
+          <div className="pd-share-url">{visitUrl}</div>
+          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(visitUrl); addToast('Visitor link copied', 'success'); }}>Copy</button>
+        </div>
+        <div className="pd-share-row">
+          <span className="pd-share-label" style={{color:'#4ade80'}}>Residents</span>
+          <div className="pd-share-url">{registerUrl}</div>
+          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(registerUrl); addToast('Resident link copied', 'success'); }}>Copy</button>
+        </div>
+        <div className="pd-share-row">
+          <span className="pd-share-label" style={{color:'#fbbf24'}}>Leasing</span>
+          <div className="pd-share-url">{leasingUrl}</div>
+          <button className="pd-share-btn" onClick={() => { window.open(leasingUrl, '_blank'); }}>Open</button>
+          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(leasingUrl); addToast('Leasing link copied', 'success'); }}>Copy</button>
+        </div>
       </div>
 
       {/* Resident Plates */}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-        <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>Resident Plates ({plates.length})</div>
-        <button onClick={() => setShowAddPlate(!showAddPlate)} style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{showAddPlate ? 'Cancel' : '+ Add'}</button>
+      <div className="pd-section-head">
+        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+          <span className="pd-section-title">Resident Plates</span>
+          <span className="pd-section-count">{plates.length}</span>
+        </div>
+        <button onClick={() => setShowAddPlate(!showAddPlate)} className="pd-share-btn" style={{color:'#4ade80'}}>{showAddPlate ? 'Cancel' : '+ Add'}</button>
       </div>
 
       {showAddPlate && (
@@ -7116,7 +7152,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         </form>
       )}
 
-      <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:20}}>
+      <div style={{display:'flex',flexDirection:'column',gap:6}}>
         {plates.map(p => (
           <div key={p.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
             <div>
@@ -7127,24 +7163,23 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
             <button onClick={() => handleRemovePlate(p.id)} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>Remove</button>
           </div>
         ))}
-        {plates.length === 0 && <div style={{textAlign:'center',padding:16,color:'var(--text-muted)',fontSize:13}}>No resident plates registered</div>}
+        {plates.length === 0 && <div className="pd-empty">No resident plates registered</div>}
       </div>
 
       {/* Parking Registrations (QR self-registrations) */}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-        <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>
-          Parking Registrations ({activeRegs.length})
+      <div className="pd-section-head">
+        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+          <span className="pd-section-title">Parking Registrations</span>
+          <span className="pd-section-count">{activeRegs.length}</span>
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text-faint)'}}>
+        <div className="pd-section-meta">
           <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
           Live · via QR
         </div>
       </div>
-      <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:20}}>
+      <div style={{display:'flex',flexDirection:'column',gap:6}}>
         {activeRegs.length === 0 ? (
-          <div style={{textAlign:'center',padding:16,color:'var(--text-muted)',fontSize:13}}>
-            No active parking registrations. Drivers who scan a lot's QR code will appear here.
-          </div>
+          <div className="pd-empty">No active registrations</div>
         ) : activeRegs.map(r => {
           const remainMs = new Date(r.expires_at).getTime() - nowTick;
           const urgent = remainMs < 60 * 60 * 1000; // < 1h
@@ -7176,9 +7211,12 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
       </div>
 
       {/* Cameras */}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-        <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>ALPR Cameras ({cameras.length})</div>
-        <button onClick={() => { setShowAddCam(!showAddCam); setNewApiKey(null); }} style={{background:'rgba(59,130,246,.12)',color:'#3b82f6',border:'1px solid rgba(59,130,246,.3)',borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{showAddCam ? 'Cancel' : '+ Register'}</button>
+      <div className="pd-section-head">
+        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+          <span className="pd-section-title">ALPR Cameras</span>
+          <span className="pd-section-count">{cameras.length}</span>
+        </div>
+        <button onClick={() => { setShowAddCam(!showAddCam); setNewApiKey(null); }} className="pd-share-btn" style={{color:'#3b82f6'}}>{showAddCam ? 'Cancel' : '+ Register'}</button>
       </div>
 
       {newApiKey && (
@@ -7210,24 +7248,23 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
             {c.last_seen_at && <div style={{fontSize:11,color:'var(--text-faint)',marginTop:2}}>Last seen: {new Date(c.last_seen_at).toLocaleString()}</div>}
           </div>
         ))}
-        {cameras.length === 0 && <div style={{textAlign:'center',padding:16,color:'var(--text-muted)',fontSize:13}}>No cameras registered</div>}
+        {cameras.length === 0 && <div className="pd-empty">No cameras registered</div>}
       </div>
 
       {/* Recent plate detections (live ALPR feed) */}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,marginTop:20}}>
-        <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>
-          Plate Detections ({events.length})
+      <div className="pd-section-head">
+        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+          <span className="pd-section-title">Plate Detections</span>
+          <span className="pd-section-count">{events.length}</span>
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text-faint)'}}>
+        <div className="pd-section-meta">
           <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
           Live
         </div>
       </div>
-      <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:20}}>
+      <div style={{display:'flex',flexDirection:'column',gap:6}}>
         {events.length === 0 ? (
-          <div style={{textAlign:'center',padding:16,color:'var(--text-muted)',fontSize:13}}>
-            No plate detections yet. Once your ALPR cameras read a plate, it appears here in real time.
-          </div>
+          <div className="pd-empty">No plate detections yet</div>
         ) : events.map(ev => {
           const cam = cameraById[ev.camera_id];
           const conf = typeof ev.confidence === 'number' ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) : null;
