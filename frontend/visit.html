@@ -187,11 +187,65 @@
     <div class="loading-state">Loading...</div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script>
+    // Raw fetch against Supabase PostgREST + Storage. Dropping supabase-js here
+    // because its createClient() auto-opens a realtime WebSocket that can hang
+    // on strict networks / extensions and leave the page stuck on "Loading...".
     const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    async function pgRest(path, init = {}, timeoutMs = 10000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(SUPABASE_URL + '/rest/v1' + path, {
+          ...init,
+          signal: ctrl.signal,
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+            'Content-Type': 'application/json',
+            ...(init.headers || {}),
+          },
+        });
+        const text = await res.text();
+        const body = text ? JSON.parse(text) : null;
+        if (!res.ok) {
+          const err = new Error((body && body.message) || ('HTTP ' + res.status));
+          err.code = body && body.code;
+          err.details = body && body.details;
+          err.status = res.status;
+          throw err;
+        }
+        return body;
+      } finally { clearTimeout(t); }
+    }
+
+    async function uploadToStorage(bucket, file, prefix, timeoutMs = 30000) {
+      if (file.size > 10 * 1024 * 1024) throw new Error('File must be under 10MB.');
+      const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+      const path = prefix + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucket}/${encodeURIComponent(path)}`, {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+            'Content-Type': file.type || 'application/octet-stream',
+            'x-upsert': 'false',
+          },
+          body: file,
+        });
+        if (!res.ok) {
+          const body = await res.text();
+          throw new Error('Upload failed: ' + (body || res.status));
+        }
+        return `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
+      } finally { clearTimeout(t); }
+    }
 
     const app = document.getElementById('app');
 
@@ -202,29 +256,41 @@
     let idPhotoFile = null;
 
     async function init() {
+      if (!qrCodeId) {
+        showNotFound('Invalid Link', 'This visitor registration link is not valid.');
+        return;
+      }
       try {
-        if (!qrCodeId) {
-          showNotFound('Invalid Link', 'This visitor registration link is not valid.');
-          return;
-        }
-
-        const { data, error } = await supabase
-          .from('properties')
-          .select('id, name, address')
-          .eq('qr_code_id', qrCodeId)
-          .single();
-
-        if (error || !data) {
+        const rows = await pgRest(`/properties?select=id,name,address&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`);
+        const data = Array.isArray(rows) ? rows[0] : null;
+        if (!data) {
           showNotFound('Property Not Found', 'This visitor registration link is not valid or has expired.');
           return;
         }
-
         property = data;
         showForm();
       } catch (err) {
-        showNotFound('Connection Error', 'Unable to connect. Please check your internet and try again.');
         console.error('init error:', err);
+        showConnectionError(err);
       }
+    }
+
+    function showConnectionError(err) {
+      const detail = err && (err.name === 'AbortError' ? 'Request timed out.' : (err.message || 'Network error.'));
+      app.innerHTML = `
+        <div class="logo"><div class="shield">LL</div><h1>Lot<span>Logic</span></h1></div>
+        <div class="not-found">
+          <h2>Can't reach server</h2>
+          <p>${escapeHtml(detail)}</p>
+          <p>Check your connection, then try again.</p>
+          <button id="retryBtn" class="submit-btn" style="margin-top:18px">Try again</button>
+        </div>
+      `;
+      const btn = document.getElementById('retryBtn');
+      if (btn) btn.addEventListener('click', () => {
+        app.innerHTML = '<div class="loading-state">Loading...</div>';
+        init();
+      });
     }
 
     function showNotFound(title, message) {
@@ -316,13 +382,7 @@
     }
 
     async function uploadFile(bucket, file, prefix) {
-      if (file.size > 10 * 1024 * 1024) throw new Error('File must be under 10MB.');
-      const ext = file.name.split('.').pop();
-      const path = prefix + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext;
-      const { data, error } = await supabase.storage.from(bucket).upload(path, file);
-      if (error) throw new Error('Upload failed: ' + error.message);
-      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
-      return urlData.publicUrl;
+      return await uploadToStorage(bucket, file, prefix);
     }
 
     let submitting = false;
@@ -361,28 +421,30 @@
         const validFrom = new Date();
         const validUntil = new Date(validFrom.getTime() + stayDays * 24 * 60 * 60 * 1000);
 
-        const { data, error } = await supabase
-          .from('visitor_passes')
-          .insert({
-            property_id: property.id,
-            plate_text: plateText,
-            visitor_name: visitorName,
-            host_unit: hostUnit,
-            host_name: '',
-            valid_from: validFrom.toISOString(),
-            valid_until: validUntil.toISOString(),
-            status: 'active',
-            parking_spot: parkingSpot,
-            tag_expiration: tagExpiration,
-            id_photo_url: idPhotoUrl,
-            stay_days: stayDays,
-            phone: phone,
-            email: email,
-          })
-          .select()
-          .single();
-
-        if (error) throw new Error('Failed to register pass. Please try again.');
+        try {
+          await pgRest('/visitor_passes', {
+            method: 'POST',
+            headers: { Prefer: 'return=minimal' },
+            body: JSON.stringify({
+              property_id: property.id,
+              plate_text: plateText,
+              visitor_name: visitorName,
+              host_unit: hostUnit,
+              host_name: '',
+              valid_from: validFrom.toISOString(),
+              valid_until: validUntil.toISOString(),
+              status: 'active',
+              parking_spot: parkingSpot,
+              tag_expiration: tagExpiration,
+              id_photo_url: idPhotoUrl,
+              stay_days: stayDays,
+              phone: phone,
+              email: email,
+            }),
+          });
+        } catch (err) {
+          throw new Error('Failed to register pass. ' + (err.message || 'Please try again.'));
+        }
 
         showSuccess(plateText, validUntil, stayDays);
       } catch (err) {
