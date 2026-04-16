@@ -16,6 +16,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -693,6 +694,58 @@
       background: var(--bg-card); border: 1.5px solid var(--border); border-radius: 10px;
       padding: 10px 12px; font-size: 14px; color: var(--text-secondary); font-family: inherit;
     }
+
+    /* ── Parking registrations (inside permits-sheet) ── */
+    .parking-qr-block {
+      padding: 20px 16px; border-bottom: 1px solid var(--border-subtle);
+      text-align: center; background: var(--bg-inset);
+    }
+    .parking-qr-tile {
+      display: inline-block; padding: 14px; background: #fff; border-radius: 12px;
+      margin-bottom: 10px;
+    }
+    .parking-qr-tile canvas { display: block; width: 200px; height: 200px; }
+    .parking-qr-url {
+      font-family: 'Courier New', monospace; font-size: 11px; color: var(--text-muted);
+      word-break: break-all; margin: 4px auto 10px; max-width: 420px;
+    }
+    .parking-qr-copy {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 14px; font-size: 12px; font-weight: 700; color: var(--text-primary);
+      cursor: pointer; font-family: inherit;
+    }
+    .parking-qr-copy:hover { border-color: var(--accent); color: var(--accent); }
+    .parking-filter {
+      display: flex; gap: 6px; padding: 12px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .parking-filter button {
+      background: var(--bg-inset); border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 14px; font-size: 12px; font-weight: 700; color: var(--text-muted);
+      cursor: pointer; font-family: inherit;
+    }
+    .parking-filter button.active {
+      background: rgba(59,130,246,.12); border-color: var(--accent); color: var(--accent);
+    }
+    .parking-reg-row {
+      padding: 12px 16px; border-bottom: 1px solid var(--bg-inset);
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    }
+    .parking-reg-row:last-child { border-bottom: none; }
+    .parking-reg-plate {
+      background: #fef3c7; color: #1c1009; border-radius: 6px; padding: 4px 10px;
+      font-size: 14px; font-weight: 800; font-family: 'Courier New', monospace;
+      letter-spacing: .1em; border: 1.5px solid #fbbf24;
+    }
+    .parking-reg-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .parking-reg-badge {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+      padding: 3px 8px; border-radius: 20px;
+    }
+    .parking-reg-badge.active { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid rgba(74,222,128,.2); }
+    .parking-reg-badge.expired { background: rgba(107,114,128,.12); color: var(--text-muted); border: 1px solid var(--border); }
+    .parking-reg-badge.cooldown { background: rgba(251,191,36,.12); color: #fbbf24; border: 1px solid rgba(251,191,36,.2); }
+    .parking-reg-badge.cancelled { background: rgba(239,68,68,.12); color: #ef4444; border: 1px solid rgba(239,68,68,.2); }
 
     /* ── Analytics ── */
     .analytics-card {
@@ -2055,6 +2108,18 @@ const db = {
       return { success: true };
     }
     throw new Error('Supabase not available');
+  },
+  // ── Parking registrations (QR self-registration) ──────────
+  async getParkingRegistrations(lotId) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('parking_registrations')
+        .select('id, plate_number, vehicle_type, registered_at, expires_at, cooldown_until, status')
+        .eq('lot_id', lotId)
+        .order('registered_at', { ascending: false });
+      if (!error && data) return data;
+    }
+    return [];
   },
 
   async deleteViolation(violId) {
@@ -4960,6 +5025,145 @@ function PermitsModal({ lotId, lotName, onClose }) {
   );
 }
 
+// ── Parking registrations modal (QR + active registrations per lot) ──
+function ParkingModal({ lotId, lotName, onClose }) {
+  const [regs, setRegs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('active'); // 'active' | 'all'
+  const canvasRef = useRef(null);
+  const { addToast } = useToast();
+
+  const target = `${window.location.origin}/park?lot=${encodeURIComponent(lotId)}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    db.getParkingRegistrations(lotId).then(data => {
+      if (cancelled) return;
+      setRegs(data);
+      setLoading(false);
+    }).catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [lotId]);
+
+  useEffect(() => {
+    if (!canvasRef.current || typeof QRCode === 'undefined') return;
+    QRCode.toCanvas(canvasRef.current, target, {
+      width: 400,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#0f172a', light: '#ffffff' },
+    }, err => { if (err) console.error('qr render:', err); });
+  }, [target]);
+
+  const now = Date.now();
+  const statusOf = r => {
+    if (r.status === 'cancelled') return 'cancelled';
+    if (r.expires_at && new Date(r.expires_at).getTime() > now && r.status === 'active') return 'active';
+    if (r.cooldown_until && new Date(r.cooldown_until).getTime() > now) return 'cooldown';
+    return 'expired';
+  };
+
+  const filtered = filter === 'active'
+    ? regs.filter(r => statusOf(r) === 'active')
+    : regs;
+
+  const activeCount = regs.filter(r => statusOf(r) === 'active').length;
+
+  function copyLink() {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(target)
+        .then(() => addToast('Link copied', 'success'))
+        .catch(() => addToast('Copy failed', 'error'));
+    }
+  }
+
+  function fmtRel(iso) {
+    if (!iso) return '';
+    const d = new Date(iso).getTime();
+    const diff = (now - d) / 1000;
+    if (diff < 60) return `${Math.floor(diff)}s ago`;
+    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+    return `${Math.floor(diff/86400)}d ago`;
+  }
+  function fmtAbs(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+  }
+
+  return (
+    <div className="permits-overlay" onClick={onClose}>
+      <div className="permits-sheet" onClick={e => e.stopPropagation()}>
+        <div className="permits-header">
+          <div>
+            <div className="permits-title">Parking QR &amp; Registrations</div>
+            <div style={{fontSize:12, color:'var(--text-faint)', marginTop:2}}>{lotName} — {activeCount} active</div>
+          </div>
+          <button onClick={onClose} style={{background:'var(--bg-inset)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 14px', fontSize:12, fontWeight:700, color:'var(--text-muted)', cursor:'pointer', fontFamily:'inherit'}}>Close</button>
+        </div>
+
+        {/* QR + shareable link */}
+        <div className="parking-qr-block">
+          <div className="parking-qr-tile"><canvas ref={canvasRef} /></div>
+          <div className="parking-qr-url">{target}</div>
+          <button className="parking-qr-copy" onClick={copyLink}>Copy link</button>
+          <div style={{fontSize:11, color:'var(--text-faint)', marginTop:10}}>
+            Print this code and post at the lot. Drivers scan to self-register.
+          </div>
+        </div>
+
+        {/* Filter tabs */}
+        <div className="parking-filter">
+          <button className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>
+            Active ({activeCount})
+          </button>
+          <button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>
+            All ({regs.length})
+          </button>
+        </div>
+
+        {/* Registration list */}
+        {loading ? (
+          <div className="loader"><span className="spin" /> Loading registrations…</div>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state" style={{padding:'28px 20px'}}>
+            <div className="empty-title">{filter === 'active' ? 'No active registrations' : 'No registrations yet'}</div>
+            <div className="empty-body">Registrations appear here when drivers scan the QR code.</div>
+          </div>
+        ) : (
+          <div>
+            {filtered.map(r => {
+              const s = statusOf(r);
+              return (
+                <div key={r.id} className="parking-reg-row">
+                  <div style={{display:'flex', alignItems:'center', gap:10, flex:1, minWidth:0}}>
+                    <span className="parking-reg-plate">{r.plate_number}</span>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:12, color:'var(--text-primary)', fontWeight:600}}>
+                        {r.vehicle_type ? r.vehicle_type : 'Vehicle'}
+                        <span style={{color:'var(--text-faint)', fontWeight:400}}> · registered {fmtRel(r.registered_at)}</span>
+                      </div>
+                      <div className="parking-reg-meta">
+                        {s === 'active' && <>Expires {fmtAbs(r.expires_at)}</>}
+                        {s === 'cooldown' && <>Cooldown until {fmtAbs(r.cooldown_until)}</>}
+                        {s === 'expired' && <>Expired {fmtAbs(r.expires_at)}</>}
+                        {s === 'cancelled' && <>Cancelled</>}
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`parking-reg-badge ${s}`}>{s}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Shared: try loading an image URL, returns true if it loads successfully ──
 async function tryLoadImageUrl(url, timeout = 5000) {
   const img = new Image();
@@ -5229,6 +5433,7 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
   const [editingZones, setEditingZones] = useState(null);
   const [addingCamera, setAddingCamera] = useState(null); // lot id
   const [managingPermits, setManagingPermits] = useState(null); // {lotId, lotName}
+  const [managingParking, setManagingParking] = useState(null); // {lotId, lotName}
   const { addToast } = useToast();
 
   if (loading && lots.length === 0) {
@@ -5311,6 +5516,11 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
               {ownerRole === 'owner' && (
                 <button className="lot-action-btn primary" onClick={() => setManagingPermits({lotId: lot.id, lotName: lot.name})}>
                   Permits
+                </button>
+              )}
+              {ownerRole === 'owner' && (
+                <button className="lot-action-btn primary" onClick={() => setManagingParking({lotId: lot.id, lotName: lot.name})}>
+                  Parking QR
                 </button>
               )}
               <button className="lot-action-btn">
@@ -5465,6 +5675,15 @@ function LotsPage({ lots, lotStates, loading, ownerRole, onZonesSaved }) {
           lotId={managingPermits.lotId}
           lotName={managingPermits.lotName}
           onClose={() => setManagingPermits(null)}
+        />
+      )}
+
+      {/* Parking QR + registrations modal */}
+      {managingParking && (
+        <ParkingModal
+          lotId={managingParking.lotId}
+          lotName={managingParking.lotName}
+          onClose={() => setManagingParking(null)}
         />
       )}
     </div>
