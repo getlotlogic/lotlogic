@@ -14,44 +14,6 @@
       padding: 24px 20px;
     }
     .wrap { max-width: 720px; margin: 0 auto; }
-    .back {
-      display: inline-block;
-      color: #3b82f6;
-      text-decoration: none;
-      font-size: 13px;
-      font-weight: 600;
-      margin-bottom: 20px;
-    }
-    .back:hover { text-decoration: underline; }
-
-    .picker h1 { font-size: 22px; font-weight: 800; color: #f9fafb; margin-bottom: 6px; }
-    .picker p { color: #9ca3af; font-size: 14px; margin-bottom: 18px; }
-    .picker-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 10px;
-    }
-    .picker-item {
-      display: block;
-      background: #1a1d27;
-      border: 1px solid rgba(255,255,255,0.08);
-      padding: 14px 16px;
-      border-radius: 10px;
-      color: #e5e7eb;
-      text-decoration: none;
-      font-weight: 600;
-      font-size: 15px;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .picker-item:hover { border-color: #3b82f6; background: rgba(59,130,246,0.08); }
-    .picker-item small {
-      display: block;
-      color: #6b7280;
-      font-size: 11px;
-      font-weight: 500;
-      margin-top: 4px;
-      word-break: break-all;
-    }
 
     .qr-view { text-align: center; padding: 20px 0; }
     .qr-view .lot-name {
@@ -83,20 +45,16 @@
     }
 
     .loading-state { text-align: center; padding: 60px 0; color: #9ca3af; }
-    .error-state {
-      background: rgba(239,68,68,0.1);
-      border: 1px solid rgba(239,68,68,0.3);
-      color: #f87171;
-      padding: 16px 20px;
-      border-radius: 10px;
-      font-size: 14px;
+    .invalid-state {
       text-align: center;
+      padding: 60px 20px;
     }
+    .invalid-state h2 { font-size: 20px; color: #f87171; margin-bottom: 10px; }
+    .invalid-state p { font-size: 14px; color: #9ca3af; line-height: 1.6; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <a class="back" href="/app">← Back to dashboard</a>
     <div id="content"><div class="loading-state">Loading…</div></div>
   </div>
 
@@ -114,42 +72,19 @@
     const lotId = qs.get('lot');
 
     async function init() {
-      if (lotId && UUID_RE.test(lotId)) {
-        await renderView(lotId);
-      } else {
-        await renderPicker();
+      if (!lotId || !UUID_RE.test(lotId)) {
+        showInvalid();
+        return;
       }
+      await renderView(lotId);
     }
 
-    async function renderPicker() {
-      try {
-        const { data, error } = await supabase
-          .from('lots')
-          .select('id, name')
-          .eq('active', true)
-          .order('name', { ascending: true });
-        if (error) throw error;
-        if (!data || data.length === 0) {
-          content.innerHTML = '<div class="error-state">No active lots found.</div>';
-          return;
-        }
-        content.innerHTML =
-          '<div class="picker">' +
-            '<h1>Parking QR codes</h1>' +
-            '<p>Pick a lot to view its QR code.</p>' +
-            '<div class="picker-grid">' +
-              data.map(l =>
-                '<a class="picker-item" href="/park/qr?lot=' + encodeURIComponent(l.id) + '">' +
-                  escapeHtml(l.name) +
-                  '<small>' + escapeHtml(l.id) + '</small>' +
-                '</a>'
-              ).join('') +
-            '</div>' +
-          '</div>';
-      } catch (err) {
-        console.error(err);
-        content.innerHTML = '<div class="error-state">Failed to load lots. ' + escapeHtml(err.message || '') + '</div>';
-      }
+    function showInvalid() {
+      content.innerHTML =
+        '<div class="invalid-state">' +
+          '<h2>Invalid QR</h2>' +
+          '<p>This page is missing a lot identifier. Open the lot-specific link from your admin tools.</p>' +
+        '</div>';
     }
 
     async function renderView(id) {
@@ -160,7 +95,7 @@
           .eq('id', id)
           .single();
         if (error || !data) {
-          content.innerHTML = '<div class="error-state">Lot not found.</div>';
+          showInvalid();
           return;
         }
         const target = window.location.origin + '/park?lot=' + encodeURIComponent(data.id);
@@ -179,7 +114,7 @@
         }, err => { if (err) console.error('qr:', err); });
       } catch (err) {
         console.error(err);
-        content.innerHTML = '<div class="error-state">Failed to load lot. ' + escapeHtml(err.message || '') + '</div>';
+        showInvalid();
       }
     }
 
