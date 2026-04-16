@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Print Parking QR — LotLogic</title>
+  <title>Parking QR — LotLogic</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -13,44 +13,19 @@
       min-height: 100vh;
       padding: 24px 20px;
     }
-    .screen-wrap { max-width: 760px; margin: 0 auto; }
-    .toolbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 18px;
-      font-size: 13px;
-    }
-    .toolbar a {
+    .wrap { max-width: 720px; margin: 0 auto; }
+    .back {
+      display: inline-block;
       color: #3b82f6;
       text-decoration: none;
+      font-size: 13px;
       font-weight: 600;
+      margin-bottom: 20px;
     }
-    .toolbar a:hover { text-decoration: underline; }
-    .print-btn {
-      padding: 10px 18px;
-      background: linear-gradient(135deg, #3b82f6, #2563eb);
-      color: #fff;
-      border: none;
-      border-radius: 10px;
-      font-size: 14px;
-      font-weight: 700;
-      cursor: pointer;
-      font-family: inherit;
-    }
-    .print-btn:hover { opacity: 0.9; }
+    .back:hover { text-decoration: underline; }
 
-    .picker h1 {
-      font-size: 22px;
-      font-weight: 800;
-      color: #f9fafb;
-      margin-bottom: 6px;
-    }
-    .picker p {
-      color: #9ca3af;
-      font-size: 14px;
-      margin-bottom: 18px;
-    }
+    .picker h1 { font-size: 22px; font-weight: 800; color: #f9fafb; margin-bottom: 6px; }
+    .picker p { color: #9ca3af; font-size: 14px; margin-bottom: 18px; }
     .picker-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -68,75 +43,43 @@
       font-size: 15px;
       transition: border-color 0.15s, background 0.15s;
     }
-    .picker-item:hover {
-      border-color: #3b82f6;
-      background: rgba(59,130,246,0.08);
-    }
+    .picker-item:hover { border-color: #3b82f6; background: rgba(59,130,246,0.08); }
     .picker-item small {
       display: block;
       color: #6b7280;
       font-size: 11px;
       font-weight: 500;
       margin-top: 4px;
-    }
-
-    .poster {
-      background: #fff;
-      color: #0f172a;
-      border-radius: 14px;
-      padding: 48px 32px 40px;
-      text-align: center;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
-    }
-    .poster-brand {
-      font-size: 13px;
-      font-weight: 800;
-      letter-spacing: 0.14em;
-      color: #3b82f6;
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }
-    .poster-heading {
-      font-size: 40px;
-      font-weight: 900;
-      color: #0f172a;
-      line-height: 1.05;
-      margin-bottom: 8px;
-    }
-    .poster-lot {
-      font-size: 20px;
-      font-weight: 600;
-      color: #475569;
-      margin-bottom: 28px;
-    }
-    .qr-canvas-wrap {
-      display: inline-block;
-      padding: 14px;
-      background: #fff;
-      border: 3px solid #0f172a;
-      border-radius: 12px;
-      margin: 4px 0 24px;
-    }
-    #qrCanvas { display: block; width: 320px; height: 320px; }
-    .poster-steps {
-      text-align: left;
-      display: inline-block;
-      margin: 0 auto 18px;
-      color: #1e293b;
-      padding-left: 22px;
-    }
-    .poster-steps li { margin: 6px 0; font-size: 16px; }
-    .poster-url {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 12px;
-      color: #475569;
-      margin-top: 18px;
       word-break: break-all;
     }
-    .poster-footnote {
+
+    .qr-view { text-align: center; padding: 20px 0; }
+    .qr-view .lot-name {
+      font-size: 24px;
+      font-weight: 800;
+      color: #f9fafb;
+      margin-bottom: 8px;
+    }
+    .qr-view .lot-sub {
+      font-size: 13px;
+      color: #9ca3af;
+      margin-bottom: 24px;
+    }
+    .qr-tile {
+      display: inline-block;
+      padding: 24px;
+      background: #fff;
+      border-radius: 14px;
+      margin-bottom: 20px;
+    }
+    #qrCanvas { display: block; width: 320px; height: 320px; }
+    .qr-url {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 12px;
-      color: #94a3b8;
-      margin-top: 10px;
+      color: #9ca3af;
+      word-break: break-all;
+      max-width: 480px;
+      margin: 0 auto;
     }
 
     .loading-state { text-align: center; padding: 60px 0; color: #9ca3af; }
@@ -149,35 +92,12 @@
       font-size: 14px;
       text-align: center;
     }
-
-    @media print {
-      body {
-        background: #fff;
-        color: #000;
-        padding: 0;
-        min-height: 0;
-      }
-      .screen-wrap { max-width: 100%; }
-      .toolbar { display: none; }
-      .poster {
-        box-shadow: none;
-        border-radius: 0;
-        padding: 32px 24px;
-      }
-      .poster-heading { font-size: 36px; }
-      #qrCanvas { width: 360px; height: 360px; }
-    }
   </style>
 </head>
 <body>
-  <div class="screen-wrap">
-    <div class="toolbar">
-      <a href="/app">&larr; Back to dashboard</a>
-      <div id="toolbarActions"></div>
-    </div>
-    <div id="content">
-      <div class="loading-state">Loading…</div>
-    </div>
+  <div class="wrap">
+    <a class="back" href="/app">← Back to dashboard</a>
+    <div id="content"><div class="loading-state">Loading…</div></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -189,14 +109,13 @@
 
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const content = document.getElementById('content');
-    const toolbarActions = document.getElementById('toolbarActions');
 
     const qs = new URLSearchParams(window.location.search);
     const lotId = qs.get('lot');
 
     async function init() {
       if (lotId && UUID_RE.test(lotId)) {
-        await renderPoster(lotId);
+        await renderView(lotId);
       } else {
         await renderPicker();
       }
@@ -216,8 +135,8 @@
         }
         content.innerHTML =
           '<div class="picker">' +
-            '<h1>Print a parking QR</h1>' +
-            '<p>Pick a lot to generate a printable QR poster. Drivers scan it to self-register their vehicle.</p>' +
+            '<h1>Parking QR codes</h1>' +
+            '<p>Pick a lot to view its QR code.</p>' +
             '<div class="picker-grid">' +
               data.map(l =>
                 '<a class="picker-item" href="/park/qr?lot=' + encodeURIComponent(l.id) + '">' +
@@ -233,11 +152,11 @@
       }
     }
 
-    async function renderPoster(id) {
+    async function renderView(id) {
       try {
         const { data, error } = await supabase
           .from('lots')
-          .select('id, name, active')
+          .select('id, name')
           .eq('id', id)
           .single();
         if (error || !data) {
@@ -246,32 +165,18 @@
         }
         const target = window.location.origin + '/park?lot=' + encodeURIComponent(data.id);
         content.innerHTML =
-          '<div class="poster" id="poster">' +
-            '<div class="poster-brand">LotLogic \u00b7 Guest Parking</div>' +
-            '<h1 class="poster-heading">Scan to Register Your Vehicle</h1>' +
-            '<div class="poster-lot">' + escapeHtml(data.name) + '</div>' +
-            '<div class="qr-canvas-wrap"><canvas id="qrCanvas"></canvas></div>' +
-            '<ol class="poster-steps">' +
-              '<li>Open your phone camera and point at the QR code.</li>' +
-              '<li>Tap the link that appears.</li>' +
-              '<li>Enter your plate and how long you\u2019ll be parked.</li>' +
-            '</ol>' +
-            '<div class="poster-url">' + escapeHtml(target) + '</div>' +
-            '<div class="poster-footnote">Max stay 48h \u00b7 24h cooldown before re-registration</div>' +
+          '<div class="qr-view">' +
+            '<div class="lot-name">' + escapeHtml(data.name) + '</div>' +
+            '<div class="lot-sub">Scan to register your vehicle</div>' +
+            '<div class="qr-tile"><canvas id="qrCanvas"></canvas></div>' +
+            '<div class="qr-url">' + escapeHtml(target) + '</div>' +
           '</div>';
-
-        toolbarActions.innerHTML = '<button class="print-btn" type="button" id="printBtn">Print</button>';
-        document.getElementById('printBtn').addEventListener('click', () => window.print());
-
-        const canvas = document.getElementById('qrCanvas');
-        QRCode.toCanvas(canvas, target, {
+        QRCode.toCanvas(document.getElementById('qrCanvas'), target, {
           width: 640,
           margin: 1,
           errorCorrectionLevel: 'M',
           color: { dark: '#0f172a', light: '#ffffff' },
-        }, err => {
-          if (err) console.error('qr render:', err);
-        });
+        }, err => { if (err) console.error('qr:', err); });
       } catch (err) {
         console.error(err);
         content.innerHTML = '<div class="error-state">Failed to load lot. ' + escapeHtml(err.message || '') + '</div>';
