@@ -5090,12 +5090,30 @@ function PermitsModal({ lotId, lotName, onClose }) {
     return () => { supabase.removeChannel(channel); };
   }, [lotId, refreshRegs]);
 
+  // Realtime for manual permits — if an owner edits from another tab or device
+  // the list mirrors instantly. Same pattern as parking_registrations.
+  const refreshPermits = useCallback(() => {
+    db.getPermits(lotId).then(setPermits).catch(() => {});
+  }, [lotId]);
+  useEffect(() => {
+    if (!supabase) return;
+    const debouncedRefresh = makeDebounced(refreshPermits, 250);
+    const channel = supabase.channel('permits-modal-' + lotId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'permitted_vehicles', filter: 'lot_id=eq.' + lotId }, debouncedRefresh)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [lotId, refreshPermits]);
+
   // Refetch when tab becomes visible again after being backgrounded
   useEffect(() => {
-    const onVis = () => { if (document.visibilityState === 'visible') refreshRegs(); };
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return;
+      refreshRegs();
+      refreshPermits();
+    };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
-  }, [refreshRegs]);
+  }, [refreshRegs, refreshPermits]);
 
   // Close on Escape — matches the pattern used by other modals in this file
   useEffect(() => {
@@ -6970,21 +6988,24 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const [newApiKey, setNewApiKey] = useState(null);
   const [saving, setSaving] = useState(false);
   const [parkingRegs, setParkingRegs] = useState([]);
+  const [visitorPasses, setVisitorPasses] = useState([]);
   const nowTick = useNowTick();
 
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
     setLoading(true);
-    const [prop, pl, cam, ev] = await Promise.all([
+    const [prop, pl, cam, ev, vp] = await Promise.all([
       db.getProperty(propertyId),
       db.getResidentPlates(propertyId),
       db.getALPRCameras(propertyId),
       db.getRecentPlateEvents(propertyId, 50),
+      db.getVisitorPasses(propertyId, { limit: 50 }),
     ]);
     setProperty(prop);
     setPlates(pl);
     setCameras(cam);
     setEvents(ev);
+    setVisitorPasses(vp);
     if (prop?.owner_id) {
       const regs = await db.getParkingRegistrationsByOwner(prop.owner_id);
       setParkingRegs(regs);
@@ -7033,6 +7054,82 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
   }, [refreshParkingRegs]);
+
+  // ── Resident plates (new /register submissions land here) ──
+  // Same live pattern as parking regs and plate events so the admin doesn't
+  // have to reload after a resident submits the form.
+  const refreshPlates = useCallback(async () => {
+    if (!propertyId) return;
+    const pl = await db.getResidentPlates(propertyId);
+    setPlates(pl);
+  }, [propertyId]);
+  useEffect(() => {
+    if (!propertyId) return;
+    const id = setInterval(refreshPlates, 20000);
+    return () => clearInterval(id);
+  }, [refreshPlates]);
+  useEffect(() => {
+    if (!supabase || !propertyId) return;
+    const debouncedRefresh = makeDebounced(refreshPlates, 200);
+    const channel = supabase.channel('resident-plates-' + propertyId)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'resident_plates',
+        filter: 'property_id=eq.' + propertyId,
+      }, debouncedRefresh)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [propertyId, refreshPlates]);
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible') refreshPlates(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refreshPlates]);
+
+  // ── Visitor passes (new /visit submissions land here) ──
+  const refreshVisitorPasses = useCallback(async () => {
+    if (!propertyId) return;
+    const vp = await db.getVisitorPasses(propertyId, { limit: 50 });
+    setVisitorPasses(vp);
+  }, [propertyId]);
+  useEffect(() => {
+    if (!propertyId) return;
+    const id = setInterval(refreshVisitorPasses, 20000);
+    return () => clearInterval(id);
+  }, [refreshVisitorPasses]);
+  useEffect(() => {
+    if (!supabase || !propertyId) return;
+    const debouncedRefresh = makeDebounced(refreshVisitorPasses, 200);
+    const channel = supabase.channel('visitor-passes-' + propertyId)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'visitor_passes',
+        filter: 'property_id=eq.' + propertyId,
+      }, debouncedRefresh)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [propertyId, refreshVisitorPasses]);
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible') refreshVisitorPasses(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refreshVisitorPasses]);
+
+  // ── ALPR cameras (register / remove + last_seen updates) ──
+  const refreshCameras = useCallback(async () => {
+    if (!propertyId) return;
+    const cam = await db.getALPRCameras(propertyId);
+    setCameras(cam);
+  }, [propertyId]);
+  useEffect(() => {
+    if (!supabase || !propertyId) return;
+    const debouncedRefresh = makeDebounced(refreshCameras, 250);
+    const channel = supabase.channel('alpr-cameras-' + propertyId)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'alpr_cameras',
+        filter: 'property_id=eq.' + propertyId,
+      }, debouncedRefresh)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [propertyId, refreshCameras]);
 
   // ── Recent plate detections (ALPR) ──
   // Keep this list fresh the same way as parking regs: realtime + 20s poll + visibility.
@@ -7209,6 +7306,58 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
           );
         })}
       </div>
+
+      {/* Visitor Passes — /visit submissions land here */}
+      {(() => {
+        const activeVisitors = visitorPasses.filter(v => {
+          if (v.status && v.status !== 'active') return false;
+          return !v.valid_until || new Date(v.valid_until).getTime() > nowTick;
+        });
+        return (
+          <>
+            <div className="pd-section-head">
+              <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+                <span className="pd-section-title">Visitor Passes</span>
+                <span className="pd-section-count">{activeVisitors.length}</span>
+              </div>
+              <div className="pd-section-meta">
+                <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
+                Live
+              </div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              {activeVisitors.length === 0 ? (
+                <div className="pd-empty">No active visitor passes</div>
+              ) : activeVisitors.map(v => {
+                const remainMs = v.valid_until ? new Date(v.valid_until).getTime() - nowTick : 0;
+                const urgent = remainMs > 0 && remainMs < 60 * 60 * 1000;
+                return (
+                  <div key={v.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
+                    <div style={{minWidth:0,flex:1}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                        <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{v.plate_text}</span>
+                        {v.visitor_name && <span style={{fontSize:12,color:'var(--text-primary)',fontWeight:600}}>{v.visitor_name}</span>}
+                      </div>
+                      <div style={{fontSize:11,color:'var(--text-faint)',marginTop:3}}>
+                        {v.valid_until ? <>Expires {new Date(v.valid_until).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</> : 'No expiry'}
+                        {v.phone ? ` · ${v.phone}` : ''}
+                      </div>
+                    </div>
+                    {v.valid_until && (
+                      <span style={{
+                        fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:20,whiteSpace:'nowrap',
+                        background: urgent ? 'rgba(251,191,36,.12)' : 'rgba(74,222,128,.12)',
+                        color: urgent ? '#fbbf24' : '#4ade80',
+                        border: urgent ? '1px solid rgba(251,191,36,.25)' : '1px solid rgba(74,222,128,.25)',
+                      }}>{fmtPassRemaining(remainMs)}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        );
+      })()}
 
       {/* Cameras */}
       <div className="pd-section-head">
