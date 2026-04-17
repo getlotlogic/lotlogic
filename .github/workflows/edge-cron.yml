@@ -1,0 +1,41 @@
+name: Edge function crons
+
+on:
+  schedule:
+    # Daily at 09:00 UTC (05:00 ET) — off-peak for most tenants.
+    - cron: '0 9 * * *'
+  # Manual trigger for one-off reruns.
+  workflow_dispatch:
+
+jobs:
+  check-violations:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Expire visitor passes past valid_until
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -X POST \
+            "${SUPABASE_URL}/functions/v1/check-violations" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            --data '{}' \
+            --max-time 60
+
+  notify-expiring-plates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Email residents with plates expiring in 72h
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -X POST \
+            "${SUPABASE_URL}/functions/v1/notify-expiring-plates" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            --data '{}' \
+            --max-time 120
