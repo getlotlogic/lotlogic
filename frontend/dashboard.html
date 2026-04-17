@@ -4695,6 +4695,7 @@ function InvoicesPage({ lots, partners: partnersProp }) {
 function BillingQuickBooksView({ partnersProp, lots }) {
   const [partners, setPartners] = React.useState(partnersProp || null);
   const [invoices, setInvoices] = React.useState(null);
+  const [qbStatus, setQbStatus] = React.useState(null);
   const [err, setErr] = React.useState('');
   const [busy, setBusy] = React.useState(false);
 
@@ -4703,8 +4704,12 @@ function BillingQuickBooksView({ partnersProp, lots }) {
     try {
       const parts = await db.getPartnersForLots(lots || []);
       setPartners(parts);
-      const inv = await apiFetch('/quickbooks/pending-invoices');
+      const [inv, status] = await Promise.all([
+        apiFetch('/quickbooks/pending-invoices'),
+        apiFetch('/quickbooks/status').catch(() => ({ connected: false })),
+      ]);
       setInvoices(inv);
+      setQbStatus(status);
     } catch (e) {
       setErr(e.message || String(e));
     } finally {
@@ -4772,9 +4777,16 @@ function BillingQuickBooksView({ partnersProp, lots }) {
     // QB connection card
     React.createElement('div', { style: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 14, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 } },
       React.createElement('div', null,
-        React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 } }, 'QuickBooks connection'),
+        React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 } },
+          'QuickBooks connection',
+          qbStatus && qbStatus.connected && React.createElement('span', {
+            style: { fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: 'rgba(16,185,129,.15)', color: '#10b981', textTransform: 'uppercase', letterSpacing: '.04em' }
+          }, 'Connected'),
+        ),
         React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)' } },
-          'Authorize LotLogic to create invoices in your QuickBooks Online account.'),
+          qbStatus && qbStatus.connected
+            ? 'Linked to QB realm #' + qbStatus.realm_id + (qbStatus.connected_at ? ' · since ' + qbStatus.connected_at.slice(0, 10) : '')
+            : 'Authorize LotLogic to create invoices in your QuickBooks Online account.'),
       ),
       React.createElement('button', {
         onClick: async (e) => {
@@ -4791,8 +4803,14 @@ function BillingQuickBooksView({ partnersProp, lots }) {
             b.textContent = orig;
           }
         },
-        style: { fontSize: 13, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--accent)', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }
-      }, 'Connect QuickBooks'),
+        style: {
+          fontSize: 13, padding: '8px 14px', borderRadius: 8,
+          border: qbStatus && qbStatus.connected ? '1px solid var(--border)' : '1px solid var(--accent)',
+          background: qbStatus && qbStatus.connected ? 'transparent' : 'var(--accent)',
+          color: qbStatus && qbStatus.connected ? 'var(--text-primary)' : '#fff',
+          cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap',
+        }
+      }, qbStatus && qbStatus.connected ? 'Reconnect' : 'Connect QuickBooks'),
     ),
 
     // Partners
