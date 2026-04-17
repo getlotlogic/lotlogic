@@ -165,14 +165,28 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    const dispatchPromise = fetch(`${supabaseUrl}/functions/v1/tow-dispatch-sms`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${serviceRoleKey}`,
-      },
-      body: JSON.stringify({ violation_id: violation.id }),
-    }).catch((err) => console.error("tow-dispatch-sms invoke failed:", err));
+    // Methods: "email", "sms", or "email,sms" to fire both (comma-separated).
+    // Default email-only while A2P 10DLC approval is pending.
+    const methods = (Deno.env.get("TOW_DISPATCH_METHODS") ?? "email")
+      .split(",").map((m) => m.trim()).filter(Boolean);
+    const fnByMethod: Record<string, string> = {
+      email: "tow-dispatch-email",
+      sms: "tow-dispatch-sms",
+    };
+    const dispatchPromises = methods
+      .map((m) => fnByMethod[m])
+      .filter(Boolean)
+      .map((fn) =>
+        fetch(`${supabaseUrl}/functions/v1/${fn}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${serviceRoleKey}`,
+          },
+          body: JSON.stringify({ violation_id: violation.id }),
+        }).catch((err) => console.error(`${fn} invoke failed:`, err))
+      );
+    const dispatchPromise = Promise.all(dispatchPromises);
     // deno-lint-ignore no-explicit-any
     const edgeRuntime = (globalThis as any).EdgeRuntime;
     if (edgeRuntime?.waitUntil) {
