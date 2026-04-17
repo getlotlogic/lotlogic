@@ -44,7 +44,7 @@ lotlogic/
 ## Key Tables
 - `cameras` - IP cameras with RTSP URLs, zones (JSONB), resolution settings
 - `snapshots` - Camera captures with `raw_detections` JSONB and `vehicles_detected` count
-- `violations` - Detected violations with `confidence`, `plate_confidence`, `zone_id`, `camera_id`
+- `violations` - Detected violations with `confidence`, `plate_confidence`, `zone_id`, `camera_id`, `zone_overlap`
 - `lots` - Parking lots linked to owners and partners
 - `partners` - Enforcement operators with fee schedules and revenue share
 
@@ -58,41 +58,42 @@ lotlogic/
 4. **Resolution too low** - At 640x360 (default), plates become unreadable at distance. Plate Recognizer needs clear character rendering
 5. **Snapshot-to-violation gap** - Camera sees vehicles (vehicles_detected > 0 in snapshots) but violation engine doesn't create violations if zone overlap check fails
 
-### Critical Learning: Backend Uses CENTER-POINT-IN-POLYGON Matching (March 2025)
-**Root cause of zone 7 failure**: The backend violation engine matches detections to zones using
-the **center point of the bounding box**, NOT bounding box overlap percentage.
+### Zone Matching: IoU Bounding Box Overlap (Upgraded March 2026)
+The backend matches detections to zones using **IoU (Intersection over Union) overlap**: what
+percentage of a vehicle's bounding box area falls inside the zone polygon.
 
-This means:
-- A vehicle bbox can overlap a zone by 40%+ but if the bbox CENTER falls outside the zone, **no violation is created**
-- Example: Zone `zone_1_mmuxri9a` had a vehicle overlapping it by 47%, but the vehicle center was 0.003 above the zone top boundary → ZERO violations
-- Zones must be drawn **large enough that vehicle centers fall inside**, not just that vehicles visually overlap
-- Zones typically need to extend further toward the camera (lower Y values) because YOLO bbox centers tend to be higher than where the vehicle visually sits on the ground
+**How it works:**
+- Detection bbox `[x1, y1, x2, y2]` is intersected with the zone polygon using Shapely
+- `overlap_pct = intersection_area / bbox_area`
+- If `overlap_pct >= ZONE_IOU_THRESHOLD` (default 0.30 / 30%), the vehicle matches that zone
+- If a vehicle overlaps multiple zones, it's assigned to the zone with the highest overlap
+- `ZONE_IOU_THRESHOLD` is configurable via environment variable (default: 0.30)
 
-**Fix applied**: Cowork redrawn zones with new IDs (`mmux` prefix) and wider polygons. After redraw, zone 7 started producing violations.
+**Why IoU replaced centroid matching:**
+Previously, the backend used center-point-in-polygon: compute the bbox center, check if that single
+point falls inside the zone. This caused repeated production failures where vehicles were clearly
+inside a zone but their centroid landed 0.1-0.3% outside the polygon boundary (the Z1 and Z7
+failures of March 2025). IoU eliminates this class of bug entirely — a car with 40% overlap gets
+matched regardless of where its center point falls.
+
+**`zone_overlap` column**: Violations now store the overlap percentage (`zone_overlap` DOUBLE PRECISION,
+0-1 scale). This feeds into departure scoring — a car with 80% overlap generates a stronger presence
+signal than one at 31%, so the system is more certain before declaring departure.
 
 **Raw detections have `zone_id: none`** — the backend does NOT assign zones at the snapshot/detection level. Zone matching happens separately in the violation engine.
 
 **Zone polygons use 0-1 normalized coords** in the DB — e.g. `[0.167, 0.645]` not `[16.7, 64.5]`
 
-### Issue: Z1 Polygon Boundary Miss (March 2025)
-**Exact root cause**: YOLO centroid for the car in Z1 was at y=66.77%, but Z1's top polygon edge
-started at y=66.91% — literally **0.14% too low**. The car was detected fine, it just fell through
-a tiny gap between zones. Fixed by extending Z1's top boundary from ~66.9% up to 64.5%.
-
-**Key insight**: Zone polygons need a **safety margin** (at least 2%) beyond where vehicle centroids
-actually appear. YOLO bbox centers shift slightly between frames, so a zone boundary that's perfectly
-flush with a centroid position will intermittently miss.
-
-### Zone Guardian Agent (Added March 2025)
+### Zone Guardian Agent (Updated March 2026)
 `monitoring/zone_guardian.py` — Autonomous agent that runs every 10 minutes, scans ALL cameras/lots,
-and detects centroid gap issues before they become problems:
-- **centroid_gap**: Vehicles overlap zone but centroids fall outside polygon (the Z1/Z7 problem)
-- **boundary_tight**: Zone works but centroids are within 1% of edge (future risk)
+and detects zone overlap issues before they become problems:
+- **low_overlap**: Vehicles overlap zone but below the IoU threshold (zone needs expansion)
+- **overlap_borderline**: Zone works but vehicles are at 20-30% overlap (fragile, could break)
 - **near_miss**: Vehicles detected near zone but not overlapping at all
-- **zone_too_small**: Zone polygon too small for reliable centroid matching
+- **zone_too_small**: Zone polygon too small for reliable IoU matching
 
 **Auto-fix mode**: `--auto-fix` flag automatically patches zone polygons via the backend API,
-expanding them with a 2% safety margin to capture missed centroids.
+expanding them to push vehicle overlap above the IoU threshold.
 
 **Usage**:
 - `python zone_guardian.py --scan` — single scan
@@ -110,10 +111,10 @@ expanding them with a 2% safety margin to capture missed centroids.
 - **Low resolution risk**: Camera resolution below 640x360 minimum
 - **No zones configured**: Camera online and taking snapshots but no zones defined
 
-### Auto-Diagnosis System (Added March 2025)
+### Auto-Diagnosis System (Updated March 2026)
 `monitoring/agent_tools.py` -> `diagnose_zone_issues()` goes deeper — compares actual detection
 bounding boxes against zone polygons from recent snapshots to find WHY zones fail:
-- **zone_matching_failure**: Vehicles overlap zone but backend doesn't assign zone_id (pipeline bug)
+- **below_iou_threshold**: Vehicles overlap zone but below the 30% IoU threshold (zone needs expansion)
 - **low_overlap**: Vehicles barely touch zone polygon (zone too small or offset)
 - **zone_near_miss**: Vehicles detected NEAR zone but not overlapping (zone needs shifting)
 - **zone_no_vehicles**: Zone in area where no vehicles appear in frame
@@ -126,6 +127,27 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 - Zone polygon coords are **0-1 normalized** in the DB, not 0-100 percentage
 - Detection bboxes are also **0-1 normalized** `[x1, y1, x2, y2]`
 - Camera has `resolution_width`/`resolution_height` AND `snapshot_width`/`snapshot_height` columns
+
+### Camera Connectivity (ngrok Tunnel)
+Cameras are on a local LAN (192.168.1.x) and exposed to the Railway-hosted puller via **ngrok** with a permanent static domain.
+
+**Permanent tunnel domain**: `arsenious-pulpiest-rosendo.ngrok-free.dev`
+**ngrok account**: LotLogic (`lotlogicai@gmail.com`)
+
+**How it works:**
+- A Raspberry Pi on the camera LAN runs `ngrok http 192.168.1.134:80 --domain arsenious-pulpiest-rosendo.ngrok-free.dev`
+- ngrok proxies HTTPS requests from the internet to the camera's HTTP server on port 80
+- The domain is stored in `cameras.ip_address` column in the DB
+- The puller's `_resolve_base_url()` detects tunnel domains (ngrok-free.dev, trycloudflare.com, ngrok.io) in `ip_address` and builds `https://<domain>` as the base URL
+- All HTTP requests through ngrok MUST include `ngrok-skip-browser-warning: true` header to bypass the free-tier interstitial page
+
+**Critical gotchas:**
+1. **Static domain**: Unlike Cloudflare quick tunnels, the ngrok domain is permanent and never changes. No DB updates needed on restart.
+2. **`http_snapshot_url` must be NULL**: If this column has a value (e.g., a private LAN IP), the puller uses it FIRST, bypassing the tunnel. Keep it NULL for cloud-hosted pullers.
+3. **Puller doesn't hot-reload URL changes**: The `_reload_cameras()` method only detects new/removed cameras — it does NOT update `base_url` on existing `CameraTask` instances. **You must restart the Railway puller service** after changing `ip_address` in the DB.
+4. **Camera auth**: Puller authenticates via `/cgi-bin/api.cgi?cmd=Login` through the tunnel, gets a time-limited token for snapshot requests.
+5. **ngrok-skip-browser-warning**: Free-tier ngrok serves an HTML interstitial for browser-like requests. The puller MUST send `ngrok-skip-browser-warning: true` header on ALL requests or it gets HTML instead of JSON/images.
+6. **systemd service**: ngrok should run as a systemd service on the Pi for auto-start on boot (`/etc/systemd/system/ngrok-tunnel.service`).
 
 ### Key Thresholds
 - Plate recognition alarm: < 20% = critical, < 50% = warning

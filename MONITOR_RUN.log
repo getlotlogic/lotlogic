@@ -1,0 +1,22 @@
+=== LotLogic Detection Monitor Run ===
+Timestamp: 2026-03-18T (scheduled run)
+Status: BLOCKED — Network egress restricted
+
+All monitor steps could not execute:
+- Supabase (nzdkoouoaedbbccraoti.supabase.co) — blocked by egress proxy
+- Backend (lotlogic-backend-production.up.railway.app) — blocked by egress proxy
+
+Steps skipped:
+1. cowork_log read — BLOCKED
+2. Snapshot pipeline freshness — BLOCKED  
+3. Zone detection staleness — BLOCKED
+4. Auto-heal stuck flags — BLOCKED
+5. Backend health check — BLOCKED
+6. Status summary write — BLOCKED
+
+Resolution needed:
+The Cowork sandbox proxy blocks outbound HTTPS to both Supabase and Railway domains.
+To run this monitor, either:
+  a) Add nzdkoouoaedbbccraoti.supabase.co and lotlogic-backend-production.up.railway.app 
+     to the network allowlist (Admin settings → Capabilities)
+  b) Run the monitor outside Cowork (e.g., as a cron job on the Railway backend or a local machine)

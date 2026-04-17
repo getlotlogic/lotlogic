@@ -182,15 +182,17 @@ async def process_snapshot(
     plate_confidence: float = None,
     vehicle_color: str = None,
     vehicle_type: str = None,
+    zone_overlap: float = None,
 ):
     """
     Main dedup entry point. Called every ~10-30s when a new snapshot arrives.
 
     Inference pipeline:
     1. Confidence gate → reject noise, compute presence score
-    2. Plate swap detection → auto-depart if a different car replaced the original
-    3. Sliding window departure → weighted presence score, not brittle consecutive streak
-    4. Sliding window confirmation → M of N detections, not strict consecutive
+    2. Zone overlap weighting → stronger signal for vehicles solidly inside zone
+    3. Plate swap detection → auto-depart if a different car replaced the original
+    4. Sliding window departure → weighted presence score, not brittle consecutive streak
+    5. Sliding window confirmation → M of N detections, not strict consecutive
     """
     sb = _get_supabase()
 
@@ -206,7 +208,22 @@ async def process_snapshot(
             zone_id, confidence, MIN_CONFIDENCE,
         )
         has_car = False
-    presence_score = (confidence if confidence is not None else 0.5) if has_car else 0.0
+
+    # ── Presence scoring: weight by both confidence AND zone overlap ──
+    # A car with 80% zone overlap is more definitively "in the zone" than one
+    # barely clearing the 30% IoU threshold. This gives the departure system a
+    # richer signal — high-overlap vehicles need a cleaner absence to depart.
+    if has_car:
+        base_confidence = confidence if confidence is not None else 0.5
+        if zone_overlap is not None and zone_overlap > 0:
+            # Scale presence by overlap: conf * (0.5 + 0.5 * overlap)
+            # e.g., conf=0.9, overlap=0.8 → 0.9 * 0.9 = 0.81 (strong)
+            # e.g., conf=0.9, overlap=0.3 → 0.9 * 0.65 = 0.585 (weaker)
+            presence_score = base_confidence * (0.5 + 0.5 * zone_overlap)
+        else:
+            presence_score = base_confidence
+    else:
+        presence_score = 0.0
 
     # Check for active (non-cleared) violation on this zone
     active_resp = (
@@ -429,6 +446,8 @@ async def process_snapshot(
             insert_data["vehicle_color"] = vehicle_color
         if vehicle_type:
             insert_data["vehicle_type"] = vehicle_type
+        if zone_overlap is not None:
+            insert_data["zone_overlap"] = round(zone_overlap, 4)
 
         try:
             result = sb.table("violations").insert(insert_data).execute()
