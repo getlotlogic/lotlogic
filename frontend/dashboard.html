@@ -4432,9 +4432,22 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
   );
 }
 
-function EarningsPage({ violations, lots, isOwner, user }) {
+function EarningsPage({ violations, lots, isOwner, user, onNavigate }) {
   const [period, setPeriod] = useState('month');
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
+
+  // Invoicable-this-week summary (owner only): resolved tows in the last 7 days
+  // that have not yet been stamped with invoiced_at and produced gross revenue.
+  // This is the hand-off to the Billing tab.
+  const weekCutoff = Date.now() - 7 * 86400000;
+  const invoicableTows = isOwner ? violations.filter(v =>
+    v.action_taken === 'tow'
+    && v.status !== 'pending'
+    && (v.gross_revenue || 0) > 0
+    && !v.invoiced_at
+    && new Date(v.resolved_at || v.detected_at).getTime() >= weekCutoff
+  ) : [];
+  const invoicableGross = invoicableTows.reduce((s, v) => s + (v.gross_revenue || 0), 0);
 
   const periodLabels = { week: 'This Week', month: 'This Month', all: 'All Time' };
 
@@ -4524,6 +4537,38 @@ function EarningsPage({ violations, lots, isOwner, user }) {
           </div>
         )}
       </div>
+
+      {/* Invoicable tows (owner only) — handoff to Billing */}
+      {isOwner && invoicableTows.length > 0 && (
+        <div
+          onClick={() => onNavigate && onNavigate('invoices')}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate && onNavigate('invoices'); } }}
+          style={{
+            background: 'linear-gradient(90deg, rgba(59,130,246,.12), rgba(59,130,246,.04))',
+            border: '1px solid rgba(59,130,246,.35)',
+            borderRadius: 12,
+            padding: 14,
+            marginBottom: 16,
+            cursor: onNavigate ? 'pointer' : 'default',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          <div>
+            <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 2}}>Invoicable this week</div>
+            <div style={{fontSize: 18, fontWeight: 800, color: 'var(--text-primary)'}}>
+              {invoicableTows.length} tow{invoicableTows.length !== 1 ? 's' : ''} · {fmtMoney(invoicableGross)}
+            </div>
+          </div>
+          <div style={{fontSize: 13, color: 'var(--accent)', fontWeight: 700, whiteSpace: 'nowrap'}}>
+            Review &amp; invoice →
+          </div>
+        </div>
+      )}
 
       {/* KPI cards */}
       <div className="kpi-bar" style={{marginBottom:16}}>
@@ -4640,93 +4685,14 @@ function EarningsPage({ violations, lots, isOwner, user }) {
   );
 }
 
-// ── Invoices page (owner only — action log from violations, QuickBooks coming soon) ────
-function InvoicesPage({ user, lots, violations: allViolations, partners: partnersProp }) {
-  const [subTab, setSubTab] = React.useState('log'); // log | quickbooks
-  const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
-
-  function formatDate(d) {
-    if (!d) return '—';
-    return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  }
-  function formatTime(d) {
-    if (!d) return '';
-    return new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  }
-
-  // Build action log from resolved violations (real data from violations table)
-  const actionLogs = (allViolations || [])
-    .filter(v => v.action_taken && v.action_taken !== 'pending' && v.action_taken !== 'plate_correction')
-    .sort((a, b) => new Date(b.resolved_at || b.detected_at) - new Date(a.resolved_at || a.detected_at));
-
-  const totalRevenue = actionLogs.reduce((s, v) => s + (v.gross_revenue || 0), 0);
-
-  // Sub-tab buttons
-  const subTabs = React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
-    [
-      { id: 'log', label: 'Action Log' },
-      { id: 'quickbooks', label: 'QuickBooks' },
-    ].map(t => React.createElement('button', {
-      key: t.id,
-      onClick: () => setSubTab(t.id),
-      style: {
-        padding: '8px 16px', borderRadius: 8, border: '1px solid',
-        borderColor: subTab === t.id ? 'var(--accent)' : 'var(--border)',
-        background: subTab === t.id ? 'rgba(59,130,246,.15)' : 'transparent',
-        color: subTab === t.id ? 'var(--accent)' : 'var(--text-muted)',
-        fontSize: 13, fontWeight: 600, cursor: 'pointer',
-      }
-    }, t.label))
-  );
-
-  // ── Action Log sub-tab (from violations) ──
-  if (subTab === 'log') {
-    return React.createElement('div', { className: 'page-section' },
-      React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Action Log'),
-      React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 } },
-        `${actionLogs.length} actions recorded · ${fmtMoney(totalRevenue)} total revenue`),
-      subTabs,
-      actionLogs.length === 0
-        ? React.createElement('div', { style: { textAlign: 'center', padding: 40, color: 'var(--text-muted)' } },
-            React.createElement('p', { style: { fontSize: 15, marginBottom: 8 } }, 'No actions recorded yet'),
-            React.createElement('p', { style: { fontSize: 13 } }, 'Boot and tow actions will appear here automatically'))
-        : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-            actionLogs.slice(0, 100).map(v => React.createElement('div', {
-              key: v.id,
-              style: {
-                background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 14,
-                borderLeft: `3px solid ${v.action_taken === 'tow' ? '#ef4444' : v.action_taken === 'boot' ? '#fbbf24' : '#6b7280'}`,
-              }
-            },
-              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
-                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                  React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: v.action_taken === 'tow' ? '#ef4444' : v.action_taken === 'boot' ? '#fbbf24' : '#a78bfa', textTransform: 'uppercase' } }, v.action_taken.replace(/_/g, ' ')),
-                  React.createElement('span', { style: { fontSize: 13, color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 600 } }, v.plate_text || 'No plate'),
-                ),
-                v.gross_revenue > 0 && React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: 'var(--green)' } }, fmtMoney(v.gross_revenue)),
-              ),
-              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)' } },
-                React.createElement('span', null, `${lotMap[v.lot_id]?.name || 'Lot'} · ${v.zone_id || ''}`),
-                React.createElement('span', null, `${formatDate(v.resolved_at || v.detected_at)} ${formatTime(v.resolved_at || v.detected_at)}`),
-              ),
-              React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 6, fontSize: 11 } },
-                v.vehicle_color && React.createElement('span', { style: { color: 'var(--text-muted)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, `${v.vehicle_color} ${v.vehicle_type || 'vehicle'}`),
-                React.createElement('span', { style: { color: v.paid ? 'var(--green)' : 'var(--yellow)', background: 'var(--bg-inset)', padding: '2px 6px', borderRadius: 4 } }, v.paid ? 'Paid' : 'Unpaid'),
-              ),
-            ))
-          )
-    );
-  }
-
-  // ── QuickBooks sub-tab (billing: partners + pending invoices) ──
-  if (subTab === 'quickbooks') {
-    return React.createElement(BillingQuickBooksView, { subTabs, partnersProp, lots });
-  }
-
-  return null;
+// ── Billing page (owner only) — partners + QuickBooks invoice lifecycle ────
+// The earnings tab is the canonical job/revenue log; this page is purely the
+// invoicing handoff (drafts, emails, send to QB).
+function InvoicesPage({ lots, partners: partnersProp }) {
+  return React.createElement(BillingQuickBooksView, { partnersProp, lots });
 }
 
-function BillingQuickBooksView({ subTabs, partnersProp, lots }) {
+function BillingQuickBooksView({ partnersProp, lots }) {
   const [partners, setPartners] = React.useState(partnersProp || null);
   const [invoices, setInvoices] = React.useState(null);
   const [err, setErr] = React.useState('');
@@ -4798,7 +4764,6 @@ function BillingQuickBooksView({ subTabs, partnersProp, lots }) {
     React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Billing & QuickBooks'),
     React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 } },
       'Weekly invoices to enforcement partners — review, email a preview, then send via QuickBooks.'),
-    subTabs,
 
     err && React.createElement('div', {
       style: { background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.3)', color: '#ef4444', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12 }
@@ -4863,9 +4828,34 @@ function BillingQuickBooksView({ subTabs, partnersProp, lots }) {
 
     // Pending invoices
     React.createElement('div', null,
-      React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 } }, 'Pending invoices'),
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
+        React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' } }, 'Pending invoices'),
+        React.createElement('button', {
+          onClick: async (e) => {
+            const b = e.currentTarget;
+            b.disabled = true;
+            const orig = b.textContent;
+            b.textContent = 'Generating…';
+            try {
+              const res = await apiFetch('/quickbooks/run-weekly-invoicing', { method: 'POST' });
+              const drafted = (res.results || []).filter(r => r.status === 'drafted').length;
+              const skipped = (res.results || []).filter(r => r.status === 'skipped_exists').length;
+              const noTows = (res.results || []).filter(r => r.status === 'no_tows').length;
+              alert(`Drafted: ${drafted} · Already existed: ${skipped} · No tows this week: ${noTows}`);
+              await refresh();
+            } catch (err) {
+              alert(err.message);
+            } finally {
+              b.disabled = false;
+              b.textContent = orig;
+            }
+          },
+          style: { fontSize: 12, padding: '6px 12px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontWeight: 600 },
+          title: 'Draft this week\'s pending invoices from resolved tows',
+        }, 'Generate invoices now'),
+      ),
       !invoices ? React.createElement('div', { style: { color: 'var(--text-muted)', fontSize: 13 } }, 'Loading…') :
-      invoices.length === 0 ? React.createElement('div', { style: { color: 'var(--text-muted)', fontSize: 13, padding: 12, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12 } }, 'No pending invoices. Weekly cron runs Monday 6am ET.') :
+      invoices.length === 0 ? React.createElement('div', { style: { color: 'var(--text-muted)', fontSize: 13, padding: 12, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12 } }, 'No pending invoices yet. Click Generate invoices now, or wait for the Monday 6am ET cron.') :
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
         invoices.map(pi => {
           const sc = statusColor[pi.status] || { bg: 'transparent', fg: 'var(--text-muted)' };
@@ -5418,7 +5408,7 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
 }
 
 // ── Analytics tab ──────────────────────────────────────────────
-function AnalyticsPage({ lots, violations, isOwner, onNavigate }) {
+function AnalyticsPage({ lots, violations, partners = [], isOwner, onNavigate }) {
   const [hourlyData, setHourlyData] = useState(null);
   const [utilData, setUtilData] = useState(null);
   const [projData, setProjData] = useState(null);
@@ -5515,6 +5505,56 @@ function AnalyticsPage({ lots, violations, isOwner, onNavigate }) {
           </div>
         </div>
       )}
+
+      {/* By Partner — tow count + revenue per partner (owner only) */}
+      {isOwner && (() => {
+        const now = Date.now();
+        const since30 = now - 30 * 86400000;
+        const lotPartner = Object.fromEntries(lots.map(l => [l.id, l.partner_id]));
+        const partnerName = Object.fromEntries(partners.map(p => [p.id, p.company_name]));
+        const agg = {};
+        violations.forEach(v => {
+          if (v.action_taken !== 'tow' || v.status === 'pending') return;
+          const ts = new Date(v.resolved_at || v.detected_at).getTime();
+          if (ts < since30) return;
+          const pid = lotPartner[v.lot_id];
+          if (!pid) return;
+          if (!agg[pid]) agg[pid] = { partner_id: pid, tows: 0, gross: 0, invoicable_tows: 0, invoicable_gross: 0 };
+          agg[pid].tows += 1;
+          agg[pid].gross += (v.gross_revenue || 0);
+          if (!v.invoiced_at && (v.gross_revenue || 0) > 0) {
+            agg[pid].invoicable_tows += 1;
+            agg[pid].invoicable_gross += (v.gross_revenue || 0);
+          }
+        });
+        const rows = Object.values(agg).sort((a, b) => b.gross - a.gross);
+        if (rows.length === 0) return null;
+        return (
+          <div className="analytics-card">
+            <div className="analytics-card-title">By Partner (Last 30 Days)</div>
+            {rows.map(r => (
+              <div key={r.partner_id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'1px solid var(--border)'}}>
+                <div>
+                  <div style={{fontSize:14, fontWeight:600, color:'var(--text-primary)'}}>
+                    {partnerName[r.partner_id] || r.partner_id.slice(0, 8)}
+                  </div>
+                  <div style={{fontSize:12, color:'var(--text-muted)', marginTop:2}}>
+                    {r.tows} tow{r.tows !== 1 ? 's' : ''} · {fmtMoney(r.gross)} gross
+                  </div>
+                </div>
+                {r.invoicable_tows > 0 && (
+                  <button
+                    onClick={() => onNavigate && onNavigate('invoices')}
+                    style={{fontSize:12, padding:'6px 10px', borderRadius:6, border:'1px solid rgba(59,130,246,.4)', background:'rgba(59,130,246,.1)', color:'var(--accent)', cursor:'pointer', fontWeight:600, whiteSpace:'nowrap'}}
+                  >
+                    Invoice {r.invoicable_tows} · {fmtMoney(r.invoicable_gross)}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Peak Violation Hours Heatmap */}
       {hourlyData && (
@@ -6685,9 +6725,9 @@ function App() {
           {tab === 'overview' && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} />}
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
-          {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} />}
-          {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} isOwner={isOwner} onNavigate={setTab} />}
-          {tab === 'invoices' && isOwner && <InvoicesPage user={owner} lots={lots} violations={violations} partners={partners} />}
+          {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
+          {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
+          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
