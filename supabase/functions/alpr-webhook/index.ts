@@ -163,6 +163,22 @@ serve(async (req) => {
       );
     }
 
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const dispatchPromise = fetch(`${supabaseUrl}/functions/v1/tow-dispatch-sms`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceRoleKey}`,
+      },
+      body: JSON.stringify({ violation_id: violation.id }),
+    }).catch((err) => console.error("tow-dispatch-sms invoke failed:", err));
+    // deno-lint-ignore no-explicit-any
+    const edgeRuntime = (globalThis as any).EdgeRuntime;
+    if (edgeRuntime?.waitUntil) {
+      edgeRuntime.waitUntil(dispatchPromise);
+    }
+
     return new Response(
       JSON.stringify({ status: "violation_created", violation_id: violation.id, plate_event_id: plateEvent.id }),
       { status: 201, headers: { ...corsHeaders, "Content-Type": "application/json" } }

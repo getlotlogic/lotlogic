@@ -13,6 +13,30 @@ AI-powered parking enforcement platform. Cameras detect vehicles in zones, creat
 - **Snapshot Puller**: Async camera polling service in `puller/`, deployed as Railway worker
 - **Monitoring**: Python agent system in `monitoring/` with Claude AI analysis (containerized)
 - **Detection Pipeline**: Camera RTSP -> Snapshots (30s poll) -> YOLO + Plate Recognizer -> Zone filtering -> Violation creation
+- **ALPR Parking Pass Pipeline**: Client posts image to `alpr-snapshot` edge fn -> PlateRecognizer Snapshot API -> `alpr-webhook` -> `plate_events` -> match against `resident_plates`/`visitor_passes` -> `alpr_violations`
+
+## PlateRecognizer Integration (added Apr 2026)
+
+OCR for the ALPR parking pass system. Cameras/clients send images; we call PlateRecognizer Snapshot API and feed detections into the pass/violation flow.
+
+### Flow
+1. Client (camera device, device gateway, or frontend upload) POSTs to `/functions/v1/alpr-snapshot` with `{api_key, image_url | image_base64, event_type?, mmc?}`. `api_key` identifies the `alpr_cameras` row.
+2. Edge fn calls `https://api.platerecognizer.com/v1/plate-reader/` with the image, `regions` (env default `us`), and optional `mmc` for vehicle make/model/color.
+3. For each result with `score >= PLATE_RECOGNIZER_MIN_SCORE` (default 0.7), the fn POSTs internally to `alpr-webhook` with the plate text, confidence, and a `raw_data` envelope containing the PlateRecognizer box/region/vehicle.
+4. `alpr-webhook` dedups (5-min window per plate+property), matches against resident/visitor lists, and creates `alpr_violations` when unmatched.
+
+### Env vars (on the Supabase Edge Functions runtime)
+- `PLATE_RECOGNIZER_TOKEN` — API token from platerecognizer.com dashboard. REQUIRED.
+- `PLATE_RECOGNIZER_MIN_SCORE` — float, default `0.8`. Plates below this score are dropped. Chosen to avoid misreads silently towing residents whose plate was OCR'd one character off.
+- `PLATE_RECOGNIZER_REGIONS` — comma-separated region codes, default `us-ga`. Passed to PlateRecognizer to bias OCR.
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — already set for other functions; `alpr-snapshot` reuses them to call `alpr-webhook`.
+
+### Deploy
+```
+supabase functions deploy alpr-snapshot
+supabase secrets set PLATE_RECOGNIZER_TOKEN=...
+```
+Or via the Supabase MCP: `deploy_edge_function` with the `alpr-snapshot` source.
 
 ## Repository Structure
 ```
