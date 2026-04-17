@@ -1694,16 +1694,18 @@ const supabase = window.supabase ? window.supabase.createClient(SUPABASE_URL, SU
 
 // When a session token is present, forward it to Supabase so RLS policies
 // see the authenticated account (owner_id / partner_id custom claims).
-// Without this, Supabase reads run as the anon role and RLS blocks them.
+// setSession() is unusable here: it calls /auth/v1/user to validate the
+// token, which 403s because our backend signs JWTs outside of Supabase
+// Auth. A silent validation failure drops the session, so every request
+// falls back to the anon key — writes then 401 under RLS. Patch the
+// Authorization header directly instead, and also refresh the realtime
+// socket's auth.
 function applySupabaseAuth(token) {
   if (!supabase || !token) return;
-  try {
-    supabase.auth.setSession({ access_token: token, refresh_token: token });
-  } catch {
-    try {
-      supabase.realtime.setAuth(token);
-    } catch {}
-  }
+  const bearer = 'Bearer ' + token;
+  try { if (supabase.rest?.headers) supabase.rest.headers['Authorization'] = bearer; } catch {}
+  try { if (supabase.storage?.headers) supabase.storage.headers['Authorization'] = bearer; } catch {}
+  try { supabase.realtime?.setAuth?.(token); } catch {}
 }
 
 // Apply on initial load so a refresh keeps Supabase authenticated.
