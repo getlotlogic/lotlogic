@@ -1,0 +1,28 @@
+name: ALPR overstay tick
+
+on:
+  schedule:
+    # Every 5 minutes — GitHub Actions' minimum granularity. An overstay
+    # violation may lag by up to ~5 min on the "nice" side of this, which
+    # is well below the window that matters for enforcement action.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  overstay-tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect overstays + dispatch driver SMS
+        env:
+          BACKEND_URL: https://lotlogic-backend-production.up.railway.app
+          # Required secret — mirror Railway's API_KEY env var (lotlogic-backend).
+          LOTLOGIC_BACKEND_API_KEY: ${{ secrets.LOTLOGIC_BACKEND_API_KEY }}
+        run: |
+          set -euo pipefail
+          resp=$(curl -fsSL -X POST \
+            "${BACKEND_URL}/alpr/cron/overstay-tick" \
+            -H "X-API-Key: ${LOTLOGIC_BACKEND_API_KEY}" \
+            -H "Content-Type: application/json" \
+            --data '{}' \
+            --max-time 60)
+          echo "$resp"
