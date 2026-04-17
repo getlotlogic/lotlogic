@@ -134,9 +134,15 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 - Revenue stored in dollars in DB, displayed as cents in frontend (multiplied by 100)
 
 ## Security Notes
-- RLS policies are currently PERMISSIVE (public read/write) - needs auth implementation
-- Supabase anon key is exposed in frontend JS - this is expected for Supabase but RLS must be tightened
-- Backend API should enforce authorization on every request
+- Property access control rolled out (Apr 2026): owners/partners authenticate with email + password against the backend `/auth/login`, which returns a JWT signed with `JWT_SECRET` (set to the Supabase JWT secret). The frontend forwards the token to both the backend and Supabase, so RLS and API routes enforce the same account → property mapping.
+- Shared X-API-Key remains for service-to-service callers (puller, monitoring, leadgen). It is no longer shipped in the dashboard bundle.
+- RLS policies live in `lotlogic-backend/migrations/20260417025411_rls_property_scope.sql` (SELECT-only, keyed on JWT claims `owner_id` / `partner_id`).
+
+## Testing
+- Playwright harness in `tests/` — access-control E2E, dashboard smoke, a11y sweep.
+- `cd tests && npm ci && npx playwright install --with-deps chromium && npm test`.
+- GitHub Actions workflow `.github/workflows/playwright.yml` runs the suite on every push / PR against the Vercel preview or live beta.
+- Seed test accounts via `ADMIN_API_KEY=… npm run seed` (requires backend `ADMIN_API_KEY` env var to be set — leave it empty in production).
 
 ## Build & Deploy
 

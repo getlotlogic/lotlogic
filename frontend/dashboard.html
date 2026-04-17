@@ -1692,15 +1692,53 @@ const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
 const supabase = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
+// When a session token is present, forward it to Supabase so RLS policies
+// see the authenticated account (owner_id / partner_id custom claims).
+// Without this, Supabase reads run as the anon role and RLS blocks them.
+function applySupabaseAuth(token) {
+  if (!supabase || !token) return;
+  try {
+    supabase.auth.setSession({ access_token: token, refresh_token: token });
+  } catch {
+    try {
+      supabase.realtime.setAuth(token);
+    } catch {}
+  }
+}
+
+// Apply on initial load so a refresh keeps Supabase authenticated.
+try {
+  const existing = JSON.parse(localStorage.getItem('lotlogic_session') || 'null');
+  if (existing?._token) applySupabaseAuth(existing._token);
+} catch {}
+
 // ── Rails API fallback ───────────────────────────────────────
 const API = 'https://lotlogic-backend-production.up.railway.app';
-const API_KEY = 'UJn9mwti15jbhgRUnhw6-VOk3TAt1VJAK3VNCIdAHa8';
+
+// The backend scopes every response to the account whose JWT is presented.
+// We stopped shipping the shared service key from the browser as part of the
+// property-access-control rollout — clients must now be authenticated as a user.
+function getSessionToken() {
+  try {
+    const raw = localStorage.getItem('lotlogic_session');
+    if (!raw) return null;
+    return JSON.parse(raw)?._token ?? null;
+  } catch {
+    return null;
+  }
+}
 
 async function apiFetch(path, options = {}) {
-  const r = await fetch(API + path, {
-    ...options,
-    headers: { 'X-API-Key': API_KEY, ...(options.headers || {}) }
-  });
+  const token = getSessionToken();
+  const headers = { ...(options.headers || {}) };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const r = await fetch(API + path, { ...options, headers });
+  if (r.status === 401) {
+    // Session expired or invalid — clear and force re-login.
+    try { localStorage.removeItem('lotlogic_session'); } catch {}
+    window.dispatchEvent(new CustomEvent('lotlogic:auth-expired'));
+  }
   if (!r.ok) {
     let msg = `Server error (${r.status})`;
     try {
@@ -1713,6 +1751,32 @@ async function apiFetch(path, options = {}) {
     throw err;
   }
   return r.json();
+}
+
+async function authLogin(email, password) {
+  const r = await fetch(API + '/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  let body = null;
+  try { body = await r.json(); } catch {}
+  if (!r.ok) {
+    const err = new Error(body?.detail || `Sign-in failed (${r.status})`);
+    err.status = r.status;
+    throw err;
+  }
+  return body;
+}
+
+async function authRequestPasswordReset(email) {
+  const r = await fetch(API + '/auth/request-password', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  // We always return ok to the caller — endpoint is intentionally non-revealing.
+  try { return await r.json(); } catch { return { ok: true }; }
 }
 
 // ── Normalize Supabase violation to app format ───────────────
@@ -3496,52 +3560,48 @@ function ViolationSnapshot({ src, detections, matchedDetection, style, onClick, 
 // ── Login ─────────────────────────────────────────────────────
 function LoginPage({ onLogin }) {
   const [email, setEmail] = useState(() => localStorage.getItem('lotlogic_email') || '');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [resetSent, setResetSent] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
-    if (!email.trim()) return;
-    setLoading(true); setError('');
+    const trimmed = email.trim();
+    if (!trimmed || !password) return;
+    setLoading(true); setError(''); setResetSent(false);
     try {
-      const needle = email.trim().toLowerCase();
-      // Check lot owners first, then enforcement partners
-      const [owners, partners] = await Promise.all([
-        db.getOwners(needle).catch(() => []),
-        db.getPartners(needle).catch(() => []),
-      ]);
-      // Find matching accounts — if duplicates exist, check which has lots assigned
-      const ownerMatches = owners.filter(o => o.email?.toLowerCase() === needle);
-      if (ownerMatches.length > 0) {
-        // Find which owner (if any) actually has lots assigned
-        const lotsChecks = await Promise.all(ownerMatches.map(o =>
-          db.getLots({ owner_id: o.id }).then(l => l.length).catch(() => 0)
-        ));
-        const withLotsIdx = ownerMatches.findIndex((_, i) => lotsChecks[i] > 0);
-        if (withLotsIdx >= 0) {
-          const ownerMatch = ownerMatches[withLotsIdx];
-          localStorage.setItem('lotlogic_email', email.trim());
-          onLogin({ ...ownerMatch, _role: 'owner', business_name: ownerMatch.business_name || ownerMatch.contact_name }); return;
-        }
-        // Owner exists but has no lots — fall through to check enforcement partners
-      }
-      const partnerMatches = partners.filter(p => p.email?.toLowerCase() === needle);
-      if (partnerMatches.length > 0) {
-        let partnerMatch = partnerMatches[partnerMatches.length - 1]; // default to last
-        if (partnerMatches.length > 1) {
-          const lotsChecks = await Promise.all(partnerMatches.map(p =>
-            db.getLots({ partner_id: p.id }).then(l => l.length).catch(() => 0)
-          ));
-          const withLots = partnerMatches.findIndex((_, i) => lotsChecks[i] > 0);
-          if (withLots >= 0) partnerMatch = partnerMatches[withLots];
-        }
-        localStorage.setItem('lotlogic_email', email.trim());
-        onLogin({ ...partnerMatch, _role: 'partner', business_name: partnerMatch.company_name }); return;
-      }
-      setError("No account found for that email. Contact your LotLogic rep if you think this is wrong.");
-    } catch {
-      setError("Can't connect right now. Check your connection and try again.");
+      const res = await authLogin(trimmed, password);
+      localStorage.setItem('lotlogic_email', trimmed);
+      const base = res.subject || {};
+      const role = base.type === 'partner' ? 'partner' : 'owner';
+      onLogin({
+        id: base.id,
+        email: base.email || trimmed,
+        business_name: base.display_name,
+        company_name: role === 'partner' ? base.display_name : undefined,
+        _role: role,
+        _token: res.token,
+        _expires_in: res.expires_in,
+      });
+    } catch (err) {
+      if (err.status === 401) setError('Invalid email or password.');
+      else if (err.status === 403) setError(err.message || 'Password not set. Use "Email me a setup link" below.');
+      else setError(err.message || "Can't connect right now. Check your connection and try again.");
     } finally { setLoading(false); }
+  }
+
+  async function sendResetLink() {
+    const trimmed = email.trim();
+    if (!trimmed) { setError('Enter your email first.'); return; }
+    setError('');
+    try {
+      await authRequestPasswordReset(trimmed);
+      setResetSent(true);
+    } catch {
+      // Endpoint is intentionally non-revealing — show the same success message.
+      setResetSent(true);
+    }
   }
 
   return (
@@ -3565,13 +3625,38 @@ function LoginPage({ onLogin }) {
             autoCorrect="off"
             required
             autoFocus
+            autoComplete="username"
             aria-required="true"
           />
-          <button className="login-btn" type="submit" disabled={loading} aria-busy={loading}>
+          <label className="field-label" htmlFor="login-password" style={{marginTop:12}}>Password</label>
+          <input
+            id="login-password"
+            className="field-input"
+            type="password"
+            placeholder="••••••••"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+            autoComplete="current-password"
+            aria-required="true"
+          />
+          <button className="login-btn" type="submit" disabled={loading || !email || !password} aria-busy={loading}>
             {loading ? 'Signing in…' : 'Sign In →'}
           </button>
         </form>
         {error && <div className="login-error" role="alert">{error}</div>}
+        {resetSent && (
+          <div className="login-note" role="status" style={{marginTop:12,fontSize:13,color:'var(--text-muted)'}}>
+            If an account exists for that email, we've sent a setup link. Check your inbox.
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={sendResetLink}
+          style={{background:'none',border:0,color:'var(--text-muted)',fontSize:13,marginTop:12,cursor:'pointer',textDecoration:'underline'}}
+        >
+          Forgot password? Email me a setup link.
+        </button>
       </div>
     </div>
   );
@@ -5820,7 +5905,11 @@ function App() {
       const s = localStorage.getItem('lotlogic_session');
       if (!s) return null;
       const parsed = JSON.parse(s);
-      // Session expires after 7 days
+      // Session expires after 7 days locally, or sooner if the JWT is missing.
+      if (!parsed._token) {
+        localStorage.removeItem('lotlogic_session');
+        return null;
+      }
       if (parsed._ts && Date.now() - parsed._ts > 7 * 86400000) {
         localStorage.removeItem('lotlogic_session');
         return null;
@@ -5828,6 +5917,14 @@ function App() {
       return parsed;
     } catch { return null; }
   });
+
+  useEffect(() => {
+    function onAuthExpired() {
+      setOwner(null);
+    }
+    window.addEventListener('lotlogic:auth-expired', onAuthExpired);
+    return () => window.removeEventListener('lotlogic:auth-expired', onAuthExpired);
+  }, []);
   // Parse deep link from SMS: /violations/{id} → open jobs tab and highlight
   const [deepLinkViolationId] = useState(() => {
     const path = window.location.pathname || '';
@@ -5928,6 +6025,7 @@ function App() {
     const session = { ...o, _ts: Date.now() };
     setOwner(session);
     try { localStorage.setItem('lotlogic_session', JSON.stringify(session)); } catch {}
+    applySupabaseAuth(session._token);
     loadData(session);
   }
 
