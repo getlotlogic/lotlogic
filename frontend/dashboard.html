@@ -2928,6 +2928,28 @@ function mapsLink(address) {
   return `https://maps.google.com/?q=${encodeURIComponent(address)}`;
 }
 
+// Vehicle color helpers — YOLO/Plate Recognizer return lowercased names.
+// Anything missing / "unknown" is treated as no color so UI can show a neutral tag.
+const VEHICLE_COLOR_HEX = {
+  black: '#111827', white: '#f9fafb', silver: '#9ca3af', gray: '#6b7280', grey: '#6b7280',
+  red: '#ef4444', blue: '#3b82f6', green: '#22c55e', yellow: '#eab308', orange: '#f97316',
+  brown: '#78350f', beige: '#d6c9a3', gold: '#d4af37', tan: '#d2b48c', purple: '#a855f7',
+};
+function displayColor(c) {
+  if (!c) return '';
+  const v = String(c).trim().toLowerCase();
+  if (!v || v === 'unknown' || v === 'none') return '';
+  return v;
+}
+function colorHex(c) {
+  const v = displayColor(c);
+  return VEHICLE_COLOR_HEX[v] || '#6b7280';
+}
+function isLowConfColor(c) {
+  const v = displayColor(c);
+  return !v;
+}
+
 // ── Toast system ──────────────────────────────────────────────
 const ToastContext = React.createContext({ addToast: () => {} });
 
