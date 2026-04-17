@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Resident Registration</title>
+  <title>Permanent Pass Request</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -215,7 +215,7 @@
 
     async function init() {
       if (!qrCodeId) {
-        showNotFound('Invalid Link', 'This resident registration link is not valid.');
+        showNotFound('Invalid Link', 'This permanent pass link is not valid.');
         return;
       }
       try {
@@ -271,21 +271,30 @@
           <h1>Lot<span>Logic</span></h1>
         </div>
         <div class="property-name">
-          Resident Vehicle Registration
+          Permanent Pass Request at
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="regForm">
           <label for="holderName">Full Name <span class="required">*</span></label>
           <input type="text" id="holderName" placeholder="John Doe" required>
 
-          <label for="plate">License Plate <span class="required">*</span></label>
-          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
-
           <label for="phone">Phone Number <span class="required">*</span></label>
           <input type="tel" id="phone" placeholder="(555) 123-4567" required>
 
-          <button type="submit" class="submit-btn" id="submitBtn">Register Vehicle</button>
-          <div class="hint">Registration requires leasing office approval</div>
+          <label for="plate">License Plate <span class="required">*</span></label>
+          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
+
+          <label for="vehicleType">Vehicle Type <span class="required">*</span></label>
+          <select id="vehicleType" required>
+            <option value="" disabled selected>Select vehicle type</option>
+            <option value="car">Car</option>
+            <option value="pickup">Pickup</option>
+            <option value="semi">Semi / Truck</option>
+            <option value="other">Other</option>
+          </select>
+
+          <button type="submit" class="submit-btn" id="submitBtn">Request Permanent Pass</button>
+          <div class="hint">Pending owner approval</div>
           <div id="errorMsg"></div>
         </form>
       `;
@@ -308,6 +317,7 @@
         const holderName = document.getElementById('holderName').value.trim();
         const plateRaw = document.getElementById('plate').value.trim();
         const plateText = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const vehicleType = document.getElementById('vehicleType').value;
         const phone = document.getElementById('phone').value.trim();
 
         if (!plateText || plateText.length < 2) {
@@ -323,6 +333,7 @@
               plate_text: plateText,
               holder_name: holderName,
               vehicle_description: '',
+              vehicle_type: vehicleType || null,
               active: true,
               phone: phone,
               status: 'pending',
@@ -330,7 +341,7 @@
           });
         } catch (error) {
           if (error.code === '23505') {
-            throw new Error('This license plate is already registered at this property.');
+            throw new Error('This license plate is already registered at this lot.');
           }
           throw new Error('Failed to register. ' + (error.message || 'Please try again.'));
         }
@@ -339,7 +350,7 @@
       } catch (err) {
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
         btn.disabled = false;
-        btn.textContent = 'Register Vehicle';
+        btn.textContent = 'Request Permanent Pass';
         submitting = false;
       }
     }
@@ -352,11 +363,11 @@
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
           </div>
-          <h2>Registration Submitted!</h2>
-          <p>Your vehicle has been registered at <strong>${escapeHtml(property.name)}</strong>.</p>
+          <h2>Request Submitted</h2>
+          <p>Your permanent pass request for <strong>${escapeHtml(property.name)}</strong> has been submitted.</p>
           <div class="success-plate">${escapeHtml(plate)}</div>
-          <div class="pending-badge">Pending Leasing Office Approval</div>
-          <div class="success-detail">You will be notified once your registration is approved.</div>
+          <div class="pending-badge">Pending Owner Approval</div>
+          <div class="success-detail">You'll be notified once your pass is approved.</div>
         </div>
       `;
     }

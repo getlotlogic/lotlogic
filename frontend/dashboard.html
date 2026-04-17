@@ -792,6 +792,27 @@
     .pd-empty {
       text-align: center; padding: 16px; color: var(--text-faint); font-size: 12px;
     }
+    .pd-qr-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;
+    }
+    @media (max-width: 520px) { .pd-qr-grid { grid-template-columns: 1fr; } }
+    .pd-qr-tile {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px; display: flex; flex-direction: column;
+      align-items: center; gap: 10px; text-align: center;
+    }
+    .pd-qr-head {
+      display: flex; align-items: baseline; gap: 8px; width: 100%; justify-content: space-between;
+    }
+    .pd-qr-sub { font-size: 10px; color: var(--text-faint); letter-spacing: .04em; }
+    .pd-qr-canvas-wrap {
+      background: #fff; padding: 8px; border-radius: 8px; line-height: 0;
+    }
+    .pd-qr-canvas-wrap canvas { display: block; width: 160px; height: 160px; }
+    .pd-qr-url {
+      font-family: monospace; font-size: 11px; color: var(--text-muted);
+      word-break: break-all; max-width: 100%;
+    }
 
     /* ── Analytics ── */
     .analytics-card {
@@ -2202,49 +2223,6 @@ const db = {
     }
     throw new Error('Supabase not available');
   },
-  // ── Parking registrations (QR self-registration) ──────────
-  async getParkingRegistrations(lotId) {
-    if (supabase) {
-      const { data, error } = await supabase
-        .from('parking_registrations')
-        .select('id, plate_number, vehicle_type, registered_at, expires_at, cooldown_until, status')
-        .eq('lot_id', lotId)
-        .order('registered_at', { ascending: false });
-      if (!error && data) return data;
-    }
-    return [];
-  },
-  async getParkingRegistrationsByOwner(ownerId) {
-    if (!supabase || !ownerId) return [];
-    const { data: lots, error: lotErr } = await supabase
-      .from('lots')
-      .select('id, name')
-      .eq('owner_id', ownerId)
-      .eq('active', true);
-    if (lotErr || !lots || lots.length === 0) return [];
-    const lotMap = Object.fromEntries(lots.map(l => [l.id, l.name]));
-    const { data, error } = await supabase
-      .from('parking_registrations')
-      .select('id, lot_id, plate_number, vehicle_type, registered_at, expires_at, cooldown_until, status')
-      .in('lot_id', lots.map(l => l.id))
-      .order('registered_at', { ascending: false });
-    if (error || !data) return [];
-    return data.map(r => ({ ...r, lot_name: lotMap[r.lot_id] || null }));
-  },
-  async getActiveParkingRegistrationsForLots(lotIds) {
-    if (!supabase || !lotIds || lotIds.length === 0) return [];
-    const nowIso = new Date().toISOString();
-    const { data, error } = await supabase
-      .from('parking_registrations')
-      .select('id, lot_id, plate_number, vehicle_type, expires_at, cooldown_until, status')
-      .in('lot_id', lotIds)
-      .eq('status', 'active')
-      .gt('expires_at', nowIso)
-      .order('expires_at', { ascending: true });
-    if (error || !data) return [];
-    return data;
-  },
-
   async deleteViolation(violId) {
     if (supabase) {
       // Fetch camera_id + zone_id before deleting so we can reset occupancy
@@ -2470,6 +2448,14 @@ const db = {
   async removeResidentPlate(id) {
     if (supabase) {
       const { error } = await supabase.from('resident_plates').update({ active: false }).eq('id', id);
+      if (error) throw new Error(error.message);
+      return { success: true };
+    }
+    return { success: true };
+  },
+  async approveResidentPlate(id) {
+    if (supabase) {
+      const { error } = await supabase.from('resident_plates').update({ status: 'approved' }).eq('id', id);
       if (error) throw new Error(error.message);
       return { success: true };
     }
@@ -5351,9 +5337,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const [newCam, setNewCam] = useState({ name: '', location_description: '' });
   const [newApiKey, setNewApiKey] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [parkingRegs, setParkingRegs] = useState([]);
   const [visitorPasses, setVisitorPasses] = useState([]);
   const nowTick = useNowTick();
+  const tempQrRef = useRef(null);
+  const permQrRef = useRef(null);
 
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
@@ -5370,56 +5357,20 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     setCameras(cam);
     setEvents(ev);
     setVisitorPasses(vp);
-    if (prop?.owner_id) {
-      const regs = await db.getParkingRegistrationsByOwner(prop.owner_id);
-      setParkingRegs(regs);
-    }
     setLoading(false);
   }, [propertyId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Refresh parking registrations — keep the Passes tab fresh with no reload
-  const refreshParkingRegs = useCallback(async () => {
-    if (!property?.owner_id) return;
-    const regs = await db.getParkingRegistrationsByOwner(property.owner_id);
-    setParkingRegs(regs);
-  }, [property?.owner_id]);
-
-  // Poll every 20s as a safety net if realtime misses an event
+  // Render the Temporary + Permanent QR codes once we know the property
   useEffect(() => {
-    if (!property?.owner_id) return;
-    const id = setInterval(refreshParkingRegs, 20000);
-    return () => clearInterval(id);
-  }, [refreshParkingRegs, property?.owner_id]);
+    if (!property?.qr_code_id || typeof QRCode === 'undefined') return;
+    const opts = { width: 320, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#0f172a', light: '#ffffff' } };
+    if (tempQrRef.current) QRCode.toCanvas(tempQrRef.current, `${window.location.origin}/temp/${property.qr_code_id}`, opts, err => { if (err) console.error('temp qr:', err); });
+    if (permQrRef.current) QRCode.toCanvas(permQrRef.current, `${window.location.origin}/perm/${property.qr_code_id}`, opts, err => { if (err) console.error('perm qr:', err); });
+  }, [property?.qr_code_id]);
 
-  // Supabase realtime: instant updates the moment a driver scans the QR.
-  // Can't filter server-side by owner (no owner_id column on parking_registrations),
-  // so filter client-side: we know which lot_ids belong to our owner from the last fetch.
-  const ownedLotIds = useMemo(() => new Set(parkingRegs.map(r => r.lot_id)), [parkingRegs]);
-  useEffect(() => {
-    if (!supabase || !property?.owner_id) return;
-    const debouncedRefresh = makeDebounced(refreshParkingRegs, 300);
-    const channel = supabase.channel('parking-regs-' + propertyId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_registrations' }, payload => {
-        // Only refetch when an event is for a lot we already know about.
-        // First-ever registration at a new lot still comes in via the 20s poll.
-        const lotId = payload?.new?.lot_id || payload?.old?.lot_id;
-        if (lotId && ownedLotIds.size > 0 && !ownedLotIds.has(lotId)) return;
-        debouncedRefresh();
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [propertyId, property?.owner_id, refreshParkingRegs, ownedLotIds]);
-
-  // Refetch on tab visibility restore
-  useEffect(() => {
-    const onVis = () => { if (document.visibilityState === 'visible') refreshParkingRegs(); };
-    document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
-  }, [refreshParkingRegs]);
-
-  // ── Resident plates (new /register submissions land here) ──
+  // ── Permanent plates (new /perm submissions land here) ──
   // Same live pattern as parking regs and plate events so the admin doesn't
   // have to reload after a resident submits the form.
   const refreshPlates = useCallback(async () => {
@@ -5525,7 +5476,6 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   }, [refreshEvents]);
 
   const cameraById = useMemo(() => Object.fromEntries((cameras || []).map(c => [c.id, c])), [cameras]);
-  const activeRegs = parkingRegs.filter(r => r.status === 'active' && new Date(r.expires_at).getTime() > nowTick);
 
   async function handleAddPlate(e) {
     e.preventDefault();
@@ -5545,6 +5495,16 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     setPlates(plates.filter(p => p.id !== id));
   }
 
+  async function handleApprovePlate(id) {
+    try {
+      await db.approveResidentPlate(id);
+      setPlates(prev => prev.map(p => p.id === id ? { ...p, status: 'approved' } : p));
+      addToast('Plate approved', 'success');
+    } catch (err) {
+      addToast('Failed to approve. ' + (err.message || ''), 'error');
+    }
+  }
+
   async function handleAddCamera(e) {
     e.preventDefault();
     setSaving(true);
@@ -5561,9 +5521,8 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading...</div></div>;
   if (!property) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Lot not found</div></div>;
 
-  const visitUrl = `${window.location.origin}/visit/${property.qr_code_id}`;
-  const registerUrl = `${window.location.origin}/register/${property.qr_code_id}`;
-  const leasingUrl = `${window.location.origin}/leasing/${property.qr_code_id}`;
+  const tempUrl = `${window.location.origin}/temp/${property.qr_code_id}`;
+  const permUrl = `${window.location.origin}/perm/${property.qr_code_id}`;
 
   return (
     <div className="page-enter">
@@ -5574,40 +5533,47 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         <div style={{fontSize:13,color:'var(--text-muted)',marginTop:2}}>{property.address || 'No address'}</div>
       </div>
 
-      {/* Share links (visitor / resident / leasing) */}
-      <div className="pd-share-card">
-        <div className="pd-share-row">
-          <span className="pd-share-label" style={{color:'#3b82f6'}}>Visitors</span>
-          <div className="pd-share-url">{visitUrl}</div>
-          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(visitUrl); addToast('Visitor link copied', 'success'); }}>Copy</button>
+      {/* Two QR codes — one for Temporary, one for Permanent */}
+      <div className="pd-qr-grid">
+        <div className="pd-qr-tile">
+          <div className="pd-qr-head">
+            <span className="pd-share-label" style={{color:'#3b82f6'}}>Temporary</span>
+            <span className="pd-qr-sub">up to 48 hrs</span>
+          </div>
+          <div className="pd-qr-canvas-wrap"><canvas ref={tempQrRef} /></div>
+          <div className="pd-qr-url">{tempUrl}</div>
+          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast('Temporary link copied', 'success'); }}>Copy link</button>
         </div>
-        <div className="pd-share-row">
-          <span className="pd-share-label" style={{color:'#4ade80'}}>Residents</span>
-          <div className="pd-share-url">{registerUrl}</div>
-          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(registerUrl); addToast('Resident link copied', 'success'); }}>Copy</button>
-        </div>
-        <div className="pd-share-row">
-          <span className="pd-share-label" style={{color:'#fbbf24'}}>Leasing</span>
-          <div className="pd-share-url">{leasingUrl}</div>
-          <button className="pd-share-btn" onClick={() => { window.open(leasingUrl, '_blank'); }}>Open</button>
-          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(leasingUrl); addToast('Leasing link copied', 'success'); }}>Copy</button>
+        <div className="pd-qr-tile">
+          <div className="pd-qr-head">
+            <span className="pd-share-label" style={{color:'#4ade80'}}>Permanent</span>
+            <span className="pd-qr-sub">owner-approved</span>
+          </div>
+          <div className="pd-qr-canvas-wrap"><canvas ref={permQrRef} /></div>
+          <div className="pd-qr-url">{permUrl}</div>
+          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(permUrl); addToast('Permanent link copied', 'success'); }}>Copy link</button>
         </div>
       </div>
 
-      {/* Resident Plates */}
-      <div className="pd-section-head">
-        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-          <span className="pd-section-title">Resident Plates</span>
-          <span className="pd-section-count">{plates.length}</span>
-        </div>
-        <button onClick={() => setShowAddPlate(!showAddPlate)} className="pd-share-btn" style={{color:'#4ade80'}}>{showAddPlate ? 'Cancel' : '+ Add'}</button>
-      </div>
+      {/* Permanent Plates */}
+      {(() => {
+        const pendingCount = plates.filter(p => p.status === 'pending').length;
+        return (
+          <div className="pd-section-head">
+            <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+              <span className="pd-section-title">Permanent Plates</span>
+              <span className="pd-section-count">{plates.length}</span>
+              {pendingCount > 0 && <span style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',padding:'2px 7px',borderRadius:20,background:'rgba(251,191,36,.12)',color:'#fbbf24',border:'1px solid rgba(251,191,36,.25)'}}>{pendingCount} PENDING</span>}
+            </div>
+            <button onClick={() => setShowAddPlate(!showAddPlate)} className="pd-share-btn" style={{color:'#4ade80'}}>{showAddPlate ? 'Cancel' : '+ Add'}</button>
+          </div>
+        );
+      })()}
 
       {showAddPlate && (
         <form onSubmit={handleAddPlate} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:12,display:'flex',flexDirection:'column',gap:8}}>
           <input value={newPlate.plate_text} onChange={e => setNewPlate({...newPlate, plate_text: e.target.value})} placeholder="Plate (e.g. ABC1234)" required style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14,textTransform:'uppercase'}} />
-          <input value={newPlate.unit_number} onChange={e => setNewPlate({...newPlate, unit_number: e.target.value})} placeholder="Unit number" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
-          <input value={newPlate.holder_name} onChange={e => setNewPlate({...newPlate, holder_name: e.target.value})} placeholder="Resident name" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
+          <input value={newPlate.holder_name} onChange={e => setNewPlate({...newPlate, holder_name: e.target.value})} placeholder="Holder name" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
           <input value={newPlate.vehicle_description} onChange={e => setNewPlate({...newPlate, vehicle_description: e.target.value})} placeholder="Vehicle (e.g. Blue Honda Civic)" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
           <button type="submit" disabled={saving} style={{background:'var(--accent)',color:'#fff',border:'none',borderRadius:6,padding:'8px',fontSize:13,fontWeight:700,cursor:'pointer'}}>{saving ? 'Saving...' : 'Add Plate'}</button>
         </form>
@@ -5615,63 +5581,24 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
 
       <div style={{display:'flex',flexDirection:'column',gap:6}}>
         {plates.map(p => (
-          <div key={p.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div>
-              <span style={{fontWeight:800,fontSize:15,color:'var(--text-primary)',letterSpacing:'.03em'}}>{p.plate_text}</span>
-              {p.status === 'pending' && <span style={{fontSize:10,fontWeight:600,color:'#fbbf24',background:'rgba(251,191,36,.12)',padding:'2px 6px',borderRadius:4,marginLeft:6}}>PENDING</span>}
-              <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>{p.unit_number ? `Unit ${p.unit_number}` : ''} {p.holder_name || ''}</span>
+          <div key={p.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+            <div style={{minWidth:0,flex:1}}>
+              <span style={{fontWeight:800,fontSize:15,color:'var(--text-primary)',letterSpacing:'.03em',fontFamily:"'Courier New',monospace"}}>{p.plate_text}</span>
+              {p.status === 'pending' && <span style={{fontSize:10,fontWeight:700,color:'#fbbf24',background:'rgba(251,191,36,.12)',padding:'2px 6px',borderRadius:4,marginLeft:6,border:'1px solid rgba(251,191,36,.25)'}}>PENDING</span>}
+              <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>{p.holder_name || ''}{p.vehicle_type ? ` · ${p.vehicle_type}` : ''}{p.phone ? ` · ${p.phone}` : ''}</span>
             </div>
-            <button onClick={() => handleRemovePlate(p.id)} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>Remove</button>
+            <div style={{display:'flex',gap:6,flexShrink:0}}>
+              {p.status === 'pending' && (
+                <button onClick={() => handleApprovePlate(p.id)} style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Approve</button>
+              )}
+              <button onClick={() => handleRemovePlate(p.id)} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>Remove</button>
+            </div>
           </div>
         ))}
-        {plates.length === 0 && <div className="pd-empty">No resident plates registered</div>}
+        {plates.length === 0 && <div className="pd-empty">No permanent plates yet</div>}
       </div>
 
-      {/* Parking Registrations (QR self-registrations) */}
-      <div className="pd-section-head">
-        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-          <span className="pd-section-title">Parking Registrations</span>
-          <span className="pd-section-count">{activeRegs.length}</span>
-        </div>
-        <div className="pd-section-meta">
-          <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
-          Live · via QR
-        </div>
-      </div>
-      <div style={{display:'flex',flexDirection:'column',gap:6}}>
-        {activeRegs.length === 0 ? (
-          <div className="pd-empty">No active registrations</div>
-        ) : activeRegs.map(r => {
-          const remainMs = new Date(r.expires_at).getTime() - nowTick;
-          const urgent = remainMs < 60 * 60 * 1000; // < 1h
-          return (
-            <div key={r.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
-              <div style={{minWidth:0,flex:1}}>
-                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                  <span style={{fontWeight:800,fontSize:15,color:'var(--text-primary)',letterSpacing:'.03em',fontFamily:"'Courier New',monospace"}}>{r.plate_number}</span>
-                  {r.vehicle_type && <span style={{fontSize:11,color:'var(--text-muted)',background:'var(--bg-inset)',padding:'2px 7px',borderRadius:4,textTransform:'capitalize'}}>{r.vehicle_type}</span>}
-                  {r.lot_name && <span style={{fontSize:11,color:'var(--text-faint)'}}>· {r.lot_name}</span>}
-                </div>
-                <div style={{fontSize:11,color:'var(--text-faint)',marginTop:3}}>
-                  Expires {new Date(r.expires_at).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
-                </div>
-              </div>
-              <span style={{
-                fontSize:11,
-                fontWeight:700,
-                padding:'4px 10px',
-                borderRadius:20,
-                background: urgent ? 'rgba(251,191,36,.12)' : 'rgba(74,222,128,.12)',
-                color: urgent ? '#fbbf24' : '#4ade80',
-                border: urgent ? '1px solid rgba(251,191,36,.25)' : '1px solid rgba(74,222,128,.25)',
-                whiteSpace:'nowrap',
-              }}>{fmtPassRemaining(remainMs)}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Visitor Passes — /visit submissions land here */}
+      {/* Temporary Passes — /temp submissions land here */}
       {(() => {
         const activeVisitors = visitorPasses.filter(v => {
           if (v.status && v.status !== 'active') return false;
@@ -5681,7 +5608,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
           <>
             <div className="pd-section-head">
               <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-                <span className="pd-section-title">Visitor Passes</span>
+                <span className="pd-section-title">Temporary Passes</span>
                 <span className="pd-section-count">{activeVisitors.length}</span>
               </div>
               <div className="pd-section-meta">
@@ -5691,7 +5618,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:6}}>
               {activeVisitors.length === 0 ? (
-                <div className="pd-empty">No active visitor passes</div>
+                <div className="pd-empty">No active temporary passes</div>
               ) : activeVisitors.map(v => {
                 const remainMs = v.valid_until ? new Date(v.valid_until).getTime() - nowTick : 0;
                 const urgent = remainMs > 0 && remainMs < 60 * 60 * 1000;
@@ -5701,6 +5628,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
                       <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                         <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{v.plate_text}</span>
                         {v.visitor_name && <span style={{fontSize:12,color:'var(--text-primary)',fontWeight:600}}>{v.visitor_name}</span>}
+                        {v.vehicle_type && <span style={{fontSize:11,color:'var(--text-muted)',background:'var(--bg-inset)',padding:'2px 7px',borderRadius:4,textTransform:'capitalize'}}>{v.vehicle_type}</span>}
                       </div>
                       <div style={{fontSize:11,color:'var(--text-faint)',marginTop:3}}>
                         {v.valid_until ? <>Expires {new Date(v.valid_until).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</> : 'No expiry'}
