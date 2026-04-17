@@ -1,0 +1,22 @@
+{
+  "name": "lotlogic-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright end-to-end and accessibility tests for LotLogic",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:access": "playwright test e2e/access-control",
+    "test:smoke": "playwright test e2e/dashboard-smoke",
+    "test:a11y": "playwright test a11y",
+    "install-browsers": "playwright install --with-deps chromium",
+    "seed": "node scripts/seed-test-accounts.mjs",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.0",
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^20.19.39",
+    "typescript": "^5.9.3"
+  }
+}

@@ -134,9 +134,71 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 - Revenue stored in dollars in DB, displayed as cents in frontend (multiplied by 100)
 
 ## Security Notes
-- RLS policies are currently PERMISSIVE (public read/write) - needs auth implementation
-- Supabase anon key is exposed in frontend JS - this is expected for Supabase but RLS must be tightened
-- Backend API should enforce authorization on every request
+- Property access control rolled out (Apr 2026): owners/partners authenticate with email + password against the backend `/auth/login`, which returns a JWT signed with `JWT_SECRET` (set to the Supabase JWT secret). The frontend forwards the token to both the backend and Supabase, so RLS and API routes enforce the same account → property mapping.
+- Shared X-API-Key remains for service-to-service callers (puller, monitoring, leadgen). It is no longer shipped in the dashboard bundle.
+- RLS policies live in `lotlogic-backend/migrations/20260417025411_rls_property_scope.sql` (SELECT-only, keyed on JWT claims `owner_id` / `partner_id`).
+
+## Auth & Property Access Control (added Apr 2026)
+
+### How a request is scoped
+1. User submits email + password to the LoginPage in `frontend/dashboard.html`.
+2. `authLogin()` posts to the backend `POST /auth/login`. Backend looks the email up in `lot_owners` first, then `enforcement_partners`, runs bcrypt, and returns a JWT.
+3. The JWT is stored in `localStorage.lotlogic_session._token`.
+4. `apiFetch()` attaches `Authorization: Bearer <jwt>` to every backend call. The shared `X-API-Key` is no longer used in the browser.
+5. `applySupabaseAuth()` forwards the same JWT to the Supabase client via `supabase.auth.setSession(...)`, so RLS policies on `lots`, `cameras`, `camera_zones`, `snapshots`, `violations`, `lot_owners`, `enforcement_partners` see the `owner_id` / `partner_id` claims.
+6. On any `401` response, `apiFetch()` clears the session and fires `window.dispatchEvent('lotlogic:auth-expired')` — the App component catches that and returns to the login page.
+
+### Files to know
+- `frontend/dashboard.html` — single-file React SPA. Search for `LoginPage`, `apiFetch`, `authLogin`, `applySupabaseAuth` to find the auth flow. Backend calls go through `apiFetch(path, options)`; direct Supabase reads go through the `db` object.
+- `tests/fixtures/accounts.ts` — shared test fixtures and the `loginAs(page, account)` helper for Playwright.
+- `tests/e2e/access-control.spec.ts` — the canonical security proof. Run this whenever the auth plumbing changes.
+
+### When you change auth-adjacent code
+- Update both the backend route and the Playwright spec in the same PR — they're the two halves of the contract.
+- If you add a new route that returns tenant-owned data, require `Subject = Depends(require_subject)` in the backend handler and filter via `services.scope` helpers. Then add a cross-tenant assertion in `tests/e2e/access-control.spec.ts`.
+- If you add a new Supabase table that holds tenant data, extend `migrations/*_rls_property_scope.sql` with a matching policy.
+
+## Testing
+- Playwright harness in `tests/` — access-control E2E, dashboard smoke, a11y sweep.
+- `cd tests && npm ci && npx playwright install --with-deps chromium && npm test`.
+- GitHub Actions workflow `.github/workflows/playwright.yml` runs the suite on every push / PR against the Vercel preview or live beta.
+- Seed test accounts via `ADMIN_API_KEY=… npm run seed` (requires backend `ADMIN_API_KEY` env var to be set — leave it empty in production once seeded).
+- Required GitHub secrets for CI: `TEST_OWNER_A_EMAIL` / `PASSWORD`, `TEST_OWNER_B_EMAIL` / `PASSWORD`, `TEST_PARTNER_A_EMAIL` / `PASSWORD`, optional `API_URL`, optional `VERCEL_PREVIEW_URL`.
+- Note: `tests/package-lock.json` is gitignored via the root `.gitignore`, so CI falls back to `npm ci || npm install`. If dep-resolution ever flakes in CI, un-gitignore it for `tests/`.
+
+## Deploy Playbook — Property Access Control Rollout (first time only)
+
+The auth/RLS changes must be shipped in this order. Skipping steps will lock
+users out or blank their data.
+
+1. **Apply `migrations/20260417024653_account_passwords.sql`** to Supabase
+   (adds `password_hash` + related columns). Use the Supabase MCP
+   `apply_migration` so the row lands in `supabase_migrations.schema_migrations`.
+2. **Set Railway env vars** on `lotlogic-backend`:
+   - `JWT_SECRET` = the Supabase JWT secret (Settings → API → JWT Secret).
+     Must match Supabase, or RLS will reject our tokens.
+   - `ADMIN_API_KEY` = a random secret, only used for seeding test accounts.
+     Clear this after test seeding is done.
+3. **Deploy the backend** (merge PR or push to `main`). `/auth/login` is now live.
+4. **Seed passwords for existing accounts.** Two options:
+   - Per-user: `curl -XPOST .../auth/request-password -d '{"email":"..."}'`. Capture the token from the DB and email a setup link to the user.
+   - Bulk: `UPDATE lot_owners SET password_hash = crypt('temp', gen_salt('bf'))` then force a reset.
+5. **Deploy the frontend** (merge PR). The login page now requires a password.
+6. **Seed Playwright test accounts**: `cd tests && ADMIN_API_KEY=… npm run seed`.
+   Then add the `TEST_*` secrets to GitHub so the workflow can run.
+7. **Apply `migrations/20260417025411_rls_property_scope.sql`** LAST. This flips
+   Supabase tables from public-read to JWT-scoped. Any still-anonymous reader
+   goes to an empty result set the moment this lands.
+8. Run `cd tests && npm run test:access` against prod to verify.
+
+## Known Bottlenecks (Apr 2026)
+- **No staging for the backend.** Railway deploys straight to prod from `main`. Nowhere to rehearse a migration or an auth change end-to-end.
+- **No backend CI.** `getlotlogic/lotlogic-backend` has no GitHub Actions workflow — no tests, no lint, no syntax check. Python bugs ship on merge.
+- **Migrations are manual.** Code can merge before the required migration is applied. Every schema change depends on human-in-the-loop.
+- **Single 6000-line `frontend/dashboard.html` with in-browser Babel.** No type check, no component tests, no tree-shaking. Every change loads the entire file.
+- **No shared types between Python and frontend.** A Pydantic field rename silently breaks the UI.
+- **Gitignored lockfile.** CI dependency resolution is non-deterministic.
+- **Secrets rotate by find-and-replace.** The old shared API key was embedded in the browser bundle and in CLAUDE.md — rotation was intrusive.
 
 ## Build & Deploy
 
