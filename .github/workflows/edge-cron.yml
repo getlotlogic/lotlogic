@@ -39,3 +39,19 @@ jobs:
             -H "Content-Type: application/json" \
             --data '{}' \
             --max-time 120
+
+  alpr-daily-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Email property owners their daily ALPR summary
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -X POST \
+            "${SUPABASE_URL}/functions/v1/alpr-daily-report" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            --data '{}' \
+            --max-time 180
