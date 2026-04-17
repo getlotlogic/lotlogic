@@ -4805,15 +4805,29 @@ function BillingQuickBooksView({ subTabs, partnersProp, lots }) {
     }, err),
 
     // QB connection card
-    React.createElement('div', { style: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 14, marginBottom: 12 } },
-      React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 } }, 'QuickBooks connection'),
-      React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)' } },
-        'OAuth connect is on the backend billing page: ',
-        React.createElement('a', {
-          href: API + '/billing.html', target: '_blank', rel: 'noopener',
-          style: { color: 'var(--accent)' }
-        }, 'open billing admin'),
-        '.'),
+    React.createElement('div', { style: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 14, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 } },
+      React.createElement('div', null,
+        React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 } }, 'QuickBooks connection'),
+        React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)' } },
+          'Authorize LotLogic to create invoices in your QuickBooks Online account.'),
+      ),
+      React.createElement('button', {
+        onClick: async (e) => {
+          const b = e.currentTarget;
+          b.disabled = true;
+          const orig = b.textContent;
+          b.textContent = 'Opening…';
+          try {
+            const { url } = await apiFetch('/quickbooks/oauth/start');
+            window.location.href = url;
+          } catch (err) {
+            alert(err.message);
+            b.disabled = false;
+            b.textContent = orig;
+          }
+        },
+        style: { fontSize: 13, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--accent)', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }
+      }, 'Connect QuickBooks'),
     ),
 
     // Partners
