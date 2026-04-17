@@ -5214,7 +5214,7 @@ function AnalyticsPage({ lots, violations, isOwner, onNavigate }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
 
   useEffect(() => {
-    if (lotIds.length === 0) return;
+    if (lotIds.length === 0) { setLoading(false); return; }
     setLoading(true);
     const ids = selectedLot === 'all' ? lotIds : [selectedLot];
     Promise.all([
@@ -5230,6 +5230,15 @@ function AnalyticsPage({ lots, violations, isOwner, onNavigate }) {
   }, [lots.length, selectedLot]);
 
   if (loading) return <div className="page-enter"><SkeletonKPIs /><SkeletonCards count={3} /></div>;
+
+  if (lots.length === 0) {
+    return (
+      <div className="page-enter" style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>
+        <div style={{fontSize:14,fontWeight:700,color:'var(--text-secondary)',marginBottom:4}}>No analytics yet</div>
+        <div style={{fontSize:12}}>Add a lot on the Lots tab to start seeing utilization, revenue projections, and hourly stats.</div>
+      </div>
+    );
+  }
 
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const maxHeat = hourlyData ? Math.max(...Object.values(hourlyData.heatmap), 1) : 1;
@@ -6166,18 +6175,25 @@ function App() {
   useEffect(() => {
     if (!owner || lots.length === 0) return;
     const lotIds = lots.map(l => l.id);
+    // Debounce burst events (e.g. zone-guardian bulk updates) — collapse any
+    // payloads that arrive within 800ms into a single loadData call. Previously
+    // every event fired a full lots + properties(id) refetch, which showed up
+    // as a 15+ query storm during zone re-evaluation.
+    let refreshTimer = null;
     const channel = db.subscribeViolations(lotIds, (payload) => {
-      // Fire in-app notification for new alerted violations
       if (payload.eventType === 'INSERT' && payload.new?.status === 'alerted') {
         NotifyManager.notifyNewViolation(payload.new);
       }
-      // On any violation change, do a silent refresh
-      loadData(owner, true);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => { loadData(owner, true); }, 800);
     }, (errStatus) => {
       addToast('Live updates disconnected. Data refreshes every 30s.', 'error');
     });
     realtimeRef.current = channel;
-    return () => { if (channel) supabase?.removeChannel(channel); };
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (channel) supabase?.removeChannel(channel);
+    };
   }, [owner, lots.length, loadData, addToast]);
 
   // Subscribe to ALPR violation changes
@@ -6185,17 +6201,28 @@ function App() {
   useEffect(() => {
     if (!owner) return;
     let active = true;
+    let refreshTimer = null;
     db.getProperties(owner.id, owner._role).then(props => {
       if (!active || !props || props.length === 0) return;
       const propIds = props.map(p => p.id);
       if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current);
       const ch = db.subscribeALPRViolations(propIds, () => {
         if (!active) return;
-        db.getAllALPRViolations(owner.id, null, owner._role).then(v => { if (active) setAlprViolations(v); }).catch(() => {});
+        // Debounce bursts — collapse rapid plate-event / violation updates into
+        // one refetch so we don't hammer /alpr_violations + /properties(id).
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => {
+          if (!active) return;
+          db.getAllALPRViolations(owner.id, null, owner._role).then(v => { if (active) setAlprViolations(v); }).catch(() => {});
+        }, 800);
       });
       alprRealtimeRef.current = ch;
     }).catch(() => {});
-    return () => { active = false; if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current); };
+    return () => {
+      active = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (alprRealtimeRef.current) supabase?.removeChannel(alprRealtimeRef.current);
+    };
   }, [owner]);
 
   if (!owner) return <LoginPage onLogin={login} />;
