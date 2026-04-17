@@ -6989,23 +6989,26 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const [saving, setSaving] = useState(false);
   const [parkingRegs, setParkingRegs] = useState([]);
   const [visitorPasses, setVisitorPasses] = useState([]);
+  const [alprViols, setAlprViols] = useState([]);
   const nowTick = useNowTick();
 
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
     setLoading(true);
-    const [prop, pl, cam, ev, vp] = await Promise.all([
+    const [prop, pl, cam, ev, vp, av] = await Promise.all([
       db.getProperty(propertyId),
       db.getResidentPlates(propertyId),
       db.getALPRCameras(propertyId),
       db.getRecentPlateEvents(propertyId, 50),
       db.getVisitorPasses(propertyId, { limit: 50 }),
+      db.getALPRViolations(propertyId),
     ]);
     setProperty(prop);
     setPlates(pl);
     setCameras(cam);
     setEvents(ev);
     setVisitorPasses(vp);
+    setAlprViols(av);
     if (prop?.owner_id) {
       const regs = await db.getParkingRegistrationsByOwner(prop.owner_id);
       setParkingRegs(regs);
@@ -7130,6 +7133,34 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [propertyId, refreshCameras]);
+
+  // ── ALPR violations (flagged plates that aren't covered by any pass) ──
+  const refreshAlprViols = useCallback(async () => {
+    if (!propertyId) return;
+    const av = await db.getALPRViolations(propertyId);
+    setAlprViols(av);
+  }, [propertyId]);
+  useEffect(() => {
+    if (!propertyId) return;
+    const id = setInterval(refreshAlprViols, 20000);
+    return () => clearInterval(id);
+  }, [refreshAlprViols]);
+  useEffect(() => {
+    if (!supabase || !propertyId) return;
+    const debouncedRefresh = makeDebounced(refreshAlprViols, 200);
+    const channel = supabase.channel('alpr-viols-' + propertyId)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'alpr_violations',
+        filter: 'property_id=eq.' + propertyId,
+      }, debouncedRefresh)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [propertyId, refreshAlprViols]);
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible') refreshAlprViols(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refreshAlprViols]);
 
   // ── Recent plate detections (ALPR) ──
   // Keep this list fresh the same way as parking regs: realtime + 20s poll + visibility.
@@ -7399,6 +7430,51 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         ))}
         {cameras.length === 0 && <div className="pd-empty">No cameras registered</div>}
       </div>
+
+      {/* ALPR Violations — plates flagged by cameras without a matching pass */}
+      {(() => {
+        const pendingViols = alprViols.filter(v => !v.status || v.status === 'pending' || v.status === 'dispatched');
+        return (
+          <>
+            <div className="pd-section-head">
+              <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+                <span className="pd-section-title">ALPR Violations</span>
+                <span className="pd-section-count">{pendingViols.length}</span>
+              </div>
+              <div className="pd-section-meta">
+                <span style={{width:6,height:6,borderRadius:'50%',background:'#ef4444',animation:'pulse-dot 1.5s infinite'}} />
+                Pending
+              </div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              {alprViols.length === 0 ? (
+                <div className="pd-empty">No violations yet</div>
+              ) : alprViols.slice(0, 20).map(v => {
+                const pe = v.plate_events;
+                const statusColor = (v.status === 'resolved') ? '#4ade80' : (v.status === 'escalated' ? '#ef4444' : '#fbbf24');
+                const imageUrl = pe?.image_url || v.image_url;
+                return (
+                  <div key={v.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
+                    {imageUrl && (
+                      <img src={imageUrl} alt="plate" loading="lazy"
+                        style={{width:52,height:40,objectFit:'cover',borderRadius:6,border:'1px solid var(--border-subtle)',flexShrink:0,background:'var(--bg-inset)'}} />
+                    )}
+                    <div style={{minWidth:0,flex:1}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                        <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{v.plate_text}</span>
+                        <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${statusColor}20`,color:statusColor,border:`1px solid ${statusColor}40`}}>{v.status || 'pending'}</span>
+                      </div>
+                      <div style={{fontSize:11,color:'var(--text-muted)',marginTop:3,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                        {v.reason ? `${v.reason} · ` : ''}{new Date(v.created_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        );
+      })()}
 
       {/* Recent plate detections (live ALPR feed) */}
       <div className="pd-section-head">
