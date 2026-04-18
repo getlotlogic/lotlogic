@@ -6473,7 +6473,7 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // Paginated, filterable temporary-pass log for truck_plaza properties.
 // Data comes from the backend /visitor_passes/parking-log endpoint — the same
 // shape as the CSV export so the two never drift.
-function TruckParkingLog({ propertyId, refreshKey }) {
+function TruckParkingLog({ propertyId }) {
   const { addToast } = useToast();
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
@@ -6509,9 +6509,12 @@ function TruckParkingLog({ propertyId, refreshKey }) {
     setLoading(false);
   }, [propertyId, filters, page]);
 
-  // One-shot load — the realtime channel + explicit Refresh handle updates.
-  // refreshKey still forces a reload on external triggers.
-  useIntervalFetch(load, 0, [load, refreshKey]);
+  // One-shot load per `load` identity. External changes to visitor_passes
+  // no longer trigger a full reload of the log — the parent's realtime
+  // channel already refreshes its own list; the log owns its filter +
+  // pagination state and uses the explicit Refresh button (via applyFilters)
+  // or filter changes to refetch.
+  useIntervalFetch(load, 0, [load]);
 
   async function handleCancel(reason) {
     if (!cancelModal) return;
@@ -7083,7 +7086,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
               Live
             </div>
           </div>
-          <TruckParkingLog propertyId={propertyId} refreshKey={visitorPasses.length} />
+          <TruckParkingLog propertyId={propertyId} />
         </>
       ) : (() => {
         const activeVisitors = visitorPasses.filter(v => {
