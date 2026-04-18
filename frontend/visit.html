@@ -169,6 +169,11 @@
     // on strict networks / extensions and leave the page stuck on "Loading...".
     const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
+    // Backend base. Used for endpoints that anon role can't read directly
+    // (e.g. /visitor_passes/check-active — RLS blocks anon SELECT on
+    // visitor_passes, so the QR form's pre-flight duplicate-pass check
+    // MUST go through the backend's public, minimal-response endpoint).
+    const BACKEND_URL = 'https://lotlogic-backend-production.up.railway.app';
 
     async function pgRest(path, init = {}, timeoutMs = 10000) {
       const ctrl = new AbortController();
@@ -419,12 +424,32 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
       const plate = normalizePlate(document.getElementById('plate').value);
       if (!plate || plate.length < 2) return;
       try {
-        const nowIso = new Date().toISOString();
-        const rows = await pgRest(`/visitor_passes?select=id,plate_text,valid_until,company_name&property_id=eq.${property.id}&plate_text=eq.${encodeURIComponent(plate)}&status=eq.active&valid_until=gte.${encodeURIComponent(nowIso)}&limit=1`);
-        if (Array.isArray(rows) && rows.length > 0) {
-          const r = rows[0];
-          const expires = new Date(r.valid_until).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
-          msg.textContent = `Already registered: pass active until ${expires} (Ref ${r.id.slice(-8).toUpperCase()})`;
+        // Pre-flight the duplicate-pass warning via the backend's public
+        // /visitor_passes/check-active endpoint. Reading visitor_passes
+        // directly from PostgREST returns [] under the anon role (no SELECT
+        // policy), so the old direct-query path was silently useless — a
+        // driver re-scanning the QR after a few hours would never see the
+        // "already registered" notice. The backend endpoint is public, in
+        // PUBLIC_PATHS, and returns only {active, valid_until, reference_id}.
+        const url = `${BACKEND_URL}/visitor_passes/check-active`
+          + `?property_id=${encodeURIComponent(property.id)}`
+          + `&plate=${encodeURIComponent(plate)}`;
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 10000);
+        let data = null;
+        try {
+          const res = await fetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json' } });
+          if (res.ok) {
+            const text = await res.text();
+            data = text ? JSON.parse(text) : null;
+          }
+        } finally { clearTimeout(t); }
+        if (data && data.active && data.valid_until) {
+          const expires = new Date(data.valid_until).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+          const ref = (data.reference_id || '').toString().toUpperCase();
+          msg.textContent = ref
+            ? `Already registered: pass active until ${expires} (Ref ${ref})`
+            : `Already registered: pass active until ${expires}`;
         }
       } catch (_) { /* non-fatal — let submit handle it */ }
     }
