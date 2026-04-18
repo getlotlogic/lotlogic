@@ -2623,10 +2623,28 @@ const db = {
     return null;
   },
   async dispatchALPRViolation(id) {
-    return this.updateALPRViolation(id, { status: 'dispatched', dispatched_at: new Date().toISOString() });
+    // Operator confirms a tow via the dashboard. action_taken='tow' + action_channel='dashboard'
+    // are the partner-reply signal; the camera-side confirmation worker writes tow_confirmed_at
+    // independently. Both feed into v_violation_billing_status.
+    const now = new Date().toISOString();
+    return this.updateALPRViolation(id, {
+      status: 'dispatched',
+      dispatched_at: now,
+      action_taken: 'tow',
+      action_channel: 'dashboard',
+      action_at: now,
+    });
   },
   async dismissALPRViolation(id, notes) {
-    return this.updateALPRViolation(id, { status: 'dismissed', resolved_at: new Date().toISOString(), notes: notes || 'Dismissed by operator' });
+    const now = new Date().toISOString();
+    return this.updateALPRViolation(id, {
+      status: 'dismissed',
+      resolved_at: now,
+      action_taken: 'no_tow',
+      action_channel: 'dashboard',
+      action_at: now,
+      notes: notes || 'Dismissed by operator',
+    });
   },
   async getTowJobs(opts = {}) {
     if (supabase) {
