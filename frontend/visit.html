@@ -11,8 +11,8 @@
        console. Keep Vercel env RECAPTCHA_SITE_KEY in sync so any future
        build step that injects it matches the hardcoded value.
        TODO: update this constant if you rotate the reCAPTCHA site. -->
-  <meta name="recaptcha-site-key" content="RECAPTCHA_SITE_KEY_PLACEHOLDER">
-  <script src="https://www.google.com/recaptcha/api.js?render=RECAPTCHA_SITE_KEY_PLACEHOLDER" async defer></script>
+  <meta name="recaptcha-site-key" content="6LdaAb4sAAAAACd5g-pYqnQBWHdvMmGCufwtEQnE">
+  <script src="https://www.google.com/recaptcha/api.js?render=6LdaAb4sAAAAACd5g-pYqnQBWHdvMmGCufwtEQnE" async defer></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -191,7 +191,7 @@
     // exactly one place to patch.
     const RECAPTCHA_SITE_KEY =
       (document.querySelector('meta[name=recaptcha-site-key]')?.content)
-      || 'RECAPTCHA_SITE_KEY_PLACEHOLDER';
+      || '6LdaAb4sAAAAACd5g-pYqnQBWHdvMmGCufwtEQnE';
 
     // Fetch a fresh reCAPTCHA v3 token for the given action. Returns null
     // on script-load failure so the caller can decide whether to hard-fail
