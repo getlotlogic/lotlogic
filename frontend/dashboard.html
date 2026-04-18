@@ -2604,6 +2604,37 @@ const db = {
       body: JSON.stringify(reason ? { reason } : {}),
     });
   },
+  // Operator overrides on alpr_violations. All are owner-scoped on the
+  // backend (POST /violations/{id}/{action}, see routers/violations.py).
+  // `reason` flows through to the audit log as notes.
+  async forceBillViolation(id, reason) {
+    return apiFetch(`/violations/${id}/force-bill`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+  async markViolationNoTow(id, reason) {
+    return apiFetch(`/violations/${id}/mark-no-tow`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+  async pauseViolationBilling(id, reason) {
+    return apiFetch(`/violations/${id}/pause-billing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+  async resumeViolationBilling(id) {
+    return apiFetch(`/violations/${id}/resume-billing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  },
   async getALPRCameras(propertyId) {
     if (supabase) {
       const { data, error } = await supabase.from('alpr_cameras').select('*').eq('property_id', propertyId).order('created_at', { ascending: false });
@@ -5213,6 +5244,15 @@ function channelIcon(ch) {
   return null;
 }
 
+// Endpoint key → db method. One place to add/rename a violation override
+// without touching the modal plumbing.
+const OPERATOR_ACTION_CALLERS = {
+  'force-bill':      (id, reason) => db.forceBillViolation(id, reason),
+  'mark-no-tow':     (id, reason) => db.markViolationNoTow(id, reason),
+  'pause-billing':   (id, reason) => db.pauseViolationBilling(id, reason),
+  'resume-billing':  (id)         => db.resumeViolationBilling(id),
+};
+
 function ConfirmationReviewView({ user, lots, partnersProp }) {
   const [rows, setRows] = React.useState(null);
   const [err, setErr] = React.useState('');
@@ -5264,18 +5304,19 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
   // against the first interval tick) and on every `refresh` identity change.
   useIntervalFetch(() => refresh(true), 15000, [refresh]);
 
-  // Fire the currently-staged action. Called by the modal's Confirm button;
-  // `reason` is the trimmed textarea value (may be empty).
+  // Fire the currently-staged action through the db helper for the chosen
+  // endpoint. `reason` is the trimmed textarea value (may be empty).
   async function confirmPendingAction(reason) {
     if (!pendingAction) return;
     const { violationId, endpoint } = pendingAction;
+    const caller = OPERATOR_ACTION_CALLERS[endpoint];
+    if (!caller) {
+      alert(`Unknown operator action: ${endpoint}`);
+      return;
+    }
     setActingId(violationId);
     try {
-      await apiFetch(`/violations/${violationId}/${endpoint}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reason: reason || undefined }),
-      });
+      await caller(violationId, reason || undefined);
       setPendingAction(null);
       await refresh(true);
     } catch (e) {
