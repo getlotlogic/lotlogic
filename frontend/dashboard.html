@@ -6893,7 +6893,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
 
   async function handleRemovePlate(id) {
     await db.removeResidentPlate(id);
-    setPlates(plates.filter(p => p.id !== id));
+    // Use functional setState so a realtime event landing between click and
+    // commit doesn't get clobbered by the closure-captured `plates`. Mirrors
+    // handleApprovePlate below.
+    setPlates(prev => prev.filter(p => p.id !== id));
   }
 
   async function handleApprovePlate(id) {
