@@ -7990,10 +7990,14 @@ function App() {
     { id: 'invoices', label: 'Billing',  badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
+    // Partner: the 'invoices' tab renders InvoicesPage in read-only
+    // Confirmation Review mode (no QuickBooks sub-tab). Label stays
+    // 'Billing' so the surface is discoverable.
     { id: 'jobs',     label: 'Jobs',     badge: pending + alprPending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'activity', label: 'Activity', badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
+    { id: 'invoices', label: 'Billing',  badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ];
 
@@ -8069,7 +8073,7 @@ function App() {
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
           {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
-          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} />}
+          {tab === 'invoices' && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
