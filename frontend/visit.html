@@ -204,8 +204,11 @@
 
     const app = document.getElementById('app');
 
+    // QR code id comes from /visit.html/<qr> in the URL, but we also accept
+    // ?qr=<id> so a shared / emailed link like /visit.html?qr=... still works.
     const pathParts = window.location.pathname.split('/').filter(Boolean);
-    const qrCodeId = pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null;
+    const qrCodeId = (pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null)
+      || new URLSearchParams(window.location.search).get('qr');
 
     let property = null;
 
