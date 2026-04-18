@@ -4759,10 +4759,40 @@ function EarningsPage({ violations, lots, isOwner, user, onNavigate }) {
 }
 
 // ── Billing page (owner only) — partners + QuickBooks invoice lifecycle ────
-// The earnings tab is the canonical job/revenue log; this page is purely the
-// invoicing handoff (drafts, emails, send to QB).
-function InvoicesPage({ lots, partners: partnersProp }) {
-  return React.createElement(BillingQuickBooksView, { partnersProp, lots });
+// The earnings tab is the canonical job/revenue log; this page hosts two
+// sub-tabs:
+//   • Invoices            → QB lifecycle (drafts, emails, send to QB)
+//   • Confirmation review → per-violation billing_status queues + operator
+//                           overrides (force-bill / no-tow / pause / resume).
+function InvoicesPage({ lots, partners: partnersProp, user }) {
+  const [subTab, setSubTab] = React.useState('invoices');
+
+  const tabBtn = (id, label) => React.createElement('button', {
+    key: id,
+    onClick: () => setSubTab(id),
+    style: {
+      background: 'transparent', border: 'none', padding: '10px 4px',
+      fontSize: 14, fontWeight: 700, cursor: 'pointer',
+      color: subTab === id ? 'var(--text-primary)' : 'var(--text-muted)',
+      borderBottom: subTab === id ? '2px solid var(--accent)' : '2px solid transparent',
+      marginBottom: -1,
+    },
+  }, label);
+
+  return React.createElement('div', { className: 'page-enter' },
+    React.createElement('div', {
+      style: {
+        display: 'flex', gap: 18, borderBottom: '1px solid var(--border)',
+        marginBottom: 16,
+      }
+    },
+      tabBtn('invoices', 'Invoices'),
+      tabBtn('review', 'Confirmation review'),
+    ),
+    subTab === 'invoices'
+      ? React.createElement(BillingQuickBooksView, { partnersProp, lots })
+      : React.createElement(ConfirmationReviewView, { user, lots, partnersProp }),
+  );
 }
 
 function BillingQuickBooksView({ partnersProp, lots }) {
@@ -5006,6 +5036,435 @@ function BillingQuickBooksView({ partnersProp, lots }) {
         })
       )
     ),
+  );
+}
+
+// ── Confirmation review — billing_status queues per alpr_violations row ────
+// Classifies each row by the same CASE logic as the DB view
+// v_violation_billing_status, grouping into operator-actionable queues:
+//   disputed / verify / unreported_confirmed / confirmed / pending / no_tow /
+//   held-or-forced. Polls every 15s.
+function normalizeTruckPlate(s) {
+  return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function computeBillingStatus(v) {
+  // Mirrors v_violation_billing_status (see migration 20260418011558_tow_confirmation.sql).
+  const a = v.action_taken;
+  const conf = !!v.tow_confirmed_at;
+  const dispatched = v.dispatched_at ? new Date(v.dispatched_at) : null;
+  if (a === 'plate_correction')                 return 'no_tow';
+  if (a === 'tow'     && conf)                  return 'confirmed';
+  if (a == null       && conf)                  return 'unreported_confirmed';
+  if (a === 'tow'     && !conf)                 return 'verify'; // DB calls this reported_unconfirmed
+  if (a === 'no_tow'  && conf)                  return 'disputed';
+  if (a === 'no_tow'  && !conf)                 return 'no_tow';
+  if (a == null && dispatched && (Date.now() - dispatched.getTime()) > 24 * 3600 * 1000) return 'no_tow';
+  return 'pending';
+}
+
+// Visible queue ordering for the UI (urgency-first).
+const REVIEW_QUEUES = [
+  { id: 'disputed',             title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red' },
+  { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', tone: 'amber' },
+  { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              tone: 'amber' },
+  { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    tone: 'green' },
+  { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           tone: 'gray' },
+  { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        tone: 'gray' },
+  { id: 'held',                 title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue' },
+];
+
+const TONE_COLORS = {
+  red:   { fg: '#ef4444', bg: 'rgba(239,68,68,.12)',  border: 'rgba(239,68,68,.3)' },
+  amber: { fg: '#f59e0b', bg: 'rgba(245,158,11,.12)', border: 'rgba(245,158,11,.3)' },
+  green: { fg: '#10b981', bg: 'rgba(16,185,129,.12)', border: 'rgba(16,185,129,.3)' },
+  gray:  { fg: '#9ca3af', bg: 'rgba(156,163,175,.12)',border: 'rgba(156,163,175,.3)' },
+  blue:  { fg: '#60a5fa', bg: 'rgba(96,165,250,.12)', border: 'rgba(96,165,250,.3)' },
+  purple:{ fg: '#a78bfa', bg: 'rgba(167,139,250,.12)',border: 'rgba(167,139,250,.3)' },
+};
+
+function channelIcon(ch) {
+  if (ch === 'email_action')       return { label: 'Email',     icon: '\u2709' };  // envelope
+  if (ch === 'sms_reply')          return { label: 'SMS',       icon: '\uD83D\uDCAC' }; // speech bubble
+  if (ch === 'dashboard')          return { label: 'Dashboard', icon: '\u2630' };  // hamburger
+  if (ch === 'dashboard_override') return { label: 'Override',  icon: '\u270E' };  // pencil
+  return null;
+}
+
+function ConfirmationReviewView({ user, lots, partnersProp }) {
+  const [rows, setRows] = React.useState(null);
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [actingId, setActingId] = React.useState(null);
+  const [expanded, setExpanded] = React.useState(() => new Set(['disputed', 'verify']));
+  const partnerName = React.useMemo(() => {
+    const m = {};
+    (partnersProp || []).forEach(p => { m[p.id] = p.company_name || p.contact_name; });
+    return m;
+  }, [partnersProp]);
+
+  const ownerId = user?.id;
+  const role = user?._role === 'partner' ? 'partner' : 'owner';
+
+  const refresh = React.useCallback(async (silent = false) => {
+    if (!ownerId || !supabase) { setRows([]); return; }
+    if (!silent) setBusy(true);
+    setErr('');
+    try {
+      const propCol = role === 'partner' ? 'tow_company_id' : 'owner_id';
+      const propQ = await supabase.from('properties').select('id, name, owner_id, tow_company_id').eq(propCol, ownerId);
+      if (propQ.error) throw new Error(propQ.error.message);
+      const props = propQ.data || [];
+      const propIds = props.map(p => p.id);
+      if (propIds.length === 0) { setRows([]); return; }
+      // Pull a generous window so disputes/verify don't fall off the page.
+      const since = new Date(Date.now() - 30 * 86400000).toISOString();
+      const { data, error } = await supabase
+        .from('alpr_violations')
+        .select('id, property_id, plate_text, status, action_taken, action_channel, action_at, tow_confirmed_at, tow_confirmation, billing_held_at, force_bill_at, invoiced_at, dispatched_at, created_at, notes, properties(name, tow_company_id)')
+        .in('property_id', propIds)
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(400);
+      if (error) throw new Error(error.message);
+      setRows(data || []);
+    } catch (e) {
+      setErr(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [ownerId, role]);
+
+  React.useEffect(() => { refresh(false); }, [refresh]);
+  // Poll every 15 s per spec.
+  React.useEffect(() => {
+    const t = setInterval(() => refresh(true), 15000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  async function doAction(violationId, endpoint, confirmMsg) {
+    const reason = window.prompt((confirmMsg || 'Reason (optional):'), '');
+    if (reason === null) return; // cancelled
+    setActingId(violationId);
+    try {
+      await apiFetch(`/violations/${violationId}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: reason || undefined }),
+      });
+      await refresh(true);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  // Group rows into queues. "held" bucket wins over anything else for rows
+  // that carry an operator override flag.
+  const grouped = React.useMemo(() => {
+    const buckets = Object.fromEntries(REVIEW_QUEUES.map(q => [q.id, []]));
+    (rows || []).forEach(r => {
+      const overridden = r.billing_held_at || r.force_bill_at;
+      const status = computeBillingStatus(r);
+      r._billing_status = status;
+      if (overridden && !r.invoiced_at) {
+        buckets.held.push(r);
+      } else if (buckets[status]) {
+        buckets[status].push(r);
+      }
+    });
+    return buckets;
+  }, [rows]);
+
+  const totalCount = (rows || []).length;
+
+  function toggleQueue(id) {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function renderRow(r) {
+    const channel = channelIcon(r.action_channel);
+    const partner = r.properties?.tow_company_id
+      ? (partnerName[r.properties.tow_company_id] || r.properties.tow_company_id.slice(0, 8))
+      : '—';
+    const propName = r.properties?.name || (r.property_id || '').slice(0, 8);
+    const evidence = r.tow_confirmation || null;
+    const isActing = actingId === r.id;
+
+    // Action set depends on current state. Held rows get Resume; force-billed
+    // rows are read-only here (they're heading to invoicing). Everything else
+    // gets the three primary overrides.
+    const actions = [];
+    if (r.billing_held_at) {
+      actions.push({ key: 'resume-billing', label: 'Resume billing', primary: true });
+    } else if (!r.invoiced_at) {
+      if (!r.force_bill_at) {
+        actions.push({ key: 'force-bill', label: 'Bill anyway', primary: true });
+      }
+      actions.push({ key: 'mark-no-tow', label: 'Mark no-tow' });
+      actions.push({ key: 'pause-billing', label: 'Pause billing' });
+    }
+
+    return React.createElement('div', {
+      key: r.id,
+      style: {
+        padding: '10px 12px', borderBottom: '1px solid var(--border)',
+        display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'start',
+      },
+    },
+      React.createElement('div', { style: { minWidth: 0 } },
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 4 } },
+          React.createElement('span', {
+            style: {
+              fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 13, fontWeight: 700,
+              background: 'var(--bg-inset)', padding: '2px 8px', borderRadius: 6,
+              border: '1px solid var(--border)', color: 'var(--text-primary)',
+            }
+          }, r.plate_text || '—'),
+          r.billing_held_at && React.createElement('span', {
+            style: {
+              fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
+              background: TONE_COLORS.blue.bg, color: TONE_COLORS.blue.fg,
+              border: `1px solid ${TONE_COLORS.blue.border}`, textTransform: 'uppercase', letterSpacing: '.04em',
+            }
+          }, 'Held by operator'),
+          r.force_bill_at && React.createElement('span', {
+            style: {
+              fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
+              background: TONE_COLORS.purple.bg, color: TONE_COLORS.purple.fg,
+              border: `1px solid ${TONE_COLORS.purple.border}`, textTransform: 'uppercase', letterSpacing: '.04em',
+            }
+          }, 'Force-billed'),
+          r.invoiced_at && React.createElement('span', {
+            style: {
+              fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
+              background: TONE_COLORS.green.bg, color: TONE_COLORS.green.fg,
+              border: `1px solid ${TONE_COLORS.green.border}`, textTransform: 'uppercase', letterSpacing: '.04em',
+            }
+          }, 'Invoiced'),
+        ),
+        React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 } },
+          propName + ' · ' + partner + ' · detected ' + (r.created_at ? fmtDate(r.created_at) + ' ' + fmtTime(r.created_at) : '—'),
+        ),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-faint)' } },
+          channel && React.createElement('span', {
+            title: `Via ${channel.label}`,
+            style: { display: 'inline-flex', alignItems: 'center', gap: 3, padding: '1px 6px', borderRadius: 4, background: 'var(--bg-inset)', border: '1px solid var(--border)' },
+          }, channel.icon, ' ', channel.label),
+          r.action_taken && React.createElement('span', null, 'Partner: ', React.createElement('strong', { style: { color: 'var(--text-secondary)' } }, r.action_taken)),
+          r.tow_confirmed_at && React.createElement('span', null, 'Confirmed ', fmtTime(r.tow_confirmed_at)),
+          evidence && evidence.truck_plate && React.createElement('span', {
+            style: { padding: '1px 6px', borderRadius: 4, background: TONE_COLORS.green.bg, color: TONE_COLORS.green.fg, border: `1px solid ${TONE_COLORS.green.border}` },
+            title: 'Camera sighting that confirmed this tow',
+          }, '\uD83D\uDE9A ', evidence.truck_plate, typeof evidence.delta_seconds === 'number' ? ` · Δ${Math.round(evidence.delta_seconds)}s` : ''),
+        ),
+      ),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' } },
+        actions.length === 0 ? React.createElement('span', { style: { fontSize: 11, color: 'var(--text-faint)' } }, 'No actions') :
+        actions.map(a => React.createElement('button', {
+          key: a.key,
+          disabled: isActing,
+          onClick: () => {
+            const verb = a.label.toLowerCase();
+            doAction(r.id, a.key, `Reason for "${verb}" (optional):`);
+          },
+          style: {
+            fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: isActing ? 'wait' : 'pointer',
+            border: '1px solid ' + (a.primary ? 'var(--accent)' : 'var(--border)'),
+            background: a.primary ? 'var(--accent)' : 'transparent',
+            color: a.primary ? '#fff' : 'var(--text-primary)',
+            fontWeight: 600, whiteSpace: 'nowrap',
+          }
+        }, isActing && actingId === r.id ? '…' : a.label)),
+      ),
+    );
+  }
+
+  return React.createElement('div', null,
+    React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Confirmation review'),
+    React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 } },
+      'Per-violation billing review. Disputes and verification candidates at the top. Refreshes every 15s.'),
+
+    err && React.createElement('div', {
+      style: { background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.3)', color: '#ef4444', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12 }
+    }, err),
+
+    React.createElement('div', {
+      style: {
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginBottom: 10, fontSize: 12, color: 'var(--text-muted)',
+      }
+    },
+      React.createElement('span', null,
+        rows === null ? 'Loading…' : (totalCount + ' row' + (totalCount === 1 ? '' : 's') + ' across queues')),
+      React.createElement('button', {
+        onClick: () => refresh(false), disabled: busy,
+        style: { fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }
+      }, busy ? 'Refreshing…' : 'Refresh now'),
+    ),
+
+    rows === null ? null :
+    REVIEW_QUEUES.map(q => {
+      const items = grouped[q.id] || [];
+      const tone = TONE_COLORS[q.tone] || TONE_COLORS.gray;
+      const isOpen = expanded.has(q.id);
+      return React.createElement('div', {
+        key: q.id,
+        style: {
+          background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
+          marginBottom: 10, overflow: 'hidden',
+        }
+      },
+        React.createElement('button', {
+          onClick: () => toggleQueue(q.id),
+          style: {
+            width: '100%', textAlign: 'left', background: 'transparent', border: 'none',
+            padding: '12px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
+          },
+        },
+          React.createElement('span', {
+            style: {
+              fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
+              background: tone.bg, color: tone.fg, border: `1px solid ${tone.border}`,
+              textTransform: 'uppercase', letterSpacing: '.04em', minWidth: 48, textAlign: 'center',
+            }
+          }, items.length),
+          React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+            React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' } }, q.title),
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 } }, q.desc),
+          ),
+          React.createElement('span', { style: { color: 'var(--text-faint)', fontSize: 12 } }, isOpen ? '▾' : '▸'),
+        ),
+        isOpen && items.length > 0 && React.createElement('div', { style: { borderTop: '1px solid var(--border)' } },
+          items.map(renderRow),
+        ),
+        isOpen && items.length === 0 && React.createElement('div', {
+          style: { padding: '10px 14px', fontSize: 12, color: 'var(--text-faint)', borderTop: '1px solid var(--border)' }
+        }, 'Nothing here.'),
+      );
+    }),
+  );
+}
+
+// ── Tow-truck plates editor (enforcement partner self-settings) ────
+// Writes directly to enforcement_partners.tow_truck_plates via Supabase REST.
+// Normalization matches the tow-confirm edge function so stored plates
+// compare cleanly against camera sightings.
+function TowTruckPlatesEditor({ user }) {
+  const [plates, setPlates] = React.useState(() => (user?.tow_truck_plates || []).slice());
+  const [draft, setDraft] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [saved, setSaved] = React.useState(false);
+
+  React.useEffect(() => {
+    // Re-sync if user prop changes (e.g. post-login refetch).
+    setPlates((user?.tow_truck_plates || []).slice());
+  }, [user?.id]);
+
+  async function persist(next) {
+    setSaving(true); setErr(''); setSaved(false);
+    try {
+      if (!supabase || !user?.id) throw new Error('Not authenticated');
+      const { error } = await supabase
+        .from('enforcement_partners')
+        .update({ tow_truck_plates: next })
+        .eq('id', user.id);
+      if (error) throw new Error(error.message);
+      setPlates(next);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } catch (e) {
+      setErr(e.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function addPlate() {
+    const norm = normalizeTruckPlate(draft);
+    if (!norm) { setDraft(''); return; }
+    if (plates.includes(norm)) { setDraft(''); return; }
+    const next = [...plates, norm];
+    setDraft('');
+    persist(next);
+  }
+
+  function removePlate(p) {
+    const next = plates.filter(x => x !== p);
+    persist(next);
+  }
+
+  return React.createElement('div', { className: 'settings-section' },
+    React.createElement('div', { className: 'settings-section-title' }, 'Tow-truck plates'),
+    React.createElement('div', {
+      style: { fontSize: 12, color: 'var(--text-muted)', padding: '0 0 10px' }
+    }, 'Plates of tow trucks operated by this partner. Camera sightings of these plates confirm that a tow actually happened.'),
+
+    React.createElement('div', {
+      style: { display: 'flex', flexWrap: 'wrap', gap: 6, padding: '4px 0 10px' }
+    },
+      plates.length === 0
+        ? React.createElement('span', { style: { fontSize: 12, color: 'var(--text-faint)' } }, 'No plates registered yet.')
+        : plates.map(p => React.createElement('span', {
+            key: p,
+            style: {
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12, fontWeight: 700,
+              padding: '4px 4px 4px 10px', borderRadius: 8,
+              background: 'var(--bg-inset)', border: '1px solid var(--border)', color: 'var(--text-primary)',
+            }
+          },
+            p,
+            React.createElement('button', {
+              onClick: () => removePlate(p), disabled: saving,
+              title: 'Remove plate',
+              style: {
+                background: 'transparent', border: 'none', color: 'var(--text-faint)',
+                cursor: saving ? 'wait' : 'pointer', padding: '0 6px', fontSize: 14, lineHeight: 1,
+              },
+            }, '\u2715'),
+          )),
+    ),
+
+    React.createElement('div', {
+      style: { display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0' }
+    },
+      React.createElement('input', {
+        type: 'text',
+        value: draft,
+        onChange: e => setDraft(e.target.value),
+        onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); addPlate(); } },
+        placeholder: 'Add plate (e.g. T-123-AB)',
+        disabled: saving,
+        style: {
+          flex: 1, fontSize: 13, padding: '6px 10px', borderRadius: 6,
+          border: '1px solid var(--border)', background: 'var(--bg-inset)',
+          color: 'var(--text-primary)', fontFamily: 'ui-monospace, Menlo, monospace', textTransform: 'uppercase',
+        },
+      }),
+      React.createElement('button', {
+        onClick: addPlate,
+        disabled: saving || !normalizeTruckPlate(draft),
+        style: {
+          fontSize: 13, padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontWeight: 700,
+          border: '1px solid var(--accent)', background: 'var(--accent)', color: '#fff',
+          opacity: (saving || !normalizeTruckPlate(draft)) ? 0.6 : 1,
+        }
+      }, saving ? 'Saving…' : 'Add plate'),
+    ),
+
+    err && React.createElement('div', {
+      style: { fontSize: 12, color: '#ef4444', padding: '6px 0 0' }
+    }, err),
+    saved && !err && React.createElement('div', {
+      style: { fontSize: 12, color: 'var(--green)', padding: '6px 0 0' }
+    }, 'Saved'),
   );
 }
 
@@ -5385,6 +5844,10 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
           </div>
         </div>
       )}
+
+      {/* Tow-truck plates — enforcement partners only. Used by the tow-confirm
+          edge function to match camera sightings against partner trucks. */}
+      {!isOwner && <TowTruckPlatesEditor user={user} />}
 
       {/* App settings */}
       <div className="settings-section">
@@ -7189,7 +7652,7 @@ function App() {
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
           {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
-          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} />}
+          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
