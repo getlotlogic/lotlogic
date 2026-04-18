@@ -4096,7 +4096,7 @@ function LoginPage({ onLogin }) {
 }
 
 // ── Jobs tab (current violations) ─────────────────────────────
-function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, onAction, isOwner, deepLinkViolationId, user }) {
+function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, onAction, isOwner, deepLinkViolationId, user, onNavigate }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
   const [selectedViol, setSelectedViol] = useState(null);
 
@@ -4467,6 +4467,102 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
           <button className={`filter-chip ${filter === 'urgent' ? 'active' : ''}`} onClick={() => setFilter('urgent')}>Urgent</button>
         </div>
       )}
+
+      {/* Partner: persistent yellow nudge if they haven't registered tow-truck plates.
+          Without plates, every tow requires manual owner confirmation before billing releases. */}
+      {user?._role === 'partner' && ((user?.tow_truck_plates?.length ?? 0) === 0) && (
+        <div style={{
+          background:'rgba(251,191,36,.08)', border:'1px solid rgba(251,191,36,.3)', borderRadius:10,
+          padding:'10px 14px', marginBottom:14, display:'flex', alignItems:'flex-start', gap:10,
+        }} role="status">
+          <div style={{fontSize:16, flexShrink:0, marginTop:1}} aria-hidden="true">⚠</div>
+          <div style={{flex:1, minWidth:0}}>
+            <div style={{fontSize:13, fontWeight:700, color:'#fbbf24', marginBottom:2}}>
+              Add your tow-truck plates so billing auto-releases after each tow.
+            </div>
+            <div style={{fontSize:11, color:'var(--text-muted)', lineHeight:1.4}}>
+              Without plates, every tow has to be confirmed manually by the property owner before we can bill.
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigate && onNavigate('account')}
+            style={{
+              fontSize:12, padding:'6px 12px', borderRadius:6, cursor:'pointer', fontWeight:700,
+              border:'1px solid rgba(251,191,36,.5)', background:'rgba(251,191,36,.12)',
+              color:'#fbbf24', whiteSpace:'nowrap', flexShrink:0,
+            }}
+          >Add plates →</button>
+        </div>
+      )}
+
+      {/* Partner "Awaiting your response" queue — dispatches where we haven't recorded any
+          action (action_channel is null) and the row is still alerted/dispatched. Distinct from
+          the general Open Jobs list so partners see exactly what the dispatch system is waiting on. */}
+      {user?._role === 'partner' && (() => {
+        const awaiting = allViolations.filter(v =>
+          !v.action_channel && ['alerted', 'dispatched'].includes(v._origStatus || v.status)
+        );
+        if (awaiting.length === 0) return null;
+        return (
+          <div style={{marginBottom:18}}>
+            <div className="section-header">
+              <div className="section-title" style={{color:'#fbbf24'}}>
+                {awaiting.length} dispatch{awaiting.length === 1 ? '' : 'es'} awaiting your response
+              </div>
+              <div className="section-count">{awaiting.length}</div>
+            </div>
+            <div style={{display:'flex', flexDirection:'column', gap:8}}>
+              {awaiting.map(v => {
+                const isActing = acting === v.id;
+                const anyActing = acting !== null;
+                const lotName = lotMap[v.lot_id]?.name || v._lot_name || '—';
+                const dispatchedAt = v.dispatched_at || v.created_at || v.detected_at;
+                return (
+                  <div key={'awaiting-' + v.id} style={{
+                    background:'var(--bg-card)', border:'1px solid rgba(251,191,36,.25)',
+                    borderRadius:10, padding:'10px 12px',
+                    display:'flex', flexWrap:'wrap', alignItems:'center', gap:10,
+                  }}>
+                    <div style={{flex:1, minWidth:180}}>
+                      <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:4}}>
+                        <span style={{
+                          fontFamily:'ui-monospace, Menlo, monospace', fontSize:13, fontWeight:700,
+                          background:'var(--bg-inset)', padding:'2px 8px', borderRadius:6,
+                          border:'1px solid var(--border)', color:'var(--text-primary)',
+                        }}>{v.plate_text || '—'}</span>
+                        <span style={{fontSize:12, color:'var(--text-secondary)'}}>{lotName}</span>
+                      </div>
+                      <div style={{fontSize:11, color:'var(--text-faint)'}}>
+                        Dispatched {dispatchedAt ? fmtTime(dispatchedAt) : '—'}
+                      </div>
+                    </div>
+                    <div style={{display:'flex', gap:6, flexShrink:0}}>
+                      <button
+                        onClick={() => requestAction(v.id, 'tow')}
+                        disabled={anyActing}
+                        style={{
+                          fontSize:12, padding:'6px 12px', borderRadius:6, fontWeight:700,
+                          border:'1px solid #ef4444', background:'#ef4444', color:'#fff',
+                          cursor: anyActing ? 'wait' : 'pointer', opacity: anyActing ? 0.6 : 1,
+                        }}
+                      >{isActing ? '…' : 'Tow'}</button>
+                      <button
+                        onClick={() => requestAction(v.id, 'no_action')}
+                        disabled={anyActing}
+                        style={{
+                          fontSize:12, padding:'6px 12px', borderRadius:6, fontWeight:600,
+                          border:'1px solid var(--border)', background:'transparent', color:'var(--text-primary)',
+                          cursor: anyActing ? 'wait' : 'pointer', opacity: anyActing ? 0.6 : 1,
+                        }}
+                      >{isActing ? '…' : 'No-tow'}</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Active jobs */}
       <div className="section-header">
@@ -8130,7 +8226,7 @@ function App() {
 
         <div key={tab + (viewAs?.id || '')} className="page-slide">
           {tab === 'overview' && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
-          {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} />}
+          {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
           {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
