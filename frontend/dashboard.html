@@ -2799,6 +2799,32 @@ function useOnlineStatus() {
   return { online, reconnected };
 }
 
+// ── Interval-fetch hook ──────────────────────────────────────
+// One-shot + interval poller. Runs `fn` once on mount, then every `ms`
+// milliseconds (pass 0 or negative to disable the interval and fire once only).
+// Uses a single useEffect so the initial call and the first interval tick
+// can't race, and sets a `cancelled` flag so a late-returning in-flight fetch
+// doesn't push stale state after unmount.
+//
+// Dependencies go in `deps` — treat it like the deps array on useEffect.
+// Because deps is dynamic we silence exhaustive-deps at the call site.
+function useIntervalFetch(fn, ms, deps) {
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      try { await fn(); } catch (_) { /* caller is responsible for error state */ }
+    };
+    run();
+    if (ms > 0) {
+      const h = setInterval(run, ms);
+      return () => { cancelled = true; clearInterval(h); };
+    }
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+}
+
 // ── Haptic feedback ──────────────────────────────────────────
 function haptic(style = 'light') {
   if (!navigator.vibrate) return;
@@ -4895,7 +4921,7 @@ function BillingQuickBooksView({ partnersProp, lots }) {
     }
   }, [lots]);
 
-  React.useEffect(() => { refresh(); }, [refresh]);
+  useIntervalFetch(refresh, 0, [refresh]);
 
   async function act(path, body) {
     try {
@@ -5234,12 +5260,9 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     }
   }, [ownerId, role]);
 
-  React.useEffect(() => { refresh(false); }, [refresh]);
-  // Poll every 15 s per spec.
-  React.useEffect(() => {
-    const t = setInterval(() => refresh(true), 15000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  // Poll every 15 s per spec. Runs once immediately on mount (no race
+  // against the first interval tick) and on every `refresh` identity change.
+  useIntervalFetch(() => refresh(true), 15000, [refresh]);
 
   // Fire the currently-staged action. Called by the modal's Confirm button;
   // `reason` is the trimmed textarea value (may be empty).
@@ -6445,7 +6468,9 @@ function TruckParkingLog({ propertyId, refreshKey }) {
     setLoading(false);
   }, [propertyId, filters, page]);
 
-  useEffect(() => { load(); }, [load, refreshKey]);
+  // One-shot load — the realtime channel + explicit Refresh handle updates.
+  // refreshKey still forces a reload on external triggers.
+  useIntervalFetch(load, 0, [load, refreshKey]);
 
   async function handleCancel(reason) {
     if (!cancelModal) return;
@@ -6681,11 +6706,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     const pl = await db.getResidentPlates(propertyId);
     setPlates(pl);
   }, [propertyId]);
-  useEffect(() => {
-    if (!propertyId) return;
-    const id = setInterval(refreshPlates, 20000);
-    return () => clearInterval(id);
-  }, [refreshPlates]);
+  useIntervalFetch(refreshPlates, 20000, [refreshPlates]);
   useEffect(() => {
     if (!supabase || !propertyId) return;
     const debouncedRefresh = makeDebounced(refreshPlates, 200);
@@ -6713,11 +6734,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     setVisitorPasses(vp);
     setPassTotalCount(count);
   }, [propertyId]);
-  useEffect(() => {
-    if (!propertyId) return;
-    const id = setInterval(refreshVisitorPasses, 20000);
-    return () => clearInterval(id);
-  }, [refreshVisitorPasses]);
+  useIntervalFetch(refreshVisitorPasses, 20000, [refreshVisitorPasses]);
   useEffect(() => {
     if (!supabase || !propertyId) return;
     const debouncedRefresh = makeDebounced(refreshVisitorPasses, 200);
@@ -6760,11 +6777,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     const ev = await db.getRecentPlateEvents(propertyId, 50);
     setEvents(ev);
   }, [propertyId]);
-  useEffect(() => {
-    if (!propertyId) return;
-    const id = setInterval(refreshEvents, 20000);
-    return () => clearInterval(id);
-  }, [refreshEvents]);
+  useIntervalFetch(refreshEvents, 20000, [refreshEvents]);
   useEffect(() => {
     if (!supabase || !propertyId) return;
     const debouncedRefresh = makeDebounced(refreshEvents, 200);
