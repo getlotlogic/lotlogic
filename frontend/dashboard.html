@@ -1803,6 +1803,21 @@ function normalizeViolation(v) {
   };
 }
 
+// ── Truck plaza default policy template ──────────────────────
+// Source of truth is the matching constant in frontend/visit.html. Keep in sync.
+const DEFAULT_TRUCK_PLAZA_POLICY = `TRUCK PARKING POLICIES
+
+1. DROPPED TRAILERS — Dropped trailers are NOT permitted on the property.
+2. DESIGNATED PARKING ONLY — All trucks must park in marked parking spaces only. Parking is NOT allowed beside the store, around the CAT scale, at gas/diesel drop locations, beside the white air-hose building, parallel to the driveway, in front of or blocking dumpsters, or in employee parking areas.
+3. PARKING TIME LIMIT — Maximum parking time is 48 hours. Once your noted time has ended, trucks must remain off the property for 24 hours before returning.
+4. NO VEHICLE WASHING — Truck or trailer washing is NOT permitted on the property.
+5. NO PERSONAL VEHICLES — Personal vehicles are NOT allowed in truck parking areas or employee parking areas.
+6. DIESEL FUEL ISLAND — Sleeping or parking on the diesel fuel island is strictly prohibited.
+
+TOWING ENFORCED — Violation of these policies will result in towing at the vehicle owner's expense.
+
+LIABILITY NOTICE — The property owner and tow operator are not responsible for any damage to vehicles that occurs on the property or during towing. By agreeing below, you confirm you have read these policies and agree to follow them.`;
+
 // ── Supabase data layer (with Rails API fallback) ─────────────
 // Real Supabase table names: lot_owners, enforcement_partners, lots, cameras,
 // violations, snapshots, camera_zones
@@ -2548,6 +2563,46 @@ const db = {
       if (!error && data) return data;
     }
     return [];
+  },
+  async countVisitorPasses(propertyId) {
+    if (supabase) {
+      const { count, error } = await supabase
+        .from('visitor_passes')
+        .select('id', { count: 'exact', head: true })
+        .eq('property_id', propertyId);
+      if (!error) return count || 0;
+    }
+    return 0;
+  },
+  // Backend-backed paginated + filtered log for the Truck Parking Log tab.
+  // Returns { items, total, page, page_size } on format=json, or a Blob on format=csv.
+  async getParkingLog(propertyId, opts = {}) {
+    const params = new URLSearchParams();
+    params.set('property_id', propertyId);
+    if (opts.format) params.set('format', opts.format);
+    if (opts.status) params.set('status', opts.status);
+    if (opts.plate) params.set('plate', opts.plate);
+    if (opts.company_name) params.set('company_name', opts.company_name);
+    if (opts.date_from) params.set('date_from', opts.date_from);
+    if (opts.date_to) params.set('date_to', opts.date_to);
+    if (opts.page) params.set('page', String(opts.page));
+    if (opts.page_size) params.set('page_size', String(opts.page_size));
+    if (opts.format === 'csv') {
+      const token = getSessionToken();
+      const headers = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const r = await fetch(`${API}/visitor_passes/parking-log?${params}`, { headers });
+      if (!r.ok) throw new Error(`Log export failed (${r.status})`);
+      return r.blob();
+    }
+    return apiFetch(`/visitor_passes/parking-log?${params}`);
+  },
+  async cancelVisitorPass(id, reason) {
+    return apiFetch(`/visitor_passes/${id}/cancel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
   },
   async getALPRCameras(propertyId) {
     if (supabase) {
@@ -3899,7 +3954,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
           supabase.from('violations').update({
             status: 'alerted', departed_at: null, empty_streak: 0
           }).eq('id', v.id).then(() => {
-            console.log(`Auto-recovered false departure: ${v.id}, zone ${v.zone_id}`);
+            if (window.LOTLOGIC_DEBUG) console.log(`Auto-recovered false departure: ${v.id}, zone ${v.zone_id}`);
             if (onAction) onAction();
           });
         }
@@ -3936,7 +3991,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
 
         if (streak.count >= DEPARTED_STREAK) {
           departedFlaggedRef.current.add(v.id);
-          console.log(`Vehicle departed — violation ${v.id}, zone ${v.zone_id}, ${streak.count} consecutive empty snapshots`);
+          if (window.LOTLOGIC_DEBUG) console.log(`Vehicle departed — violation ${v.id}, zone ${v.zone_id}, ${streak.count} consecutive empty snapshots`);
           db.markDeparted(v.id, streak.count);
         }
       } else if (gone === true) {
@@ -3971,7 +4026,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
         const age = now - new Date(v.detected_at).getTime();
         if (age > STALE_AGE_MS) {
           autoDismissedRef.current.add(v.id);
-          console.log(`Auto-dismissing stale violation ${v.id}: ${Math.round(age / 60000)}m old, no acknowledgment`);
+          if (window.LOTLOGIC_DEBUG) console.log(`Auto-dismissing stale violation ${v.id}: ${Math.round(age / 60000)}m old, no acknowledgment`);
           db.markDeparted(v.id, 0);
           continue;
         }
@@ -3985,7 +4040,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
         } else if (now - departedTimersRef.current[v.id] > DEPARTED_AUTO_DISMISS_MS) {
           autoDismissedRef.current.add(v.id);
           delete departedTimersRef.current[v.id];
-          console.log(`Auto-resolving departed violation ${v.id} after grace period`);
+          if (window.LOTLOGIC_DEBUG) console.log(`Auto-resolving departed violation ${v.id} after grace period`);
           db.recordAction(v.id, 'already_gone', {}).catch(e => console.warn('Auto-dismiss failed:', e));
           continue;
         }
@@ -5766,6 +5821,225 @@ function SightingStrip({ sightings, cameras, nowTick }) {
   );
 }
 
+// ── Truck Parking Log ────────────────────────────────────────
+// Paginated, filterable temporary-pass log for truck_plaza properties.
+// Data comes from the backend /visitor_passes/parking-log endpoint — the same
+// shape as the CSV export so the two never drift.
+function TruckParkingLog({ propertyId, refreshKey }) {
+  const { addToast } = useToast();
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const pageSize = 100;
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [filters, setFilters] = useState(() => {
+    const today = new Date();
+    const iso = today.toISOString().slice(0, 10);
+    return { date_from: iso, date_to: iso, plate: '', company_name: '', status: '' };
+  });
+  const [pendingFilters, setPendingFilters] = useState(filters);
+  const [cancelModal, setCancelModal] = useState(null); // { id, plate_text } | null
+  const [cancelReason, setCancelReason] = useState('');
+  const [exporting, setExporting] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!propertyId) return;
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await db.getParkingLog(propertyId, {
+        ...filters,
+        page,
+        page_size: pageSize,
+      });
+      setRows(res.items || []);
+      setTotal(res.total ?? (res.items?.length || 0));
+    } catch (e) {
+      setErr(e.message || 'Failed to load log');
+    }
+    setLoading(false);
+  }, [propertyId, filters, page]);
+
+  useEffect(() => { load(); }, [load, refreshKey]);
+
+  async function handleCancel() {
+    if (!cancelModal) return;
+    try {
+      await db.cancelVisitorPass(cancelModal.id, cancelReason.trim() || undefined);
+      addToast('Pass cancelled', 'success');
+      setCancelModal(null);
+      setCancelReason('');
+      load();
+    } catch (e) {
+      addToast('Cancel failed: ' + (e.message || ''), 'error');
+    }
+  }
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const blob = await db.getParkingLog(propertyId, { ...filters, format: 'csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const today = new Date().toISOString().slice(0, 10);
+      a.download = `truck-parking-log-${today}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      addToast('Export failed: ' + (e.message || ''), 'error');
+    }
+    setExporting(false);
+  }
+
+  function applyFilters(e) {
+    e?.preventDefault();
+    setPage(1);
+    setFilters(pendingFilters);
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const inputStyle = {padding:'6px 8px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:12};
+  const thStyle = {textAlign:'left',padding:'6px 8px',fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',color:'var(--text-muted)',borderBottom:'1px solid var(--border)',whiteSpace:'nowrap'};
+  const tdStyle = {padding:'8px',fontSize:12,color:'var(--text-primary)',borderBottom:'1px solid var(--border-subtle)',verticalAlign:'top'};
+  const statusColor = {
+    active: '#4ade80',
+    expired: 'var(--text-muted)',
+    cancelled: '#ef4444',
+    revoked: '#ef4444',
+    towed: '#f59e0b',
+  };
+
+  return (
+    <div>
+      <form onSubmit={applyFilters} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:10,marginBottom:10,display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))',gap:8,alignItems:'end'}}>
+        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>From
+          <input type="date" value={pendingFilters.date_from} onChange={e => setPendingFilters({...pendingFilters, date_from: e.target.value})} style={inputStyle} />
+        </label>
+        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>To
+          <input type="date" value={pendingFilters.date_to} onChange={e => setPendingFilters({...pendingFilters, date_to: e.target.value})} style={inputStyle} />
+        </label>
+        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Plate
+          <input type="text" value={pendingFilters.plate} onChange={e => setPendingFilters({...pendingFilters, plate: e.target.value})} placeholder="ABC 1234" style={inputStyle} />
+        </label>
+        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Company
+          <input type="text" value={pendingFilters.company_name} onChange={e => setPendingFilters({...pendingFilters, company_name: e.target.value})} placeholder="ACME" style={inputStyle} />
+        </label>
+        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Status
+          <select value={pendingFilters.status} onChange={e => setPendingFilters({...pendingFilters, status: e.target.value})} style={inputStyle}>
+            <option value="">All</option>
+            <option value="active">Active</option>
+            <option value="expired">Expired</option>
+            <option value="cancelled">Cancelled</option>
+            <option value="towed">Towed</option>
+          </select>
+        </label>
+        <div style={{display:'flex',gap:6,alignSelf:'end'}}>
+          <button type="submit" className="pd-share-btn" style={{color:'#60a5fa'}}>Apply</button>
+          <button type="button" onClick={handleExport} disabled={exporting} className="pd-share-btn" style={{color:'#4ade80'}}>{exporting ? 'Exporting…' : 'Export CSV'}</button>
+        </div>
+      </form>
+
+      {err && <div style={{padding:12,background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',fontSize:12,marginBottom:10}}>{err}</div>}
+
+      <div style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+          <thead>
+            <tr>
+              <th style={thStyle}>Registered</th>
+              <th style={thStyle}>Company</th>
+              <th style={thStyle}>Plate</th>
+              <th style={thStyle}>Spot</th>
+              <th style={thStyle}>Phone</th>
+              <th style={thStyle}>Stay</th>
+              <th style={thStyle}>Placard</th>
+              <th style={thStyle}>Status</th>
+              <th style={thStyle}>Policy</th>
+              <th style={thStyle}>Expires</th>
+              <th style={thStyle}>Cancelled</th>
+              <th style={thStyle}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && rows.length === 0 ? (
+              <tr><td colSpan={12} style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>Loading…</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={12} style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>No entries for these filters</td></tr>
+            ) : rows.map(r => {
+              const s = r.status || 'active';
+              const color = statusColor[s] || 'var(--text-muted)';
+              const isActive = s === 'active';
+              return (
+                <tr key={r.id}>
+                  <td style={tdStyle}>{r.created_at ? new Date(r.created_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}</td>
+                  <td style={tdStyle}>{r.company_name || '—'}</td>
+                  <td style={{...tdStyle,fontFamily:"'Courier New',monospace",fontWeight:700,letterSpacing:'.05em'}}>{r.plate_text}</td>
+                  <td style={tdStyle}>{r.parking_spot || '—'}</td>
+                  <td style={tdStyle}>{r.phone || '—'}</td>
+                  <td style={tdStyle}>{r.stay_days ? `${r.stay_days}d` : '—'}</td>
+                  <td style={tdStyle}>{r.placard_color || '—'}</td>
+                  <td style={tdStyle}><span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:20,background:`${color}18`,color,border:`1px solid ${color}40`,textTransform:'uppercase'}}>{s}</span></td>
+                  <td style={tdStyle}>{r.policy_acknowledged_at ? <span style={{color:'#4ade80',fontWeight:700}}>✓</span> : <span style={{color:'var(--text-faint)'}}>—</span>}</td>
+                  <td style={tdStyle}>{r.valid_until ? new Date(r.valid_until).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}</td>
+                  <td style={tdStyle}>
+                    {r.cancelled_at ? (
+                      <>
+                        <div>{new Date(r.cancelled_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>
+                        {r.cancelled_by && <div style={{fontSize:10,color:'var(--text-faint)'}}>by {r.cancelled_by}</div>}
+                      </>
+                    ) : '—'}
+                  </td>
+                  <td style={tdStyle}>
+                    {isActive && (
+                      <button
+                        onClick={() => { setCancelModal({ id: r.id, plate_text: r.plate_text }); setCancelReason(''); }}
+                        style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'3px 8px',fontSize:10,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}
+                      >Cancel</button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,fontSize:12,color:'var(--text-muted)'}}>
+        <div>{total.toLocaleString()} total · page {page} of {totalPages}</div>
+        <div style={{display:'flex',gap:6}}>
+          <button onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1 || loading} className="pd-share-btn">Prev</button>
+          <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages || loading} className="pd-share-btn">Next</button>
+        </div>
+      </div>
+
+      {cancelModal && (
+        <div onClick={() => setCancelModal(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+          <div onClick={e => e.stopPropagation()} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:16,maxWidth:440,width:'100%'}}>
+            <div style={{fontSize:16,fontWeight:800,color:'var(--text-primary)',marginBottom:4}}>Cancel pass?</div>
+            <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:10}}>
+              Soft-cancels the active pass for <strong style={{color:'var(--text-primary)'}}>{cancelModal.plate_text}</strong>. The row stays in the log.
+            </div>
+            <textarea
+              value={cancelReason}
+              onChange={e => setCancelReason(e.target.value)}
+              rows={2}
+              placeholder="Reason (optional)"
+              style={{width:'100%',padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box'}}
+            />
+            <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:10}}>
+              <button onClick={() => setCancelModal(null)} className="pd-share-btn">Keep</button>
+              <button onClick={handleCancel} style={{background:'rgba(239,68,68,.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Cancel pass</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const { addToast } = useToast();
   const [property, setProperty] = useState(null);
@@ -5775,30 +6049,37 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const [loading, setLoading] = useState(true);
   const [showAddPlate, setShowAddPlate] = useState(false);
   const [showAddCam, setShowAddCam] = useState(false);
-  const [newPlate, setNewPlate] = useState({ plate_text: '', unit_number: '', holder_name: '', vehicle_description: '' });
+  const [newPlate, setNewPlate] = useState({ plate_text: '', unit_number: '', holder_name: '', vehicle_description: '', phone: '', vehicle_type: '' });
   const [newCam, setNewCam] = useState({ name: '', location_description: '' });
   const [newApiKey, setNewApiKey] = useState(null);
   const [saving, setSaving] = useState(false);
   const [visitorPasses, setVisitorPasses] = useState([]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsDraft, setSettingsDraft] = useState(null);
+  const [passTotalCount, setPassTotalCount] = useState(0);
   const nowTick = useNowTick();
   const tempQrRef = useRef(null);
   const permQrRef = useRef(null);
 
+  const isTruckPlaza = property?.property_type === 'truck_plaza';
+
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
     setLoading(true);
-    const [prop, pl, cam, ev, vp] = await Promise.all([
+    const [prop, pl, cam, ev, vp, pCount] = await Promise.all([
       db.getProperty(propertyId),
       db.getResidentPlates(propertyId),
       db.getALPRCameras(propertyId),
       db.getRecentPlateEvents(propertyId, 50),
       db.getVisitorPasses(propertyId, { limit: 50 }),
+      db.countVisitorPasses(propertyId),
     ]);
     setProperty(prop);
     setPlates(pl);
     setCameras(cam);
     setEvents(ev);
     setVisitorPasses(vp);
+    setPassTotalCount(pCount);
     setLoading(false);
   }, [propertyId]);
 
@@ -5845,8 +6126,12 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   // ── Visitor passes (new /visit submissions land here) ──
   const refreshVisitorPasses = useCallback(async () => {
     if (!propertyId) return;
-    const vp = await db.getVisitorPasses(propertyId, { limit: 50 });
+    const [vp, count] = await Promise.all([
+      db.getVisitorPasses(propertyId, { limit: 50 }),
+      db.countVisitorPasses(propertyId),
+    ]);
     setVisitorPasses(vp);
+    setPassTotalCount(count);
   }, [propertyId]);
   useEffect(() => {
     if (!propertyId) return;
@@ -5923,12 +6208,49 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await db.addResidentPlate({ ...newPlate, property_id: propertyId });
-      setNewPlate({ plate_text: '', unit_number: '', holder_name: '', vehicle_description: '' });
+      const payload = { ...newPlate, property_id: propertyId };
+      payload.holder_role = isTruckPlaza ? 'employee' : 'resident';
+      if (isTruckPlaza) {
+        // Apartment-only fields stay NULL on employee rows.
+        delete payload.unit_number;
+        delete payload.lease_doc_url;
+        delete payload.plate_expiration;
+      }
+      await db.addResidentPlate(payload);
+      setNewPlate({ plate_text: '', unit_number: '', holder_name: '', vehicle_description: '', phone: '', vehicle_type: '' });
       setShowAddPlate(false);
       const pl = await db.getResidentPlates(propertyId);
       setPlates(pl);
     } catch (err) { addToast('Failed to add plate. ' + (err.message || ''), 'error'); }
+    setSaving(false);
+  }
+
+  async function handleSaveSettings(e) {
+    e.preventDefault();
+    if (!settingsDraft) return;
+    setSaving(true);
+    try {
+      const updates = {};
+      // property_type change only allowed when there are zero passes.
+      if (settingsDraft.property_type !== property.property_type) {
+        if (passTotalCount > 0) {
+          addToast('Cannot change property type after passes have been recorded.', 'error');
+          setSaving(false);
+          return;
+        }
+        updates.property_type = settingsDraft.property_type;
+      }
+      if (settingsDraft.property_type === 'truck_plaza') {
+        updates.policy_text = settingsDraft.policy_text || DEFAULT_TRUCK_PLAZA_POLICY;
+        updates.policy_phone = settingsDraft.policy_phone || null;
+      }
+      const updated = await db.updateProperty(propertyId, updates);
+      setProperty(updated);
+      setShowSettings(false);
+      addToast('Settings saved', 'success');
+    } catch (err) {
+      addToast('Failed to save settings. ' + (err.message || ''), 'error');
+    }
     setSaving(false);
   }
 
@@ -5971,9 +6293,60 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
       <button onClick={onBack} style={{background:'none',border:'none',color:'var(--accent)',fontSize:13,fontWeight:700,cursor:'pointer',padding:0,marginBottom:12}}>← Back to Lots</button>
 
       <div style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:'16px',marginBottom:16}}>
-        <div style={{fontSize:18,fontWeight:800,color:'var(--text-primary)'}}>{property.name}</div>
-        <div style={{fontSize:13,color:'var(--text-muted)',marginTop:2}}>{property.address || 'No address'}</div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12}}>
+          <div style={{minWidth:0,flex:1}}>
+            <div style={{fontSize:18,fontWeight:800,color:'var(--text-primary)'}}>{property.name}</div>
+            <div style={{fontSize:13,color:'var(--text-muted)',marginTop:2}}>{property.address || 'No address'}</div>
+            <div style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',padding:'2px 7px',borderRadius:20,background:isTruckPlaza?'rgba(251,146,60,.12)':'rgba(96,165,250,.12)',color:isTruckPlaza?'#fb923c':'#60a5fa',border:isTruckPlaza?'1px solid rgba(251,146,60,.3)':'1px solid rgba(96,165,250,.3)',display:'inline-block',marginTop:6}}>{isTruckPlaza ? 'Truck Plaza' : 'Apartment'}</div>
+          </div>
+          <button
+            onClick={() => {
+              setSettingsDraft({
+                property_type: property.property_type || 'apartment',
+                policy_text: property.policy_text || DEFAULT_TRUCK_PLAZA_POLICY,
+                policy_phone: property.policy_phone || '',
+              });
+              setShowSettings(!showSettings);
+            }}
+            className="pd-share-btn"
+          >{showSettings ? 'Close' : 'Settings'}</button>
+        </div>
       </div>
+
+      {showSettings && settingsDraft && (
+        <form onSubmit={handleSaveSettings} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:16,display:'flex',flexDirection:'column',gap:8}}>
+          <label style={{fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Property Type</label>
+          <select
+            value={settingsDraft.property_type}
+            disabled={passTotalCount > 0}
+            onChange={e => setSettingsDraft({...settingsDraft, property_type: e.target.value})}
+            style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14,opacity: passTotalCount > 0 ? 0.6 : 1}}
+          >
+            <option value="apartment">Apartment</option>
+            <option value="truck_plaza">Truck Plaza</option>
+          </select>
+          {passTotalCount > 0 && (
+            <div style={{fontSize:11,color:'var(--text-faint)'}}>
+              Property type is locked: {passTotalCount} temporary pass{passTotalCount === 1 ? '' : 'es'} on record. Changing type after passes exist would corrupt the log.
+            </div>
+          )}
+          {settingsDraft.property_type === 'truck_plaza' && (
+            <>
+              <label style={{fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:4}}>Parking Policy Text</label>
+              <textarea
+                value={settingsDraft.policy_text}
+                onChange={e => setSettingsDraft({...settingsDraft, policy_text: e.target.value})}
+                rows={10}
+                style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:12,fontFamily:'monospace',resize:'vertical'}}
+              />
+              <button type="button" onClick={() => setSettingsDraft({...settingsDraft, policy_text: DEFAULT_TRUCK_PLAZA_POLICY})} className="pd-share-btn" style={{alignSelf:'flex-start'}}>Reset to default</button>
+              <label style={{fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:4}}>Towing Contact Phone</label>
+              <input type="tel" value={settingsDraft.policy_phone} onChange={e => setSettingsDraft({...settingsDraft, policy_phone: e.target.value})} placeholder="+12692176208" style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14}} />
+            </>
+          )}
+          <button type="submit" disabled={saving} style={{background:'var(--accent)',color:'#fff',border:'none',borderRadius:8,padding:'10px',fontSize:14,fontWeight:700,cursor:'pointer',marginTop:4}}>{saving ? 'Saving...' : 'Save Settings'}</button>
+        </form>
+      )}
 
       {/* Two QR codes — one for Temporary, one for Permanent */}
       <div className="pd-qr-grid">
@@ -5997,13 +6370,14 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         </div>
       </div>
 
-      {/* Permanent Plates */}
+      {/* Permanent Plates (label switches to "Permanent Plates (Employees)" on truck plazas) */}
       {(() => {
         const pendingCount = plates.filter(p => p.status === 'pending').length;
+        const label = isTruckPlaza ? 'Permanent Plates (Employees)' : 'Permanent Plates';
         return (
           <div className="pd-section-head">
             <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-              <span className="pd-section-title">Permanent Plates</span>
+              <span className="pd-section-title">{label}</span>
               <span className="pd-section-count">{plates.length}</span>
               {pendingCount > 0 && <span style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',padding:'2px 7px',borderRadius:20,background:'rgba(251,191,36,.12)',color:'#fbbf24',border:'1px solid rgba(251,191,36,.25)'}}>{pendingCount} PENDING</span>}
             </div>
@@ -6015,8 +6389,24 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
       {showAddPlate && (
         <form onSubmit={handleAddPlate} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:12,display:'flex',flexDirection:'column',gap:8}}>
           <input value={newPlate.plate_text} onChange={e => setNewPlate({...newPlate, plate_text: e.target.value})} placeholder="Plate (e.g. ABC1234)" required style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14,textTransform:'uppercase'}} />
-          <input value={newPlate.holder_name} onChange={e => setNewPlate({...newPlate, holder_name: e.target.value})} placeholder="Holder name" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
-          <input value={newPlate.vehicle_description} onChange={e => setNewPlate({...newPlate, vehicle_description: e.target.value})} placeholder="Vehicle (e.g. Blue Honda Civic)" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
+          <input value={newPlate.holder_name} onChange={e => setNewPlate({...newPlate, holder_name: e.target.value})} placeholder={isTruckPlaza ? 'Employee name' : 'Holder name'} style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
+          {isTruckPlaza && (
+            <>
+              <input type="tel" value={newPlate.phone} onChange={e => setNewPlate({...newPlate, phone: e.target.value})} placeholder="Phone" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
+              <select value={newPlate.vehicle_type} onChange={e => setNewPlate({...newPlate, vehicle_type: e.target.value})} style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}}>
+                <option value="">Vehicle type…</option>
+                <option value="semi">Semi</option>
+                <option value="box_truck">Box truck</option>
+                <option value="van">Van</option>
+                <option value="car">Car</option>
+                <option value="other">Other</option>
+              </select>
+            </>
+          )}
+          <input value={newPlate.vehicle_description} onChange={e => setNewPlate({...newPlate, vehicle_description: e.target.value})} placeholder={isTruckPlaza ? 'Vehicle (e.g. Freightliner Cascadia)' : 'Vehicle (e.g. Blue Honda Civic)'} style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
+          {!isTruckPlaza && (
+            <input value={newPlate.unit_number || ''} onChange={e => setNewPlate({...newPlate, unit_number: e.target.value})} placeholder="Unit number (optional)" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
+          )}
           <button type="submit" disabled={saving} style={{background:'var(--accent)',color:'#fff',border:'none',borderRadius:6,padding:'8px',fontSize:13,fontWeight:700,cursor:'pointer'}}>{saving ? 'Saving...' : 'Add Plate'}</button>
         </form>
       )}
@@ -6046,8 +6436,22 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         {plates.length === 0 && <div className="pd-empty">No permanent plates yet</div>}
       </div>
 
-      {/* Temporary Passes — /temp submissions land here */}
-      {(() => {
+      {/* Temporary Passes / Truck Parking Log — variant depends on property_type */}
+      {isTruckPlaza ? (
+        <>
+          <div className="pd-section-head">
+            <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+              <span className="pd-section-title">Truck Parking Log</span>
+              <span className="pd-section-count">{passTotalCount.toLocaleString()}</span>
+            </div>
+            <div className="pd-section-meta">
+              <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
+              Live
+            </div>
+          </div>
+          <TruckParkingLog propertyId={propertyId} refreshKey={visitorPasses.length} />
+        </>
+      ) : (() => {
         const activeVisitors = visitorPasses.filter(v => {
           if (v.status && v.status !== 'active') return false;
           return !v.valid_until || new Date(v.valid_until).getTime() > nowTick;
@@ -6257,7 +6661,7 @@ function ALPRPropertiesPage({ user }) {
   const [properties, setProperties] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [newProp, setNewProp] = useState({ name: '', address: '' });
+  const [newProp, setNewProp] = useState({ name: '', address: '', property_type: 'apartment' });
   const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
 
@@ -6274,8 +6678,11 @@ function ALPRPropertiesPage({ user }) {
       const propData = { ...newProp };
       if (user._role === 'partner') propData.tow_company_id = user.id;
       else propData.owner_id = user.id;
+      if (propData.property_type === 'truck_plaza' && !propData.policy_text) {
+        propData.policy_text = DEFAULT_TRUCK_PLAZA_POLICY;
+      }
       await db.createProperty(propData);
-      setNewProp({ name: '', address: '' });
+      setNewProp({ name: '', address: '', property_type: 'apartment' });
       setShowAdd(false);
       const p = await db.getProperties(user.id, user._role);
       setProperties(p);
@@ -6298,6 +6705,25 @@ function ALPRPropertiesPage({ user }) {
         <form onSubmit={handleAdd} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:12,display:'flex',flexDirection:'column',gap:8}}>
           <input value={newProp.name} onChange={e => setNewProp({...newProp, name: e.target.value})} placeholder="Lot name" required style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14}} />
           <input value={newProp.address} onChange={e => setNewProp({...newProp, address: e.target.value})} placeholder="Address" style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14}} />
+          <label style={{display:'block',fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:2}}>Property Type</label>
+          <select value={newProp.property_type} onChange={e => setNewProp({...newProp, property_type: e.target.value})} style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14}}>
+            <option value="apartment">Apartment</option>
+            <option value="truck_plaza">Truck Plaza</option>
+          </select>
+          {newProp.property_type === 'truck_plaza' && (
+            <>
+              <label style={{display:'block',fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:2}}>Parking Policy Text</label>
+              <textarea
+                value={newProp.policy_text ?? DEFAULT_TRUCK_PLAZA_POLICY}
+                onChange={e => setNewProp({...newProp, policy_text: e.target.value})}
+                rows={8}
+                style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:12,fontFamily:'monospace',resize:'vertical'}}
+              />
+              <button type="button" onClick={() => setNewProp({...newProp, policy_text: DEFAULT_TRUCK_PLAZA_POLICY})} className="pd-share-btn" style={{alignSelf:'flex-start'}}>Reset to default</button>
+              <label style={{display:'block',fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:2}}>Towing Contact Phone</label>
+              <input type="tel" value={newProp.policy_phone || ''} onChange={e => setNewProp({...newProp, policy_phone: e.target.value})} placeholder="+12692176208" style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14}} />
+            </>
+          )}
           <button type="submit" disabled={saving} style={{background:'var(--accent)',color:'#fff',border:'none',borderRadius:8,padding:'10px',fontSize:14,fontWeight:700,cursor:'pointer'}}>{saving ? 'Creating...' : 'Create Lot'}</button>
         </form>
       )}
