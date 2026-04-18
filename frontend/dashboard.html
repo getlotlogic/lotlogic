@@ -1860,8 +1860,26 @@ async function authLogin(email, password) {
   let body = null;
   try { body = await r.json(); } catch {}
   if (!r.ok) {
-    const err = new Error(body?.detail || `Sign-in failed (${r.status})`);
+    // Pydantic 422 returns { detail: [{msg, loc, type, ...}] }. The old
+    // `body?.detail || fallback` path coerced the array to a string in
+    // `new Error(...)`, which meant the login form rendered
+    // "[object Object]" for every validation failure (e.g. an unparseable
+    // email address). Fish out the human-readable `msg` fields when
+    // detail is an array; fall back to string detail; last-ditch show
+    // a generic "please check your email" message.
+    const detail = body && body.detail;
+    let pretty;
+    if (Array.isArray(detail)) {
+      const msgs = detail.map(d => (d && typeof d === 'object' ? d.msg : String(d))).filter(Boolean);
+      pretty = msgs.length ? msgs.join(', ') : 'Please check your email and try again.';
+    } else if (typeof detail === 'string') {
+      pretty = detail;
+    } else {
+      pretty = `Sign-in failed (${r.status})`;
+    }
+    const err = new Error(pretty);
     err.status = r.status;
+    err.detail = detail;
     throw err;
   }
   return body;
