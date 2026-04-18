@@ -354,7 +354,9 @@
       } catch (err) {
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
         btn.disabled = false;
-        btn.textContent = 'Request Permanent Pass';
+        btn.textContent = property.property_type === 'truck_plaza'
+          ? 'Register Employee Plate'
+          : 'Request Permanent Pass';
         submitting = false;
       }
     }
