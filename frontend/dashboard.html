@@ -1663,7 +1663,8 @@ class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     // Surface enough context for after-the-fact debugging without leaking
-    // user data. No console.log — keep the dev console clean.
+    // user data. Uses console.error (not the ungated logger) so the dev
+    // console stays clean in normal operation.
     if (typeof window !== 'undefined' && window.console && window.console.error) {
       window.console.error('[ErrorBoundary:' + (this.props.label || 'unknown') + ']', error, info);
     }
@@ -5411,14 +5412,16 @@ function displayBucketFor(rawStatus) {
 }
 
 // Visible queue ordering for the UI (urgency-first). Keyed by display bucket.
+// Glyphs make the tone distinguishable without relying on color alone
+// (WCAG 1.4.1 — Use of Color). Mirror glyphs are used by status chips below.
 const REVIEW_QUEUES = [
-  { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red' },
-  { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', tone: 'amber' },
-  { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              tone: 'amber' },
-  { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    tone: 'green' },
-  { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           tone: 'gray' },
-  { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        tone: 'gray' },
-  { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue' },
+  { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red',   glyph: '!'  },
+  { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', tone: 'amber', glyph: '\u25C6' /* ◆ */ },
+  { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              tone: 'amber', glyph: '\u25C6' },
+  { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    tone: 'green', glyph: '\u2713' /* ✓ */ },
+  { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           tone: 'gray',  glyph: '\u2014' /* — */ },
+  { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        tone: 'gray',  glyph: '\u2014' },
+  { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue',  glyph: '\u275A\u275A' /* ❚❚ */ },
 ];
 
 const TONE_COLORS = {
@@ -5591,21 +5594,30 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
               background: TONE_COLORS.blue.bg, color: TONE_COLORS.blue.fg,
               border: `1px solid ${TONE_COLORS.blue.border}`, textTransform: 'uppercase', letterSpacing: '.04em',
             }
-          }, 'Held by operator'),
+          },
+            React.createElement('span', { 'aria-hidden': true, style: { marginRight: 4 } }, '\u275A\u275A'),
+            'Held by operator',
+          ),
           r.force_bill_at && React.createElement('span', {
             style: {
               fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
               background: TONE_COLORS.purple.bg, color: TONE_COLORS.purple.fg,
               border: `1px solid ${TONE_COLORS.purple.border}`, textTransform: 'uppercase', letterSpacing: '.04em',
             }
-          }, 'Force-billed'),
+          },
+            React.createElement('span', { 'aria-hidden': true, style: { marginRight: 4 } }, '\u26A1' /* ⚡ */),
+            'Force-billed',
+          ),
           r.invoiced_at && React.createElement('span', {
             style: {
               fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
               background: TONE_COLORS.green.bg, color: TONE_COLORS.green.fg,
               border: `1px solid ${TONE_COLORS.green.border}`, textTransform: 'uppercase', letterSpacing: '.04em',
             }
-          }, 'Invoiced'),
+          },
+            React.createElement('span', { 'aria-hidden': true, style: { marginRight: 4 } }, '\u2713'),
+            'Invoiced',
+          ),
         ),
         React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 } },
           propName + ' · ' + partner + ' · detected ' + (r.created_at ? fmtDate(r.created_at) + ' ' + fmtTime(r.created_at) : '—'),
@@ -5700,7 +5712,14 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
             }
           }, items.length),
           React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-            React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' } }, q.title),
+            React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' } },
+              q.glyph
+                ? React.createElement(React.Fragment, null,
+                    React.createElement('span', { 'aria-hidden': true, style: { color: tone.fg, marginRight: 6, fontWeight: 800 } }, q.glyph),
+                    q.title,
+                  )
+                : q.title,
+            ),
             React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 } }, q.desc),
           ),
           React.createElement('span', { 'aria-hidden': true, style: { color: 'var(--text-faint)', fontSize: 12 } }, isOpen ? '▾' : '▸'),
@@ -6859,7 +6878,7 @@ function TruckParkingLog({ propertyId }) {
                   <td style={tdStyle}>{r.phone || '—'}</td>
                   <td style={tdStyle}>{r.stay_days ? `${r.stay_days}d` : '—'}</td>
                   <td style={tdStyle}>{r.placard_color || '—'}</td>
-                  <td style={tdStyle}><span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:20,background:`${color}18`,color,border:`1px solid ${color}40`,textTransform:'uppercase'}}>{s}</span></td>
+                  <td style={tdStyle}><span aria-label={`Pass status: ${s}`} style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:20,background:`${color}18`,color,border:`1px solid ${color}40`,textTransform:'uppercase'}}>{s}</span></td>
                   <td style={tdStyle}>{r.policy_acknowledged_at ? <span style={{color:'#4ade80',fontWeight:700}}>✓</span> : <span style={{color:'var(--text-faint)'}}>—</span>}</td>
                   <td style={tdStyle}>{r.valid_until ? new Date(r.valid_until).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}</td>
                   <td style={tdStyle}>
