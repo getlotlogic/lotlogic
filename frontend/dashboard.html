@@ -5563,6 +5563,100 @@ function ImageLightbox({ src, caption, downloadHref, onClose }) {
   );
 }
 
+// Vertical 5-step review timeline: Detected, Dispatched, Acted, Confirmed,
+// Invoiced. Each step has a filled dot if the event occurred, hollow
+// otherwise. Timestamps render local time, channel icon decorates the
+// "Acted" step so operators can tell how the partner responded at a glance.
+function TimelineStrip({ row }) {
+  const detectedAt = (row._plate_event && row._plate_event.created_at) || row.created_at;
+  const dispatchedAt = row.dispatched_at || row.sms_sent_at;
+  const actedAt = row.action_at;
+  const confirmedAt = row.tow_confirmed_at;
+  const invoicedAt = row.invoiced_at;
+  const channel = channelIcon(row.action_channel);
+  const evidence = row.tow_confirmation || null;
+
+  const steps = [
+    { key: 'detected',   label: 'Detected',   at: detectedAt,  icon: null },
+    { key: 'dispatched', label: 'Dispatched', at: dispatchedAt, icon: channel && (row.sms_sent_at && !row.dispatched_at) ? { icon: '\uD83D\uDCAC', label: 'SMS' } : null, note: row.dispatched_at ? null : (row.sms_sent_at ? 'SMS only' : null) },
+    { key: 'acted',      label: 'Acted',      at: actedAt,      icon: channel, note: row.action_taken || null },
+    { key: 'confirmed',  label: 'Confirmed',  at: confirmedAt,  icon: confirmedAt ? { icon: '\uD83D\uDCF7', label: 'camera_sighting' } : null, note: evidence && typeof evidence.delta_seconds === 'number' ? `plate Δ +${Math.round(evidence.delta_seconds)}s` : null },
+    { key: 'invoiced',   label: 'Invoiced',   at: invoicedAt,   icon: null,  note: row.quickbooks_invoice_id ? ('QB ' + String(row.quickbooks_invoice_id).slice(0, 8)) : null },
+  ];
+
+  return React.createElement('div', {
+    style: { display: 'flex', flexDirection: 'column', gap: 3, margin: '6px 0 4px', paddingLeft: 2 },
+  },
+    steps.map((s, idx) => {
+      const happened = !!s.at;
+      return React.createElement('div', {
+        key: s.key,
+        style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: happened ? 'var(--text-muted)' : 'var(--text-faint)' },
+      },
+        React.createElement('span', {
+          'aria-hidden': true,
+          style: {
+            display: 'inline-block', width: 9, height: 9, borderRadius: 999,
+            background: happened ? TONE_COLORS.green.fg : 'transparent',
+            border: '1.5px solid ' + (happened ? TONE_COLORS.green.fg : 'var(--border)'),
+            flexShrink: 0,
+          },
+        }),
+        React.createElement('span', { style: { width: 78, flexShrink: 0, color: happened ? 'var(--text-secondary)' : 'var(--text-faint)', fontWeight: 600 } }, s.label),
+        React.createElement('span', { style: { flex: 1 } },
+          happened
+            ? (fmtDate(s.at) + '  ' + fmtTime(s.at))
+            : '\u2014',
+        ),
+        s.icon && React.createElement('span', {
+          title: 'Via ' + s.icon.label,
+          style: { display: 'inline-flex', alignItems: 'center', gap: 3, padding: '0 5px', borderRadius: 4, background: 'var(--bg-inset)', border: '1px solid var(--border)', color: 'var(--text-muted)' },
+        }, s.icon.icon),
+        s.note && React.createElement('span', {
+          style: { fontSize: 10, color: 'var(--text-faint)', fontStyle: 'italic' },
+        }, s.note),
+      );
+    }),
+  );
+}
+
+// Pass-on-this-plate panel. Surfaces a visitor_pass row that matches the
+// violation's plate — diagnostic for disputes because if a legit pass
+// exists, the tow likely shouldn't have happened. Uses the Driver naming
+// convention per the project's Permanent/Temporary/Driver rule.
+function PassContextPanel({ pass }) {
+  if (!pass) return null;
+  const validFrom = pass.valid_from ? (fmtDate(pass.valid_from) + ' ' + fmtTime(pass.valid_from)) : '—';
+  const validUntil = pass.valid_until ? (fmtDate(pass.valid_until) + ' ' + fmtTime(pass.valid_until)) : '—';
+  const activeNow = pass.status === 'active' && pass.valid_until
+    ? new Date(pass.valid_until).getTime() > Date.now() : false;
+  const tone = activeNow ? TONE_COLORS.amber : TONE_COLORS.gray;
+  const bits = [];
+  if (pass.visitor_name) bits.push({ label: 'Driver', value: pass.visitor_name });
+  if (pass.company_name) bits.push({ label: '', value: pass.company_name });
+  if (pass.parking_spot) bits.push({ label: 'spot', value: pass.parking_spot });
+  if (pass.placard_color) bits.push({ label: 'placard', value: pass.placard_color });
+  return React.createElement('div', {
+    style: {
+      margin: '6px 0 2px', padding: '6px 8px', borderRadius: 6,
+      background: tone.bg, border: `1px solid ${tone.border}`,
+      fontSize: 11, color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+    },
+  },
+    React.createElement('span', {
+      style: { fontWeight: 700, color: tone.fg, textTransform: 'uppercase', letterSpacing: '.04em', fontSize: 10 },
+    }, activeNow ? 'Active pass on this plate' : 'Past pass on this plate'),
+    bits.map((b, i) => React.createElement('span', { key: i },
+      b.label ? (b.label + ' ') : '',
+      React.createElement('strong', { style: { color: 'var(--text-primary)' } }, b.value),
+    )),
+    pass.policy_acknowledged_at && React.createElement('span', { title: 'Policy acknowledged at ' + new Date(pass.policy_acknowledged_at).toLocaleString() },
+      'policy ', React.createElement('span', { style: { color: TONE_COLORS.green.fg } }, '\u2713'), ' ', fmtTime(pass.policy_acknowledged_at),
+    ),
+    React.createElement('span', null, 'valid ', validFrom, ' \u2192 ', validUntil),
+  );
+}
+
 function ConfirmationReviewView({ user, lots, partnersProp }) {
   const [rows, setRows] = React.useState(null);
   const [err, setErr] = React.useState('');
@@ -5827,20 +5921,50 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
             'Invoiced',
           ),
         ),
-        React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 } },
-          propName + ' · ' + partner + ' · detected ' + (r.created_at ? fmtDate(r.created_at) + ' ' + fmtTime(r.created_at) : '—'),
+        React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 2 } },
+          propName + ' · ' + partner,
         ),
+        // Compact chip row — kept for quick scanning even though the full
+        // timeline below captures the same channel + delta data.
         React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-faint)' } },
           channel && React.createElement('span', {
             title: `Via ${channel.label}`,
             style: { display: 'inline-flex', alignItems: 'center', gap: 3, padding: '1px 6px', borderRadius: 4, background: 'var(--bg-inset)', border: '1px solid var(--border)' },
           }, channel.icon, ' ', channel.label),
           r.action_taken && React.createElement('span', null, 'Partner: ', React.createElement('strong', { style: { color: 'var(--text-secondary)' } }, r.action_taken)),
-          r.tow_confirmed_at && React.createElement('span', null, 'Confirmed ', fmtTime(r.tow_confirmed_at)),
           evidence && evidence.truck_plate && React.createElement('span', {
             style: { padding: '1px 6px', borderRadius: 4, background: TONE_COLORS.green.bg, color: TONE_COLORS.green.fg, border: `1px solid ${TONE_COLORS.green.border}` },
             title: 'Camera sighting that confirmed this tow',
-          }, '\uD83D\uDE9A ', evidence.truck_plate, typeof evidence.delta_seconds === 'number' ? ` · Δ${Math.round(evidence.delta_seconds)}s` : ''),
+          }, '\uD83D\uDE9A ', evidence.truck_plate),
+          // Delta chip — first-class on disputed rows, still useful elsewhere.
+          evidence && typeof evidence.delta_seconds === 'number' && React.createElement('span', {
+            title: 'Seconds between partner action and camera sighting',
+            style: {
+              padding: '1px 6px', borderRadius: 4, fontWeight: 700,
+              background: displayBucketFor(computeBillingStatus(r)) === 'fraud' ? TONE_COLORS.red.bg : TONE_COLORS.amber.bg,
+              color:      displayBucketFor(computeBillingStatus(r)) === 'fraud' ? TONE_COLORS.red.fg : TONE_COLORS.amber.fg,
+              border: '1px solid ' + (displayBucketFor(computeBillingStatus(r)) === 'fraud' ? TONE_COLORS.red.border : TONE_COLORS.amber.border),
+            },
+          }, `\u0394 ${evidence.delta_seconds >= 0 ? '+' : ''}${Math.round(evidence.delta_seconds)}s`),
+        ),
+        // Timeline + pass + evidence JSON
+        React.createElement(TimelineStrip, { row: r }),
+        React.createElement(PassContextPanel, { pass: r._pass }),
+        evidence && React.createElement('details', {
+          style: { marginTop: 4, fontSize: 11 },
+        },
+          React.createElement('summary', {
+            style: { cursor: 'pointer', color: 'var(--text-faint)', userSelect: 'none' },
+          }, 'Evidence JSON'),
+          React.createElement('pre', {
+            style: {
+              margin: '4px 0 0', padding: 8, background: 'var(--bg-inset)',
+              border: '1px solid var(--border)', borderRadius: 6,
+              fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 11,
+              color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              maxHeight: 260, overflow: 'auto',
+            },
+          }, JSON.stringify(evidence, null, 2)),
         ),
       ),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' } },
