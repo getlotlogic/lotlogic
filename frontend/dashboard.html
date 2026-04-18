@@ -5088,8 +5088,11 @@ function EarningsPage({ violations, lots, isOwner, user, onNavigate }) {
 //   • Invoices            → QB lifecycle (drafts, emails, send to QB)
 //   • Confirmation review → per-violation billing_status queues + operator
 //                           overrides (force-bill / no-tow / pause / resume).
-function InvoicesPage({ lots, partners: partnersProp, user }) {
-  const [subTab, setSubTab] = React.useState('invoices');
+function InvoicesPage({ lots, partners: partnersProp, user, isOwner = true }) {
+  // Partners don't get the QuickBooks invoice-sending surface (that's an
+  // owner-only server flow). They land straight on the Confirmation
+  // Review sub-tab, which already scopes server-side via tow_company_id.
+  const [subTab, setSubTab] = React.useState(isOwner ? 'invoices' : 'review');
 
   const tabBtn = (id, label) => React.createElement('button', {
     key: id,
@@ -5104,7 +5107,9 @@ function InvoicesPage({ lots, partners: partnersProp, user }) {
   }, label);
 
   return React.createElement('div', { className: 'page-enter' },
-    React.createElement('div', {
+    // Hide the sub-tab nav entirely for partners — they only see
+    // confirmation review, no QB surface to switch to.
+    isOwner && React.createElement('div', {
       style: {
         display: 'flex', gap: 18, borderBottom: '1px solid var(--border)',
         marginBottom: 16,
@@ -5113,7 +5118,7 @@ function InvoicesPage({ lots, partners: partnersProp, user }) {
       tabBtn('invoices', 'Invoices'),
       tabBtn('review', 'Confirmation review'),
     ),
-    subTab === 'invoices'
+    (isOwner && subTab === 'invoices')
       ? React.createElement(BillingQuickBooksView, { partnersProp, lots })
       : React.createElement(ErrorBoundary, { label: 'confirmation review' },
           React.createElement(ConfirmationReviewView, { user, lots, partnersProp }),
@@ -5561,15 +5566,19 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     // rows are read-only here (they're heading to invoicing). Everything else
     // gets the three primary overrides. `destructive` endpoints require a
     // reason in the modal and render with a red Confirm button.
+    // Partners have zero server-side permission on these endpoints (they
+    // 400/403), so the view is purely read-only evidence for them.
     const actions = [];
-    if (r.billing_held_at) {
-      actions.push({ key: 'resume-billing', label: 'Resume billing', primary: true });
-    } else if (!r.invoiced_at) {
-      if (!r.force_bill_at) {
-        actions.push({ key: 'force-bill', label: 'Bill anyway', primary: true, destructive: true });
+    if (role !== 'partner') {
+      if (r.billing_held_at) {
+        actions.push({ key: 'resume-billing', label: 'Resume billing', primary: true });
+      } else if (!r.invoiced_at) {
+        if (!r.force_bill_at) {
+          actions.push({ key: 'force-bill', label: 'Bill anyway', primary: true, destructive: true });
+        }
+        actions.push({ key: 'mark-no-tow', label: 'Mark no-tow', destructive: true });
+        actions.push({ key: 'pause-billing', label: 'Pause billing' });
       }
-      actions.push({ key: 'mark-no-tow', label: 'Mark no-tow', destructive: true });
-      actions.push({ key: 'pause-billing', label: 'Pause billing' });
     }
 
     return React.createElement('div', {
@@ -5663,6 +5672,22 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Confirmation review'),
     React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 } },
       'Per-violation billing review. Disputes and verification candidates at the top. Refreshes every 15s.'),
+
+    // Read-only banner for partners — their endpoints 400/403 server-side,
+    // so they see evidence only. Disputes go through the owner.
+    role === 'partner' && React.createElement('div', {
+      style: {
+        background: 'rgba(96,165,250,.08)', border: '1px solid rgba(96,165,250,.25)',
+        borderRadius: 10, padding: '10px 14px', marginBottom: 12,
+        fontSize: 13, color: 'var(--text-primary)', display: 'flex', gap: 10, alignItems: 'flex-start',
+      }
+    },
+      React.createElement('span', { 'aria-hidden': true, style: { fontSize: 14, color: '#60a5fa', lineHeight: 1.2 } }, '\u2139' /* ℹ */),
+      React.createElement('div', null,
+        React.createElement('strong', { style: { fontWeight: 700 } }, 'Read-only.'),
+        ' Your owner handles billing overrides. Reach out if you want to contest a row.',
+      ),
+    ),
 
     err && React.createElement('div', {
       style: { background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.3)', color: '#ef4444', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12 }
@@ -7990,10 +8015,14 @@ function App() {
     { id: 'invoices', label: 'Billing',  badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
+    // Partner: the 'invoices' tab renders InvoicesPage in read-only
+    // Confirmation Review mode (no QuickBooks sub-tab). Label stays
+    // 'Billing' so the surface is discoverable.
     { id: 'jobs',     label: 'Jobs',     badge: pending + alprPending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'activity', label: 'Activity', badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
+    { id: 'invoices', label: 'Billing',  badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ];
 
@@ -8069,7 +8098,7 @@ function App() {
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
           {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
-          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} />}
+          {tab === 'invoices' && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
