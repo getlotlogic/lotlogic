@@ -210,7 +210,7 @@
         return;
       }
       try {
-        const rows = await pgRest(`/properties?select=id,name,address&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`);
+        const rows = await pgRest(`/properties?select=id,name,address,property_type,policy_text,policy_phone&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`);
         const data = Array.isArray(rows) ? rows[0] : null;
         if (!data) {
           showNotFound('Lot Not Found', 'This temporary pass link is not valid or has expired.');
@@ -255,7 +255,47 @@
       `;
     }
 
+    // Form-mount idempotency key — same key reused on every retry of the same form.
+    let idempotencyKey = null;
+    function newIdempotencyKey() {
+      idempotencyKey = (crypto.randomUUID && crypto.randomUUID()) ||
+        (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
+    }
+
+    function normalizePlate(s) {
+      return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    }
+    function normalizePhone(s) {
+      const digits = (s || '').replace(/\D/g, '');
+      if (digits.length === 10) return '+1' + digits;
+      if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+      if (digits.startsWith('+')) return s;
+      return digits ? ('+' + digits) : '';
+    }
+
+    const DEFAULT_TRUCK_PLAZA_POLICY = `TRUCK PARKING POLICIES
+
+1. DROPPED TRAILERS — Dropped trailers are NOT permitted on the property.
+2. DESIGNATED PARKING ONLY — All trucks must park in marked parking spaces only. Parking is NOT allowed beside the store, around the CAT scale, at gas/diesel drop locations, beside the white air-hose building, parallel to the driveway, in front of or blocking dumpsters, or in employee parking areas.
+3. PARKING TIME LIMIT — Maximum parking time is 48 hours. Once your noted time has ended, trucks must remain off the property for 24 hours before returning.
+4. NO VEHICLE WASHING — Truck or trailer washing is NOT permitted on the property.
+5. NO PERSONAL VEHICLES — Personal vehicles are NOT allowed in truck parking areas or employee parking areas.
+6. DIESEL FUEL ISLAND — Sleeping or parking on the diesel fuel island is strictly prohibited.
+
+TOWING ENFORCED — Violation of these policies will result in towing at the vehicle owner's expense.
+
+LIABILITY NOTICE — The property owner and tow operator are not responsible for any damage to vehicles that occurs on the property or during towing. By agreeing below, you confirm you have read these policies and agree to follow them.`;
+
     function showForm() {
+      newIdempotencyKey();
+      if (property.property_type === 'truck_plaza') {
+        showTruckPlazaForm();
+      } else {
+        showApartmentForm();
+      }
+    }
+
+    function showApartmentForm() {
       app.innerHTML = `
         <div class="logo">
           <div class="shield">LL</div>
@@ -300,11 +340,95 @@
         </form>
       `;
 
-      document.getElementById('passForm').addEventListener('submit', handleSubmit);
+      document.getElementById('passForm').addEventListener('submit', handleApartmentSubmit);
+    }
+
+    function showTruckPlazaForm() {
+      const policyText = property.policy_text || DEFAULT_TRUCK_PLAZA_POLICY;
+      const policyPhone = property.policy_phone ? `<p style="margin-top:8px;color:#9ca3af;font-size:12px;">Towing contact: <strong>${escapeHtml(property.policy_phone)}</strong></p>` : '';
+      app.innerHTML = `
+        <div class="logo">
+          <div class="shield">LL</div>
+          <h1>Lot<span>Logic</span></h1>
+        </div>
+        <div class="property-name">
+          Truck Parking Registration<br>
+          <strong>${escapeHtml(property.name)}</strong>
+        </div>
+        <form id="passForm">
+          <label for="companyName">Company Name <span class="required">*</span></label>
+          <input type="text" id="companyName" placeholder="ACME Trucking Co" required maxlength="80">
+
+          <label for="plate">Truck License Plate <span class="required">*</span></label>
+          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
+          <div id="preflightMsg" style="font-size:13px;color:#fbbf24;margin-top:-8px;margin-bottom:8px;"></div>
+
+          <label for="parkingSpot">Parking Space # <span class="required">*</span></label>
+          <input type="text" id="parkingSpot" placeholder="12, back, dirt lot, etc." required maxlength="20">
+
+          <label for="phone">Phone Number <span class="required">*</span></label>
+          <input type="tel" id="phone" placeholder="(555) 123-4567" required>
+
+          <label for="vehicleType">Vehicle Type <span class="required">*</span></label>
+          <select id="vehicleType" required>
+            <option value="semi" selected>Semi</option>
+            <option value="box_truck">Box truck</option>
+            <option value="van">Van</option>
+            <option value="other">Other</option>
+          </select>
+
+          <label>Stay Duration <span class="required">*</span></label>
+          <div style="display:flex;gap:12px;margin-top:6px;">
+            <label style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px;">
+              <input type="radio" name="stayHours" value="24" checked> 24 hours
+            </label>
+            <label style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px;">
+              <input type="radio" name="stayHours" value="48"> 48 hours
+            </label>
+          </div>
+
+          <label for="placardColor" style="margin-top:18px;">Color Placard <span style="color:#6b7280;font-size:12px;">(optional)</span></label>
+          <input type="text" id="placardColor" placeholder="yellow / red / blue / etc." maxlength="30">
+
+          <div style="margin-top:24px;background:rgba(255,255,255,0.03);border:1px solid #2b2f3a;border-radius:8px;padding:16px;max-height:280px;overflow-y:auto;">
+            <pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;color:#cbd5e1;margin:0;">${escapeHtml(policyText)}</pre>
+            ${policyPhone}
+          </div>
+
+          <label style="display:flex;align-items:flex-start;gap:10px;margin-top:14px;cursor:pointer;font-size:14px;">
+            <input type="checkbox" id="policyAck" required style="margin-top:3px;">
+            <span>I have read and agree to the truck parking policies above. <span class="required">*</span></span>
+          </label>
+
+          <button type="submit" class="submit-btn" id="submitBtn" style="margin-top:18px;">Register Truck</button>
+          <div class="validity">Maximum stay: 48 hours from registration. Once expired, you must remain off the property for 24 hours.</div>
+          <div id="errorMsg"></div>
+        </form>
+      `;
+
+      document.getElementById('passForm').addEventListener('submit', handleTruckPlazaSubmit);
+      document.getElementById('plate').addEventListener('blur', preflightCheckPlate);
+    }
+
+    async function preflightCheckPlate() {
+      const msg = document.getElementById('preflightMsg');
+      msg.textContent = '';
+      const plate = normalizePlate(document.getElementById('plate').value);
+      if (!plate || plate.length < 2) return;
+      try {
+        const nowIso = new Date().toISOString();
+        const rows = await pgRest(`/visitor_passes?select=id,plate_text,valid_until,company_name&property_id=eq.${property.id}&plate_text=eq.${encodeURIComponent(plate)}&status=eq.active&valid_until=gte.${encodeURIComponent(nowIso)}&limit=1`);
+        if (Array.isArray(rows) && rows.length > 0) {
+          const r = rows[0];
+          const expires = new Date(r.valid_until).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+          msg.textContent = `Already registered: pass active until ${expires} (Ref ${r.id.slice(-8).toUpperCase()})`;
+        }
+      } catch (_) { /* non-fatal — let submit handle it */ }
     }
 
     let submitting = false;
-    async function handleSubmit(e) {
+
+    async function handleApartmentSubmit(e) {
       e.preventDefault();
       if (submitting) return;
       submitting = true;
@@ -315,52 +439,55 @@
       btn.textContent = 'Registering...';
 
       try {
-        const plateRaw = document.getElementById('plate').value.trim();
-        const plateText = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const plateText = normalizePlate(document.getElementById('plate').value);
         const visitorName = document.getElementById('visitorName').value.trim();
         const vehicleType = document.getElementById('vehicleType').value;
         const stayHours = parseInt(document.getElementById('stayHours').value, 10);
-        const phone = document.getElementById('phone').value.trim();
+        const phone = normalizePhone(document.getElementById('phone').value);
 
-        if (!plateText || plateText.length < 2) {
-          throw new Error('Please enter a valid license plate number.');
-        }
-        if (!stayHours || stayHours > 48) {
-          throw new Error('Choose how long you will be parked (max 48 hours).');
-        }
+        if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
+        if (!stayHours || stayHours > 48) throw new Error('Choose how long you will be parked (max 48 hours).');
 
         const validFrom = new Date();
         const validUntil = new Date(validFrom.getTime() + stayHours * 60 * 60 * 1000);
-        // stay_days is legacy on this row; derive the closest whole-day equivalent.
         const stayDays = Math.max(1, Math.ceil(stayHours / 24));
 
-        try {
-          await pgRest('/visitor_passes', {
-            method: 'POST',
-            headers: { Prefer: 'return=minimal' },
-            body: JSON.stringify({
-              property_id: property.id,
-              plate_text: plateText,
-              visitor_name: visitorName,
-              vehicle_type: vehicleType || null,
-              host_unit: '',
-              host_name: '',
-              valid_from: validFrom.toISOString(),
-              valid_until: validUntil.toISOString(),
-              status: 'active',
-              parking_spot: null,
-              tag_expiration: null,
-              id_photo_url: null,
-              stay_days: stayDays,
-              phone: phone,
-            }),
-          });
-        } catch (err) {
-          throw new Error('Failed to register pass. ' + (err.message || 'Please try again.'));
-        }
+        await pgRest('/visitor_passes', {
+          method: 'POST',
+          headers: { Prefer: 'return=minimal' },
+          body: JSON.stringify({
+            property_id: property.id,
+            plate_text: plateText,
+            visitor_name: visitorName,
+            vehicle_type: vehicleType || null,
+            host_unit: '',
+            host_name: '',
+            valid_from: validFrom.toISOString(),
+            valid_until: validUntil.toISOString(),
+            status: 'active',
+            parking_spot: null,
+            tag_expiration: null,
+            id_photo_url: null,
+            stay_days: stayDays,
+            phone: phone,
+            registration_source: 'qr_scan',
+            submission_idempotency_key: idempotencyKey,
+          }),
+        });
 
-        showSuccess(plateText, validUntil, stayHours);
+        showSuccess({plate: plateText, validUntil, stayHours, refId: null, parkingSpot: null, placardColor: null});
       } catch (err) {
+        if (err.status === 409 && idempotencyKey) {
+          // Idempotent: surface the existing pass.
+          try {
+            const rows = await pgRest(`/visitor_passes?select=id,plate_text,valid_until,stay_days&submission_idempotency_key=eq.${encodeURIComponent(idempotencyKey)}&limit=1`);
+            if (rows && rows.length) {
+              const r = rows[0];
+              showSuccess({plate: r.plate_text, validUntil: new Date(r.valid_until), stayHours: parseInt(document.getElementById('stayHours').value, 10), refId: r.id.slice(-8).toUpperCase(), parkingSpot: null, placardColor: null});
+              return;
+            }
+          } catch (_) {}
+        }
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
         btn.disabled = false;
         btn.textContent = 'Get Temporary Pass';
@@ -368,11 +495,121 @@
       }
     }
 
-    function showSuccess(plate, validUntil, stayHours) {
+    async function handleTruckPlazaSubmit(e) {
+      e.preventDefault();
+      if (submitting) return;
+      submitting = true;
+      const btn = document.getElementById('submitBtn');
+      const errorDiv = document.getElementById('errorMsg');
+      errorDiv.innerHTML = '';
+      btn.disabled = true;
+      btn.textContent = 'Registering...';
+
+      try {
+        const companyName = document.getElementById('companyName').value.trim();
+        const plateText   = normalizePlate(document.getElementById('plate').value);
+        const parkingSpot = document.getElementById('parkingSpot').value.trim();
+        const phone       = normalizePhone(document.getElementById('phone').value);
+        const vehicleType = document.getElementById('vehicleType').value;
+        const stayHoursEl = document.querySelector('input[name="stayHours"]:checked');
+        const stayHours   = stayHoursEl ? parseInt(stayHoursEl.value, 10) : 0;
+        const placardColor = (document.getElementById('placardColor').value || '').trim();
+        const policyAck = document.getElementById('policyAck').checked;
+
+        if (!companyName) throw new Error('Company name is required.');
+        if (!plateText || plateText.length < 2) throw new Error('Please enter a valid plate number.');
+        if (!parkingSpot) throw new Error('Parking space is required.');
+        if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
+        if (stayHours !== 24 && stayHours !== 48) throw new Error('Choose 24 or 48 hours.');
+        if (!policyAck) throw new Error('You must acknowledge the parking policies.');
+
+        const validFrom = new Date();
+        const validUntil = new Date(validFrom.getTime() + stayHours * 60 * 60 * 1000);
+        const stayDays = Math.max(1, Math.ceil(stayHours / 24));
+
+        await pgRest('/visitor_passes', {
+          method: 'POST',
+          headers: { Prefer: 'return=minimal' },
+          body: JSON.stringify({
+            property_id: property.id,
+            plate_text: plateText,
+            visitor_name: '',
+            company_name: companyName,
+            vehicle_type: vehicleType,
+            host_unit: '',
+            host_name: '',
+            valid_from: validFrom.toISOString(),
+            valid_until: validUntil.toISOString(),
+            status: 'active',
+            parking_spot: parkingSpot,
+            tag_expiration: null,
+            id_photo_url: null,
+            stay_days: stayDays,
+            phone: phone,
+            placard_color: placardColor || null,
+            policy_acknowledged_at: validFrom.toISOString(),
+            registration_source: 'qr_scan',
+            submission_idempotency_key: idempotencyKey,
+          }),
+        });
+
+        // Fetch the row we just created to get its id (for reference).
+        const inserted = await pgRest(`/visitor_passes?select=id&submission_idempotency_key=eq.${encodeURIComponent(idempotencyKey)}&limit=1`);
+        const refId = (inserted && inserted[0] && inserted[0].id || '').slice(-8).toUpperCase();
+        showSuccess({plate: plateText, validUntil, stayHours, refId, parkingSpot, placardColor, companyName});
+      } catch (err) {
+        // Cooldown rejection — surfaces a friendly message instead of raw error.
+        if (err.message && err.message.includes('COOLDOWN')) {
+          errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message.replace('COOLDOWN: ', '')) + '</div>';
+          btn.disabled = false;
+          btn.textContent = 'Register Truck';
+          submitting = false;
+          return;
+        }
+        // Idempotency duplicate — surface the existing pass.
+        if (err.status === 409 && idempotencyKey) {
+          try {
+            const rows = await pgRest(`/visitor_passes?select=id,plate_text,valid_until,parking_spot,placard_color,company_name&submission_idempotency_key=eq.${encodeURIComponent(idempotencyKey)}&limit=1`);
+            if (rows && rows.length) {
+              const r = rows[0];
+              const stayHoursEl2 = document.querySelector('input[name="stayHours"]:checked');
+              showSuccess({
+                plate: r.plate_text,
+                validUntil: new Date(r.valid_until),
+                stayHours: stayHoursEl2 ? parseInt(stayHoursEl2.value, 10) : 24,
+                refId: r.id.slice(-8).toUpperCase(),
+                parkingSpot: r.parking_spot,
+                placardColor: r.placard_color,
+                companyName: r.company_name,
+              });
+              return;
+            }
+          } catch (_) {}
+        }
+        errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+        btn.disabled = false;
+        btn.textContent = 'Register Truck';
+        submitting = false;
+      }
+    }
+
+    function showSuccess(opts) {
+      const {plate, validUntil, stayHours, refId, parkingSpot, placardColor, companyName} = opts;
       const expiresStr = validUntil.toLocaleString('en-US', {
         weekday: 'short', month: 'short', day: 'numeric',
         hour: 'numeric', minute: '2-digit', hour12: true,
       });
+      const isPlaza = property.property_type === 'truck_plaza';
+      const extras = isPlaza ? `
+        <div class="success-detail" style="margin-top:8px;">
+          ${companyName ? `Company: <strong>${escapeHtml(companyName)}</strong><br>` : ''}
+          ${parkingSpot ? `Parking space: <strong>${escapeHtml(parkingSpot)}</strong><br>` : ''}
+          ${placardColor ? `Placard: <strong>${escapeHtml(placardColor)}</strong><br>` : ''}
+          ${refId ? `Reference: <strong>${escapeHtml(refId)}</strong>` : ''}
+        </div>
+        <div class="success-detail" style="margin-top:14px;color:#6b7280;font-size:12px;">
+          Save this page (screenshot or bookmark) as your registration receipt.
+        </div>` : '';
 
       app.innerHTML = `
         <div class="success-card">
@@ -381,10 +618,11 @@
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
           </div>
-          <h2>Temporary Pass Active</h2>
+          <h2>${isPlaza ? 'Truck Registered' : 'Temporary Pass Active'}</h2>
           <p>Your pass for <strong>${escapeHtml(property.name)}</strong> is active.</p>
           <div class="success-plate">${escapeHtml(plate)}</div>
           <div class="success-detail">Valid for ${stayHours} hour${stayHours !== 1 ? 's' : ''} &mdash; until ${escapeHtml(expiresStr)}</div>
+          ${extras}
         </div>
       `;
     }

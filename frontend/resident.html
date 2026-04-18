@@ -219,7 +219,7 @@
         return;
       }
       try {
-        const rows = await pgRest(`/properties?select=id,name,address&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`);
+        const rows = await pgRest(`/properties?select=id,name,address,property_type&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`);
         const data = Array.isArray(rows) ? rows[0] : null;
         if (!data) {
           showNotFound('Property Not Found', 'This registration link is not valid or has expired.');
@@ -265,13 +265,16 @@
     }
 
     function showForm() {
+      const isPlaza = property.property_type === 'truck_plaza';
+      const headline = isPlaza ? 'Employee Plate Registration' : 'Permanent Pass Request';
+      const submitLabel = isPlaza ? 'Register Employee Plate' : 'Request Permanent Pass';
       app.innerHTML = `
         <div class="logo">
           <div class="shield">LL</div>
           <h1>Lot<span>Logic</span></h1>
         </div>
         <div class="property-name">
-          Permanent Pass Request at
+          ${escapeHtml(headline)} at
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="regForm">
@@ -293,7 +296,7 @@
             <option value="other">Other</option>
           </select>
 
-          <button type="submit" class="submit-btn" id="submitBtn">Request Permanent Pass</button>
+          <button type="submit" class="submit-btn" id="submitBtn">${escapeHtml(submitLabel)}</button>
           <div class="hint">Pending owner approval</div>
           <div id="errorMsg"></div>
         </form>
@@ -332,6 +335,7 @@
               property_id: property.id,
               plate_text: plateText,
               holder_name: holderName,
+              holder_role: property.property_type === 'truck_plaza' ? 'employee' : 'resident',
               vehicle_description: '',
               vehicle_type: vehicleType || null,
               active: true,
