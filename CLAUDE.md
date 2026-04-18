@@ -14,6 +14,7 @@ AI-powered parking enforcement platform. Cameras detect vehicles in zones, creat
 - **Monitoring**: Python agent system in `monitoring/` with Claude AI analysis (containerized)
 - **Detection Pipeline**: Camera RTSP -> Snapshots (30s poll) -> YOLO + Plate Recognizer -> Zone filtering -> Violation creation
 - **ALPR Parking Pass Pipeline**: Client posts image to `alpr-snapshot` edge fn -> PlateRecognizer Snapshot API -> `alpr-webhook` -> `plate_events` -> match against `resident_plates`/`visitor_passes` -> `alpr_violations`
+- **ALPR (camera-initiated)**: Milesight SC211 (or similar) posts snapshot to PR -> PR runs OCR -> PR fires webhook -> `alpr-pr-webhook` edge fn translates payload + stashes snapshot in `plate-snapshots` storage bucket -> internally invokes `alpr-webhook` with the same shape as the `alpr-snapshot` path. See `docs/camera-setup-milesight-sc211.md` for provisioning.
 
 ## PlateRecognizer Integration (added Apr 2026)
 
@@ -54,7 +55,8 @@ lotlogic/
 ├── supabase/
 │   └── functions/     # Edge functions deployed via `supabase functions deploy`
 │       ├── alpr-webhook/          # Camera plate event ingest
-│       ├── alpr-snapshot/         # Plate Recognizer integration
+│       ├── alpr-snapshot/         # Plate Recognizer integration (client POSTs image to us)
+│       ├── alpr-pr-webhook/       # Plate Recognizer webhook receiver (PR POSTs to us; Milesight SC211 path)
 │       ├── tow-confirm/           # Camera-based tow-truck sighting correlator
 │       ├── tow-dispatch-email/    # Partner email w/ action buttons
 │       ├── tow-dispatch-sms/      # Partner SMS dispatch
@@ -308,3 +310,4 @@ supabase secrets set JWT_SECRET=$SUPABASE_JWT_SECRET  # tow-dispatch-email
 New env vars required:
 - `tow-dispatch-email`: `JWT_SECRET` (= the Supabase JWT secret = backend's `JWT_SECRET`), `BACKEND_URL` (optional, defaults to prod)
 - `tow-confirm`: `TOW_CONFIRM_MIN_CONFIDENCE` (default 0.85), `TOW_CONFIRM_LOOKBACK_MINUTES` (default 180)
+- `alpr-pr-webhook`: `PR_WEBHOOK_MIN_SCORE` (optional, default 0.8). Reuses `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` that the other edge functions already have. Deploy with `verify_jwt=false` (public endpoint — Plate Recognizer can't attach our JWT). Requires the `plate-snapshots` public storage bucket (provisioned at deploy time — see `docs/camera-setup-milesight-sc211.md`).
