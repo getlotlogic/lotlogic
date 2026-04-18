@@ -192,7 +192,7 @@ serve(async (req) => {
     `First seen: ${formatLocal(firstSeen)} (${firstSeenAgo} ago)`,
     triggerEvent?.confidence != null ? `Confidence: ${Math.round(triggerEvent.confidence * 100)}%` : null,
     `Pass: ${passLine}`,
-    lastPass?.visitor_name ? `Visitor: ${lastPass.visitor_name}` : null,
+    lastPass?.visitor_name ? `Driver: ${lastPass.visitor_name}` : null,
     triggerEvent?.image_url ? `Photo: ${triggerEvent.image_url}` : null,
     "",
     towLink ? `✅ Mark as towed:    ${towLink}` : null,
@@ -221,7 +221,7 @@ ${property.address ? `<tr><td style=\"padding:6px 0; color:#555;\">Address</td><
 <tr><td style=\"padding:6px 0; color:#555;\">First seen</td><td style=\"padding:6px 0;\">${escapeHtml(formatLocal(firstSeen))} <span style=\"color:#888;\">(${escapeHtml(firstSeenAgo)} ago)</span></td></tr>
 ${triggerEvent?.confidence != null ? `<tr><td style=\"padding:6px 0; color:#555;\">Confidence</td><td style=\"padding:6px 0;\">${Math.round((triggerEvent.confidence as number) * 100)}%</td></tr>` : ""}
 <tr><td style=\"padding:6px 0; color:#555; vertical-align:top;\">Pass</td><td style=\"padding:6px 0;\">${escapeHtml(passLine)}</td></tr>
-${lastPass?.visitor_name ? `<tr><td style=\"padding:6px 0; color:#555;\">Visitor</td><td style=\"padding:6px 0;\">${escapeHtml(lastPass.visitor_name)}</td></tr>` : ""}
+${lastPass?.visitor_name ? `<tr><td style=\"padding:6px 0; color:#555;\">Driver</td><td style=\"padding:6px 0;\">${escapeHtml(lastPass.visitor_name)}</td></tr>` : ""}
 </table>
 ${photoBlock}
 ${buttonsBlock}

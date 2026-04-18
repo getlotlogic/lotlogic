@@ -6414,6 +6414,7 @@ function TruckParkingLog({ propertyId, refreshKey }) {
             <tr>
               <th style={thStyle}>Registered</th>
               <th style={thStyle}>Company</th>
+              <th style={thStyle}>Driver</th>
               <th style={thStyle}>Plate</th>
               <th style={thStyle}>Spot</th>
               <th style={thStyle}>Phone</th>
@@ -6428,9 +6429,9 @@ function TruckParkingLog({ propertyId, refreshKey }) {
           </thead>
           <tbody>
             {loading && rows.length === 0 ? (
-              <tr><td colSpan={12} style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>Loading…</td></tr>
+              <tr><td colSpan={13} style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={12} style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>No entries for these filters</td></tr>
+              <tr><td colSpan={13} style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>No entries for these filters</td></tr>
             ) : rows.map(r => {
               const s = r.status || 'active';
               const color = statusColor[s] || 'var(--text-muted)';
@@ -6439,6 +6440,7 @@ function TruckParkingLog({ propertyId, refreshKey }) {
                 <tr key={r.id}>
                   <td style={tdStyle}>{r.created_at ? new Date(r.created_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}</td>
                   <td style={tdStyle}>{r.company_name || '—'}</td>
+                  <td style={tdStyle}>{r.visitor_name || '—'}</td>
                   <td style={{...tdStyle,fontFamily:"'Courier New',monospace",fontWeight:700,letterSpacing:'.05em'}}>{r.plate_text}</td>
                   <td style={tdStyle}>{r.parking_spot || '—'}</td>
                   <td style={tdStyle}>{r.phone || '—'}</td>
