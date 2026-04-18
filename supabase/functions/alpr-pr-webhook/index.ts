@@ -265,12 +265,16 @@ serve(async (req) => {
   // Translate the PR envelope into what alpr-webhook accepts. We trim the
   // raw_data to the top result plus the surrounding context (timestamp,
   // filename, processing_time) so we don't bloat plate_events.raw_data.
+  //
+  // event_type is constrained by `plate_events` to ('entry','exit','patrol'),
+  // so we pass 'entry' and surface the actual source (PR webhook) inside
+  // raw_data.source for observability.
   const alprWebhookBody = {
     plate_text: top.plate,
     confidence: score,
     image_url: imageUrl,
     api_key: cameraId,
-    event_type: "platerecognizer",
+    event_type: "entry",
     raw_data: {
       source: "platerecognizer_webhook",
       filename: data.filename ?? null,
