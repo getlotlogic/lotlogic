@@ -4580,6 +4580,39 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
           <div style={{width:48, height:48, borderRadius:12, background:'rgba(74,222,128,.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22}}>✓</div>
           <div className="empty-title">All clear</div>
           <div className="empty-body">No violations pending at your lots right now</div>
+          {/* Partner-only orientation mini-explainer. Owners see the existing empty state unchanged. */}
+          {user?._role === 'partner' && (
+            <div style={{
+              marginTop:20, paddingTop:20, borderTop:'1px solid var(--border)',
+              display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:14,
+              textAlign:'left',
+            }}>
+              <div>
+                <div style={{fontSize:12, fontWeight:700, color:'var(--text-primary)', marginBottom:4}}>
+                  How a dispatch arrives
+                </div>
+                <div style={{fontSize:12, color:'var(--text-muted)', lineHeight:1.5}}>
+                  SMS or email with plate + lot. Click the link to open this app on the job.
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:12, fontWeight:700, color:'var(--text-primary)', marginBottom:4}}>
+                  What you'll do
+                </div>
+                <div style={{fontSize:12, color:'var(--text-muted)', lineHeight:1.5}}>
+                  Tap Tow or Boot. Our cameras confirm the tow-plate sighting automatically.
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:12, fontWeight:700, color:'var(--text-primary)', marginBottom:4}}>
+                  How you get paid
+                </div>
+                <div style={{fontSize:12, color:'var(--text-muted)', lineHeight:1.5}}>
+                  Confirmed tows appear in Earnings within minutes. Billing releases after the camera sees your truck.
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         filteredActive.map((v, idx) => {
