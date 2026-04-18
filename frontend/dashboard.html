@@ -1640,6 +1640,90 @@
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
 
+// ── Error boundary ────────────────────────────────────────────
+// Catches render / lifecycle throws in a subtree so a malformed record
+// (e.g. tow_confirmation.delta_seconds === NaN) can't take the whole
+// dashboard down. React 18 still supports class-component boundaries —
+// there is no hook equivalent for componentDidCatch.
+//
+// Fallback UI: "Something went wrong loading this view" with the error
+// message tucked into a <details> for devs / support. A Reload tab
+// button resets the boundary's state so transient errors recover
+// without a full page reload.
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+    this.handleReset = this.handleReset.bind(this);
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    // Surface enough context for after-the-fact debugging without leaking
+    // user data. Uses console.error (not the ungated logger) so the dev
+    // console stays clean in normal operation.
+    if (typeof window !== 'undefined' && window.console && window.console.error) {
+      window.console.error('[ErrorBoundary:' + (this.props.label || 'unknown') + ']', error, info);
+    }
+  }
+
+  handleReset() {
+    this.setState({ error: null });
+  }
+
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    const label = this.props.label || 'this view';
+    const message = (error && (error.message || String(error))) || 'Unknown error';
+    return (
+      React.createElement('div', {
+        role: 'alert',
+        style: {
+          margin: 16,
+          padding: 16,
+          background: 'rgba(239,68,68,.08)',
+          border: '1px solid rgba(239,68,68,.3)',
+          borderRadius: 10,
+          color: 'var(--text-primary)',
+        },
+      },
+        React.createElement('div', {
+          style: { fontSize: 14, fontWeight: 800, color: '#ef4444', marginBottom: 6 },
+        }, 'Something went wrong loading ' + label + '.'),
+        React.createElement('div', {
+          style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 },
+        }, 'Try reloading. If it keeps happening, please report the details below.'),
+        React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 10 } },
+          React.createElement('button', {
+            onClick: this.handleReset,
+            style: {
+              fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 6,
+              border: '1px solid var(--accent)', background: 'var(--accent)', color: '#fff', cursor: 'pointer',
+            },
+          }, 'Reload tab'),
+        ),
+        React.createElement('details', null,
+          React.createElement('summary', {
+            style: { fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' },
+          }, 'Error details'),
+          React.createElement('pre', {
+            style: {
+              fontSize: 11, color: 'var(--text-muted)', marginTop: 6,
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              background: 'var(--bg-inset)', padding: 8, borderRadius: 6,
+              border: '1px solid var(--border)',
+            },
+          }, message),
+        ),
+      )
+    );
+  }
+}
+
 // ── Shared helpers (parking passes) ──────────────────────────
 // Format a millisecond duration as "Xh Ym left" / "Zm left" / "<1m left" / "Expired"
 function fmtPassRemaining(ms) {
@@ -3118,6 +3202,98 @@ function ConfirmDialog({ title, body, confirmLabel, confirmColor, onConfirm, onC
   );
 }
 
+// ── Focus trap for modal dialogs ─────────────────────────────
+// Minimal a11y helper for <div role="dialog">-style overlays. Responsibilities:
+//   1. Stash document.activeElement when the modal opens
+//   2. Move focus to the first focusable element inside the container
+//   3. Keep Tab / Shift+Tab cycling inside the container
+//   4. Close on ESC (via onClose)
+//   5. Restore focus to the previously-focused element on unmount
+// `containerRef` must point at the outermost modal surface. Pass `isOpen=true`
+// to activate; pass a falsy `onClose` to suppress ESC handling.
+const FOCUSABLE_SELECTOR = [
+  'a[href]', 'area[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+function useFocusTrap(containerRef, isOpen, onClose) {
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const previouslyFocused = document.activeElement;
+    const container = containerRef.current;
+    if (!container) return undefined;
+
+    // Focus the first autofocus target, else the first focusable element,
+    // else the container itself (as a non-focusable fallback we still want the
+    // keyboard trap to work).
+    function getFocusable() {
+      return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR))
+        .filter(el => !el.hasAttribute('disabled') && el.offsetParent !== null);
+    }
+
+    const autoEl = container.querySelector('[autofocus]');
+    const initial = autoEl || getFocusable()[0] || container;
+    try { initial.focus({ preventScroll: true }); } catch {}
+
+    function onKey(e) {
+      if (e.key === 'Escape' && typeof onClose === 'function') {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !container.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      // Restore focus to the triggering element so keyboard users land back
+      // where they started. Guard against the element being unmounted
+      // (focus() on a detached node silently no-ops but can still throw in
+      // jsdom / older Safari).
+      if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+        try { previouslyFocused.focus({ preventScroll: true }); } catch {}
+      }
+    };
+  }, [containerRef, isOpen, onClose]);
+}
+
+// Monotonically increasing counter for auto-generated DOM ids. Used by modal
+// dialogs to wire aria-labelledby / aria-describedby without asking callers to
+// manage ids. Ok to be a global — it's just a render-time counter.
+let __uidCounter = 0;
+function useUid(prefix = 'uid') {
+  const ref = useRef(null);
+  if (ref.current === null) {
+    __uidCounter += 1;
+    ref.current = `${prefix}-${__uidCounter}`;
+  }
+  return ref.current;
+}
+
 // ── Confirm action modal (inline, replaces window.prompt) ──────
 // Reusable modal for plate-scoped operator actions: shows the plate, the
 // action label, an optional reason textarea, and Confirm / Cancel buttons.
@@ -3152,14 +3328,30 @@ function ConfirmActionModal({
   const [reason, setReason] = useState('');
   const trimmed = reason.trim();
   const disabled = submitting || (requireReason && trimmed.length < 2);
+  const dialogRef = useRef(null);
+  const titleId = useUid('modal-title');
+  const descId = useUid('modal-desc');
+  // ESC/overlay-click close is suppressed while submitting, matching the
+  // existing pointer-guard on the overlay.
+  const handleClose = submitting ? null : onCancel;
+  useFocusTrap(dialogRef, true, handleClose);
   return (
     <div
       onClick={submitting ? undefined : onCancel}
       style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
     >
-      <div onClick={e => e.stopPropagation()} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:16,maxWidth:440,width:'100%'}}>
-        <div style={{fontSize:16,fontWeight:800,color:'var(--text-primary)',marginBottom:4}}>{actionLabel}?</div>
-        <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:10}}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        tabIndex={-1}
+        onClick={e => e.stopPropagation()}
+        style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:16,maxWidth:440,width:'100%',outline:'none'}}
+      >
+        <div id={titleId} style={{fontSize:16,fontWeight:800,color:'var(--text-primary)',marginBottom:4}}>{actionLabel}?</div>
+        <div id={descId} style={{fontSize:12,color:'var(--text-muted)',marginBottom:10}}>
           {description || <>Applies to plate <strong style={{color:'var(--text-primary)'}}>{plate || '—'}</strong>.</>}
         </div>
         <textarea
@@ -3427,7 +3619,7 @@ function ImageZoom({ src, alt, onClose }) {
   return (
     <div className="snap-zoom-overlay" onClick={onClose}>
       <img src={src} alt={alt || 'Zoomed view'} onClick={e => e.stopPropagation()} />
-      <button className="snap-zoom-close" onClick={onClose}>✕</button>
+      <button className="snap-zoom-close" onClick={onClose} aria-label="Close zoomed image">✕</button>
     </div>
   );
 }
@@ -4923,7 +5115,9 @@ function InvoicesPage({ lots, partners: partnersProp, user }) {
     ),
     subTab === 'invoices'
       ? React.createElement(BillingQuickBooksView, { partnersProp, lots })
-      : React.createElement(ConfirmationReviewView, { user, lots, partnersProp }),
+      : React.createElement(ErrorBoundary, { label: 'confirmation review' },
+          React.createElement(ConfirmationReviewView, { user, lots, partnersProp }),
+        ),
   );
 }
 
@@ -5140,6 +5334,7 @@ function BillingQuickBooksView({ partnersProp, lots }) {
                     onClick: () => act('/quickbooks/pending-invoices/' + pi.id + '/remove-line', { violation_id: ln.violation_id }),
                     style: { border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1 },
                     title: 'Remove this line',
+                    'aria-label': 'Remove line for plate ' + (ln.plate || 'unknown'),
                   }, '\u2715'),
                 ),
               ))
@@ -5217,14 +5412,16 @@ function displayBucketFor(rawStatus) {
 }
 
 // Visible queue ordering for the UI (urgency-first). Keyed by display bucket.
+// Glyphs make the tone distinguishable without relying on color alone
+// (WCAG 1.4.1 — Use of Color). Mirror glyphs are used by status chips below.
 const REVIEW_QUEUES = [
-  { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red' },
-  { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', tone: 'amber' },
-  { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              tone: 'amber' },
-  { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    tone: 'green' },
-  { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           tone: 'gray' },
-  { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        tone: 'gray' },
-  { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue' },
+  { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red',   glyph: '!'  },
+  { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', tone: 'amber', glyph: '\u25C6' /* ◆ */ },
+  { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              tone: 'amber', glyph: '\u25C6' },
+  { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    tone: 'green', glyph: '\u2713' /* ✓ */ },
+  { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           tone: 'gray',  glyph: '\u2014' /* — */ },
+  { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        tone: 'gray',  glyph: '\u2014' },
+  { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue',  glyph: '\u275A\u275A' /* ❚❚ */ },
 ];
 
 const TONE_COLORS = {
@@ -5397,21 +5594,30 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
               background: TONE_COLORS.blue.bg, color: TONE_COLORS.blue.fg,
               border: `1px solid ${TONE_COLORS.blue.border}`, textTransform: 'uppercase', letterSpacing: '.04em',
             }
-          }, 'Held by operator'),
+          },
+            React.createElement('span', { 'aria-hidden': true, style: { marginRight: 4 } }, '\u275A\u275A'),
+            'Held by operator',
+          ),
           r.force_bill_at && React.createElement('span', {
             style: {
               fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
               background: TONE_COLORS.purple.bg, color: TONE_COLORS.purple.fg,
               border: `1px solid ${TONE_COLORS.purple.border}`, textTransform: 'uppercase', letterSpacing: '.04em',
             }
-          }, 'Force-billed'),
+          },
+            React.createElement('span', { 'aria-hidden': true, style: { marginRight: 4 } }, '\u26A1' /* ⚡ */),
+            'Force-billed',
+          ),
           r.invoiced_at && React.createElement('span', {
             style: {
               fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
               background: TONE_COLORS.green.bg, color: TONE_COLORS.green.fg,
               border: `1px solid ${TONE_COLORS.green.border}`, textTransform: 'uppercase', letterSpacing: '.04em',
             }
-          }, 'Invoiced'),
+          },
+            React.createElement('span', { 'aria-hidden': true, style: { marginRight: 4 } }, '\u2713'),
+            'Invoiced',
+          ),
         ),
         React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 } },
           propName + ' · ' + partner + ' · detected ' + (r.created_at ? fmtDate(r.created_at) + ' ' + fmtTime(r.created_at) : '—'),
@@ -5490,12 +5696,15 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       },
         React.createElement('button', {
           onClick: () => toggleQueue(q.id),
+          'aria-expanded': isOpen,
+          'aria-label': `${q.title} — ${items.length} item${items.length === 1 ? '' : 's'} — ${isOpen ? 'collapse' : 'expand'}`,
           style: {
             width: '100%', textAlign: 'left', background: 'transparent', border: 'none',
             padding: '12px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
           },
         },
           React.createElement('span', {
+            'aria-hidden': true,
             style: {
               fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
               background: tone.bg, color: tone.fg, border: `1px solid ${tone.border}`,
@@ -5503,10 +5712,17 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
             }
           }, items.length),
           React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-            React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' } }, q.title),
+            React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' } },
+              q.glyph
+                ? React.createElement(React.Fragment, null,
+                    React.createElement('span', { 'aria-hidden': true, style: { color: tone.fg, marginRight: 6, fontWeight: 800 } }, q.glyph),
+                    q.title,
+                  )
+                : q.title,
+            ),
             React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 } }, q.desc),
           ),
-          React.createElement('span', { style: { color: 'var(--text-faint)', fontSize: 12 } }, isOpen ? '▾' : '▸'),
+          React.createElement('span', { 'aria-hidden': true, style: { color: 'var(--text-faint)', fontSize: 12 } }, isOpen ? '▾' : '▸'),
         ),
         isOpen && items.length > 0 && React.createElement('div', { style: { borderTop: '1px solid var(--border)' } },
           items.map(renderRow),
@@ -5547,10 +5763,16 @@ function TowTruckPlatesEditor({ user }) {
   const [err, setErr] = React.useState('');
   const [saved, setSaved] = React.useState(false);
 
+  // Stringified signature of the incoming plates array. Using just `user?.id`
+  // missed updates where the parent refetched and only the plates array
+  // mutated (same user id, different list). Re-sync whenever the list
+  // content changes.
+  const userPlatesKey = JSON.stringify(user?.tow_truck_plates ?? []);
   React.useEffect(() => {
-    // Re-sync if user prop changes (e.g. post-login refetch).
+    // Re-sync on user id change or plates array content change.
     setPlates((user?.tow_truck_plates || []).slice());
-  }, [user?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, userPlatesKey]);
 
   async function persist(next) {
     setSaving(true); setErr(''); setSaved(false);
@@ -5609,6 +5831,7 @@ function TowTruckPlatesEditor({ user }) {
             React.createElement('button', {
               onClick: () => removePlate(p), disabled: saving,
               title: 'Remove plate',
+              'aria-label': 'Remove tow-truck plate ' + p,
               style: {
                 background: 'transparent', border: 'none', color: 'var(--text-faint)',
                 cursor: saving ? 'wait' : 'pointer', padding: '0 6px', fontSize: 14, lineHeight: 1,
@@ -6557,6 +6780,16 @@ function TruckParkingLog({ propertyId }) {
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // Export uses the last-applied `filters`, not `pendingFilters`. If the user
+  // edited the form but hasn't clicked Apply, the CSV would silently reflect
+  // stale filters. Disable the Export button until the form is re-applied.
+  const filtersDirty = (
+    pendingFilters.date_from !== filters.date_from ||
+    pendingFilters.date_to !== filters.date_to ||
+    pendingFilters.plate !== filters.plate ||
+    pendingFilters.company_name !== filters.company_name ||
+    pendingFilters.status !== filters.status
+  );
   const inputStyle = {padding:'6px 8px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:12};
   const thStyle = {textAlign:'left',padding:'6px 8px',fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',color:'var(--text-muted)',borderBottom:'1px solid var(--border)',whiteSpace:'nowrap'};
   const tdStyle = {padding:'8px',fontSize:12,color:'var(--text-primary)',borderBottom:'1px solid var(--border-subtle)',verticalAlign:'top'};
@@ -6594,7 +6827,14 @@ function TruckParkingLog({ propertyId }) {
         </label>
         <div style={{display:'flex',gap:6,alignSelf:'end'}}>
           <button type="submit" className="pd-share-btn" style={{color:'#60a5fa'}}>Apply</button>
-          <button type="button" onClick={handleExport} disabled={exporting} className="pd-share-btn" style={{color:'#4ade80'}}>{exporting ? 'Exporting…' : 'Export CSV'}</button>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting || filtersDirty}
+            title={filtersDirty ? 'Apply filters before exporting' : undefined}
+            className="pd-share-btn"
+            style={{color:'#4ade80'}}
+          >{exporting ? 'Exporting…' : 'Export CSV'}</button>
         </div>
       </form>
 
@@ -6638,7 +6878,7 @@ function TruckParkingLog({ propertyId }) {
                   <td style={tdStyle}>{r.phone || '—'}</td>
                   <td style={tdStyle}>{r.stay_days ? `${r.stay_days}d` : '—'}</td>
                   <td style={tdStyle}>{r.placard_color || '—'}</td>
-                  <td style={tdStyle}><span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:20,background:`${color}18`,color,border:`1px solid ${color}40`,textTransform:'uppercase'}}>{s}</span></td>
+                  <td style={tdStyle}><span aria-label={`Pass status: ${s}`} style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:20,background:`${color}18`,color,border:`1px solid ${color}40`,textTransform:'uppercase'}}>{s}</span></td>
                   <td style={tdStyle}>{r.policy_acknowledged_at ? <span style={{color:'#4ade80',fontWeight:700}}>✓</span> : <span style={{color:'var(--text-faint)'}}>—</span>}</td>
                   <td style={tdStyle}>{r.valid_until ? new Date(r.valid_until).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}</td>
                   <td style={tdStyle}>
@@ -6893,7 +7133,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
 
   async function handleRemovePlate(id) {
     await db.removeResidentPlate(id);
-    setPlates(plates.filter(p => p.id !== id));
+    // Use functional setState so a realtime event landing between click and
+    // commit doesn't get clobbered by the closure-captured `plates`. Mirrors
+    // handleApprovePlate below.
+    setPlates(prev => prev.filter(p => p.id !== id));
   }
 
   async function handleApprovePlate(id) {
@@ -7086,7 +7329,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
               Live
             </div>
           </div>
-          <TruckParkingLog propertyId={propertyId} />
+          <ErrorBoundary label="truck parking log"><TruckParkingLog propertyId={propertyId} /></ErrorBoundary>
         </>
       ) : (() => {
         const activeVisitors = visitorPasses.filter(v => {
@@ -7327,7 +7570,7 @@ function ALPRPropertiesPage({ user }) {
     setSaving(false);
   }
 
-  if (selectedId) return <ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} />;
+  if (selectedId) return <ErrorBoundary label="this property"><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} /></ErrorBoundary>;
 
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading properties...</div></div>;
 
@@ -7855,7 +8098,9 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<ToastProvider><App /></ToastProvider>);
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <ErrorBoundary label="the dashboard"><ToastProvider><App /></ToastProvider></ErrorBoundary>
+);
 </script>
 </body>
 </html>
