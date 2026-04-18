@@ -6557,6 +6557,16 @@ function TruckParkingLog({ propertyId }) {
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // Export uses the last-applied `filters`, not `pendingFilters`. If the user
+  // edited the form but hasn't clicked Apply, the CSV would silently reflect
+  // stale filters. Disable the Export button until the form is re-applied.
+  const filtersDirty = (
+    pendingFilters.date_from !== filters.date_from ||
+    pendingFilters.date_to !== filters.date_to ||
+    pendingFilters.plate !== filters.plate ||
+    pendingFilters.company_name !== filters.company_name ||
+    pendingFilters.status !== filters.status
+  );
   const inputStyle = {padding:'6px 8px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:12};
   const thStyle = {textAlign:'left',padding:'6px 8px',fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',color:'var(--text-muted)',borderBottom:'1px solid var(--border)',whiteSpace:'nowrap'};
   const tdStyle = {padding:'8px',fontSize:12,color:'var(--text-primary)',borderBottom:'1px solid var(--border-subtle)',verticalAlign:'top'};
@@ -6594,7 +6604,14 @@ function TruckParkingLog({ propertyId }) {
         </label>
         <div style={{display:'flex',gap:6,alignSelf:'end'}}>
           <button type="submit" className="pd-share-btn" style={{color:'#60a5fa'}}>Apply</button>
-          <button type="button" onClick={handleExport} disabled={exporting} className="pd-share-btn" style={{color:'#4ade80'}}>{exporting ? 'Exporting…' : 'Export CSV'}</button>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting || filtersDirty}
+            title={filtersDirty ? 'Apply filters before exporting' : undefined}
+            className="pd-share-btn"
+            style={{color:'#4ade80'}}
+          >{exporting ? 'Exporting…' : 'Export CSV'}</button>
         </div>
       </form>
 
