@@ -22,7 +22,7 @@ OCR for the ALPR parking pass system. Cameras/clients send images; we call Plate
 ### Flow
 1. Client (camera device, device gateway, or frontend upload) POSTs to `/functions/v1/alpr-snapshot` with `{api_key, image_url | image_base64, event_type?, mmc?}`. `api_key` identifies the `alpr_cameras` row.
 2. Edge fn calls `https://api.platerecognizer.com/v1/plate-reader/` with the image, `regions` (env default `us`), and optional `mmc` for vehicle make/model/color.
-3. For each result with `score >= PLATE_RECOGNIZER_MIN_SCORE` (default 0.7), the fn POSTs internally to `alpr-webhook` with the plate text, confidence, and a `raw_data` envelope containing the PlateRecognizer box/region/vehicle.
+3. For each result with `score >= PLATE_RECOGNIZER_MIN_SCORE` (default 0.8), the fn POSTs internally to `alpr-webhook` with the plate text, confidence, and a `raw_data` envelope containing the PlateRecognizer box/region/vehicle.
 4. `alpr-webhook` dedups (5-min window per plate+property), matches against resident/visitor lists, and creates `alpr_violations` when unmatched.
 
 ### Env vars (on the Supabase Edge Functions runtime)
@@ -41,27 +41,36 @@ Or via the Supabase MCP: `deploy_edge_function` with the `alpr-snapshot` source.
 ## Repository Structure
 ```
 lotlogic/
-├── frontend/          # React SPA deployed on Vercel (auto-deploy from main)
-│   ├── index.html     # Single-file React app
-│   ├── vercel.json    # Vercel config (SPA rewrites)
-│   ├── Dockerfile     # nginx:alpine container (legacy Railway)
-│   ├── nginx.conf     # SPA routing + compression (legacy Railway)
-│   └── railway.toml   # Railway deploy config (legacy)
+├── frontend/          # Vercel-deployed static pages (auto-deploy from main)
+│   ├── dashboard.html # ~7000-line single-file React SPA (Babel in-browser)
+│   ├── index.html     # Marketing / landing
+│   ├── visit.html     # Public QR → temporary-pass form
+│   ├── resident.html  # Public QR → permanent-plate form
+│   ├── privacy.html
+│   ├── terms.html
+│   ├── pitch-*.html   # Sales / pitch decks
+│   ├── blog/          # Content + SEO pages
+│   └── vercel.json    # SPA rewrites + cache headers
+├── supabase/
+│   └── functions/     # Edge functions deployed via `supabase functions deploy`
+│       ├── alpr-webhook/          # Camera plate event ingest
+│       ├── alpr-snapshot/         # Plate Recognizer integration
+│       ├── tow-confirm/           # Camera-based tow-truck sighting correlator
+│       ├── tow-dispatch-email/    # Partner email w/ action buttons
+│       ├── tow-dispatch-sms/      # Partner SMS dispatch
+│       ├── check-violations/      # Soft-expire + batch housekeeping
+│       ├── notify-expiring-plates/
+│       └── alpr-daily-report/
 ├── backend/           # Python modules imported by the API server
 │   ├── violation_dedup.py
 │   └── notifications.py
 ├── puller/            # Async snapshot capture (Railway worker service)
-│   ├── async_puller.py
-│   ├── Dockerfile
-│   └── railway.toml
 ├── monitoring/        # AI monitoring agents (Railway worker service)
-│   ├── agent_monitor.py
-│   ├── zone_guardian.py
-│   ├── Dockerfile
-│   └── railway.toml
-├── migrations/        # SQL schema patches
+├── leadgen/           # Cold-outreach blog / email automation
+├── migrations/        # SQL schema patches (backend repo is source of truth)
+├── tests/             # Playwright E2E
 ├── supabase-schema.sql
-├── Makefile           # Unified build/run commands (make help)
+├── Makefile
 └── CLAUDE.md
 ```
 
@@ -204,9 +213,9 @@ users out or blank their data.
    - `ADMIN_API_KEY` = a random secret, only used for seeding test accounts.
      Clear this after test seeding is done.
 3. **Deploy the backend** (merge PR or push to `main`). `/auth/login` is now live.
-4. **Seed passwords for existing accounts.** Two options:
-   - Per-user: `curl -XPOST .../auth/request-password -d '{"email":"..."}'`. Capture the token from the DB and email a setup link to the user.
-   - Bulk: `UPDATE lot_owners SET password_hash = crypt('temp', gen_salt('bf'))` then force a reset.
+4. **Seed passwords for existing accounts** via per-user reset tokens:
+   `curl -XPOST .../auth/request-password -d '{"email":"..."}'`. Capture the token from the DB and email a setup link to the user.
+   Do NOT bulk-set a shared password like `'temp'` — every owner ends up with the same trivial credential until they happen to rotate. If bulk seeding is unavoidable, generate a unique random password per row (`password_hash = crypt(gen_random_uuid()::text, gen_salt('bf'))`) and deliver each one out-of-band.
 5. **Deploy the frontend** (merge PR). The login page now requires a password.
 6. **Seed Playwright test accounts**: `cd tests && ADMIN_API_KEY=… npm run seed`.
    Then add the `TEST_*` secrets to GitHub so the workflow can run.
@@ -253,7 +262,7 @@ Resolved vs earlier versions of this note:
 ## Development Rules
 - The dashboard is a single `frontend/dashboard.html` file (React + Babel transpiled in-browser)
 - QR registration flow uses two separate single-file pages: `frontend/visit.html` (temporary) and `frontend/resident.html` (permanent)
-- Zone coordinates are percentage-based (0-100) mapped to SVG viewBox
+- Zone coordinates in the DB and new code are **0-1 normalized**. Legacy 0-100 values are converted on read by `_convert_camera_zones()` in `routers/snapshots.py` — do NOT write new 0-100 coords.
 - All timestamps are UTC (TIMESTAMPTZ)
 - Legacy `violations` row status is only 'pending' or 'resolved' (CHECK constraint); `alpr_violations` uses a richer state machine driven by `action_taken` + `tow_confirmed_at`
 - `action_taken` values: boot, tow, dismissed, already_gone, no_action, plate_correction; on `alpr_violations` also: `tow`, `no_tow`
