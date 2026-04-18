@@ -359,6 +359,9 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <label for="companyName">Company Name <span class="required">*</span></label>
           <input type="text" id="companyName" placeholder="ACME Trucking Co" required maxlength="80">
 
+          <label for="driverName">Driver Name <span class="required">*</span></label>
+          <input type="text" id="driverName" placeholder="John Smith" required maxlength="80">
+
           <label for="plate">Truck License Plate <span class="required">*</span></label>
           <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
           <div id="preflightMsg" style="font-size:13px;color:#fbbf24;margin-top:-8px;margin-bottom:8px;"></div>
@@ -507,6 +510,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
 
       try {
         const companyName = document.getElementById('companyName').value.trim();
+        const driverName  = document.getElementById('driverName').value.trim();
         const plateText   = normalizePlate(document.getElementById('plate').value);
         const parkingSpot = document.getElementById('parkingSpot').value.trim();
         const phone       = normalizePhone(document.getElementById('phone').value);
@@ -517,6 +521,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const policyAck = document.getElementById('policyAck').checked;
 
         if (!companyName) throw new Error('Company name is required.');
+        if (!driverName) throw new Error('Driver name is required.');
         if (!plateText || plateText.length < 2) throw new Error('Please enter a valid plate number.');
         if (!parkingSpot) throw new Error('Parking space is required.');
         if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
@@ -533,7 +538,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           body: JSON.stringify({
             property_id: property.id,
             plate_text: plateText,
-            visitor_name: '',
+            visitor_name: driverName,
             company_name: companyName,
             vehicle_type: vehicleType,
             host_unit: '',
