@@ -5415,13 +5415,13 @@ function displayBucketFor(rawStatus) {
 // Glyphs make the tone distinguishable without relying on color alone
 // (WCAG 1.4.1 — Use of Color). Mirror glyphs are used by status chips below.
 const REVIEW_QUEUES = [
-  { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red',   glyph: '!'  },
-  { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', tone: 'amber', glyph: '\u25C6' /* ◆ */ },
-  { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              tone: 'amber', glyph: '\u25C6' },
-  { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    tone: 'green', glyph: '\u2713' /* ✓ */ },
-  { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           tone: 'gray',  glyph: '\u2014' /* — */ },
-  { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        tone: 'gray',  glyph: '\u2014' },
-  { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue',  glyph: '\u275A\u275A' /* ❚❚ */ },
+  { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             empty: 'No disputes \u2014 partners and cameras agree on every tow.',                  tone: 'red',   glyph: '!'  },
+  { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', empty: 'No pending manual verifications.',                                            tone: 'amber', glyph: '\u25C6' /* ◆ */ },
+  { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              empty: 'No camera-confirmed tows missing partner action.',                             tone: 'amber', glyph: '\u25C6' },
+  { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    empty: 'No newly-confirmed tows this window. Check Earnings for history.',              tone: 'green', glyph: '\u2713' /* ✓ */ },
+  { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           empty: 'Nothing pending. Next dispatch will appear here automatically.',               tone: 'gray',  glyph: '\u2014' /* — */ },
+  { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        empty: 'No cancelled / no-tow records in this window.',                                tone: 'gray',  glyph: '\u2014' },
+  { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                empty: 'No operator overrides. Nothing frozen, nothing force-billed.',                 tone: 'blue',  glyph: '\u275A\u275A' /* ❚❚ */ },
 ];
 
 const TONE_COLORS = {
@@ -5812,6 +5812,21 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
 
   const totalCount = (rows || []).length;
 
+  // Summary strip counts. Keep them as a single useMemo so the header doesn't
+  // recompute on every keystroke in the reason modal.
+  const summary = React.useMemo(() => {
+    const r = rows || [];
+    return {
+      total: r.length,
+      fraud: (grouped.fraud || []).length,
+      confirmed: (grouped.confirmed || []).length,
+      verify: (grouped.verify || []).length,
+      unreported: (grouped.unreported_confirmed || []).length,
+      pending: (grouped.pending || []).length,
+      held: (grouped.held_or_forced || []).length,
+    };
+  }, [rows, grouped]);
+
   function toggleQueue(id) {
     setExpanded(prev => {
       const next = new Set(prev);
@@ -6000,17 +6015,50 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       style: { background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.3)', color: '#ef4444', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12 }
     }, err),
 
+    // Summary strip — at-a-glance verdict on whether this screen needs
+    // attention. Fraud and Needs-verification are called out in tone colors
+    // because those are the rows that actually block the weekly billing run.
     React.createElement('div', {
       style: {
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',
         marginBottom: 10, fontSize: 12, color: 'var(--text-muted)',
+        padding: '10px 12px', background: 'var(--bg-card)',
+        border: '1px solid var(--border)', borderRadius: 10,
       }
     },
-      React.createElement('span', null,
-        rows === null ? 'Loading…' : (totalCount + ' row' + (totalCount === 1 ? '' : 's') + ' across queues')),
+      React.createElement('span', { style: { fontWeight: 700, color: 'var(--text-primary)' } },
+        rows === null ? 'Loading…' : (summary.total + ' row' + (summary.total === 1 ? '' : 's') + ' in last ' + rangeDays + ' day' + (rangeDays === 1 ? '' : 's'))),
+      rows !== null && summary.fraud > 0 && React.createElement('span', {
+        style: {
+          fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+          background: TONE_COLORS.red.bg, color: TONE_COLORS.red.fg, border: `1px solid ${TONE_COLORS.red.border}`,
+        }
+      }, summary.fraud + ' possible fraud'),
+      rows !== null && summary.verify > 0 && React.createElement('span', {
+        style: {
+          fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+          background: TONE_COLORS.amber.bg, color: TONE_COLORS.amber.fg, border: `1px solid ${TONE_COLORS.amber.border}`,
+        }
+      }, summary.verify + ' needs verification'),
+      rows !== null && summary.confirmed > 0 && React.createElement('span', {
+        style: {
+          fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+          background: TONE_COLORS.green.bg, color: TONE_COLORS.green.fg, border: `1px solid ${TONE_COLORS.green.border}`,
+        }
+      }, summary.confirmed + ' confirmed'),
+      rows !== null && summary.held > 0 && React.createElement('span', {
+        style: {
+          fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+          background: TONE_COLORS.blue.bg, color: TONE_COLORS.blue.fg, border: `1px solid ${TONE_COLORS.blue.border}`,
+        }
+      }, summary.held + ' held / force-billed'),
+      rows !== null && summary.total > 0 && summary.fraud === 0 && summary.verify === 0 && React.createElement('span', {
+        style: { color: TONE_COLORS.green.fg, fontSize: 11, fontWeight: 600 },
+      }, 'All clear — no disputes in this window.'),
+      React.createElement('span', { style: { flex: 1 } }),
       React.createElement('button', {
         onClick: () => refresh(false), disabled: busy,
-        style: { fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }
+        style: { fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: busy ? 'wait' : 'pointer' }
       }, busy ? 'Refreshing…' : 'Refresh now'),
     ),
 
@@ -6061,7 +6109,7 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
         ),
         isOpen && items.length === 0 && React.createElement('div', {
           style: { padding: '10px 14px', fontSize: 12, color: 'var(--text-faint)', borderTop: '1px solid var(--border)' }
-        }, 'Nothing here.'),
+        }, q.empty || 'Nothing here.'),
       );
     }),
     pendingAction && React.createElement(ConfirmActionModal, {
