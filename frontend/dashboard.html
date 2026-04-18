@@ -5459,11 +5459,22 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
   // Staged operator action waiting on modal confirmation. null == closed.
   // Shape: { violationId, plate, endpoint, label, destructive }
   const [pendingAction, setPendingAction] = React.useState(null);
+  // Image viewer (lightbox) state — null or { src, caption, downloadHref }.
+  const [lightbox, setLightbox] = React.useState(null);
+  // Filter state. `rangeDays` drives the `created_at` lower bound. The
+  // property selector is owner-only — partners are scoped to their own
+  // tow_company_id via RLS anyway.
+  const [rangeDays, setRangeDays] = React.useState(7);
+  const [propertyFilter, setPropertyFilter] = React.useState('all');
   const partnerName = React.useMemo(() => {
     const m = {};
     (partnersProp || []).forEach(p => { m[p.id] = p.company_name || p.contact_name; });
     return m;
   }, [partnersProp]);
+  // Property lookup map (id → {name, tow_company_id}). Populated from the
+  // `properties` pre-query in refresh — feeds the property filter dropdown
+  // and provides fallback labels if the FK join doesn't hydrate.
+  const [propMap, setPropMap] = React.useState({});
 
   const ownerId = user?.id;
   const role = user?._role === 'partner' ? 'partner' : 'owner';
@@ -5478,24 +5489,78 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       if (propQ.error) throw new Error(propQ.error.message);
       const props = propQ.data || [];
       const propIds = props.map(p => p.id);
+      const pm = {};
+      props.forEach(p => { pm[p.id] = { name: p.name, tow_company_id: p.tow_company_id }; });
+      setPropMap(pm);
       if (propIds.length === 0) { setRows([]); return; }
-      // Pull a generous window so disputes/verify don't fall off the page.
-      const since = new Date(Date.now() - 30 * 86400000).toISOString();
+      // Window is driven by the operator-selected range, clamped 1-90 days.
+      const winDays = Math.max(1, Math.min(90, rangeDays || 7));
+      const since = new Date(Date.now() - winDays * 86400000).toISOString();
       const { data, error } = await supabase
         .from('alpr_violations')
-        .select('id, property_id, plate_text, status, action_taken, action_channel, action_at, tow_confirmed_at, tow_confirmation, billing_held_at, force_bill_at, invoiced_at, dispatched_at, created_at, notes, properties(name, tow_company_id)')
+        .select('id, property_id, plate_text, status, action_taken, action_channel, action_at, tow_confirmed_at, tow_confirmation, billing_held_at, force_bill_at, invoiced_at, dispatched_at, sms_sent_at, created_at, notes, plate_event_id, quickbooks_invoice_id, properties(name, tow_company_id)')
         .in('property_id', propIds)
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .limit(400);
       if (error) throw new Error(error.message);
-      setRows(data || []);
+      const baseRows = data || [];
+
+      // Batch-fetch joined plate_events in two buckets:
+      //   (1) the original detection snapshot (alpr_violations.plate_event_id)
+      //   (2) the truck-sighting snapshot (tow_confirmation.truck_entry_event_id)
+      // One .in() query covers both — O(1) round-trips regardless of row count.
+      const plateEventIds = Array.from(new Set(baseRows.map(r => r.plate_event_id).filter(Boolean)));
+      const truckEventIds = Array.from(new Set(baseRows
+        .map(r => r.tow_confirmation && r.tow_confirmation.truck_entry_event_id)
+        .filter(Boolean)));
+      const allEventIds = Array.from(new Set([...plateEventIds, ...truckEventIds]));
+      const eventsById = {};
+      if (allEventIds.length > 0) {
+        const { data: events, error: eventsErr } = await supabase
+          .from('plate_events')
+          .select('id, image_url, confidence, event_type, created_at')
+          .in('id', allEventIds);
+        if (eventsErr) throw new Error(eventsErr.message);
+        (events || []).forEach(ev => { eventsById[ev.id] = ev; });
+      }
+
+      // Batch-fetch the most recent visitor_pass per (property_id, plate_text)
+      // pair present in the current row set. RLS already restricts reads to
+      // the caller's properties so the wide-in is safe.
+      const plateTexts = Array.from(new Set(baseRows.map(r => (r.plate_text || '').trim().toUpperCase()).filter(Boolean)));
+      const passesByKey = {};
+      if (plateTexts.length > 0 && propIds.length > 0) {
+        const { data: passes, error: passesErr } = await supabase
+          .from('visitor_passes')
+          .select('id, property_id, plate_text, visitor_name, company_name, parking_spot, placard_color, phone, valid_from, valid_until, status, policy_acknowledged_at, stay_days, created_at')
+          .in('property_id', propIds)
+          .in('plate_text', plateTexts)
+          .order('created_at', { ascending: false })
+          .limit(500);
+        if (passesErr) throw new Error(passesErr.message);
+        (passes || []).forEach(p => {
+          const key = p.property_id + '|' + (p.plate_text || '').trim().toUpperCase();
+          // First write wins — passes are ordered newest-first.
+          if (!passesByKey[key]) passesByKey[key] = p;
+        });
+      }
+
+      const enriched = baseRows.map(r => {
+        const plateEv = r.plate_event_id ? eventsById[r.plate_event_id] : null;
+        const truckEvId = r.tow_confirmation && r.tow_confirmation.truck_entry_event_id;
+        const truckEv = truckEvId ? eventsById[truckEvId] : null;
+        const passKey = r.property_id + '|' + (r.plate_text || '').trim().toUpperCase();
+        const pass = passesByKey[passKey] || null;
+        return { ...r, _plate_event: plateEv, _truck_event: truckEv, _pass: pass };
+      });
+      setRows(enriched);
     } catch (e) {
       setErr(e.message || String(e));
     } finally {
       setBusy(false);
     }
-  }, [ownerId, role]);
+  }, [ownerId, role, rangeDays]);
 
   // Poll every 15 s per spec. Runs once immediately on mount (no race
   // against the first interval tick) and on every `refresh` identity change.
