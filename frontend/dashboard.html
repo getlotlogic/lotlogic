@@ -5547,10 +5547,16 @@ function TowTruckPlatesEditor({ user }) {
   const [err, setErr] = React.useState('');
   const [saved, setSaved] = React.useState(false);
 
+  // Stringified signature of the incoming plates array. Using just `user?.id`
+  // missed updates where the parent refetched and only the plates array
+  // mutated (same user id, different list). Re-sync whenever the list
+  // content changes.
+  const userPlatesKey = JSON.stringify(user?.tow_truck_plates ?? []);
   React.useEffect(() => {
-    // Re-sync if user prop changes (e.g. post-login refetch).
+    // Re-sync on user id change or plates array content change.
     setPlates((user?.tow_truck_plates || []).slice());
-  }, [user?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, userPlatesKey]);
 
   async function persist(next) {
     setSaving(true); setErr(''); setSaved(false);
