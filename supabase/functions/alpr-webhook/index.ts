@@ -20,10 +20,9 @@ serve(async (req) => {
   }
 
   try {
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-    );
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const body = await req.json();
     const { plate_text, confidence, image_url, api_key, event_type, raw_data } = body;
@@ -35,7 +34,6 @@ serve(async (req) => {
       );
     }
 
-    // Validate API key and get camera info
     const { data: camera, error: camErr } = await supabase
       .from("alpr_cameras")
       .select("id, property_id, active")
@@ -56,13 +54,11 @@ serve(async (req) => {
       );
     }
 
-    // Update camera last_seen_at
     await supabase
       .from("alpr_cameras")
       .update({ last_seen_at: new Date().toISOString() })
       .eq("id", camera.id);
 
-    // Normalize and validate plate text
     const normalizedPlate = plate_text.toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (normalizedPlate.length < 2) {
       return new Response(
@@ -71,7 +67,6 @@ serve(async (req) => {
       );
     }
 
-    // Dedup: skip if same plate was seen at this property in the last 5 minutes
     const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const { data: recentEvent } = await supabase
       .from("plate_events")
@@ -108,33 +103,30 @@ serve(async (req) => {
       );
     }
 
-    // Fire-and-forget: ask tow-confirm whether this plate belongs to an
-    // enforcement partner's tow truck. If so, it records a sighting and
-    // may stamp tow_confirmed_at on an open violation. We never block the
-    // webhook response on this — a slow partner-lookup shouldn't delay the
-    // resident/visitor/violation decision path below.
-    const supabaseUrlForConfirm = Deno.env.get("SUPABASE_URL") ?? "";
-    const serviceRoleKeyForConfirm = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    const towConfirmController = new AbortController();
-    const towConfirmTimeoutId = setTimeout(() => towConfirmController.abort(), 1500);
-    const towConfirmPromise = fetch(`${supabaseUrlForConfirm}/functions/v1/tow-confirm`, {
+    // ─── PROOF-OF-TOW: invoke tow-confirm before any auth checks. ──────────
+    // Fire-and-forget so resident/visitor early-returns don't skip it.
+    // The worker handles all event_types (entry / exit) and decides what to do.
+    const confirmPromise = fetch(`${supabaseUrl}/functions/v1/tow-confirm`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${serviceRoleKeyForConfirm}`,
+        Authorization: `Bearer ${serviceRoleKey}`,
       },
-      body: JSON.stringify({ plate_event_id: plateEvent.id }),
-      signal: towConfirmController.signal,
-    })
-      .catch((err) => console.error("tow-confirm invoke failed:", err))
-      .finally(() => clearTimeout(towConfirmTimeoutId));
+      body: JSON.stringify({
+        plate_event_id: plateEvent.id,
+        property_id: camera.property_id,
+        plate_text: normalizedPlate,
+        event_type: event_type ?? "entry",
+        confidence: confidence ?? 0,
+        seen_at: plateEvent.created_at,
+      }),
+    }).catch((err) => console.error("tow-confirm invoke failed:", err));
     // deno-lint-ignore no-explicit-any
-    const edgeRuntimeForConfirm = (globalThis as any).EdgeRuntime;
-    if (edgeRuntimeForConfirm?.waitUntil) {
-      edgeRuntimeForConfirm.waitUntil(towConfirmPromise);
+    const edgeRuntimeConfirm = (globalThis as any).EdgeRuntime;
+    if (edgeRuntimeConfirm?.waitUntil) {
+      edgeRuntimeConfirm.waitUntil(confirmPromise);
     }
 
-    // Check against approved resident plates (pending registrations are not authorized)
     const { data: residentMatch } = await supabase
       .from("resident_plates")
       .select("id")
@@ -151,7 +143,6 @@ serve(async (req) => {
       );
     }
 
-    // Check against active visitor passes
     const now = new Date().toISOString();
     const { data: visitorMatch } = await supabase
       .from("visitor_passes")
@@ -170,7 +161,6 @@ serve(async (req) => {
       );
     }
 
-    // No match — create ALPR violation
     const { data: violation, error: violErr } = await supabase
       .from("alpr_violations")
       .insert({
@@ -189,16 +179,26 @@ serve(async (req) => {
       );
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    const dispatchPromise = fetch(`${supabaseUrl}/functions/v1/tow-dispatch-sms`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${serviceRoleKey}`,
-      },
-      body: JSON.stringify({ violation_id: violation.id }),
-    }).catch((err) => console.error("tow-dispatch-sms invoke failed:", err));
+    const methods = (Deno.env.get("TOW_DISPATCH_METHODS") ?? "email")
+      .split(",").map((m) => m.trim()).filter(Boolean);
+    const fnByMethod: Record<string, string> = {
+      email: "tow-dispatch-email",
+      sms: "tow-dispatch-sms",
+    };
+    const dispatchPromises = methods
+      .map((m) => fnByMethod[m])
+      .filter(Boolean)
+      .map((fn) =>
+        fetch(`${supabaseUrl}/functions/v1/${fn}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${serviceRoleKey}`,
+          },
+          body: JSON.stringify({ violation_id: violation.id }),
+        }).catch((err) => console.error(`${fn} invoke failed:`, err))
+      );
+    const dispatchPromise = Promise.all(dispatchPromises);
     // deno-lint-ignore no-explicit-any
     const edgeRuntime = (globalThis as any).EdgeRuntime;
     if (edgeRuntime?.waitUntil) {
