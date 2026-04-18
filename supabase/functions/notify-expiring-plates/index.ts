@@ -66,7 +66,7 @@ function buildEmailHtml(resident: ResidentPlate, propertyName: string): string {
       </div>
       <h2 style="font-size: 18px; color: #1a1a2e; text-align: center;">Vehicle Registration Expiring Soon</h2>
       <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-        Hi ${resident.holder_name || "Resident"},
+        Hi ${resident.holder_name || "Driver"},
       </p>
       <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
         Your vehicle registration for plate <strong style="color: #1a1a2e; font-family: monospace; letter-spacing: 0.05em;">${resident.plate_text}</strong>
@@ -161,7 +161,7 @@ serve(async (_req: Request) => {
 
     return new Response(
       JSON.stringify({
-        message: `Notified ${sentCount} resident(s)`,
+        message: `Notified ${sentCount} pass holder(s)`,
         count: sentCount,
         skipped: skippedCount,
         dry_run: !RESEND_API_KEY,

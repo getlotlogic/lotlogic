@@ -6,7 +6,7 @@ Here's the problem with private property towing right now — you're either wait
 
 We built LotLogic to fix that.
 
-We partner with apartment complexes to install free solar-powered cameras at their entrances. Every resident gets a digital parking pass — they register their plate in 30 seconds. When an unregistered vehicle enters and overstays, the system sends an SMS to the enforcement partner with the plate photo, location, and timestamp. Documented proof of a violation, on your phone, before anyone even complains.
+We partner with apartment complexes to install free solar-powered cameras at their entrances. Every authorized driver gets a digital parking pass — they register their plate in 30 seconds. When an unregistered vehicle enters and overstays, the system sends an SMS to the enforcement partner with the plate photo, location, and timestamp. Documented proof of a violation, on your phone, before anyone even complains.
 
 No more wasted patrol runs. No more "he said she said." Every violation is logged with photo evidence, and you get a dashboard tracking every job and how much revenue each lot is generating.
 

@@ -108,7 +108,7 @@ serve(async (req) => {
       );
     }
 
-    // Check against approved resident plates (pending registrations are not authorized)
+    // Check against approved permanent plates (pending registrations are not authorized)
     const { data: residentMatch } = await supabase
       .from("resident_plates")
       .select("id")
@@ -125,7 +125,7 @@ serve(async (req) => {
       );
     }
 
-    // Check against active visitor passes
+    // Check against active temporary passes
     const now = new Date().toISOString();
     const { data: visitorMatch } = await supabase
       .from("visitor_passes")

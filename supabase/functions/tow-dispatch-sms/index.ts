@@ -171,7 +171,7 @@ serve(async (req) => {
         (hostBits ? ` (host: ${hostBits})` : "") +
         ` — ${String(lastPass.status).toUpperCase()}`,
     );
-    if (lastPass.visitor_name) lines.push(`Visitor: ${lastPass.visitor_name}`);
+    if (lastPass.visitor_name) lines.push(`Driver: ${lastPass.visitor_name}`);
   } else {
     lines.push(`Pass: NONE (never registered)`);
   }

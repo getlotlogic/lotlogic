@@ -12,7 +12,7 @@ serve(async (req) => {
     let totalExpired = 0;
     const batchSize = 500;
 
-    // Expire visitor passes in batches to avoid timeouts on large datasets
+    // Expire temporary passes in batches to avoid timeouts on large datasets
     while (true) {
       const { data: batch, error: batchErr } = await supabase
         .from("visitor_passes")

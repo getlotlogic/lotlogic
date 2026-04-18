@@ -5709,7 +5709,7 @@ function AnalyticsPage({ lots, violations, partners = [], isOwner, onNavigate })
 
 // ── ALPR Page Components ─────────────────────────────────────
 
-// Shown under every plate / visitor-pass row: a compact strip of the most
+// Shown under every plate / temporary-pass row: a compact strip of the most
 // recent plate_events linked to that registration. Each thumbnail surfaces
 // the match_status and rolling OCR confidence so an operator can glance
 // at a pass and see whether anything looks wrong before it ever becomes a
@@ -5814,7 +5814,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
 
   // ── Permanent plates (new /perm submissions land here) ──
   // Same live pattern as parking regs and plate events so the admin doesn't
-  // have to reload after a resident submits the form.
+  // have to reload after a driver submits the form.
   const refreshPlates = useCallback(async () => {
     if (!propertyId) return;
     const pl = await db.getResidentPlates(propertyId);
@@ -5842,7 +5842,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     return () => document.removeEventListener('visibilitychange', onVis);
   }, [refreshPlates]);
 
-  // ── Visitor passes (new /visit submissions land here) ──
+  // ── Temporary passes (new /visit submissions land here) ──
   const refreshVisitorPasses = useCallback(async () => {
     if (!propertyId) return;
     const vp = await db.getVisitorPasses(propertyId, { limit: 50 });
