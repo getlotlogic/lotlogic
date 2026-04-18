@@ -678,6 +678,25 @@
       font-size: 14px; font-weight: 800; font-family: 'Courier New', monospace;
       letter-spacing: .1em; border: 1.5px solid #fbbf24;
     }
+    /* Confirmation-review row action buttons. Destructive (force-bill,
+       mark-no-tow) use red outline + transparent fill + "!" glyph; neutral
+       (pause-billing, resume-billing) keep the standard operator pill look.
+       Keeps the destructive affordance visually distinct from the neutral
+       ones so a miss-tap doesn't trigger an irreversible billing move. */
+    .cr-btn-destructive {
+      font-size: 11px; padding: 4px 10px; border-radius: 6px;
+      border: 1px solid var(--red); background: transparent; color: var(--red);
+      font-weight: 700; white-space: nowrap; cursor: pointer; line-height: 1.2;
+      transition: background .12s ease;
+    }
+    .cr-btn-destructive:hover:not(:disabled) { background: rgba(239,68,68,.1); }
+    .cr-btn-destructive:disabled { cursor: wait; opacity: 0.5; }
+    .cr-btn-neutral {
+      font-size: 11px; padding: 4px 10px; border-radius: 6px;
+      border: 1px solid var(--border); background: transparent; color: var(--text-primary);
+      font-weight: 600; white-space: nowrap; cursor: pointer; line-height: 1.2;
+    }
+    .cr-btn-neutral:disabled { cursor: wait; opacity: 0.5; }
     .permit-type-badge {
       font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
       padding: 3px 8px; border-radius: 20px;
@@ -5775,8 +5794,14 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       ),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' } },
         actions.length === 0 ? React.createElement('span', { style: { fontSize: 11, color: 'var(--text-faint)' } }, 'No actions') :
+        // force-bill and mark-no-tow are one-way destructive operator overrides
+        // with real billing implications. They render with a red outline + red
+        // text on transparent (distinct from neutral pause/resume pills) and a
+        // leading "!" glyph so the visual weight matches the stakes. Hover
+        // tints to rgba(239,68,68,.1) per the UX spec.
         actions.map(a => React.createElement('button', {
           key: a.key,
+          className: a.destructive ? 'cr-btn-destructive' : 'cr-btn-neutral',
           disabled: isActing,
           onClick: () => setPendingAction({
             violationId: r.id,
@@ -5785,14 +5810,12 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
             label: a.label,
             destructive: !!a.destructive,
           }),
-          style: {
-            fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: isActing ? 'wait' : 'pointer',
-            border: '1px solid ' + (a.primary ? 'var(--accent)' : 'var(--border)'),
-            background: a.primary ? 'var(--accent)' : 'transparent',
-            color: a.primary ? '#fff' : 'var(--text-primary)',
-            fontWeight: 600, whiteSpace: 'nowrap',
-          }
-        }, isActing && actingId === r.id ? '…' : a.label)),
+        },
+          // Leading "!" glyph on destructive actions — visual weight that matches stakes.
+          // aria-hidden so screen readers don't announce "exclamation mark" before the label.
+          a.destructive && React.createElement('span', { 'aria-hidden': true, style: { marginRight: 4, fontWeight: 800 } }, '!'),
+          isActing && actingId === r.id ? '…' : a.label,
+        )),
       ),
     );
   }
