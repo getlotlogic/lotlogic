@@ -4,6 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Permanent Pass Request</title>
+  <!-- reCAPTCHA v3. The site key is a PUBLIC value by design; security
+       relies only on the server-side RECAPTCHA_SECRET_KEY. The placeholder
+       below must be replaced with the real site key from the Google
+       reCAPTCHA admin console. Keep Vercel env RECAPTCHA_SITE_KEY in sync.
+       TODO: update this constant if you rotate the reCAPTCHA site. -->
+  <meta name="recaptcha-site-key" content="RECAPTCHA_SITE_KEY_PLACEHOLDER">
+  <script src="https://www.google.com/recaptcha/api.js?render=RECAPTCHA_SITE_KEY_PLACEHOLDER" async defer></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -178,6 +185,66 @@
     // hang on strict networks and leave the page stuck on "Loading...".
     const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
+    // Backend base. reCAPTCHA-gated POST /resident_plates/register lives here —
+    // the anon role can still read `properties` directly via PostgREST, but
+    // writes to `resident_plates` now route through the backend so the token
+    // can be verified server-side before any row is inserted.
+    const BACKEND_URL = 'https://lotlogic-backend-production.up.railway.app';
+
+    // reCAPTCHA v3 site key. Public by Google's design; see visit.html for
+    // the rotation / env-sync note. Mirrored in the <meta> tag in <head>.
+    const RECAPTCHA_SITE_KEY =
+      (document.querySelector('meta[name=recaptcha-site-key]')?.content)
+      || 'RECAPTCHA_SITE_KEY_PLACEHOLDER';
+
+    async function getRecaptchaToken(action) {
+      if (!window.grecaptcha || typeof grecaptcha.ready !== 'function') {
+        return null;
+      }
+      return new Promise((resolve, reject) => {
+        try {
+          grecaptcha.ready(() => {
+            grecaptcha.execute(RECAPTCHA_SITE_KEY, { action }).then(resolve, reject);
+          });
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }
+
+    async function backendRegister(path, payload, timeoutMs = 12000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(BACKEND_URL + path, {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const text = await res.text();
+        const body = text ? JSON.parse(text) : null;
+        if (!res.ok) {
+          const detail = body && (body.detail || body.message);
+          const err = new Error(typeof detail === 'string' ? detail : ('HTTP ' + res.status));
+          err.status = res.status;
+          err.detail = detail;
+          throw err;
+        }
+        return body;
+      } finally { clearTimeout(t); }
+    }
+
+    function friendlyErrorMessage(err) {
+      const msg = (err && err.message) || '';
+      if (msg.startsWith('recaptcha:') || /automated-access check failed/i.test(msg)) {
+        return 'Please retry — automated-access check failed.';
+      }
+      if (err && err.name === 'AbortError') {
+        return 'Request timed out. Please try again.';
+      }
+      return msg || 'Something went wrong. Please try again.';
+    }
 
     async function pgRest(path, init = {}, timeoutMs = 10000) {
       const ctrl = new AbortController();
@@ -330,32 +397,33 @@
           throw new Error('Please enter a valid license plate number.');
         }
 
+        const recaptchaToken = await getRecaptchaToken('plate_register').catch(() => null);
+        if (!recaptchaToken) {
+          throw new Error('Please retry — automated-access check failed.');
+        }
+
         try {
-          await pgRest('/resident_plates', {
-            method: 'POST',
-            headers: { Prefer: 'return=minimal' },
-            body: JSON.stringify({
-              property_id: property.id,
-              plate_text: plateText,
-              holder_name: holderName,
-              holder_role: property.property_type === 'truck_plaza' ? 'employee' : 'resident',
-              vehicle_description: '',
-              vehicle_type: vehicleType || null,
-              active: true,
-              phone: phone,
-              status: 'pending',
-            }),
+          await backendRegister('/resident_plates/register', {
+            property_id: property.id,
+            plate_text: plateText,
+            holder_name: holderName,
+            holder_role: property.property_type === 'truck_plaza' ? 'employee' : 'resident',
+            vehicle_type: vehicleType || 'car',
+            phone: phone,
+            recaptcha_token: recaptchaToken,
           });
         } catch (error) {
-          if (error.code === '23505') {
-            throw new Error('This license plate is already registered at this lot.');
+          if (error.status === 409) {
+            // Backend returns the friendly "already registered" message for
+            // the (property, plate) uniqueness violation.
+            throw new Error(error.detail || 'This license plate is already registered at this lot.');
           }
-          throw new Error('Failed to register. ' + (error.message || 'Please try again.'));
+          throw error;
         }
 
         showSuccess(plateText);
       } catch (err) {
-        errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+        errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
         btn.textContent = property.property_type === 'truck_plaza'
           ? 'Register Employee Plate'

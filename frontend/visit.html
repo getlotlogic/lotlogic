@@ -4,6 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Temporary Parking Pass</title>
+  <!-- reCAPTCHA v3. The site key is a PUBLIC value by design (Google docs
+       explicitly state it's safe to expose); security relies only on the
+       server-side RECAPTCHA_SECRET_KEY. The key below is a placeholder —
+       replace it with the real site key from the Google reCAPTCHA admin
+       console. Keep Vercel env RECAPTCHA_SITE_KEY in sync so any future
+       build step that injects it matches the hardcoded value.
+       TODO: update this constant if you rotate the reCAPTCHA site. -->
+  <meta name="recaptcha-site-key" content="RECAPTCHA_SITE_KEY_PLACEHOLDER">
+  <script src="https://www.google.com/recaptcha/api.js?render=RECAPTCHA_SITE_KEY_PLACEHOLDER" async defer></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -174,6 +183,33 @@
     // visitor_passes, so the QR form's pre-flight duplicate-pass check
     // MUST go through the backend's public, minimal-response endpoint).
     const BACKEND_URL = 'https://lotlogic-backend-production.up.railway.app';
+
+    // reCAPTCHA v3 site key. Public value — Google explicitly documents
+    // that the site key is meant to be exposed; security relies only on
+    // the server-side RECAPTCHA_SECRET_KEY. Mirrored in the <meta> tag in
+    // <head> so any future build step that does token replacement has
+    // exactly one place to patch.
+    const RECAPTCHA_SITE_KEY =
+      (document.querySelector('meta[name=recaptcha-site-key]')?.content)
+      || 'RECAPTCHA_SITE_KEY_PLACEHOLDER';
+
+    // Fetch a fresh reCAPTCHA v3 token for the given action. Returns null
+    // on script-load failure so the caller can decide whether to hard-fail
+    // or continue (we hard-fail on submit — Intuit requires a valid token).
+    async function getRecaptchaToken(action) {
+      if (!window.grecaptcha || typeof grecaptcha.ready !== 'function') {
+        return null;
+      }
+      return new Promise((resolve, reject) => {
+        try {
+          grecaptcha.ready(() => {
+            grecaptcha.execute(RECAPTCHA_SITE_KEY, { action }).then(resolve, reject);
+          });
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }
 
     async function pgRest(path, init = {}, timeoutMs = 10000) {
       const ctrl = new AbortController();
@@ -479,47 +515,30 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
         if (!stayHours || stayHours > 48) throw new Error('Choose how long you will be parked (max 48 hours).');
 
-        const validFrom = new Date();
-        const validUntil = new Date(validFrom.getTime() + stayHours * 60 * 60 * 1000);
-        const stayDays = Math.max(1, Math.ceil(stayHours / 24));
+        const recaptchaToken = await getRecaptchaToken('pass_register').catch(() => null);
+        if (!recaptchaToken) {
+          throw new Error('Please retry — automated-access check failed.');
+        }
 
-        await pgRest('/visitor_passes', {
-          method: 'POST',
-          headers: { Prefer: 'return=minimal' },
-          body: JSON.stringify({
-            property_id: property.id,
-            plate_text: plateText,
-            visitor_name: visitorName,
-            vehicle_type: vehicleType || null,
-            host_unit: '',
-            host_name: '',
-            valid_from: validFrom.toISOString(),
-            valid_until: validUntil.toISOString(),
-            status: 'active',
-            parking_spot: null,
-            tag_expiration: null,
-            id_photo_url: null,
-            stay_days: stayDays,
-            phone: phone,
-            registration_source: 'qr_scan',
-            submission_idempotency_key: idempotencyKey,
-          }),
+        const result = await backendRegister('/visitor_passes/register', {
+          property_id: property.id,
+          plate_text: plateText,
+          visitor_name: visitorName,
+          vehicle_type: vehicleType || null,
+          host_unit: '',
+          host_name: '',
+          phone: phone,
+          stay_hours: stayHours,
+          submission_idempotency_key: idempotencyKey,
+          recaptcha_token: recaptchaToken,
         });
 
-        showSuccess({plate: plateText, validUntil, stayHours, refId: null, parkingSpot: null, placardColor: null});
+        const validUntil = result.valid_until ? new Date(result.valid_until)
+          : new Date(Date.now() + stayHours * 60 * 60 * 1000);
+        const refId = (result.reference_id || '').toString().toUpperCase();
+        showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot: null, placardColor: null});
       } catch (err) {
-        if (err.status === 409 && idempotencyKey) {
-          // Idempotent: surface the existing pass.
-          try {
-            const rows = await pgRest(`/visitor_passes?select=id,plate_text,valid_until,stay_days&submission_idempotency_key=eq.${encodeURIComponent(idempotencyKey)}&limit=1`);
-            if (rows && rows.length) {
-              const r = rows[0];
-              showSuccess({plate: r.plate_text, validUntil: new Date(r.valid_until), stayHours: parseInt(document.getElementById('stayHours').value, 10), refId: r.id.slice(-8).toUpperCase(), parkingSpot: null, placardColor: null});
-              return;
-            }
-          } catch (_) {}
-        }
-        errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+        errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
         btn.textContent = 'Get Temporary Pass';
         submitting = false;
@@ -556,74 +575,90 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         if (stayHours !== 24 && stayHours !== 48) throw new Error('Choose 24 or 48 hours.');
         if (!policyAck) throw new Error('You must acknowledge the parking policies.');
 
-        const validFrom = new Date();
-        const validUntil = new Date(validFrom.getTime() + stayHours * 60 * 60 * 1000);
-        const stayDays = Math.max(1, Math.ceil(stayHours / 24));
+        const recaptchaToken = await getRecaptchaToken('pass_register').catch(() => null);
+        if (!recaptchaToken) {
+          throw new Error('Please retry — automated-access check failed.');
+        }
 
-        await pgRest('/visitor_passes', {
-          method: 'POST',
-          headers: { Prefer: 'return=minimal' },
-          body: JSON.stringify({
-            property_id: property.id,
-            plate_text: plateText,
-            visitor_name: driverName,
-            company_name: companyName,
-            vehicle_type: vehicleType,
-            host_unit: '',
-            host_name: '',
-            valid_from: validFrom.toISOString(),
-            valid_until: validUntil.toISOString(),
-            status: 'active',
-            parking_spot: parkingSpot,
-            tag_expiration: null,
-            id_photo_url: null,
-            stay_days: stayDays,
-            phone: phone,
-            placard_color: placardColor || null,
-            policy_acknowledged_at: validFrom.toISOString(),
-            registration_source: 'qr_scan',
-            submission_idempotency_key: idempotencyKey,
-          }),
+        const now = new Date();
+        const result = await backendRegister('/visitor_passes/register', {
+          property_id: property.id,
+          plate_text: plateText,
+          visitor_name: driverName,
+          company_name: companyName,
+          vehicle_type: vehicleType,
+          host_unit: '',
+          host_name: '',
+          phone: phone,
+          parking_spot: parkingSpot,
+          placard_color: placardColor || null,
+          stay_hours: stayHours,
+          policy_acknowledged_at: now.toISOString(),
+          submission_idempotency_key: idempotencyKey,
+          recaptcha_token: recaptchaToken,
         });
 
-        // Fetch the row we just created to get its id (for reference).
-        const inserted = await pgRest(`/visitor_passes?select=id&submission_idempotency_key=eq.${encodeURIComponent(idempotencyKey)}&limit=1`);
-        const refId = (inserted && inserted[0] && inserted[0].id || '').slice(-8).toUpperCase();
-        showSuccess({plate: plateText, validUntil, stayHours, refId, parkingSpot, placardColor, companyName});
+        const validUntil = result.valid_until ? new Date(result.valid_until)
+          : new Date(now.getTime() + stayHours * 60 * 60 * 1000);
+        const refId = (result.reference_id || '').toString().toUpperCase();
+        showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot, placardColor, companyName});
       } catch (err) {
-        // Cooldown rejection — surfaces a friendly message instead of raw error.
-        if (err.message && err.message.includes('COOLDOWN')) {
-          errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message.replace('COOLDOWN: ', '')) + '</div>';
+        // Cooldown rejection (409 with detail "COOLDOWN: ...") — friendly message.
+        const msg = (err && err.message) || '';
+        if (msg.includes('COOLDOWN')) {
+          errorDiv.innerHTML = '<div class="error">' + escapeHtml(msg.replace('COOLDOWN: ', '')) + '</div>';
           btn.disabled = false;
           btn.textContent = 'Register Truck';
           submitting = false;
           return;
         }
-        // Idempotency duplicate — surface the existing pass.
-        if (err.status === 409 && idempotencyKey) {
-          try {
-            const rows = await pgRest(`/visitor_passes?select=id,plate_text,valid_until,parking_spot,placard_color,company_name&submission_idempotency_key=eq.${encodeURIComponent(idempotencyKey)}&limit=1`);
-            if (rows && rows.length) {
-              const r = rows[0];
-              const stayHoursEl2 = document.querySelector('input[name="stayHours"]:checked');
-              showSuccess({
-                plate: r.plate_text,
-                validUntil: new Date(r.valid_until),
-                stayHours: stayHoursEl2 ? parseInt(stayHoursEl2.value, 10) : 24,
-                refId: r.id.slice(-8).toUpperCase(),
-                parkingSpot: r.parking_spot,
-                placardColor: r.placard_color,
-                companyName: r.company_name,
-              });
-              return;
-            }
-          } catch (_) {}
-        }
-        errorDiv.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+        errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
         btn.textContent = 'Register Truck';
         submitting = false;
       }
+    }
+
+    // ── Backend register helper ────────────────────────────────────────
+    // POST to one of the public /register endpoints. Normalizes errors so
+    // the handlers above can dispatch on err.status and err.message.
+    // reCAPTCHA rejects come back as 400 with detail "recaptcha:<reason>";
+    // we surface a single friendly string to the user and rely on the
+    // server-side log for the real reason (never log the token here).
+    async function backendRegister(path, payload, timeoutMs = 12000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(BACKEND_URL + path, {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const text = await res.text();
+        const body = text ? JSON.parse(text) : null;
+        if (!res.ok) {
+          const detail = body && (body.detail || body.message);
+          const err = new Error(typeof detail === 'string' ? detail : ('HTTP ' + res.status));
+          err.status = res.status;
+          err.detail = detail;
+          throw err;
+        }
+        return body;
+      } finally { clearTimeout(t); }
+    }
+
+    // Translate a backend error into a message the driver should see.
+    // reCAPTCHA failures → generic retry message (don't leak the reason).
+    function friendlyErrorMessage(err) {
+      const msg = (err && err.message) || '';
+      if (msg.startsWith('recaptcha:') || /automated-access check failed/i.test(msg)) {
+        return 'Please retry — automated-access check failed.';
+      }
+      if (err && err.name === 'AbortError') {
+        return 'Request timed out. Please try again.';
+      }
+      return msg || 'Something went wrong. Please try again.';
     }
 
     function showSuccess(opts) {
