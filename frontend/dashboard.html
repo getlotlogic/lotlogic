@@ -3618,7 +3618,7 @@ function ImageZoom({ src, alt, onClose }) {
   return (
     <div className="snap-zoom-overlay" onClick={onClose}>
       <img src={src} alt={alt || 'Zoomed view'} onClick={e => e.stopPropagation()} />
-      <button className="snap-zoom-close" onClick={onClose}>✕</button>
+      <button className="snap-zoom-close" onClick={onClose} aria-label="Close zoomed image">✕</button>
     </div>
   );
 }
@@ -5333,6 +5333,7 @@ function BillingQuickBooksView({ partnersProp, lots }) {
                     onClick: () => act('/quickbooks/pending-invoices/' + pi.id + '/remove-line', { violation_id: ln.violation_id }),
                     style: { border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1 },
                     title: 'Remove this line',
+                    'aria-label': 'Remove line for plate ' + (ln.plate || 'unknown'),
                   }, '\u2715'),
                 ),
               ))
@@ -5683,12 +5684,15 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       },
         React.createElement('button', {
           onClick: () => toggleQueue(q.id),
+          'aria-expanded': isOpen,
+          'aria-label': `${q.title} — ${items.length} item${items.length === 1 ? '' : 's'} — ${isOpen ? 'collapse' : 'expand'}`,
           style: {
             width: '100%', textAlign: 'left', background: 'transparent', border: 'none',
             padding: '12px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
           },
         },
           React.createElement('span', {
+            'aria-hidden': true,
             style: {
               fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
               background: tone.bg, color: tone.fg, border: `1px solid ${tone.border}`,
@@ -5699,7 +5703,7 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
             React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' } }, q.title),
             React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 } }, q.desc),
           ),
-          React.createElement('span', { style: { color: 'var(--text-faint)', fontSize: 12 } }, isOpen ? '▾' : '▸'),
+          React.createElement('span', { 'aria-hidden': true, style: { color: 'var(--text-faint)', fontSize: 12 } }, isOpen ? '▾' : '▸'),
         ),
         isOpen && items.length > 0 && React.createElement('div', { style: { borderTop: '1px solid var(--border)' } },
           items.map(renderRow),
@@ -5808,6 +5812,7 @@ function TowTruckPlatesEditor({ user }) {
             React.createElement('button', {
               onClick: () => removePlate(p), disabled: saving,
               title: 'Remove plate',
+              'aria-label': 'Remove tow-truck plate ' + p,
               style: {
                 background: 'transparent', border: 'none', color: 'var(--text-faint)',
                 cursor: saving ? 'wait' : 'pointer', padding: '0 6px', fontSize: 14, lineHeight: 1,
