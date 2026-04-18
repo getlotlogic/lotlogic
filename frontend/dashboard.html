@@ -5041,37 +5041,58 @@ function BillingQuickBooksView({ partnersProp, lots }) {
 
 // ── Confirmation review — billing_status queues per alpr_violations row ────
 // Classifies each row by the same CASE logic as the DB view
-// v_violation_billing_status, grouping into operator-actionable queues:
-//   disputed / verify / unreported_confirmed / confirmed / pending / no_tow /
-//   held-or-forced. Polls every 15s.
+// v_violation_billing_status (raw strings), then maps to 7 display buckets:
+//   fraud / verify / unreported_confirmed / confirmed / pending / no_tow /
+//   held_or_forced. Polls every 15s.
 function normalizeTruckPlate(s) {
   return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+// Mirrors v_violation_billing_status (migration 20260418011558_tow_confirmation.sql:55-66)
+// byte-for-byte — returns the RAW status string so any code that compares against
+// the DB view's output stays in lockstep. Do NOT collapse buckets here; that's
+// render-time formatting, see displayBucketFor below.
 function computeBillingStatus(v) {
-  // Mirrors v_violation_billing_status (see migration 20260418011558_tow_confirmation.sql).
   const a = v.action_taken;
   const conf = !!v.tow_confirmed_at;
   const dispatched = v.dispatched_at ? new Date(v.dispatched_at) : null;
   if (a === 'plate_correction')                 return 'no_tow';
   if (a === 'tow'     && conf)                  return 'confirmed';
   if (a == null       && conf)                  return 'unreported_confirmed';
-  if (a === 'tow'     && !conf)                 return 'verify'; // DB calls this reported_unconfirmed
+  if (a === 'tow'     && !conf)                 return 'reported_unconfirmed';
   if (a === 'no_tow'  && conf)                  return 'disputed';
   if (a === 'no_tow'  && !conf)                 return 'no_tow';
-  if (a == null && dispatched && (Date.now() - dispatched.getTime()) > 24 * 3600 * 1000) return 'no_tow';
+  if (a == null && dispatched && (Date.now() - dispatched.getTime()) > 24 * 3600 * 1000) return 'no_tow_timeout';
   return 'pending';
 }
 
-// Visible queue ordering for the UI (urgency-first).
+// Pure raw-status → display-bucket mapper. Keeps classification (which matches
+// the DB view verbatim) separate from the 7-queue UI grouping. Operator-override
+// rows (billing_held_at / force_bill_at) are handled at call-site, not here.
+function displayBucketFor(rawStatus) {
+  switch (rawStatus) {
+    case 'disputed':              return 'fraud';
+    case 'reported_unconfirmed':  return 'verify';
+    case 'unreported_confirmed':  return 'unreported_confirmed';
+    case 'confirmed':             return 'confirmed';
+    case 'pending':               return 'pending';
+    case 'no_tow':                return 'no_tow';
+    case 'no_tow_timeout':        return 'no_tow';
+    case 'manually_held':         return 'held_or_forced';
+    case 'force_billed':          return 'held_or_forced';
+    default:                      return 'pending';
+  }
+}
+
+// Visible queue ordering for the UI (urgency-first). Keyed by display bucket.
 const REVIEW_QUEUES = [
-  { id: 'disputed',             title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red' },
+  { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red' },
   { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', tone: 'amber' },
   { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              tone: 'amber' },
   { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    tone: 'green' },
   { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           tone: 'gray' },
   { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        tone: 'gray' },
-  { id: 'held',                 title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue' },
+  { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue' },
 ];
 
 const TONE_COLORS = {
@@ -5096,7 +5117,7 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
   const [err, setErr] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [actingId, setActingId] = React.useState(null);
-  const [expanded, setExpanded] = React.useState(() => new Set(['disputed', 'verify']));
+  const [expanded, setExpanded] = React.useState(() => new Set(['fraud', 'verify']));
   const partnerName = React.useMemo(() => {
     const m = {};
     (partnersProp || []).forEach(p => { m[p.id] = p.company_name || p.contact_name; });
@@ -5160,19 +5181,17 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     }
   }
 
-  // Group rows into queues. "held" bucket wins over anything else for rows
-  // that carry an operator override flag.
+  // Group rows into display buckets WITHOUT mutating the source rows.
+  // Operator overrides (held / force-billed, still un-invoiced) go to the
+  // held_or_forced bucket regardless of raw billing status.
   const grouped = React.useMemo(() => {
     const buckets = Object.fromEntries(REVIEW_QUEUES.map(q => [q.id, []]));
     (rows || []).forEach(r => {
       const overridden = r.billing_held_at || r.force_bill_at;
-      const status = computeBillingStatus(r);
-      r._billing_status = status;
-      if (overridden && !r.invoiced_at) {
-        buckets.held.push(r);
-      } else if (buckets[status]) {
-        buckets[status].push(r);
-      }
+      const bucketId = (overridden && !r.invoiced_at)
+        ? 'held_or_forced'
+        : displayBucketFor(computeBillingStatus(r));
+      if (buckets[bucketId]) buckets[bucketId].push(r);
     });
     return buckets;
   }, [rows]);
