@@ -5798,9 +5798,18 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
   // Group rows into display buckets WITHOUT mutating the source rows.
   // Operator overrides (held / force-billed, still un-invoiced) go to the
   // held_or_forced bucket regardless of raw billing status.
+  // Rows filtered by the property selector (owner-only; partners see their
+  // entire scope via RLS). Done as a derived value so toggling the filter
+  // doesn't trigger a refetch.
+  const filteredRows = React.useMemo(() => {
+    if (!rows) return rows;
+    if (propertyFilter === 'all') return rows;
+    return rows.filter(r => r.property_id === propertyFilter);
+  }, [rows, propertyFilter]);
+
   const grouped = React.useMemo(() => {
     const buckets = Object.fromEntries(REVIEW_QUEUES.map(q => [q.id, []]));
-    (rows || []).forEach(r => {
+    (filteredRows || []).forEach(r => {
       const overridden = r.billing_held_at || r.force_bill_at;
       const bucketId = (overridden && !r.invoiced_at)
         ? 'held_or_forced'
@@ -5808,9 +5817,9 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       if (buckets[bucketId]) buckets[bucketId].push(r);
     });
     return buckets;
-  }, [rows]);
+  }, [filteredRows]);
 
-  const totalCount = (rows || []).length;
+  const totalCount = (filteredRows || []).length;
 
   // Summary strip counts. Keep them as a single useMemo so the header doesn't
   // recompute on every keystroke in the reason modal.
@@ -5837,10 +5846,17 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
 
   function renderRow(r) {
     const channel = channelIcon(r.action_channel);
-    const partner = r.properties?.tow_company_id
-      ? (partnerName[r.properties.tow_company_id] || r.properties.tow_company_id.slice(0, 8))
+    // Resolve the partner (tow company) name with a chain of fallbacks so we
+    // never show a raw uuid slice like "abc12345…" in the row metadata. The
+    // partnerName map is built from the owner's lots' enforcement_partners;
+    // propMap covers the property's denormalised tow_company_id; the FK join
+    // on alpr_violations.properties is the last resort. If all three miss we
+    // fall back to em-dash rather than a uuid chunk.
+    const towCompanyId = r.properties?.tow_company_id || (propMap[r.property_id] && propMap[r.property_id].tow_company_id);
+    const partner = towCompanyId
+      ? (partnerName[towCompanyId] || '—')
       : '—';
-    const propName = r.properties?.name || (r.property_id || '').slice(0, 8);
+    const propName = r.properties?.name || (propMap[r.property_id] && propMap[r.property_id].name) || '—';
     const evidence = r.tow_confirmation || null;
     const isActing = actingId === r.id;
     const plateEv = r._plate_event;
@@ -5937,7 +5953,13 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
           ),
         ),
         React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginBottom: 2 } },
-          propName + ' · ' + partner,
+          // Owner view: "Property — Partner: Acme Tow" (owners manage
+          // multiple properties and want to know which partner handled the
+          // tow). Partner view: just the property name (they already know
+          // the partner is themselves).
+          role === 'partner'
+            ? propName
+            : propName + ' \u2014 Partner: ' + partner,
         ),
         // Compact chip row — kept for quick scanning even though the full
         // timeline below captures the same channel + delta data.
@@ -6014,6 +6036,52 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     err && React.createElement('div', {
       style: { background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.3)', color: '#ef4444', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12 }
     }, err),
+
+    // Filter bar — date-range + property selector (owner-only). The 15s
+    // polling stays put; the Refresh button in the summary strip is for
+    // impatient operators who don't want to wait for the next tick.
+    React.createElement('div', {
+      style: {
+        display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+        marginBottom: 10, fontSize: 12, color: 'var(--text-muted)',
+      }
+    },
+      React.createElement('label', {
+        style: { display: 'flex', alignItems: 'center', gap: 6 },
+      },
+        React.createElement('span', { style: { fontSize: 11, color: 'var(--text-faint)' } }, 'Range'),
+        React.createElement('select', {
+          value: String(rangeDays),
+          onChange: e => setRangeDays(Number(e.target.value) || 7),
+          style: { fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-inset)', color: 'var(--text-primary)' },
+        },
+          React.createElement('option', { value: '1' }, 'Last 24h'),
+          React.createElement('option', { value: '7' }, 'Last 7 days'),
+          React.createElement('option', { value: '14' }, 'Last 14 days'),
+          React.createElement('option', { value: '30' }, 'Last 30 days'),
+          React.createElement('option', { value: '90' }, 'Last 90 days'),
+        ),
+      ),
+      role === 'owner' && Object.keys(propMap).length > 0 && React.createElement('label', {
+        style: { display: 'flex', alignItems: 'center', gap: 6 },
+      },
+        React.createElement('span', { style: { fontSize: 11, color: 'var(--text-faint)' } }, 'Property'),
+        React.createElement('select', {
+          value: propertyFilter,
+          onChange: e => setPropertyFilter(e.target.value),
+          style: { fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-inset)', color: 'var(--text-primary)', maxWidth: 260 },
+        },
+          React.createElement('option', { value: 'all' }, 'All properties'),
+          Object.entries(propMap)
+            .sort((a, b) => (a[1].name || '').localeCompare(b[1].name || ''))
+            .map(([id, p]) => React.createElement('option', { key: id, value: id }, p.name || id.slice(0, 8))),
+        ),
+      ),
+      propertyFilter !== 'all' && React.createElement('button', {
+        onClick: () => setPropertyFilter('all'),
+        style: { fontSize: 11, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' },
+      }, 'Clear filter'),
+    ),
 
     // Summary strip — at-a-glance verdict on whether this screen needs
     // attention. Fraud and Needs-verification are called out in tone colors
