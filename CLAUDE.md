@@ -217,12 +217,15 @@ users out or blank their data.
 
 ## Known Bottlenecks (Apr 2026)
 - **No staging for the backend.** Railway deploys straight to prod from `main`. Nowhere to rehearse a migration or an auth change end-to-end.
-- **No backend CI.** `getlotlogic/lotlogic-backend` has no GitHub Actions workflow — no tests, no lint, no syntax check. Python bugs ship on merge.
 - **Migrations are manual.** Code can merge before the required migration is applied. Every schema change depends on human-in-the-loop.
-- **Single 6000-line `frontend/dashboard.html` with in-browser Babel.** No type check, no component tests, no tree-shaking. Every change loads the entire file.
+- **Single ~7000-line `frontend/dashboard.html` with in-browser Babel.** No type check, no component tests, no tree-shaking. Every change loads the entire file.
 - **No shared types between Python and frontend.** A Pydantic field rename silently breaks the UI.
 - **Gitignored lockfile.** CI dependency resolution is non-deterministic.
 - **Secrets rotate by find-and-replace.** The old shared API key was embedded in the browser bundle and in CLAUDE.md — rotation was intrusive.
+- **Edge functions deploy out-of-band.** `supabase/functions/*` lives here but `supabase functions deploy` is a manual step. Repo can drift from deployed runtime. When you touch an edge function, diff against `mcp__supabase__get_edge_function` before pushing.
+
+Resolved vs earlier versions of this note:
+- ~~No backend CI~~ → `getlotlogic/lotlogic-backend` now has `.github/workflows/ci.yml` (ruff + compileall + pytest).
 
 ## Build & Deploy
 
@@ -248,8 +251,51 @@ users out or blank their data.
 - Each Railway service should have its root directory set to its subdirectory (e.g., `puller/`, `monitoring/`)
 
 ## Development Rules
-- The frontend is a single `frontend/index.html` file (React + Babel transpiled in-browser)
+- The dashboard is a single `frontend/dashboard.html` file (React + Babel transpiled in-browser)
+- QR registration flow uses two separate single-file pages: `frontend/visit.html` (temporary) and `frontend/resident.html` (permanent)
 - Zone coordinates are percentage-based (0-100) mapped to SVG viewBox
 - All timestamps are UTC (TIMESTAMPTZ)
-- Violation status is only 'pending' or 'resolved' (CHECK constraint)
-- `action_taken` values: boot, tow, dismissed, already_gone, no_action, plate_correction
+- Legacy `violations` row status is only 'pending' or 'resolved' (CHECK constraint); `alpr_violations` uses a richer state machine driven by `action_taken` + `tow_confirmed_at`
+- `action_taken` values: boot, tow, dismissed, already_gone, no_action, plate_correction; on `alpr_violations` also: `tow`, `no_tow`
+- **User-facing naming rule**: never write "Resident", "Visitor", or "Guest" in any UI string, email body, SMS body, or comment. Use **Permanent**, **Temporary**, or **Driver**. Database column names stay (`resident_plates`, `visitor_passes`, `visitor_name`) — UI labels everything.
+
+## Truck-plaza passes (Apr 2026)
+
+Spec: [`getlotlogic/lotlogic-backend` → `docs/superpowers/specs/2026-04-18-truck-plaza-passes-design.md`]
+
+- `properties.property_type` ∈ (`apartment`, `truck_plaza`) drives form variants in `visit.html` / `resident.html` and tab labels in the dashboard.
+- `visit.html` on a truck_plaza property renders a different form (company name, parking space, placard color, policy ack checkbox, 24h/48h stay radio). Pre-flight active-pass check hits the backend `GET /visitor_passes/check-active` (public; Supabase RLS blocks anon reads of visitor_passes, so the pre-flight MUST go through the backend).
+- `resident.html` branches holder role on `property.property_type`: apartments write `holder_role='resident'`, truck plazas write `holder_role='employee'`.
+- Dashboard (`dashboard.html`): property create/edit has a `property_type` selector + `policy_text` / `policy_phone` fields for truck_plaza. Tab labels on the property detail page switch: apartment = Permanent Plates / Temporary Passes; truck_plaza = Permanent Plates (Employees) / Truck Parking Log.
+- Truck Parking Log tab backed by `GET /visitor_passes/parking-log?property_id=...&format=json|csv` with date/plate/company/status filters + operator Cancel (via `POST /visitor_passes/{id}/cancel`) + CSV export.
+
+## Tow confirmation + Confirmation review tab
+
+Spec: [`getlotlogic/lotlogic-backend` → `docs/superpowers/specs/2026-04-18-tow-confirmation-design.md`]
+
+- `supabase/functions/tow-confirm/` — correlates camera sightings of tow-truck plates (listed in `enforcement_partners.tow_truck_plates`) back to open violations. Claims sightings via `partner_truck_sightings.consumed_by_violation_id`. Exit-event correlation uses a lookback window (`TOW_CONFIRM_LOOKBACK_MINUTES`, default 180).
+- `supabase/functions/alpr-webhook/` fires `tow-confirm` fire-and-forget after every `plate_events` insert. Also fans out to `tow-dispatch-email` + `tow-dispatch-sms` via `TOW_DISPATCH_METHODS` env.
+- `supabase/functions/tow-dispatch-email/` mints HMAC-SHA256 JWT action tokens (aud `violation-action`, 48h TTL, signed with `JWT_SECRET` — MUST match the backend's) and renders two one-click buttons. Clicking hits backend `GET /violations/action` (render confirm form) → `POST /violations/action` (atomic resolve).
+- Dashboard Billing tab has a **Confirmation review** sub-tab with 7 queues derived from `v_violation_billing_status`: Possible fraud → Needs verification → Unreported confirmed → Confirmed → Pending → No tow → Held/Force-billed. Per-row operator actions: Bill Anyway, Mark No-Tow, Pause/Resume Billing (all owner-scoped, hit backend endpoints `POST /violations/{id}/{force-bill|mark-no-tow|pause-billing|resume-billing}`).
+- Partner settings: `AccountPage` has a **tow-truck plates** editor writing `enforcement_partners.tow_truck_plates`. Plates normalized byte-identically to `tow-confirm/index.ts`.
+
+## Deploying edge functions
+
+Edge functions deploy independently of the Vercel push-to-main flow. **Diff against deployed runtime before overwriting.**
+
+```bash
+# Diff first (recommended):
+supabase functions download alpr-webhook --project-ref nzdkoouoaedbbccraoti
+# Or use the MCP: mcp__supabase__get_edge_function
+
+# Deploy:
+supabase functions deploy tow-confirm
+supabase functions deploy alpr-webhook
+supabase functions deploy tow-dispatch-email
+# Set secrets where needed:
+supabase secrets set JWT_SECRET=$SUPABASE_JWT_SECRET  # tow-dispatch-email
+```
+
+New env vars required:
+- `tow-dispatch-email`: `JWT_SECRET` (= the Supabase JWT secret = backend's `JWT_SECRET`), `BACKEND_URL` (optional, defaults to prod)
+- `tow-confirm`: `TOW_CONFIRM_MIN_CONFIDENCE` (default 0.85), `TOW_CONFIRM_LOOKBACK_MINUTES` (default 180)
