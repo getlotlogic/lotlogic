@@ -108,6 +108,32 @@ serve(async (req) => {
       );
     }
 
+    // Fire-and-forget: ask tow-confirm whether this plate belongs to an
+    // enforcement partner's tow truck. If so, it records a sighting and
+    // may stamp tow_confirmed_at on an open violation. We never block the
+    // webhook response on this — a slow partner-lookup shouldn't delay the
+    // resident/visitor/violation decision path below.
+    const supabaseUrlForConfirm = Deno.env.get("SUPABASE_URL") ?? "";
+    const serviceRoleKeyForConfirm = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const towConfirmController = new AbortController();
+    const towConfirmTimeoutId = setTimeout(() => towConfirmController.abort(), 1500);
+    const towConfirmPromise = fetch(`${supabaseUrlForConfirm}/functions/v1/tow-confirm`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceRoleKeyForConfirm}`,
+      },
+      body: JSON.stringify({ plate_event_id: plateEvent.id }),
+      signal: towConfirmController.signal,
+    })
+      .catch((err) => console.error("tow-confirm invoke failed:", err))
+      .finally(() => clearTimeout(towConfirmTimeoutId));
+    // deno-lint-ignore no-explicit-any
+    const edgeRuntimeForConfirm = (globalThis as any).EdgeRuntime;
+    if (edgeRuntimeForConfirm?.waitUntil) {
+      edgeRuntimeForConfirm.waitUntil(towConfirmPromise);
+    }
+
     // Check against approved resident plates (pending registrations are not authorized)
     const { data: residentMatch } = await supabase
       .from("resident_plates")
