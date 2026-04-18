@@ -2604,6 +2604,37 @@ const db = {
       body: JSON.stringify(reason ? { reason } : {}),
     });
   },
+  // Operator overrides on alpr_violations. All are owner-scoped on the
+  // backend (POST /violations/{id}/{action}, see routers/violations.py).
+  // `reason` flows through to the audit log as notes.
+  async forceBillViolation(id, reason) {
+    return apiFetch(`/violations/${id}/force-bill`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+  async markViolationNoTow(id, reason) {
+    return apiFetch(`/violations/${id}/mark-no-tow`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+  async pauseViolationBilling(id, reason) {
+    return apiFetch(`/violations/${id}/pause-billing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+  async resumeViolationBilling(id) {
+    return apiFetch(`/violations/${id}/resume-billing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  },
   async getALPRCameras(propertyId) {
     if (supabase) {
       const { data, error } = await supabase.from('alpr_cameras').select('*').eq('property_id', propertyId).order('created_at', { ascending: false });
@@ -2797,6 +2828,32 @@ function useOnlineStatus() {
     return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
   }, []);
   return { online, reconnected };
+}
+
+// ── Interval-fetch hook ──────────────────────────────────────
+// One-shot + interval poller. Runs `fn` once on mount, then every `ms`
+// milliseconds (pass 0 or negative to disable the interval and fire once only).
+// Uses a single useEffect so the initial call and the first interval tick
+// can't race, and sets a `cancelled` flag so a late-returning in-flight fetch
+// doesn't push stale state after unmount.
+//
+// Dependencies go in `deps` — treat it like the deps array on useEffect.
+// Because deps is dynamic we silence exhaustive-deps at the call site.
+function useIntervalFetch(fn, ms, deps) {
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      try { await fn(); } catch (_) { /* caller is responsible for error state */ }
+    };
+    run();
+    if (ms > 0) {
+      const h = setInterval(run, ms);
+      return () => { cancelled = true; clearInterval(h); };
+    }
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
 }
 
 // ── Haptic feedback ──────────────────────────────────────────
@@ -3055,6 +3112,81 @@ function ConfirmDialog({ title, body, confirmLabel, confirmColor, onConfirm, onC
         <div className="confirm-btns">
           <button className="confirm-cancel" onClick={onCancel}>Cancel</button>
           <button className="confirm-ok" style={{background: confirmColor || '#3b82f6'}} onClick={onConfirm}>{confirmLabel || 'Confirm'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Confirm action modal (inline, replaces window.prompt) ──────
+// Reusable modal for plate-scoped operator actions: shows the plate, the
+// action label, an optional reason textarea, and Confirm / Cancel buttons.
+// Used by Confirmation review (force-bill / mark-no-tow / pause-billing /
+// resume-billing) AND the Truck Parking Log cancel-pass flow.
+//
+// Props:
+//   plate             - string plate shown prominently for confirmation
+//   actionLabel       - verb displayed in the title (e.g. "Force bill")
+//   description       - optional node under the title (falls back to generic)
+//   confirmLabel      - button text (defaults to actionLabel)
+//   confirmColor      - hex / token for the confirm background (red for
+//                       destructive, accent for primary)
+//   requireReason     - when true, Confirm stays disabled until the reason has
+//                       at least 2 non-whitespace chars
+//   reasonPlaceholder - placeholder text for the textarea
+//   submitting        - disables buttons while a POST is in flight
+//   onConfirm(reason) - called with trimmed reason (may be empty string)
+//   onCancel()
+function ConfirmActionModal({
+  plate,
+  actionLabel,
+  description,
+  confirmLabel,
+  confirmColor,
+  requireReason = false,
+  reasonPlaceholder = 'Reason (optional)',
+  submitting = false,
+  onConfirm,
+  onCancel,
+}) {
+  const [reason, setReason] = useState('');
+  const trimmed = reason.trim();
+  const disabled = submitting || (requireReason && trimmed.length < 2);
+  return (
+    <div
+      onClick={submitting ? undefined : onCancel}
+      style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+    >
+      <div onClick={e => e.stopPropagation()} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:16,maxWidth:440,width:'100%'}}>
+        <div style={{fontSize:16,fontWeight:800,color:'var(--text-primary)',marginBottom:4}}>{actionLabel}?</div>
+        <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:10}}>
+          {description || <>Applies to plate <strong style={{color:'var(--text-primary)'}}>{plate || '—'}</strong>.</>}
+        </div>
+        <textarea
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          rows={2}
+          placeholder={reasonPlaceholder}
+          autoFocus
+          style={{width:'100%',padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box'}}
+        />
+        <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:10}}>
+          <button onClick={onCancel} disabled={submitting} className="pd-share-btn">Cancel</button>
+          <button
+            onClick={() => onConfirm(trimmed)}
+            disabled={disabled}
+            style={{
+              background: confirmColor || 'var(--accent)',
+              color: '#fff',
+              border: '1px solid ' + (confirmColor || 'var(--accent)'),
+              borderRadius: 6,
+              padding: '4px 12px',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              opacity: disabled ? 0.6 : 1,
+            }}
+          >{submitting ? '…' : (confirmLabel || actionLabel)}</button>
         </div>
       </div>
     </div>
@@ -4820,7 +4952,7 @@ function BillingQuickBooksView({ partnersProp, lots }) {
     }
   }, [lots]);
 
-  React.useEffect(() => { refresh(); }, [refresh]);
+  useIntervalFetch(refresh, 0, [refresh]);
 
   async function act(path, body) {
     try {
@@ -5041,37 +5173,58 @@ function BillingQuickBooksView({ partnersProp, lots }) {
 
 // ── Confirmation review — billing_status queues per alpr_violations row ────
 // Classifies each row by the same CASE logic as the DB view
-// v_violation_billing_status, grouping into operator-actionable queues:
-//   disputed / verify / unreported_confirmed / confirmed / pending / no_tow /
-//   held-or-forced. Polls every 15s.
+// v_violation_billing_status (raw strings), then maps to 7 display buckets:
+//   fraud / verify / unreported_confirmed / confirmed / pending / no_tow /
+//   held_or_forced. Polls every 15s.
 function normalizeTruckPlate(s) {
   return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+// Mirrors v_violation_billing_status (migration 20260418011558_tow_confirmation.sql:55-66)
+// byte-for-byte — returns the RAW status string so any code that compares against
+// the DB view's output stays in lockstep. Do NOT collapse buckets here; that's
+// render-time formatting, see displayBucketFor below.
 function computeBillingStatus(v) {
-  // Mirrors v_violation_billing_status (see migration 20260418011558_tow_confirmation.sql).
   const a = v.action_taken;
   const conf = !!v.tow_confirmed_at;
   const dispatched = v.dispatched_at ? new Date(v.dispatched_at) : null;
   if (a === 'plate_correction')                 return 'no_tow';
   if (a === 'tow'     && conf)                  return 'confirmed';
   if (a == null       && conf)                  return 'unreported_confirmed';
-  if (a === 'tow'     && !conf)                 return 'verify'; // DB calls this reported_unconfirmed
+  if (a === 'tow'     && !conf)                 return 'reported_unconfirmed';
   if (a === 'no_tow'  && conf)                  return 'disputed';
   if (a === 'no_tow'  && !conf)                 return 'no_tow';
-  if (a == null && dispatched && (Date.now() - dispatched.getTime()) > 24 * 3600 * 1000) return 'no_tow';
+  if (a == null && dispatched && (Date.now() - dispatched.getTime()) > 24 * 3600 * 1000) return 'no_tow_timeout';
   return 'pending';
 }
 
-// Visible queue ordering for the UI (urgency-first).
+// Pure raw-status → display-bucket mapper. Keeps classification (which matches
+// the DB view verbatim) separate from the 7-queue UI grouping. Operator-override
+// rows (billing_held_at / force_bill_at) are handled at call-site, not here.
+function displayBucketFor(rawStatus) {
+  switch (rawStatus) {
+    case 'disputed':              return 'fraud';
+    case 'reported_unconfirmed':  return 'verify';
+    case 'unreported_confirmed':  return 'unreported_confirmed';
+    case 'confirmed':             return 'confirmed';
+    case 'pending':               return 'pending';
+    case 'no_tow':                return 'no_tow';
+    case 'no_tow_timeout':        return 'no_tow';
+    case 'manually_held':         return 'held_or_forced';
+    case 'force_billed':          return 'held_or_forced';
+    default:                      return 'pending';
+  }
+}
+
+// Visible queue ordering for the UI (urgency-first). Keyed by display bucket.
 const REVIEW_QUEUES = [
-  { id: 'disputed',             title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red' },
+  { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             tone: 'red' },
   { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', tone: 'amber' },
   { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              tone: 'amber' },
   { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    tone: 'green' },
   { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           tone: 'gray' },
   { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        tone: 'gray' },
-  { id: 'held',                 title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue' },
+  { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                tone: 'blue' },
 ];
 
 const TONE_COLORS = {
@@ -5091,12 +5244,24 @@ function channelIcon(ch) {
   return null;
 }
 
+// Endpoint key → db method. One place to add/rename a violation override
+// without touching the modal plumbing.
+const OPERATOR_ACTION_CALLERS = {
+  'force-bill':      (id, reason) => db.forceBillViolation(id, reason),
+  'mark-no-tow':     (id, reason) => db.markViolationNoTow(id, reason),
+  'pause-billing':   (id, reason) => db.pauseViolationBilling(id, reason),
+  'resume-billing':  (id)         => db.resumeViolationBilling(id),
+};
+
 function ConfirmationReviewView({ user, lots, partnersProp }) {
   const [rows, setRows] = React.useState(null);
   const [err, setErr] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [actingId, setActingId] = React.useState(null);
-  const [expanded, setExpanded] = React.useState(() => new Set(['disputed', 'verify']));
+  const [expanded, setExpanded] = React.useState(() => new Set(['fraud', 'verify']));
+  // Staged operator action waiting on modal confirmation. null == closed.
+  // Shape: { violationId, plate, endpoint, label, destructive }
+  const [pendingAction, setPendingAction] = React.useState(null);
   const partnerName = React.useMemo(() => {
     const m = {};
     (partnersProp || []).forEach(p => { m[p.id] = p.company_name || p.contact_name; });
@@ -5135,23 +5300,24 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     }
   }, [ownerId, role]);
 
-  React.useEffect(() => { refresh(false); }, [refresh]);
-  // Poll every 15 s per spec.
-  React.useEffect(() => {
-    const t = setInterval(() => refresh(true), 15000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  // Poll every 15 s per spec. Runs once immediately on mount (no race
+  // against the first interval tick) and on every `refresh` identity change.
+  useIntervalFetch(() => refresh(true), 15000, [refresh]);
 
-  async function doAction(violationId, endpoint, confirmMsg) {
-    const reason = window.prompt((confirmMsg || 'Reason (optional):'), '');
-    if (reason === null) return; // cancelled
+  // Fire the currently-staged action through the db helper for the chosen
+  // endpoint. `reason` is the trimmed textarea value (may be empty).
+  async function confirmPendingAction(reason) {
+    if (!pendingAction) return;
+    const { violationId, endpoint } = pendingAction;
+    const caller = OPERATOR_ACTION_CALLERS[endpoint];
+    if (!caller) {
+      alert(`Unknown operator action: ${endpoint}`);
+      return;
+    }
     setActingId(violationId);
     try {
-      await apiFetch(`/violations/${violationId}/${endpoint}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reason: reason || undefined }),
-      });
+      await caller(violationId, reason || undefined);
+      setPendingAction(null);
       await refresh(true);
     } catch (e) {
       alert(e.message);
@@ -5160,19 +5326,17 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     }
   }
 
-  // Group rows into queues. "held" bucket wins over anything else for rows
-  // that carry an operator override flag.
+  // Group rows into display buckets WITHOUT mutating the source rows.
+  // Operator overrides (held / force-billed, still un-invoiced) go to the
+  // held_or_forced bucket regardless of raw billing status.
   const grouped = React.useMemo(() => {
     const buckets = Object.fromEntries(REVIEW_QUEUES.map(q => [q.id, []]));
     (rows || []).forEach(r => {
       const overridden = r.billing_held_at || r.force_bill_at;
-      const status = computeBillingStatus(r);
-      r._billing_status = status;
-      if (overridden && !r.invoiced_at) {
-        buckets.held.push(r);
-      } else if (buckets[status]) {
-        buckets[status].push(r);
-      }
+      const bucketId = (overridden && !r.invoiced_at)
+        ? 'held_or_forced'
+        : displayBucketFor(computeBillingStatus(r));
+      if (buckets[bucketId]) buckets[bucketId].push(r);
     });
     return buckets;
   }, [rows]);
@@ -5198,15 +5362,16 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
 
     // Action set depends on current state. Held rows get Resume; force-billed
     // rows are read-only here (they're heading to invoicing). Everything else
-    // gets the three primary overrides.
+    // gets the three primary overrides. `destructive` endpoints require a
+    // reason in the modal and render with a red Confirm button.
     const actions = [];
     if (r.billing_held_at) {
       actions.push({ key: 'resume-billing', label: 'Resume billing', primary: true });
     } else if (!r.invoiced_at) {
       if (!r.force_bill_at) {
-        actions.push({ key: 'force-bill', label: 'Bill anyway', primary: true });
+        actions.push({ key: 'force-bill', label: 'Bill anyway', primary: true, destructive: true });
       }
-      actions.push({ key: 'mark-no-tow', label: 'Mark no-tow' });
+      actions.push({ key: 'mark-no-tow', label: 'Mark no-tow', destructive: true });
       actions.push({ key: 'pause-billing', label: 'Pause billing' });
     }
 
@@ -5269,10 +5434,13 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
         actions.map(a => React.createElement('button', {
           key: a.key,
           disabled: isActing,
-          onClick: () => {
-            const verb = a.label.toLowerCase();
-            doAction(r.id, a.key, `Reason for "${verb}" (optional):`);
-          },
+          onClick: () => setPendingAction({
+            violationId: r.id,
+            plate: r.plate_text || '',
+            endpoint: a.key,
+            label: a.label,
+            destructive: !!a.destructive,
+          }),
           style: {
             fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: isActing ? 'wait' : 'pointer',
             border: '1px solid ' + (a.primary ? 'var(--accent)' : 'var(--border)'),
@@ -5347,6 +5515,23 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
           style: { padding: '10px 14px', fontSize: 12, color: 'var(--text-faint)', borderTop: '1px solid var(--border)' }
         }, 'Nothing here.'),
       );
+    }),
+    pendingAction && React.createElement(ConfirmActionModal, {
+      key: 'action-modal-' + pendingAction.violationId + '-' + pendingAction.endpoint,
+      plate: pendingAction.plate,
+      actionLabel: pendingAction.label,
+      description: React.createElement(React.Fragment, null,
+        'Applies to plate ',
+        React.createElement('strong', { style: { color: 'var(--text-primary)' } }, pendingAction.plate || '—'),
+        '. Logged as an operator override.'
+      ),
+      confirmLabel: pendingAction.label,
+      confirmColor: pendingAction.destructive ? '#ef4444' : undefined,
+      requireReason: pendingAction.destructive,
+      reasonPlaceholder: pendingAction.destructive ? 'Reason (required)' : 'Reason (optional)',
+      submitting: actingId === pendingAction.violationId,
+      onConfirm: (reason) => confirmPendingAction(reason),
+      onCancel: () => { if (actingId !== pendingAction.violationId) setPendingAction(null); },
     }),
   );
 }
@@ -6288,7 +6473,7 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // Paginated, filterable temporary-pass log for truck_plaza properties.
 // Data comes from the backend /visitor_passes/parking-log endpoint — the same
 // shape as the CSV export so the two never drift.
-function TruckParkingLog({ propertyId, refreshKey }) {
+function TruckParkingLog({ propertyId }) {
   const { addToast } = useToast();
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
@@ -6303,7 +6488,7 @@ function TruckParkingLog({ propertyId, refreshKey }) {
   });
   const [pendingFilters, setPendingFilters] = useState(filters);
   const [cancelModal, setCancelModal] = useState(null); // { id, plate_text } | null
-  const [cancelReason, setCancelReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
@@ -6324,18 +6509,25 @@ function TruckParkingLog({ propertyId, refreshKey }) {
     setLoading(false);
   }, [propertyId, filters, page]);
 
-  useEffect(() => { load(); }, [load, refreshKey]);
+  // One-shot load per `load` identity. External changes to visitor_passes
+  // no longer trigger a full reload of the log — the parent's realtime
+  // channel already refreshes its own list; the log owns its filter +
+  // pagination state and uses the explicit Refresh button (via applyFilters)
+  // or filter changes to refetch.
+  useIntervalFetch(load, 0, [load]);
 
-  async function handleCancel() {
+  async function handleCancel(reason) {
     if (!cancelModal) return;
+    setCancelling(true);
     try {
-      await db.cancelVisitorPass(cancelModal.id, cancelReason.trim() || undefined);
+      await db.cancelVisitorPass(cancelModal.id, reason || undefined);
       addToast('Pass cancelled', 'success');
       setCancelModal(null);
-      setCancelReason('');
       load();
     } catch (e) {
       addToast('Cancel failed: ' + (e.message || ''), 'error');
+    } finally {
+      setCancelling(false);
     }
   }
 
@@ -6460,7 +6652,7 @@ function TruckParkingLog({ propertyId, refreshKey }) {
                   <td style={tdStyle}>
                     {isActive && (
                       <button
-                        onClick={() => { setCancelModal({ id: r.id, plate_text: r.plate_text }); setCancelReason(''); }}
+                        onClick={() => setCancelModal({ id: r.id, plate_text: r.plate_text })}
                         style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'3px 8px',fontSize:10,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}
                       >Cancel</button>
                     )}
@@ -6481,25 +6673,17 @@ function TruckParkingLog({ propertyId, refreshKey }) {
       </div>
 
       {cancelModal && (
-        <div onClick={() => setCancelModal(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
-          <div onClick={e => e.stopPropagation()} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:16,maxWidth:440,width:'100%'}}>
-            <div style={{fontSize:16,fontWeight:800,color:'var(--text-primary)',marginBottom:4}}>Cancel pass?</div>
-            <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:10}}>
-              Soft-cancels the active pass for <strong style={{color:'var(--text-primary)'}}>{cancelModal.plate_text}</strong>. The row stays in the log.
-            </div>
-            <textarea
-              value={cancelReason}
-              onChange={e => setCancelReason(e.target.value)}
-              rows={2}
-              placeholder="Reason (optional)"
-              style={{width:'100%',padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box'}}
-            />
-            <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:10}}>
-              <button onClick={() => setCancelModal(null)} className="pd-share-btn">Keep</button>
-              <button onClick={handleCancel} style={{background:'rgba(239,68,68,.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Cancel pass</button>
-            </div>
-          </div>
-        </div>
+        <ConfirmActionModal
+          plate={cancelModal.plate_text}
+          actionLabel="Cancel pass"
+          description={<>Soft-cancels the active pass for <strong style={{color:'var(--text-primary)'}}>{cancelModal.plate_text}</strong>. The row stays in the log.</>}
+          confirmLabel="Cancel pass"
+          confirmColor="#ef4444"
+          reasonPlaceholder="Reason (optional)"
+          submitting={cancelling}
+          onConfirm={(reason) => handleCancel(reason)}
+          onCancel={() => { if (!cancelling) setCancelModal(null); }}
+        />
       )}
     </div>
   );
@@ -6566,11 +6750,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     const pl = await db.getResidentPlates(propertyId);
     setPlates(pl);
   }, [propertyId]);
-  useEffect(() => {
-    if (!propertyId) return;
-    const id = setInterval(refreshPlates, 20000);
-    return () => clearInterval(id);
-  }, [refreshPlates]);
+  useIntervalFetch(refreshPlates, 20000, [refreshPlates]);
   useEffect(() => {
     if (!supabase || !propertyId) return;
     const debouncedRefresh = makeDebounced(refreshPlates, 200);
@@ -6598,11 +6778,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     setVisitorPasses(vp);
     setPassTotalCount(count);
   }, [propertyId]);
-  useEffect(() => {
-    if (!propertyId) return;
-    const id = setInterval(refreshVisitorPasses, 20000);
-    return () => clearInterval(id);
-  }, [refreshVisitorPasses]);
+  useIntervalFetch(refreshVisitorPasses, 20000, [refreshVisitorPasses]);
   useEffect(() => {
     if (!supabase || !propertyId) return;
     const debouncedRefresh = makeDebounced(refreshVisitorPasses, 200);
@@ -6645,11 +6821,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     const ev = await db.getRecentPlateEvents(propertyId, 50);
     setEvents(ev);
   }, [propertyId]);
-  useEffect(() => {
-    if (!propertyId) return;
-    const id = setInterval(refreshEvents, 20000);
-    return () => clearInterval(id);
-  }, [refreshEvents]);
+  useIntervalFetch(refreshEvents, 20000, [refreshEvents]);
   useEffect(() => {
     if (!supabase || !propertyId) return;
     const debouncedRefresh = makeDebounced(refreshEvents, 200);
@@ -6914,7 +7086,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
               Live
             </div>
           </div>
-          <TruckParkingLog propertyId={propertyId} refreshKey={visitorPasses.length} />
+          <TruckParkingLog propertyId={propertyId} />
         </>
       ) : (() => {
         const activeVisitors = visitorPasses.filter(v => {
