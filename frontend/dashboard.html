@@ -5450,6 +5450,119 @@ const OPERATOR_ACTION_CALLERS = {
   'resume-billing':  (id)         => db.resumeViolationBilling(id),
 };
 
+// Evidence thumbnail. 80x60 on desktop, 56x42 on mobile. When `src` is present
+// the element is a button that opens the shared lightbox; when missing it
+// falls back to a neutral placeholder with the plate text centered.
+// Props:
+//   src       - image URL (nullable)
+//   plate     - plate text for the placeholder + fallback alt text
+//   label     - short descriptor rendered under the thumb ("Plate", "Tow")
+//   onOpen    - (src, caption, downloadHref) => void, called when clicked
+//   timestamp - ISO timestamp used in the lightbox caption
+function EvidenceThumb({ src, plate, label, onOpen, timestamp, mobile }) {
+  const dim = mobile ? { w: 56, h: 42, fs: 10 } : { w: 80, h: 60, fs: 11 };
+  const caption = (plate || '—') + ' · ' + (label || 'snapshot') +
+    (timestamp ? ' · ' + fmtDate(timestamp) + ' ' + fmtTime(timestamp) : '');
+  const commonBoxStyle = {
+    width: dim.w, height: dim.h, borderRadius: 6, border: '1px solid var(--border)',
+    overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'var(--bg-inset)', flexShrink: 0,
+  };
+  if (!src) {
+    // Placeholder: monospace plate text centered on inset bg. Stays a div so
+    // it isn't mistaken for an interactive element.
+    return React.createElement('div', {
+      role: 'img',
+      'aria-label': (label || 'snapshot') + ' unavailable for ' + (plate || 'unknown plate'),
+      title: 'No snapshot available',
+      style: Object.assign({}, commonBoxStyle, {
+        fontFamily: 'ui-monospace, Menlo, monospace', fontSize: dim.fs,
+        fontWeight: 700, color: 'var(--text-faint)', letterSpacing: '.02em',
+      }),
+    }, plate || '—');
+  }
+  return React.createElement('button', {
+    type: 'button',
+    onClick: (e) => { e.stopPropagation(); onOpen && onOpen(src, caption, src); },
+    'aria-label': 'Enlarge ' + (label || 'snapshot') + ' for ' + (plate || 'unknown plate'),
+    title: caption,
+    style: Object.assign({}, commonBoxStyle, {
+      cursor: 'zoom-in', padding: 0, position: 'relative',
+    }),
+  },
+    React.createElement('img', {
+      src,
+      alt: (label || 'snapshot') + ' for ' + (plate || 'unknown plate'),
+      loading: 'lazy',
+      style: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
+    }),
+  );
+}
+
+// Full-screen image viewer. Reuses the focus-trap + ESC handling from PR #75
+// via the shared useFocusTrap hook so keyboard users can dismiss the overlay
+// the same way they dismiss ConfirmActionModal.
+function ImageLightbox({ src, caption, downloadHref, onClose }) {
+  const dialogRef = useRef(null);
+  const titleId = useUid('lightbox-title');
+  useFocusTrap(dialogRef, true, onClose);
+  return React.createElement('div', {
+    onClick: onClose,
+    style: {
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.82)', zIndex: 1100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+    },
+  },
+    React.createElement('div', {
+      ref: dialogRef,
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-labelledby': titleId,
+      tabIndex: -1,
+      onClick: (e) => e.stopPropagation(),
+      style: { maxWidth: 'min(1100px, 98vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', gap: 10, outline: 'none' },
+    },
+      React.createElement('img', {
+        src,
+        alt: caption || 'Evidence snapshot',
+        style: { maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain', borderRadius: 6, border: '1px solid rgba(255,255,255,.12)' },
+      }),
+      React.createElement('div', {
+        style: {
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 10, color: '#f9fafb', fontSize: 12,
+        },
+      },
+        React.createElement('div', { id: titleId, style: { flex: 1, minWidth: 0, opacity: .9 } }, caption || 'Evidence snapshot'),
+        React.createElement('div', { style: { display: 'flex', gap: 8, flexShrink: 0 } },
+          downloadHref && React.createElement('a', {
+            href: downloadHref,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            download: '',
+            style: {
+              fontSize: 11, fontWeight: 700, padding: '5px 10px', borderRadius: 6,
+              border: '1px solid rgba(255,255,255,.25)', background: 'rgba(255,255,255,.08)',
+              color: '#f9fafb', textDecoration: 'none',
+            },
+          }, 'Download'),
+          React.createElement('button', {
+            type: 'button',
+            onClick: onClose,
+            'aria-label': 'Close image viewer',
+            autoFocus: true,
+            style: {
+              fontSize: 11, fontWeight: 700, padding: '5px 10px', borderRadius: 6,
+              border: '1px solid rgba(255,255,255,.25)', background: 'rgba(255,255,255,.08)',
+              color: '#f9fafb', cursor: 'pointer',
+            },
+          }, 'Close'),
+        ),
+      ),
+    ),
+  );
+}
+
 function ConfirmationReviewView({ user, lots, partnersProp }) {
   const [rows, setRows] = React.useState(null);
   const [err, setErr] = React.useState('');
@@ -5621,6 +5734,11 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     const propName = r.properties?.name || (r.property_id || '').slice(0, 8);
     const evidence = r.tow_confirmation || null;
     const isActing = actingId === r.id;
+    const plateEv = r._plate_event;
+    const truckEv = r._truck_event;
+    const plateConfPct = plateEv && typeof plateEv.confidence === 'number'
+      ? Math.round(plateEv.confidence * 100) : null;
+    const openLightbox = (src, caption, href) => setLightbox({ src, caption, downloadHref: href });
 
     // Action set depends on current state. Held rows get Resume; force-billed
     // rows are read-only here (they're heading to invoicing). Everything else
@@ -5641,9 +5759,30 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       key: r.id,
       style: {
         padding: '10px 12px', borderBottom: '1px solid var(--border)',
-        display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'start',
+        display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 10, alignItems: 'start',
       },
     },
+      // Column 1: evidence thumbnails (plate snapshot + optional truck sighting)
+      React.createElement('div', {
+        style: { display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' },
+      },
+        React.createElement('div', { style: { display: 'flex', gap: 4 } },
+          React.createElement(EvidenceThumb, {
+            src: plateEv && plateEv.image_url,
+            plate: r.plate_text,
+            label: 'Plate',
+            timestamp: (plateEv && plateEv.created_at) || r.created_at,
+            onOpen: openLightbox,
+          }),
+          (truckEv || (evidence && evidence.truck_plate)) && React.createElement(EvidenceThumb, {
+            src: truckEv && truckEv.image_url,
+            plate: (evidence && evidence.truck_plate) || '',
+            label: 'Camera saw truck',
+            timestamp: (truckEv && truckEv.created_at) || r.tow_confirmed_at,
+            onOpen: openLightbox,
+          }),
+        ),
+      ),
       React.createElement('div', { style: { minWidth: 0 } },
         React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 4 } },
           React.createElement('span', {
@@ -5653,6 +5792,10 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
               border: '1px solid var(--border)', color: 'var(--text-primary)',
             }
           }, r.plate_text || '—'),
+          plateConfPct != null && React.createElement('span', {
+            title: 'Plate Recognizer OCR confidence',
+            style: { fontSize: 11, color: 'var(--text-faint)' },
+          }, plateConfPct + '% OCR'),
           r.billing_held_at && React.createElement('span', {
             style: {
               fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
@@ -5813,6 +5956,13 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       submitting: actingId === pendingAction.violationId,
       onConfirm: (reason) => confirmPendingAction(reason),
       onCancel: () => { if (actingId !== pendingAction.violationId) setPendingAction(null); },
+    }),
+    lightbox && React.createElement(ImageLightbox, {
+      key: 'cr-lightbox-' + lightbox.src,
+      src: lightbox.src,
+      caption: lightbox.caption,
+      downloadHref: lightbox.downloadHref,
+      onClose: () => setLightbox(null),
     }),
   );
 }
