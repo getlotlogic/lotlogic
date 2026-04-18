@@ -1,19 +1,11 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { create, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-api-key, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
-
-// Must match backend services/auth.py constants exactly — these are the
-// two halves of the same email-action contract.
-const VIOLATION_ACTION_AUDIENCE = "violation-action";
-const VIOLATION_ACTION_TTL_SECONDS = 48 * 3600;
-const JWT_ISSUER = "lotlogic-backend";
-const JWT_ALGORITHM = "HS256";
 
 function json(body: unknown, status: number) {
   return new Response(JSON.stringify(body), {
@@ -55,37 +47,40 @@ function escapeHtml(s: string | null | undefined): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
+    .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
 
-async function importHmacKey(secret: string): Promise<CryptoKey> {
-  return await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"],
-  );
-}
-
-async function issueViolationActionToken(
-  violationId: string,
-  action: "tow" | "no_tow",
-  secret: string,
-): Promise<string> {
-  const key = await importHmacKey(secret);
+// HMAC-SHA256 JWT for the email-action one-click links.
+// Same JWT_SECRET as the Python backend (Railway env). Audience
+// 'violation-action' is single-purpose, distinct from session tokens.
+async function signActionToken(violationId: string, action: "tow" | "no_tow", secret: string): Promise<string> {
+  const enc = new TextEncoder();
+  const b64url = (b: Uint8Array | string): string => {
+    const arr = typeof b === "string" ? enc.encode(b) : b;
+    let s = "";
+    for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+    return btoa(s).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  };
   const now = Math.floor(Date.now() / 1000);
   const payload = {
-    iss: JWT_ISSUER,
-    aud: VIOLATION_ACTION_AUDIENCE,
+    iss: "lotlogic-backend",
+    aud: "violation-action",
     iat: now,
-    exp: getNumericDate(VIOLATION_ACTION_TTL_SECONDS),
+    exp: now + 48 * 3600,
     sub: violationId,
     v: violationId,
     a: action,
   };
-  return await create({ alg: JWT_ALGORITHM, typ: "JWT" }, payload, key);
+  const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const body = b64url(JSON.stringify(payload));
+  const data = `${header}.${body}`;
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const sigBytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(data)));
+  return `${data}.${b64url(sigBytes)}`;
 }
 
 serve(async (req) => {
@@ -94,11 +89,9 @@ serve(async (req) => {
 
   const resendKey = Deno.env.get("RESEND_API_KEY");
   const fromEmail = Deno.env.get("FROM_EMAIL") || "noreply@lotlogic.com";
-  const jwtSecret = Deno.env.get("JWT_SECRET");
-  const backendUrl =
-    Deno.env.get("BACKEND_URL") || "https://lotlogic-backend-production.up.railway.app";
+  const jwtSecret = Deno.env.get("JWT_SECRET") || "";
+  const backendUrl = Deno.env.get("BACKEND_URL") || "https://lotlogic-backend-production.up.railway.app";
   if (!resendKey) return json({ error: "RESEND_API_KEY not configured" }, 500);
-  if (!jwtSecret) return json({ error: "JWT_SECRET not configured" }, 500);
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL") ?? "",
@@ -171,28 +164,26 @@ serve(async (req) => {
       ? humanDuration(new Date(lastPass.valid_until).getTime() - new Date(lastPass.valid_from).getTime())
       : (lastPass.stay_days ? `${lastPass.stay_days}d` : "?");
     const hostBits = [lastPass.host_unit, lastPass.host_name].filter(Boolean).join(" ");
-    return `${duration} ${formatLocal(lastPass.valid_from)} → ${formatLocal(lastPass.valid_until)}` +
+    return `${duration} ${formatLocal(lastPass.valid_from)} \u2192 ${formatLocal(lastPass.valid_until)}` +
       (hostBits ? ` (host: ${hostBits})` : "") +
-      ` — ${String(lastPass.status).toUpperCase()}`;
+      ` \u2014 ${String(lastPass.status).toUpperCase()}`;
   })();
 
-  // Mint the pair of single-purpose action tokens. Same secret and claims
-  // layout the backend's services.auth.decode_violation_action_token
-  // expects.
-  let towToken: string;
-  let noTowToken: string;
-  try {
-    towToken = await issueViolationActionToken(violation.id, "tow", jwtSecret);
-    noTowToken = await issueViolationActionToken(violation.id, "no_tow", jwtSecret);
-  } catch (err) {
-    console.error("tow-dispatch-email: token sign failed", err);
-    return json({ error: "Failed to sign action tokens" }, 500);
+  // Build action links (only if JWT_SECRET configured).
+  let towLink = "";
+  let noTowLink = "";
+  if (jwtSecret) {
+    try {
+      const towTok = await signActionToken(violation.id, "tow", jwtSecret);
+      const noTowTok = await signActionToken(violation.id, "no_tow", jwtSecret);
+      towLink = `${backendUrl}/violations/action?token=${towTok}`;
+      noTowLink = `${backendUrl}/violations/action?token=${noTowTok}`;
+    } catch (err) {
+      console.error("failed to mint action tokens:", err);
+    }
   }
 
-  const towUrl = `${backendUrl}/violations/action?token=${encodeURIComponent(towToken)}`;
-  const noTowUrl = `${backendUrl}/violations/action?token=${encodeURIComponent(noTowToken)}`;
-
-  const subject = `[TOW] ${property.name || "Property"} — Plate ${violation.plate_text}`;
+  const subject = `[TOW] ${property.name || "Property"} \u2014 Plate ${violation.plate_text}`;
 
   const textBody = [
     `[TOW] ${property.name || "Property"}`,
@@ -201,55 +192,40 @@ serve(async (req) => {
     `First seen: ${formatLocal(firstSeen)} (${firstSeenAgo} ago)`,
     triggerEvent?.confidence != null ? `Confidence: ${Math.round(triggerEvent.confidence * 100)}%` : null,
     `Pass: ${passLine}`,
-    lastPass?.visitor_name ? `Driver: ${lastPass.visitor_name}` : null,
+    lastPass?.visitor_name ? `Visitor: ${lastPass.visitor_name}` : null,
     triggerEvent?.image_url ? `Photo: ${triggerEvent.image_url}` : null,
     "",
-    `Mark as towed: ${towUrl}`,
-    `No tow needed:  ${noTowUrl}`,
+    towLink ? `✅ Mark as towed:    ${towLink}` : null,
+    noTowLink ? `❌ No tow needed:     ${noTowLink}` : null,
     "",
-    "Or reply DONE via SMS / log in to the LotLogic dashboard to mark this resolved.",
+    "You can also reply DONE via SMS, or log in to the LotLogic dashboard.",
   ].filter(Boolean).join("\n");
 
   const photoBlock = triggerEvent?.image_url
-    ? `<p><img src="${escapeHtml(triggerEvent.image_url)}" alt="Plate snapshot" style="max-width:100%; border:1px solid #ccc; border-radius:6px;" /></p>`
+    ? `<p><img src=\"${escapeHtml(triggerEvent.image_url)}\" alt=\"Plate snapshot\" style=\"max-width:100%; border:1px solid #ccc; border-radius:6px;\" /></p>`
     : "";
 
-  // Action buttons: 48px tall, prominent, side-by-side. Tow = red
-  // (dangerous/destructive); no-tow = neutral gray. We render them as
-  // styled <a> tags for broad email-client support — a button element
-  // wouldn't survive most MUAs' HTML sanitization.
-  const buttonBlock = `
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:20px 0; border-collapse:collapse;">
-  <tr>
-    <td style="padding-right:10px;">
-      <a href="${escapeHtml(towUrl)}"
-         style="display:inline-block; box-sizing:border-box; height:48px; line-height:48px; padding:0 22px; background-color:#b91c1c; color:#ffffff; font-family:-apple-system, Segoe UI, Roboto, sans-serif; font-size:15px; font-weight:600; text-decoration:none; border-radius:6px;">
-        Mark as towed
-      </a>
-    </td>
-    <td style="padding-left:10px;">
-      <a href="${escapeHtml(noTowUrl)}"
-         style="display:inline-block; box-sizing:border-box; height:48px; line-height:48px; padding:0 22px; background-color:#4b5563; color:#ffffff; font-family:-apple-system, Segoe UI, Roboto, sans-serif; font-size:15px; font-weight:600; text-decoration:none; border-radius:6px;">
-        No tow needed
-      </a>
-    </td>
-  </tr>
-</table>`;
+  const buttonsBlock = (towLink && noTowLink) ? `
+<div style=\"text-align:center; margin:20px 0; padding:14px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px;\">
+  <a href=\"${escapeHtml(towLink)}\" style=\"display:inline-block; background:#b91c1c; color:#fff; padding:12px 22px; text-decoration:none; border-radius:6px; font-weight:600; margin:6px;\">✅ Mark as towed</a>
+  <a href=\"${escapeHtml(noTowLink)}\" style=\"display:inline-block; background:#6b7280; color:#fff; padding:12px 22px; text-decoration:none; border-radius:6px; font-weight:600; margin:6px;\">❌ No tow needed</a>
+  <p style=\"color:#6b7280; font-size:12px; margin:8px 0 0;\">Each link asks you to confirm before recording the result. Valid for 48 hours.</p>
+</div>` : "";
 
   const html = `<!doctype html>
-<html><body style="font-family:-apple-system, Segoe UI, Roboto, sans-serif; color:#111; max-width:560px; margin:0 auto; padding:16px;">
-<h2 style="margin:0 0 12px; color:#b91c1c;">[TOW] ${escapeHtml(property.name || "Property")}</h2>
-<table style="border-collapse:collapse; width:100%; font-size:15px;">
-<tr><td style="padding:6px 0; width:110px; color:#555;">Plate</td><td style="padding:6px 0; font-weight:600; font-size:20px;">${escapeHtml(violation.plate_text)}</td></tr>
-${property.address ? `<tr><td style="padding:6px 0; color:#555;">Address</td><td style="padding:6px 0;">${escapeHtml(property.address)}</td></tr>` : ""}
-<tr><td style="padding:6px 0; color:#555;">First seen</td><td style="padding:6px 0;">${escapeHtml(formatLocal(firstSeen))} <span style="color:#888;">(${escapeHtml(firstSeenAgo)} ago)</span></td></tr>
-${triggerEvent?.confidence != null ? `<tr><td style="padding:6px 0; color:#555;">Confidence</td><td style="padding:6px 0;">${Math.round((triggerEvent.confidence as number) * 100)}%</td></tr>` : ""}
-<tr><td style="padding:6px 0; color:#555; vertical-align:top;">Pass</td><td style="padding:6px 0;">${escapeHtml(passLine)}</td></tr>
-${lastPass?.visitor_name ? `<tr><td style="padding:6px 0; color:#555;">Driver</td><td style="padding:6px 0;">${escapeHtml(lastPass.visitor_name)}</td></tr>` : ""}
+<html><body style=\"font-family:-apple-system, Segoe UI, Roboto, sans-serif; color:#111; max-width:560px; margin:0 auto; padding:16px;\">
+<h2 style=\"margin:0 0 12px; color:#b91c1c;\">[TOW] ${escapeHtml(property.name || "Property")}</h2>
+<table style=\"border-collapse:collapse; width:100%; font-size:15px;\">
+<tr><td style=\"padding:6px 0; width:110px; color:#555;\">Plate</td><td style=\"padding:6px 0; font-weight:600; font-size:20px;\">${escapeHtml(violation.plate_text)}</td></tr>
+${property.address ? `<tr><td style=\"padding:6px 0; color:#555;\">Address</td><td style=\"padding:6px 0;\">${escapeHtml(property.address)}</td></tr>` : ""}
+<tr><td style=\"padding:6px 0; color:#555;\">First seen</td><td style=\"padding:6px 0;\">${escapeHtml(formatLocal(firstSeen))} <span style=\"color:#888;\">(${escapeHtml(firstSeenAgo)} ago)</span></td></tr>
+${triggerEvent?.confidence != null ? `<tr><td style=\"padding:6px 0; color:#555;\">Confidence</td><td style=\"padding:6px 0;\">${Math.round((triggerEvent.confidence as number) * 100)}%</td></tr>` : ""}
+<tr><td style=\"padding:6px 0; color:#555; vertical-align:top;\">Pass</td><td style=\"padding:6px 0;\">${escapeHtml(passLine)}</td></tr>
+${lastPass?.visitor_name ? `<tr><td style=\"padding:6px 0; color:#555;\">Visitor</td><td style=\"padding:6px 0;\">${escapeHtml(lastPass.visitor_name)}</td></tr>` : ""}
 </table>
 ${photoBlock}
-${buttonBlock}
-<p style="color:#555; font-size:13px; margin-top:18px; border-top:1px solid #eee; padding-top:12px;">Or reply <strong>DONE</strong> via SMS / log in to the LotLogic dashboard to mark this resolved. Action links expire in 48 hours.</p>
+${buttonsBlock}
+<p style=\"color:#555; font-size:13px; margin-top:18px; border-top:1px solid #eee; padding-top:12px;\">You can also reply <strong>DONE</strong> via SMS, or log in to the LotLogic dashboard.</p>
 </body></html>`;
 
   const resendRes = await fetch("https://api.resend.com/emails", {
@@ -291,6 +267,7 @@ ${buttonBlock}
       violation_id: violation.id,
       subject,
       resend_id: (resendBody as { id?: string })?.id ?? null,
+      action_links_included: !!(towLink && noTowLink),
     },
     200,
   );
