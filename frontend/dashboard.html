@@ -376,15 +376,15 @@
     }
     .job-tag strong { color: var(--text-primary); font-weight: 600; }
     .plate-tag {
-      background: #fef3c7;
-      color: #1c1009;
+      background: var(--bg-elevated);
+      color: #f3f4f6;
       border-radius: 7px;
       padding: 5px 11px;
       font-size: 13px;
       font-weight: 800;
       font-family: 'Courier New', monospace;
       letter-spacing: .1em;
-      border: 1.5px solid #fbbf24;
+      border: 1px solid rgba(255,255,255,.12);
     }
     .job-footer {
       border-top: 1px solid var(--border-subtle);
@@ -674,10 +674,29 @@
     }
     .permit-card:last-child { border-bottom: none; }
     .permit-plate {
-      background: #fef3c7; color: #1c1009; border-radius: 6px; padding: 4px 10px;
+      background: var(--bg-elevated); color: #f3f4f6; border-radius: 6px; padding: 4px 10px;
       font-size: 14px; font-weight: 800; font-family: 'Courier New', monospace;
-      letter-spacing: .1em; border: 1.5px solid #fbbf24;
+      letter-spacing: .1em; border: 1px solid rgba(255,255,255,.12);
     }
+    /* Confirmation-review row action buttons. Destructive (force-bill,
+       mark-no-tow) use red outline + transparent fill + "!" glyph; neutral
+       (pause-billing, resume-billing) keep the standard operator pill look.
+       Keeps the destructive affordance visually distinct from the neutral
+       ones so a miss-tap doesn't trigger an irreversible billing move. */
+    .cr-btn-destructive {
+      font-size: 11px; padding: 4px 10px; border-radius: 6px;
+      border: 1px solid var(--red); background: transparent; color: var(--red);
+      font-weight: 700; white-space: nowrap; cursor: pointer; line-height: 1.2;
+      transition: background .12s ease;
+    }
+    .cr-btn-destructive:hover:not(:disabled) { background: rgba(239,68,68,.1); }
+    .cr-btn-destructive:disabled { cursor: wait; opacity: 0.5; }
+    .cr-btn-neutral {
+      font-size: 11px; padding: 4px 10px; border-radius: 6px;
+      border: 1px solid var(--border); background: transparent; color: var(--text-primary);
+      font-weight: 600; white-space: nowrap; cursor: pointer; line-height: 1.2;
+    }
+    .cr-btn-neutral:disabled { cursor: wait; opacity: 0.5; }
     .permit-type-badge {
       font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
       padding: 3px 8px; border-radius: 20px;
@@ -4114,7 +4133,7 @@ function LoginPage({ onLogin }) {
 }
 
 // ── Jobs tab (current violations) ─────────────────────────────
-function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, onAction, isOwner, deepLinkViolationId, user }) {
+function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, onAction, isOwner, deepLinkViolationId, user, onNavigate }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
   const [selectedViol, setSelectedViol] = useState(null);
 
@@ -4486,6 +4505,102 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
         </div>
       )}
 
+      {/* Partner: persistent yellow nudge if they haven't registered tow-truck plates.
+          Without plates, every tow requires manual owner confirmation before billing releases. */}
+      {user?._role === 'partner' && ((user?.tow_truck_plates?.length ?? 0) === 0) && (
+        <div style={{
+          background:'rgba(251,191,36,.08)', border:'1px solid rgba(251,191,36,.3)', borderRadius:10,
+          padding:'10px 14px', marginBottom:14, display:'flex', alignItems:'flex-start', gap:10,
+        }} role="status">
+          <div style={{fontSize:16, flexShrink:0, marginTop:1}} aria-hidden="true">⚠</div>
+          <div style={{flex:1, minWidth:0}}>
+            <div style={{fontSize:13, fontWeight:700, color:'#fbbf24', marginBottom:2}}>
+              Add your tow-truck plates so billing auto-releases after each tow.
+            </div>
+            <div style={{fontSize:11, color:'var(--text-muted)', lineHeight:1.4}}>
+              Without plates, every tow has to be confirmed manually by the property owner before we can bill.
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigate && onNavigate('account')}
+            style={{
+              fontSize:12, padding:'6px 12px', borderRadius:6, cursor:'pointer', fontWeight:700,
+              border:'1px solid rgba(251,191,36,.5)', background:'rgba(251,191,36,.12)',
+              color:'#fbbf24', whiteSpace:'nowrap', flexShrink:0,
+            }}
+          >Add plates →</button>
+        </div>
+      )}
+
+      {/* Partner "Awaiting your response" queue — dispatches where we haven't recorded any
+          action (action_channel is null) and the row is still alerted/dispatched. Distinct from
+          the general Open Jobs list so partners see exactly what the dispatch system is waiting on. */}
+      {user?._role === 'partner' && (() => {
+        const awaiting = allViolations.filter(v =>
+          !v.action_channel && ['alerted', 'dispatched'].includes(v._origStatus || v.status)
+        );
+        if (awaiting.length === 0) return null;
+        return (
+          <div style={{marginBottom:18}}>
+            <div className="section-header">
+              <div className="section-title" style={{color:'#fbbf24'}}>
+                {awaiting.length} dispatch{awaiting.length === 1 ? '' : 'es'} awaiting your response
+              </div>
+              <div className="section-count">{awaiting.length}</div>
+            </div>
+            <div style={{display:'flex', flexDirection:'column', gap:8}}>
+              {awaiting.map(v => {
+                const isActing = acting === v.id;
+                const anyActing = acting !== null;
+                const lotName = lotMap[v.lot_id]?.name || v._lot_name || '—';
+                const dispatchedAt = v.dispatched_at || v.created_at || v.detected_at;
+                return (
+                  <div key={'awaiting-' + v.id} style={{
+                    background:'var(--bg-card)', border:'1px solid rgba(251,191,36,.25)',
+                    borderRadius:10, padding:'10px 12px',
+                    display:'flex', flexWrap:'wrap', alignItems:'center', gap:10,
+                  }}>
+                    <div style={{flex:1, minWidth:180}}>
+                      <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:4}}>
+                        <span style={{
+                          fontFamily:'ui-monospace, Menlo, monospace', fontSize:13, fontWeight:700,
+                          background:'var(--bg-inset)', padding:'2px 8px', borderRadius:6,
+                          border:'1px solid var(--border)', color:'var(--text-primary)',
+                        }}>{v.plate_text || '—'}</span>
+                        <span style={{fontSize:12, color:'var(--text-secondary)'}}>{lotName}</span>
+                      </div>
+                      <div style={{fontSize:11, color:'var(--text-faint)'}}>
+                        Dispatched {dispatchedAt ? fmtTime(dispatchedAt) : '—'}
+                      </div>
+                    </div>
+                    <div style={{display:'flex', gap:6, flexShrink:0}}>
+                      <button
+                        onClick={() => requestAction(v.id, 'tow')}
+                        disabled={anyActing}
+                        style={{
+                          fontSize:12, padding:'6px 12px', borderRadius:6, fontWeight:700,
+                          border:'1px solid #ef4444', background:'#ef4444', color:'#fff',
+                          cursor: anyActing ? 'wait' : 'pointer', opacity: anyActing ? 0.6 : 1,
+                        }}
+                      >{isActing ? '…' : 'Tow'}</button>
+                      <button
+                        onClick={() => requestAction(v.id, 'no_action')}
+                        disabled={anyActing}
+                        style={{
+                          fontSize:12, padding:'6px 12px', borderRadius:6, fontWeight:600,
+                          border:'1px solid var(--border)', background:'transparent', color:'var(--text-primary)',
+                          cursor: anyActing ? 'wait' : 'pointer', opacity: anyActing ? 0.6 : 1,
+                        }}
+                      >{isActing ? '…' : 'No-tow'}</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Active jobs */}
       <div className="section-header">
         <div className="section-title">Open Jobs</div>
@@ -4502,6 +4617,39 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
           <div style={{width:48, height:48, borderRadius:12, background:'rgba(74,222,128,.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22}}>✓</div>
           <div className="empty-title">All clear</div>
           <div className="empty-body">No violations pending at your lots right now</div>
+          {/* Partner-only orientation mini-explainer. Owners see the existing empty state unchanged. */}
+          {user?._role === 'partner' && (
+            <div style={{
+              marginTop:20, paddingTop:20, borderTop:'1px solid var(--border)',
+              display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:14,
+              textAlign:'left',
+            }}>
+              <div>
+                <div style={{fontSize:12, fontWeight:700, color:'var(--text-primary)', marginBottom:4}}>
+                  How a dispatch arrives
+                </div>
+                <div style={{fontSize:12, color:'var(--text-muted)', lineHeight:1.5}}>
+                  SMS or email with plate + lot. Click the link to open this app on the job.
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:12, fontWeight:700, color:'var(--text-primary)', marginBottom:4}}>
+                  What you'll do
+                </div>
+                <div style={{fontSize:12, color:'var(--text-muted)', lineHeight:1.5}}>
+                  Tap Tow or Boot. Our cameras confirm the tow-plate sighting automatically.
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:12, fontWeight:700, color:'var(--text-primary)', marginBottom:4}}>
+                  How you get paid
+                </div>
+                <div style={{fontSize:12, color:'var(--text-muted)', lineHeight:1.5}}>
+                  Confirmed tows appear in Earnings within minutes. Billing releases after the camera sees your truck.
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         filteredActive.map((v, idx) => {
@@ -5106,8 +5254,11 @@ function EarningsPage({ violations, lots, isOwner, user, onNavigate }) {
 //   • Invoices            → QB lifecycle (drafts, emails, send to QB)
 //   • Confirmation review → per-violation billing_status queues + operator
 //                           overrides (force-bill / no-tow / pause / resume).
-function InvoicesPage({ lots, partners: partnersProp, user }) {
-  const [subTab, setSubTab] = React.useState('invoices');
+function InvoicesPage({ lots, partners: partnersProp, user, isOwner = true }) {
+  // Partners don't get the QuickBooks invoice-sending surface (that's an
+  // owner-only server flow). They land straight on the Confirmation
+  // Review sub-tab, which already scopes server-side via tow_company_id.
+  const [subTab, setSubTab] = React.useState(isOwner ? 'invoices' : 'review');
 
   const tabBtn = (id, label) => React.createElement('button', {
     key: id,
@@ -5122,7 +5273,9 @@ function InvoicesPage({ lots, partners: partnersProp, user }) {
   }, label);
 
   return React.createElement('div', { className: 'page-enter' },
-    React.createElement('div', {
+    // Hide the sub-tab nav entirely for partners — they only see
+    // confirmation review, no QB surface to switch to.
+    isOwner && React.createElement('div', {
       style: {
         display: 'flex', gap: 18, borderBottom: '1px solid var(--border)',
         marginBottom: 16,
@@ -5131,7 +5284,7 @@ function InvoicesPage({ lots, partners: partnersProp, user }) {
       tabBtn('invoices', 'Invoices'),
       tabBtn('review', 'Confirmation review'),
     ),
-    subTab === 'invoices'
+    (isOwner && subTab === 'invoices')
       ? React.createElement(BillingQuickBooksView, { partnersProp, lots })
       : React.createElement(ErrorBoundary, { label: 'confirmation review' },
           React.createElement(ConfirmationReviewView, { user, lots, partnersProp }),
@@ -5579,15 +5732,19 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     // rows are read-only here (they're heading to invoicing). Everything else
     // gets the three primary overrides. `destructive` endpoints require a
     // reason in the modal and render with a red Confirm button.
+    // Partners have zero server-side permission on these endpoints (they
+    // 400/403), so the view is purely read-only evidence for them.
     const actions = [];
-    if (r.billing_held_at) {
-      actions.push({ key: 'resume-billing', label: 'Resume billing', primary: true });
-    } else if (!r.invoiced_at) {
-      if (!r.force_bill_at) {
-        actions.push({ key: 'force-bill', label: 'Bill anyway', primary: true, destructive: true });
+    if (role !== 'partner') {
+      if (r.billing_held_at) {
+        actions.push({ key: 'resume-billing', label: 'Resume billing', primary: true });
+      } else if (!r.invoiced_at) {
+        if (!r.force_bill_at) {
+          actions.push({ key: 'force-bill', label: 'Bill anyway', primary: true, destructive: true });
+        }
+        actions.push({ key: 'mark-no-tow', label: 'Mark no-tow', destructive: true });
+        actions.push({ key: 'pause-billing', label: 'Pause billing' });
       }
-      actions.push({ key: 'mark-no-tow', label: 'Mark no-tow', destructive: true });
-      actions.push({ key: 'pause-billing', label: 'Pause billing' });
     }
 
     return React.createElement('div', {
@@ -5655,8 +5812,14 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       ),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' } },
         actions.length === 0 ? React.createElement('span', { style: { fontSize: 11, color: 'var(--text-faint)' } }, 'No actions') :
+        // force-bill and mark-no-tow are one-way destructive operator overrides
+        // with real billing implications. They render with a red outline + red
+        // text on transparent (distinct from neutral pause/resume pills) and a
+        // leading "!" glyph so the visual weight matches the stakes. Hover
+        // tints to rgba(239,68,68,.1) per the UX spec.
         actions.map(a => React.createElement('button', {
           key: a.key,
+          className: a.destructive ? 'cr-btn-destructive' : 'cr-btn-neutral',
           disabled: isActing,
           onClick: () => setPendingAction({
             violationId: r.id,
@@ -5665,14 +5828,12 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
             label: a.label,
             destructive: !!a.destructive,
           }),
-          style: {
-            fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: isActing ? 'wait' : 'pointer',
-            border: '1px solid ' + (a.primary ? 'var(--accent)' : 'var(--border)'),
-            background: a.primary ? 'var(--accent)' : 'transparent',
-            color: a.primary ? '#fff' : 'var(--text-primary)',
-            fontWeight: 600, whiteSpace: 'nowrap',
-          }
-        }, isActing && actingId === r.id ? '…' : a.label)),
+        },
+          // Leading "!" glyph on destructive actions — visual weight that matches stakes.
+          // aria-hidden so screen readers don't announce "exclamation mark" before the label.
+          a.destructive && React.createElement('span', { 'aria-hidden': true, style: { marginRight: 4, fontWeight: 800 } }, '!'),
+          isActing && actingId === r.id ? '…' : a.label,
+        )),
       ),
     );
   }
@@ -5681,6 +5842,22 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Confirmation review'),
     React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 } },
       'Per-violation billing review. Disputes and verification candidates at the top. Refreshes every 15s.'),
+
+    // Read-only banner for partners — their endpoints 400/403 server-side,
+    // so they see evidence only. Disputes go through the owner.
+    role === 'partner' && React.createElement('div', {
+      style: {
+        background: 'rgba(96,165,250,.08)', border: '1px solid rgba(96,165,250,.25)',
+        borderRadius: 10, padding: '10px 14px', marginBottom: 12,
+        fontSize: 13, color: 'var(--text-primary)', display: 'flex', gap: 10, alignItems: 'flex-start',
+      }
+    },
+      React.createElement('span', { 'aria-hidden': true, style: { fontSize: 14, color: '#60a5fa', lineHeight: 1.2 } }, '\u2139' /* ℹ */),
+      React.createElement('div', null,
+        React.createElement('strong', { style: { fontWeight: 700 } }, 'Read-only.'),
+        ' Your owner handles billing overrides. Reach out if you want to contest a row.',
+      ),
+    ),
 
     err && React.createElement('div', {
       style: { background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.3)', color: '#ef4444', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12 }
@@ -5792,7 +5969,11 @@ function TowTruckPlatesEditor({ user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, userPlatesKey]);
 
-  async function persist(next) {
+  // Track last persist intent so we can show an "added" vs. generic save message.
+  // Stateful instead of a function arg so the flag survives the async setTimeout.
+  const [lastAction, setLastAction] = React.useState(null); // 'added' | 'removed' | null
+
+  async function persist(next, action) {
     setSaving(true); setErr(''); setSaved(false);
     try {
       if (!supabase || !user?.id) throw new Error('Not authenticated');
@@ -5802,8 +5983,11 @@ function TowTruckPlatesEditor({ user }) {
         .eq('id', user.id);
       if (error) throw new Error(error.message);
       setPlates(next);
+      setLastAction(action || null);
       setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
+      // Longer linger on the "Plate added" banner — it carries instructional
+      // copy the partner needs time to read.
+      setTimeout(() => setSaved(false), action === 'added' ? 4000 : 1500);
     } catch (e) {
       setErr(e.message || String(e));
     } finally {
@@ -5817,16 +6001,34 @@ function TowTruckPlatesEditor({ user }) {
     if (plates.includes(norm)) { setDraft(''); return; }
     const next = [...plates, norm];
     setDraft('');
-    persist(next);
+    persist(next, 'added');
   }
 
   function removePlate(p) {
     const next = plates.filter(x => x !== p);
-    persist(next);
+    persist(next, 'removed');
   }
 
   return React.createElement('div', { className: 'settings-section' },
-    React.createElement('div', { className: 'settings-section-title' }, 'Tow-truck plates'),
+    React.createElement('div', {
+      className: 'settings-section-title',
+      style: { display: 'flex', alignItems: 'center', gap: 6 },
+    },
+      'Tow-truck plates',
+      // Info glyph with native tooltip — clarifies when auto-confirmation runs.
+      React.createElement('span', {
+        'aria-label': 'Auto-confirmation runs when one of these plates is seen by the property\'s cameras after you report a tow.',
+        title: 'Auto-confirmation runs when one of these plates is seen by the property\'s cameras after you report a tow.',
+        role: 'img',
+        tabIndex: 0,
+        style: {
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 16, height: 16, borderRadius: '50%', fontSize: 11, fontWeight: 700,
+          background: 'var(--bg-inset)', color: 'var(--text-muted)',
+          border: '1px solid var(--border)', cursor: 'help',
+        }
+      }, 'i'),
+    ),
     React.createElement('div', {
       style: { fontSize: 12, color: 'var(--text-muted)', padding: '0 0 10px' }
     }, 'Plates of tow trucks operated by this partner. Camera sightings of these plates confirm that a tow actually happened.'),
@@ -5835,7 +6037,16 @@ function TowTruckPlatesEditor({ user }) {
       style: { display: 'flex', flexWrap: 'wrap', gap: 6, padding: '4px 0 10px' }
     },
       plates.length === 0
-        ? React.createElement('span', { style: { fontSize: 12, color: 'var(--text-faint)' } }, 'No plates registered yet.')
+        ? React.createElement('div', { style: { fontSize: 12, color: 'var(--text-faint)', lineHeight: 1.45 } },
+            React.createElement('div', { style: { color: 'var(--text-muted)', marginBottom: 4 } },
+              'No plates registered yet. ',
+              React.createElement('strong', { style: { color: 'var(--text-primary)', fontWeight: 700 } },
+                'Add your tow-truck plates so camera sightings automatically confirm your tows.'),
+            ),
+            React.createElement('div', null,
+              'Without plates, every tow has to be confirmed manually by the property owner before we can release billing.',
+            ),
+          )
         : plates.map(p => React.createElement('span', {
             key: p,
             style: {
@@ -5889,8 +6100,10 @@ function TowTruckPlatesEditor({ user }) {
       style: { fontSize: 12, color: '#ef4444', padding: '6px 0 0' }
     }, err),
     saved && !err && React.createElement('div', {
-      style: { fontSize: 12, color: 'var(--green)', padding: '6px 0 0' }
-    }, 'Saved'),
+      style: { fontSize: 12, color: 'var(--green)', padding: '6px 0 0', lineHeight: 1.45 }
+    }, lastAction === 'added'
+         ? 'Plate added! Camera sightings will now auto-confirm your tows within a few minutes.'
+         : 'Saved'),
   );
 }
 
@@ -8008,10 +8221,14 @@ function App() {
     { id: 'invoices', label: 'Billing',  badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
+    // Partner: the 'invoices' tab renders InvoicesPage in read-only
+    // Confirmation Review mode (no QuickBooks sub-tab). Label stays
+    // 'Billing' so the surface is discoverable.
     { id: 'jobs',     label: 'Jobs',     badge: pending + alprPending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'activity', label: 'Activity', badge: 0 },
     { id: 'earnings', label: 'Earnings', badge: 0 },
+    { id: 'invoices', label: 'Billing',  badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ];
 
@@ -8083,11 +8300,11 @@ function App() {
 
         <div key={tab + (viewAs?.id || '')} className="page-slide">
           {tab === 'overview' && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
-          {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} />}
+          {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
           {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
-          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} />}
+          {tab === 'invoices' && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
