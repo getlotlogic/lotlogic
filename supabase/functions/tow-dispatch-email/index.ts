@@ -87,11 +87,18 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
+  // Primary provider is SendGrid (Twilio's email product). We keep the
+  // RESEND_API_KEY fallback so the function degrades gracefully if SendGrid
+  // is unreachable and the old Resend config is still present.
+  const sendgridKey = Deno.env.get("SENDGRID_API_KEY");
   const resendKey = Deno.env.get("RESEND_API_KEY");
   const fromEmail = Deno.env.get("FROM_EMAIL") || "noreply@lotlogic.com";
+  const fromName = Deno.env.get("FROM_NAME") || "LotLogic";
   const jwtSecret = Deno.env.get("JWT_SECRET") || "";
   const backendUrl = Deno.env.get("BACKEND_URL") || "https://lotlogic-backend-production.up.railway.app";
-  if (!resendKey) return json({ error: "RESEND_API_KEY not configured" }, 500);
+  if (!sendgridKey && !resendKey) {
+    return json({ error: "No email provider configured (set SENDGRID_API_KEY or RESEND_API_KEY)" }, 500);
+  }
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL") ?? "",
@@ -234,27 +241,17 @@ ${buttonsBlock}
   const overrideTo = Deno.env.get("EMAIL_OVERRIDE_TO");
   const recipient = overrideTo && overrideTo.includes("@") ? overrideTo : partner.email;
 
-  const resendRes = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${resendKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: fromEmail,
-      to: [recipient],
-      subject,
-      html,
-      text: textBody,
-    }),
-  });
+  const sendResult = sendgridKey
+    ? await sendViaSendGrid(sendgridKey, fromEmail, fromName, recipient, subject, textBody, html)
+    : await sendViaResend(resendKey!, fromEmail, recipient, subject, textBody, html);
 
-  const resendText = await resendRes.text();
-  let resendBody: unknown;
-  try { resendBody = JSON.parse(resendText); } catch { resendBody = resendText; }
-
-  if (!resendRes.ok) {
-    return json({ error: "Resend send failed", resend_status: resendRes.status, resend_body: resendBody }, 502);
+  if (!sendResult.ok) {
+    return json({
+      error: `${sendResult.provider} send failed`,
+      provider: sendResult.provider,
+      status: sendResult.status,
+      body: sendResult.body,
+    }, 502);
   }
 
   await supabase
@@ -269,14 +266,77 @@ ${buttonsBlock}
   return json(
     {
       status: "sent",
+      provider: sendResult.provider,
       to: recipient,
       partner_email: partner.email,
       override_active: recipient !== partner.email,
       violation_id: violation.id,
       subject,
-      resend_id: (resendBody as { id?: string })?.id ?? null,
+      message_id: sendResult.messageId ?? null,
       action_links_included: !!(towLink && noTowLink),
     },
     200,
   );
 });
+
+type SendResult =
+  | { ok: true; provider: "sendgrid" | "resend"; messageId: string | null }
+  | { ok: false; provider: "sendgrid" | "resend"; status: number; body: unknown };
+
+async function sendViaSendGrid(
+  apiKey: string,
+  fromEmail: string,
+  fromName: string,
+  to: string,
+  subject: string,
+  textBody: string,
+  htmlBody: string,
+): Promise<SendResult> {
+  const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      personalizations: [{ to: [{ email: to }] }],
+      from: { email: fromEmail, name: fromName },
+      subject,
+      content: [
+        { type: "text/plain", value: textBody },
+        { type: "text/html", value: htmlBody },
+      ],
+    }),
+  });
+  // SendGrid returns 202 Accepted with empty body on success; X-Message-Id header has the id.
+  if (res.status === 202 || res.status === 200) {
+    return { ok: true, provider: "sendgrid", messageId: res.headers.get("x-message-id") };
+  }
+  const text = await res.text().catch(() => "");
+  let body: unknown;
+  try { body = JSON.parse(text); } catch { body = text; }
+  return { ok: false, provider: "sendgrid", status: res.status, body };
+}
+
+async function sendViaResend(
+  apiKey: string,
+  fromEmail: string,
+  to: string,
+  subject: string,
+  textBody: string,
+  htmlBody: string,
+): Promise<SendResult> {
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ from: fromEmail, to: [to], subject, html: htmlBody, text: textBody }),
+  });
+  const text = await res.text().catch(() => "");
+  let body: unknown;
+  try { body = JSON.parse(text); } catch { body = text; }
+  if (!res.ok) return { ok: false, provider: "resend", status: res.status, body };
+  return { ok: true, provider: "resend", messageId: (body as { id?: string })?.id ?? null };
+}
