@@ -12,32 +12,8 @@ AI-powered parking enforcement platform. Cameras detect vehicles in zones, creat
 - **Database**: Supabase (PostgreSQL) at `https://nzdkoouoaedbbccraoti.supabase.co`
 - **Snapshot Puller**: Async camera polling service in `puller/`, deployed as Railway worker
 - **Monitoring**: Python agent system in `monitoring/` with Claude AI analysis (containerized)
-- **Detection Pipeline**: Camera RTSP -> Snapshots (30s poll) -> YOLO + Plate Recognizer -> Zone filtering -> Violation creation
-- **ALPR Parking Pass Pipeline**: Client posts image to `alpr-snapshot` edge fn -> PlateRecognizer Snapshot API -> `alpr-webhook` -> `plate_events` -> match against `resident_plates`/`visitor_passes` -> `alpr_violations`
-- **ALPR (camera-initiated)**: Milesight SC211 (or similar) posts snapshot to PR -> PR runs OCR -> PR fires webhook -> `alpr-pr-webhook` edge fn translates payload + stashes snapshot in `plate-snapshots` storage bucket -> internally invokes `alpr-webhook` with the same shape as the `alpr-snapshot` path. See `docs/camera-setup-milesight-sc211.md` for provisioning.
-
-## PlateRecognizer Integration (added Apr 2026)
-
-OCR for the ALPR parking pass system. Cameras/clients send images; we call PlateRecognizer Snapshot API and feed detections into the pass/violation flow.
-
-### Flow
-1. Client (camera device, device gateway, or frontend upload) POSTs to `/functions/v1/alpr-snapshot` with `{api_key, image_url | image_base64, event_type?, mmc?}`. `api_key` identifies the `alpr_cameras` row.
-2. Edge fn calls `https://api.platerecognizer.com/v1/plate-reader/` with the image, `regions` (env default `us`), and optional `mmc` for vehicle make/model/color.
-3. For each result with `score >= PLATE_RECOGNIZER_MIN_SCORE` (default 0.8), the fn POSTs internally to `alpr-webhook` with the plate text, confidence, and a `raw_data` envelope containing the PlateRecognizer box/region/vehicle.
-4. `alpr-webhook` dedups (5-min window per plate+property), matches against resident/visitor lists, and creates `alpr_violations` when unmatched.
-
-### Env vars (on the Supabase Edge Functions runtime)
-- `PLATE_RECOGNIZER_TOKEN` — API token from platerecognizer.com dashboard. REQUIRED.
-- `PLATE_RECOGNIZER_MIN_SCORE` — float, default `0.8`. Plates below this score are dropped. Chosen to avoid misreads silently towing residents whose plate was OCR'd one character off.
-- `PLATE_RECOGNIZER_REGIONS` — comma-separated region codes, default `us-ga`. Passed to PlateRecognizer to bias OCR.
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — already set for other functions; `alpr-snapshot` reuses them to call `alpr-webhook`.
-
-### Deploy
-```
-supabase functions deploy alpr-snapshot
-supabase secrets set PLATE_RECOGNIZER_TOKEN=...
-```
-Or via the Supabase MCP: `deploy_edge_function` with the `alpr-snapshot` source.
+- **Detection Pipeline**: Camera RTSP -> Snapshots (30s poll) -> YOLO -> Zone filtering -> Violation creation
+- **Camera-based ALPR pipeline** (rebuilt 2026-04-19, live): Milesight 4G Traffic Sensing Camera → HTTP POST with JSON body (`values.image` = base64 JPEG, `values.devMac` = camera id) → `supabase/functions/camera-snapshot/` → calls Plate Recognizer `/v1/plate-reader/` synchronously → uploads snapshot to R2 bucket `parking-snapshots` → inserts `plate_events` → allowlist match against `resident_plates` / `visitor_passes` / `parking_registrations` → inserts `alpr_violations` on miss → fires `tow-dispatch-email` fire-and-forget. Spec: `docs/superpowers/specs/2026-04-19-milesight-pr-integration-design.md` (spec is the earlier PR-webhook flavour; the shipped path collapses it into one synchronous call because Milesight can only post a URL, not a multipart form). `pr-ingest` edge function remains deployed for cameras that DO webhook in via PR, but receives no production traffic.
 
 ## Repository Structure
 ```
@@ -54,15 +30,14 @@ lotlogic/
 │   └── vercel.json    # SPA rewrites + cache headers
 ├── supabase/
 │   └── functions/     # Edge functions deployed via `supabase functions deploy`
-│       ├── alpr-webhook/          # Camera plate event ingest
-│       ├── alpr-snapshot/         # Plate Recognizer integration (client POSTs image to us)
-│       ├── alpr-pr-webhook/       # Plate Recognizer webhook receiver (PR POSTs to us; Milesight SC211 path)
+│       ├── camera-snapshot/       # Primary ingest: camera JSON/image POST -> PR -> plate_events -> violation -> email
+│       ├── pr-ingest/              # Alt ingest: PR webhook (multipart) -> plate_events -> violation. No traffic today.
+│       ├── camera-debug/          # One-off diagnostic. Captures raw POST body + headers to R2. Delete when not bringing up new camera models.
 │       ├── tow-confirm/           # Camera-based tow-truck sighting correlator
-│       ├── tow-dispatch-email/    # Partner email w/ action buttons
+│       ├── tow-dispatch-email/    # Partner email w/ action buttons (SendGrid, fallback Resend)
 │       ├── tow-dispatch-sms/      # Partner SMS dispatch
 │       ├── check-violations/      # Soft-expire + batch housekeeping
-│       ├── notify-expiring-plates/
-│       └── alpr-daily-report/
+│       └── notify-expiring-plates/
 ├── backend/           # Python modules imported by the API server
 │   ├── violation_dedup.py
 │   └── notifications.py
@@ -284,9 +259,9 @@ Spec: [`getlotlogic/lotlogic-backend` → `docs/superpowers/specs/2026-04-18-tru
 
 Spec: [`getlotlogic/lotlogic-backend` → `docs/superpowers/specs/2026-04-18-tow-confirmation-design.md`]
 
-- `supabase/functions/tow-confirm/` — correlates camera sightings of tow-truck plates (listed in `enforcement_partners.tow_truck_plates`) back to open violations. Claims sightings via `partner_truck_sightings.consumed_by_violation_id`. Exit-event correlation uses a lookback window (`TOW_CONFIRM_LOOKBACK_MINUTES`, default 180).
-- `supabase/functions/alpr-webhook/` fires `tow-confirm` fire-and-forget after every `plate_events` insert. Also fans out to `tow-dispatch-email` + `tow-dispatch-sms` via `TOW_DISPATCH_METHODS` env.
-- `supabase/functions/tow-dispatch-email/` mints HMAC-SHA256 JWT action tokens (aud `violation-action`, 48h TTL, signed with `JWT_SECRET` — MUST match the backend's) and renders two one-click buttons. Clicking hits backend `GET /violations/action` (render confirm form) → `POST /violations/action` (atomic resolve).
+- `supabase/functions/tow-confirm/` — correlates camera sightings of tow-truck plates (listed in `enforcement_partners.tow_truck_plates`) back to open violations. Claims sightings via `partner_truck_sightings.consumed_by_violation_id`. Exit-event correlation uses a lookback window (`TOW_CONFIRM_LOOKBACK_MINUTES`, default 180). **Not currently wired into the new pipeline** — `camera-snapshot` does not fan out to `tow-confirm`. Re-enabling it is a separate task; see TODO in `camera-snapshot/index.ts`.
+- `supabase/functions/camera-snapshot/` fires `tow-dispatch-email` fire-and-forget after every new `alpr_violations` insert. No SMS today.
+- `supabase/functions/tow-dispatch-email/` mints HMAC-SHA256 JWT action tokens (aud `violation-action`, 48h TTL, signed with `JWT_SECRET` — MUST match the backend's) and renders two one-click buttons. Clicking hits backend `GET /violations/action` (render confirm form) → `POST /violations/action` (atomic resolve). Provider: SendGrid (primary) with Resend fallback. Click/open tracking is disabled in `tracking_settings` so Tow / No Tow links resolve straight to the backend without SendGrid's `url{N}.<domain>` redirector (whose SSL cert is flaky on first provisioning).
 - Dashboard Billing tab has a **Confirmation review** sub-tab with 7 queues derived from `v_violation_billing_status`: Possible fraud → Needs verification → Unreported confirmed → Confirmed → Pending → No tow → Held/Force-billed. Per-row operator actions: Bill Anyway, Mark No-Tow, Pause/Resume Billing (all owner-scoped, hit backend endpoints `POST /violations/{id}/{force-bill|mark-no-tow|pause-billing|resume-billing}`).
 - Partner settings: `AccountPage` has a **tow-truck plates** editor writing `enforcement_partners.tow_truck_plates`. Plates normalized byte-identically to `tow-confirm/index.ts`.
 
@@ -296,18 +271,26 @@ Edge functions deploy independently of the Vercel push-to-main flow. **Diff agai
 
 ```bash
 # Diff first (recommended):
-supabase functions download alpr-webhook --project-ref nzdkoouoaedbbccraoti
+supabase functions download <slug> --project-ref nzdkoouoaedbbccraoti
 # Or use the MCP: mcp__supabase__get_edge_function
 
 # Deploy:
 supabase functions deploy tow-confirm
-supabase functions deploy alpr-webhook
 supabase functions deploy tow-dispatch-email
 # Set secrets where needed:
 supabase secrets set JWT_SECRET=$SUPABASE_JWT_SECRET  # tow-dispatch-email
 ```
 
 New env vars required:
-- `tow-dispatch-email`: `JWT_SECRET` (= the Supabase JWT secret = backend's `JWT_SECRET`), `BACKEND_URL` (optional, defaults to prod)
+- `tow-dispatch-email`: `JWT_SECRET` (= the Supabase JWT secret = backend's `JWT_SECRET`), `BACKEND_URL` (optional, defaults to prod), `SENDGRID_API_KEY` (primary provider) OR `RESEND_API_KEY` (fallback), `FROM_EMAIL` (must be on a domain-authenticated sender — currently `dispatch@lotlogicparking.com`), `FROM_NAME` (optional, "LotLogic" default), `EMAIL_OVERRIDE_TO` (optional test-recipient override; unset in prod).
 - `tow-confirm`: `TOW_CONFIRM_MIN_CONFIDENCE` (default 0.85), `TOW_CONFIRM_LOOKBACK_MINUTES` (default 180)
-- `alpr-pr-webhook`: `PR_WEBHOOK_MIN_SCORE` (optional, default 0.8). Reuses `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` that the other edge functions already have. Deploy with `verify_jwt=false` (public endpoint — Plate Recognizer can't attach our JWT). Requires the `plate-snapshots` public storage bucket (provisioned at deploy time — see `docs/camera-setup-milesight-sc211.md`).
+- `camera-snapshot` / `pr-ingest`: `PLATE_RECOGNIZER_TOKEN`, `PR_MIN_SCORE` (default `0.8`), `PR_DEDUP_WINDOW_SECONDS` (default `0`; currently `300` in prod), `CAMERA_SNAPSHOT_URL_SECRET` (primary) or `PR_INGEST_URL_SECRET` (fallback shared secret for the trailing-path URL), `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_PUBLIC_BASE_URL`.
+
+## Email sending (added Apr 2026)
+
+Domain: `lotlogicparking.com` registered in Cloudflare (Gabe's account). Inbound = Cloudflare Email Routing (FREE); forwards `dispatch@`, `gabriel@`, + future custom addresses to `standardvendingcompany@gmail.com`. Outbound = SendGrid (Twilio's email product) with the domain Domain-Authenticated via 3 CNAMEs in Cloudflare DNS (gray cloud / DNS-only — NOT proxied). `FROM_EMAIL=dispatch@lotlogicparking.com`. Single Sender Verification is not used.
+
+Guardrails:
+- Never turn on the orange cloud (Cloudflare proxy) for SendGrid CNAMEs — they're `em{N}.lotlogicparking.com`, `s1._domainkey.lotlogicparking.com`, `s2._domainkey.lotlogicparking.com` and must be DNS-only.
+- SendGrid tracking is explicitly disabled per-message in `tow-dispatch-email/index.ts` via `tracking_settings`. Re-enabling it will route every link through `url{N}.lotlogicparking.com` and the branded-link SSL cert breaks Tow / No Tow buttons until provisioned.
+- `EMAIL_OVERRIDE_TO` currently set to `standardvendingcompany@gmail.com` during testing. Production: unset the secret and emails route to each violation's `enforcement_partners.email`.

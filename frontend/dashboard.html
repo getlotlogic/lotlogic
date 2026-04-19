@@ -8191,9 +8191,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
           const conf = typeof ev.confidence === 'number' ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) : null;
           const evType = ev.event_type || 'patrol';
           const evColor = evType === 'entry' ? '#4ade80' : (evType === 'exit' ? '#f59e0b' : '#60a5fa');
-          const statusColor = ev.match_status === 'matched' ? '#4ade80'
-            : ['low_confidence','review_needed','camera_suspended'].includes(ev.match_status) ? '#fbbf24'
+          const statusColor = ['matched','resident','visitor_pass','self_registered'].includes(ev.match_status) ? '#4ade80'
+            : ['low_confidence','review_needed','camera_suspended','grace_window','pending'].includes(ev.match_status) ? '#fbbf24'
             : ev.match_status === 'unmatched' ? '#f87171'
+            : ev.match_status === 'dedup_suppressed' ? '#94a3b8'
             : 'var(--text-faint)';
           return (
             <div key={ev.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
