@@ -106,3 +106,36 @@ Deno.test("matchPlate skips cancelled visitor_pass", async () => {
   const r = await matchPlate(db, PROPERTY, "ABC123", NOW);
   assertEquals(r.kind, "unmatched");
 });
+
+import { makeR2Uploader } from "./r2.ts";
+
+Deno.test("makeR2Uploader returns public URL on 200", async () => {
+  const fakeFetch = async (_url: string, _init: RequestInit) =>
+    new Response("", { status: 200 });
+  const upload = makeR2Uploader({
+    accountId: "acct",
+    bucket: "parking-snapshots",
+    accessKeyId: "AKIA",
+    secretAccessKey: "secret",
+    publicBaseUrl: "https://pub-x.r2.dev",
+    fetchImpl: fakeFetch as any,
+  });
+  const r = await upload("foo/bar.jpg", new Uint8Array([1, 2, 3]));
+  assertEquals(r.ok, true);
+  if (r.ok) assertEquals(r.url, "https://pub-x.r2.dev/foo/bar.jpg");
+});
+
+Deno.test("makeR2Uploader surfaces error on 4xx", async () => {
+  const fakeFetch = async () => new Response("denied", { status: 403 });
+  const upload = makeR2Uploader({
+    accountId: "acct",
+    bucket: "parking-snapshots",
+    accessKeyId: "AKIA",
+    secretAccessKey: "secret",
+    publicBaseUrl: "https://pub-x.r2.dev",
+    fetchImpl: fakeFetch as any,
+  });
+  const r = await upload("foo/bar.jpg", new Uint8Array([1]));
+  assertEquals(r.ok, false);
+  if (!r.ok) assertEquals(r.error.includes("403"), true);
+});
