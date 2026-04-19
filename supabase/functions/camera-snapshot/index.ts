@@ -146,6 +146,12 @@ Deno.serve(async (req: Request) => {
         }).select().single();
         if (vIns.error) throw vIns.error;
         violationCount++;
+
+        // Fire tow-dispatch-email for the partner. Fire-and-forget via
+        // EdgeRuntime.waitUntil so we return fast; email delivery failures
+        // are logged but don't fail the ingest. No grace period during
+        // testing — every unmatched violation notifies immediately.
+        dispatchTowEmail(vIns.data.id);
       }
     }
 
@@ -161,6 +167,34 @@ Deno.serve(async (req: Request) => {
     return json(500, { ok: false, error: "internal_error" });
   }
 });
+
+// Fire tow-dispatch-email asynchronously. Uses EdgeRuntime.waitUntil when
+// available so the response can return before Resend acks; falls back to a
+// best-effort unawaited fetch otherwise. Delivery errors are logged only —
+// never surface to the camera, which would cause it to retry the ingest.
+function dispatchTowEmail(violationId: string): void {
+  const url = `${SUPABASE_URL}/functions/v1/tow-dispatch-email`;
+  const task = fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+    body: JSON.stringify({ violation_id: violationId }),
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        console.warn(`tow-dispatch-email ${res.status} for ${violationId}: ${body.slice(0, 200)}`);
+      }
+    })
+    .catch((err) => {
+      console.warn(`tow-dispatch-email fetch failed for ${violationId}: ${String(err)}`);
+    });
+
+  const runtime = (globalThis as unknown as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+  if (runtime?.waitUntil) runtime.waitUntil(task);
+}
 
 async function callPlateRecognizer(
   imageBytes: Uint8Array,

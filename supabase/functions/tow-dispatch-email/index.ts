@@ -228,6 +228,12 @@ ${buttonsBlock}
 <p style=\"color:#555; font-size:13px; margin-top:18px; border-top:1px solid #eee; padding-top:12px;\">You can also reply <strong>DONE</strong> via SMS, or log in to the LotLogic dashboard.</p>
 </body></html>`;
 
+  // EMAIL_OVERRIDE_TO short-circuits the configured partner email during
+  // testing. Unset in production. When set, keep the partner's real address
+  // in the response body so operators can see who it "would have" gone to.
+  const overrideTo = Deno.env.get("EMAIL_OVERRIDE_TO");
+  const recipient = overrideTo && overrideTo.includes("@") ? overrideTo : partner.email;
+
   const resendRes = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -236,7 +242,7 @@ ${buttonsBlock}
     },
     body: JSON.stringify({
       from: fromEmail,
-      to: [partner.email],
+      to: [recipient],
       subject,
       html,
       text: textBody,
@@ -263,7 +269,9 @@ ${buttonsBlock}
   return json(
     {
       status: "sent",
-      to: partner.email,
+      to: recipient,
+      partner_email: partner.email,
+      override_active: recipient !== partner.email,
       violation_id: violation.id,
       subject,
       resend_id: (resendBody as { id?: string })?.id ?? null,
