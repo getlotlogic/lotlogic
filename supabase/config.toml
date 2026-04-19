@@ -1,6 +1,4 @@
-[project]
-id = "nzdkoouoaedbbccraoti"
-name = "lotlogic"
+project_id = "nzdkoouoaedbbccraoti"
 
 [api]
 enabled = true
