@@ -306,6 +306,13 @@ async function sendViaSendGrid(
         { type: "text/plain", value: textBody },
         { type: "text/html", value: htmlBody },
       ],
+      // Partners need the raw action URL, not SendGrid's tracking redirector.
+      // Analytics are nice-to-have; a broken button is not.
+      tracking_settings: {
+        click_tracking: { enable: false, enable_text: false },
+        open_tracking: { enable: false },
+        subscription_tracking: { enable: false },
+      },
     }),
   });
   // SendGrid returns 202 Accepted with empty body on success; X-Message-Id header has the id.
