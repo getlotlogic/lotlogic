@@ -1,0 +1,18 @@
+{
+  "hook": { "target": "https://x", "id": 1, "event": "image.done" },
+  "data": {
+    "filename": "test.jpg",
+    "timestamp": "2026-04-19T15:00:00Z",
+    "camera_id": "trillium-front-gate",
+    "results": [
+      {
+        "plate": "fm046sc",
+        "score": 0.91,
+        "dscore": 0.99,
+        "box": { "xmin": 100, "ymin": 200, "xmax": 300, "ymax": 280 },
+        "region": { "code": "us-ga", "score": 0.85 }
+      }
+    ],
+    "processing_time": 123
+  }
+}

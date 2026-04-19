@@ -139,3 +139,99 @@ Deno.test("makeR2Uploader surfaces error on 4xx", async () => {
   assertEquals(r.ok, false);
   if (!r.ok) assertEquals(r.error.includes("403"), true);
 });
+
+import { runPipeline } from "./pipeline.ts";
+
+const CAMERA_ROW = {
+  id: "cam-uuid-1",
+  property_id: PROPERTY,
+  api_key: "trillium-front-gate",
+  active: true,
+};
+
+function makePipelineDb(opts: {
+  cameras?: any[];
+  residents?: any[];
+  passes?: any[];
+  regs?: any[];
+  recentEvents?: any[];   // for dedup query
+  inserts?: { plateEvents: any[]; violations: any[] };
+}) {
+  const inserts = opts.inserts ?? { plateEvents: [], violations: [] };
+  return {
+    from(table: string) {
+      const rows: any[] =
+        table === "alpr_cameras" ? (opts.cameras ?? [])
+        : table === "resident_plates" ? (opts.residents ?? [])
+        : table === "visitor_passes" ? (opts.passes ?? [])
+        : table === "parking_registrations" ? (opts.regs ?? [])
+        : table === "plate_events" ? (opts.recentEvents ?? [])
+        : [];
+      const builder: any = {
+        _filtered: rows,
+        select() { return builder; },
+        eq(c: string, v: any) { builder._filtered = builder._filtered.filter((r: any) => r[c] === v); return builder; },
+        gte(c: string, v: any) { builder._filtered = builder._filtered.filter((r: any) => new Date(r[c]) >= new Date(v)); return builder; },
+        lt() { return builder; },
+        limit(n: number) {
+          builder._filtered = builder._filtered.slice(0, n);
+          return Promise.resolve({ data: builder._filtered, error: null });
+        },
+        maybeSingle() {
+          return Promise.resolve({ data: builder._filtered[0] ?? null, error: null });
+        },
+        insert(row: any) {
+          if (table === "plate_events") inserts.plateEvents.push(row);
+          if (table === "alpr_violations") inserts.violations.push(row);
+          return {
+            select() {
+              return {
+                single() {
+                  return Promise.resolve({
+                    data: { id: `${table}-uuid-${inserts.plateEvents.length + inserts.violations.length}`, ...row },
+                    error: null,
+                  });
+                },
+              };
+            },
+          };
+        },
+      };
+      return builder;
+    },
+  } as any;
+}
+
+async function buildMultipartRequest() {
+  const sample = JSON.parse(
+    await Deno.readTextFile(new URL("./fixtures/pr-webhook-sample.json", import.meta.url)),
+  );
+  const jpeg = await Deno.readFile(new URL("./fixtures/tiny.jpg", import.meta.url));
+  const fd = new FormData();
+  fd.append("json", JSON.stringify(sample));
+  fd.append("upload", new Blob([jpeg], { type: "image/jpeg" }), "snap.jpg");
+  return new Request("https://x.supabase.co/functions/v1/pr-ingest/SECRET", {
+    method: "POST",
+    body: fd,
+  });
+}
+
+Deno.test("happy path: unknown plate creates plate_events + alpr_violations", async () => {
+  const inserts = { plateEvents: [] as any[], violations: [] as any[] };
+  const r2Calls: Array<{ key: string; bytes: Uint8Array }> = [];
+  const deps: Deps = {
+    db: makePipelineDb({ cameras: [CAMERA_ROW], inserts }),
+    r2: async (key, bytes) => { r2Calls.push({ key, bytes }); return { ok: true, url: `https://pub-x.r2.dev/${key}` }; },
+    env: { PR_MIN_SCORE: 0.8, PR_DEDUP_WINDOW_SECONDS: 0 },
+    now: () => NOW,
+  };
+  const req = await buildMultipartRequest();
+  const result = await runPipeline(req, deps);
+  assertEquals(result.status, 200);
+  assertEquals(inserts.plateEvents.length, 1);
+  assertEquals(inserts.plateEvents[0].plate_text, "FM046SC");
+  assertEquals(inserts.plateEvents[0].normalized_plate, "FM046SC");
+  assertEquals(inserts.plateEvents[0].image_url, r2Calls[0] ? `https://pub-x.r2.dev/${r2Calls[0].key}` : null);
+  assertEquals(inserts.violations.length, 1);
+  assertEquals(inserts.violations[0].plate_text, "FM046SC");
+});
