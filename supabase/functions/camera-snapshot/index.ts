@@ -70,11 +70,34 @@ Deno.serve(async (req: Request) => {
 
     let eventCount = 0;
     let violationCount = 0;
+    let dedupCount = 0;
     const now = new Date();
 
     for (const result of surviving) {
       const plateUpper = (result.plate as string).toUpperCase();
       const normalized = normalizePlate(result.plate as string);
+
+      // Dedup FIRST — cheaper than an R2 PUT and avoids an endless chain of
+      // suppressed rows each resetting the window on the next iteration.
+      // We compare against real (non-suppressed) plate_events rows; suppressed
+      // rows don't exist anymore, but the filter also tolerates legacy rows.
+      if (PR_DEDUP_WINDOW_SECONDS > 0) {
+        const since = new Date(now.getTime() - PR_DEDUP_WINDOW_SECONDS * 1000).toISOString();
+        const recent = await db
+          .from("plate_events")
+          .select("id")
+          .eq("property_id", camera.property_id)
+          .eq("normalized_plate", normalized)
+          .neq("match_status", "dedup_suppressed")
+          .gte("created_at", since)
+          .limit(1);
+        if (recent.error) throw recent.error;
+        if ((recent.data ?? []).length > 0) {
+          dedupCount++;
+          continue;
+        }
+      }
+
       const epochMs = now.getTime();
       const dateStr = now.toISOString().slice(0, 10);
       const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${plateUpper}.jpg`;
@@ -85,23 +108,7 @@ Deno.serve(async (req: Request) => {
       if (upRes.ok) imageUrl = upRes.url;
       else imageError = upRes.error;
 
-      let dedupSuppressed = false;
-      if (PR_DEDUP_WINDOW_SECONDS > 0) {
-        const since = new Date(now.getTime() - PR_DEDUP_WINDOW_SECONDS * 1000).toISOString();
-        const recent = await db
-          .from("plate_events")
-          .select("id")
-          .eq("property_id", camera.property_id)
-          .eq("normalized_plate", normalized)
-          .gte("created_at", since)
-          .limit(1);
-        if (recent.error) throw recent.error;
-        if ((recent.data ?? []).length > 0) dedupSuppressed = true;
-      }
-
-      const outcome = dedupSuppressed
-        ? { kind: "dedup_suppressed" as const }
-        : await matchPlate(db, camera.property_id, normalized, now);
+      const outcome = await matchPlate(db, camera.property_id, normalized, now);
 
       const eventRow: Record<string, unknown> = {
         camera_id: camera.id,
@@ -119,8 +126,8 @@ Deno.serve(async (req: Request) => {
           ...(imageError ? { image_upload_error: imageError } : {}),
         },
         match_status: outcome.kind,
-        match_reason: outcome.kind === "dedup_suppressed" ? "within window" : null,
-        matched_at: outcome.kind !== "unmatched" && outcome.kind !== "dedup_suppressed" ? now.toISOString() : null,
+        match_reason: null,
+        matched_at: outcome.kind !== "unmatched" ? now.toISOString() : null,
         ...(outcome.kind === "resident" ? { resident_plate_id: outcome.resident_plate_id } : {}),
         ...(outcome.kind === "visitor_pass" ? { visitor_pass_id: outcome.visitor_pass_id } : {}),
       };
@@ -142,7 +149,13 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    return json(200, { ok: true, events: eventCount, violations: violationCount, source: extracted.source });
+    return json(200, {
+      ok: true,
+      events: eventCount,
+      violations: violationCount,
+      dedup_suppressed: dedupCount,
+      source: extracted.source,
+    });
   } catch (err) {
     console.error("camera-snapshot unhandled error:", err instanceof Error ? err.stack ?? err.message : err);
     return json(500, { ok: false, error: "internal_error" });
