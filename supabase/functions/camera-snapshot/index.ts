@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { makeR2Uploader } from "../pr-ingest/r2.ts";
 import { matchPlate } from "../pr-ingest/match.ts";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
-import { extractImageBytes } from "./extract.ts";
+import { extractFromRequest } from "./extract.ts";
 import { parsePath } from "./path.ts";
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
@@ -29,32 +29,34 @@ const r2 = makeR2Uploader({
 
 Deno.serve(async (req: Request) => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
-    return json(200, { ok: true, fn: "camera-snapshot", accepts: "POST image bytes" });
+    return json(200, { ok: true, fn: "camera-snapshot", accepts: "POST image/json/multipart" });
   }
   if (req.method !== "POST") return json(405, { ok: false, error: "method_not_allowed" });
 
-  const { apiKey, secret } = parsePath(new URL(req.url));
+  const { apiKey: pathApiKey, secret } = parsePath(new URL(req.url));
   if (!URL_SECRET || secret !== URL_SECRET) return json(401, { ok: false, error: "unauthorized" });
-  if (!apiKey) return json(400, { ok: false, error: "missing_camera_api_key" });
 
   try {
+    const extracted = await extractFromRequest(req);
+    if (!extracted) return json(200, { ok: false, reason: "no_image_bytes" });
+
+    // Identify the camera. Path segment wins; otherwise fall back to whatever
+    // the camera self-identifies as in the payload (Milesight → devMac).
+    const cameraApiKey = pathApiKey ?? extracted.cameraHint;
+    if (!cameraApiKey) return json(200, { ok: false, reason: "no_camera_identity" });
+
     const cameraQ = await db
       .from("alpr_cameras")
       .select("id,property_id,api_key,active")
-      .eq("api_key", apiKey)
+      .eq("api_key", cameraApiKey)
       .eq("active", true)
       .limit(1);
     if (cameraQ.error) throw cameraQ.error;
     const camera = (cameraQ.data ?? [])[0];
-    if (!camera) return json(200, { ok: false, reason: "unknown_camera", api_key: apiKey });
+    if (!camera) return json(200, { ok: false, reason: "unknown_camera", api_key: cameraApiKey });
 
-    const imageBytes = await extractImageBytes(req);
-    if (!imageBytes) return json(200, { ok: false, reason: "no_image_bytes" });
-
-    // Call Plate Recognizer synchronously. Network failure → 500 so the
-    // camera retries; PR non-200 → log and 200 (don't punish the camera for
-    // PR outages — we just drop the frame).
-    const prResp = await callPlateRecognizer(imageBytes, apiKey);
+    // Call Plate Recognizer synchronously.
+    const prResp = await callPlateRecognizer(extracted.bytes, cameraApiKey);
     if (!prResp.ok) {
       console.warn("camera-snapshot PR call failed:", prResp.status, prResp.bodyText.slice(0, 200));
       return json(200, { ok: false, reason: "pr_call_failed", status: prResp.status });
@@ -79,7 +81,7 @@ Deno.serve(async (req: Request) => {
 
       let imageUrl: string | null = null;
       let imageError: string | null = null;
-      const upRes = await r2(key, imageBytes);
+      const upRes = await r2(key, extracted.bytes);
       if (upRes.ok) imageUrl = upRes.url;
       else imageError = upRes.error;
 
@@ -112,7 +114,8 @@ Deno.serve(async (req: Request) => {
         raw_data: {
           ...result,
           _pr_response: prResp.data,
-          _source: "camera-snapshot",
+          _source: `camera-snapshot:${extracted.source}`,
+          ...(extracted.rawMeta ?? {}),
           ...(imageError ? { image_upload_error: imageError } : {}),
         },
         match_status: outcome.kind,
@@ -139,7 +142,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    return json(200, { ok: true, events: eventCount, violations: violationCount });
+    return json(200, { ok: true, events: eventCount, violations: violationCount, source: extracted.source });
   } catch (err) {
     console.error("camera-snapshot unhandled error:", err instanceof Error ? err.stack ?? err.message : err);
     return json(500, { ok: false, error: "internal_error" });
