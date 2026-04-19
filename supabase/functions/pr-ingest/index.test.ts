@@ -354,6 +354,11 @@ Deno.test("extractAndCheckSecret: matching trailing path returns true", () => {
   assertEquals(extractAndCheckSecret(url, "mysecret123"), true);
 });
 
+Deno.test("extractAndCheckSecret: matches Supabase runtime pathname (/pr-ingest/<secret>)", () => {
+  const url = new URL("https://abc.supabase.co/pr-ingest/mysecret123");
+  assertEquals(extractAndCheckSecret(url, "mysecret123"), true);
+});
+
 Deno.test("extractAndCheckSecret: missing trailing path returns false", () => {
   const url = new URL("https://abc.supabase.co/functions/v1/pr-ingest/");
   assertEquals(extractAndCheckSecret(url, "mysecret123"), false);

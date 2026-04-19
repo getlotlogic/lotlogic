@@ -6,6 +6,10 @@
  */
 export function extractAndCheckSecret(url: URL, expected: string): boolean {
   if (!expected) return false;
-  const trailing = url.pathname.replace(/^\/functions\/v1\/pr-ingest\/?/, "");
+  // The Supabase edge runtime delivers req.url with pathname `/pr-ingest/<secret>`,
+  // but the hosted URL and our tests use `/functions/v1/pr-ingest/<secret>`. Accept both.
+  const trailing = url.pathname
+    .replace(/^\/functions\/v1\/pr-ingest\/?/, "")
+    .replace(/^\/pr-ingest\/?/, "");
   return trailing === expected;
 }
