@@ -235,3 +235,48 @@ Deno.test("happy path: unknown plate creates plate_events + alpr_violations", as
   assertEquals(inserts.violations.length, 1);
   assertEquals(inserts.violations[0].plate_text, "FM046SC");
 });
+
+Deno.test("resident match: writes plate_events with status='resident', no violation", async () => {
+  const inserts = { plateEvents: [] as any[], violations: [] as any[] };
+  const deps: Deps = {
+    db: makePipelineDb({
+      cameras: [CAMERA_ROW],
+      residents: [{ id: "r1", property_id: PROPERTY, plate_text: "fm046sc", active: true }],
+      inserts,
+    }),
+    r2: async (key) => ({ ok: true, url: `https://pub-x.r2.dev/${key}` }),
+    env: { PR_MIN_SCORE: 0.8, PR_DEDUP_WINDOW_SECONDS: 0 },
+    now: () => NOW,
+  };
+  const req = await buildMultipartRequest();
+  const result = await runPipeline(req, deps);
+  assertEquals(result.status, 200);
+  assertEquals(inserts.plateEvents.length, 1);
+  assertEquals(inserts.plateEvents[0].match_status, "resident");
+  assertEquals(inserts.plateEvents[0].resident_plate_id, "r1");
+  assertEquals(inserts.violations.length, 0);
+});
+
+Deno.test("visitor pass match: writes plate_events with status='visitor_pass', no violation", async () => {
+  const inserts = { plateEvents: [] as any[], violations: [] as any[] };
+  const deps: Deps = {
+    db: makePipelineDb({
+      cameras: [CAMERA_ROW],
+      passes: [{
+        id: "v1", property_id: PROPERTY, plate_text: "FM046SC",
+        valid_from: "2026-04-19T14:00:00Z", valid_until: "2026-04-19T20:00:00Z",
+        cancelled_at: null,
+      }],
+      inserts,
+    }),
+    r2: async (key) => ({ ok: true, url: `https://pub-x.r2.dev/${key}` }),
+    env: { PR_MIN_SCORE: 0.8, PR_DEDUP_WINDOW_SECONDS: 0 },
+    now: () => NOW,
+  };
+  const req = await buildMultipartRequest();
+  const result = await runPipeline(req, deps);
+  assertEquals(result.status, 200);
+  assertEquals(inserts.plateEvents[0].match_status, "visitor_pass");
+  assertEquals(inserts.plateEvents[0].visitor_pass_id, "v1");
+  assertEquals(inserts.violations.length, 0);
+});
