@@ -2,6 +2,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import { runPipeline } from "./pipeline.ts";
 import { makeR2Uploader } from "./r2.ts";
+import { extractAndCheckSecret } from "./secret.ts";
+
+// Re-export so tests can import extractAndCheckSecret from "./index.ts" if desired,
+// but the canonical import path for tests is "./secret.ts".
+export { extractAndCheckSecret } from "./secret.ts";
 
 const URL_SECRET = Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_MIN_SCORE = Number(Deno.env.get("PR_MIN_SCORE") ?? "0.8");
@@ -29,9 +34,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // The function is mounted at /functions/v1/pr-ingest. Anything after that is treated as the secret.
-  const url = new URL(req.url);
-  const trailing = url.pathname.replace(/^\/functions\/v1\/pr-ingest\/?/, "");
-  if (!URL_SECRET || trailing !== URL_SECRET) {
+  if (!extractAndCheckSecret(new URL(req.url), URL_SECRET)) {
     return json(401, { ok: false, error: "unauthorized" });
   }
 
@@ -46,7 +49,7 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     // DB/insert errors get 500 so PR retries. Anything else should already have been
     // converted to 200 inside runPipeline. We log loudly so it shows up in `supabase functions logs`.
-    console.error("pr-ingest unhandled error:", err);
+    console.error("pr-ingest unhandled error:", err instanceof Error ? err.stack ?? err.message : err);
     return json(500, { ok: false, error: "internal_error", detail: String(err) });
   }
 });

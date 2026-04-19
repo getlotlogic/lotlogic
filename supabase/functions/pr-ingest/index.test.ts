@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { normalizePlate } from "./normalize.ts";
 
 Deno.test("normalizePlate uppercases and strips non-alphanumerics", () => {
@@ -340,5 +340,107 @@ Deno.test("dedup window > 0 and recent event exists: skips violation insert", as
   assertEquals(result.status, 200);
   assertEquals(inserts.plateEvents.length, 1);
   assertEquals(inserts.plateEvents[0].match_status, "dedup_suppressed");
+  assertEquals(inserts.violations.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Fix 2: extractAndCheckSecret unit tests
+// ---------------------------------------------------------------------------
+
+import { extractAndCheckSecret } from "./secret.ts";
+
+Deno.test("extractAndCheckSecret: matching trailing path returns true", () => {
+  const url = new URL("https://abc.supabase.co/functions/v1/pr-ingest/mysecret123");
+  assertEquals(extractAndCheckSecret(url, "mysecret123"), true);
+});
+
+Deno.test("extractAndCheckSecret: missing trailing path returns false", () => {
+  const url = new URL("https://abc.supabase.co/functions/v1/pr-ingest/");
+  assertEquals(extractAndCheckSecret(url, "mysecret123"), false);
+});
+
+Deno.test("extractAndCheckSecret: wrong trailing path returns false", () => {
+  const url = new URL("https://abc.supabase.co/functions/v1/pr-ingest/wrongsecret");
+  assertEquals(extractAndCheckSecret(url, "mysecret123"), false);
+});
+
+Deno.test("extractAndCheckSecret: empty expected secret returns false (defense-in-depth)", () => {
+  const url = new URL("https://abc.supabase.co/functions/v1/pr-ingest/");
+  assertEquals(extractAndCheckSecret(url, ""), false);
+});
+
+// ---------------------------------------------------------------------------
+// Fix 3: DB insert failure → runPipeline throws (caller returns 500)
+// ---------------------------------------------------------------------------
+
+function failingInsertDb(cameras: any[]) {
+  return {
+    from(table: string) {
+      const rows: any[] = table === "alpr_cameras" ? cameras : [];
+      const builder: any = {
+        _filtered: rows,
+        select() { return builder; },
+        eq(c: string, v: any) { builder._filtered = builder._filtered.filter((r: any) => r[c] === v); return builder; },
+        gte() { return builder; },
+        lt() { return builder; },
+        limit(n: number) {
+          builder._filtered = builder._filtered.slice(0, n);
+          return Promise.resolve({ data: builder._filtered, error: null });
+        },
+        insert(_row: any) {
+          return {
+            select() {
+              return {
+                single() {
+                  return Promise.resolve({ data: null, error: { message: "simulated failure" } });
+                },
+              };
+            },
+          };
+        },
+      };
+      return builder;
+    },
+  } as any;
+}
+
+Deno.test("DB insert failure: runPipeline throws (handler must return 500)", async () => {
+  const deps: Deps = {
+    db: failingInsertDb([CAMERA_ROW]),
+    r2: async (key) => ({ ok: true, url: `https://pub-x.r2.dev/${key}` }),
+    env: { PR_MIN_SCORE: 0.8, PR_DEDUP_WINDOW_SECONDS: 0 },
+    now: () => NOW,
+  };
+  const req = await buildMultipartRequest();
+  await assertRejects(() => runPipeline(req, deps));
+});
+
+// ---------------------------------------------------------------------------
+// Fix 4: parking_registrations match → match_status='self_registered', no violation
+// ---------------------------------------------------------------------------
+
+Deno.test("parking_registrations match: writes plate_events with status='self_registered', no violation", async () => {
+  const inserts = { plateEvents: [] as any[], violations: [] as any[] };
+  const deps: Deps = {
+    db: makePipelineDb({
+      cameras: [CAMERA_ROW],
+      regs: [{
+        id: "reg1",
+        property_id: PROPERTY,
+        plate_number: "fm046sc",
+        status: "active",
+        expires_at: "2026-04-20T00:00:00Z",  // future
+      }],
+      inserts,
+    }),
+    r2: async (key) => ({ ok: true, url: `https://pub-x.r2.dev/${key}` }),
+    env: { PR_MIN_SCORE: 0.8, PR_DEDUP_WINDOW_SECONDS: 0 },
+    now: () => NOW,
+  };
+  const req = await buildMultipartRequest();
+  const result = await runPipeline(req, deps);
+  assertEquals(result.status, 200);
+  assertEquals(inserts.plateEvents.length, 1);
+  assertEquals(inserts.plateEvents[0].match_status, "self_registered");
   assertEquals(inserts.violations.length, 0);
 });

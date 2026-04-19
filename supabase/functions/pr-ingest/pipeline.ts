@@ -56,10 +56,11 @@ export async function runPipeline(req: Request, deps: Deps): Promise<PipelineRes
   let violationCount = 0;
 
   for (const result of surviving) {
+    const t = deps.now();
     const plateUpper = result.plate.toUpperCase();
     const normalized = normalizePlate(result.plate);
-    const epochMs = deps.now().getTime();
-    const dateStr = deps.now().toISOString().slice(0, 10);
+    const epochMs = t.getTime();
+    const dateStr = t.toISOString().slice(0, 10);
     const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${plateUpper}.jpg`;
 
     let imageUrl: string | null = null;
@@ -73,7 +74,7 @@ export async function runPipeline(req: Request, deps: Deps): Promise<PipelineRes
     // Dedup check
     let dedupSuppressed = false;
     if (deps.env.PR_DEDUP_WINDOW_SECONDS > 0) {
-      const since = new Date(deps.now().getTime() - deps.env.PR_DEDUP_WINDOW_SECONDS * 1000).toISOString();
+      const since = new Date(t.getTime() - deps.env.PR_DEDUP_WINDOW_SECONDS * 1000).toISOString();
       const recent = await deps.db
         .from("plate_events")
         .select("id,property_id,normalized_plate,created_at")
@@ -87,7 +88,7 @@ export async function runPipeline(req: Request, deps: Deps): Promise<PipelineRes
 
     let outcome = dedupSuppressed
       ? { kind: "dedup_suppressed" as const }
-      : await matchPlate(deps.db, camera.property_id, normalized, deps.now());
+      : await matchPlate(deps.db, camera.property_id, normalized, t);
 
     const matchStatus = outcome.kind;
     const matchReason = outcome.kind === "dedup_suppressed" ? "within window" : null;
@@ -99,11 +100,11 @@ export async function runPipeline(req: Request, deps: Deps): Promise<PipelineRes
       normalized_plate: normalized,
       confidence: result.score,
       image_url: imageUrl,
-      event_type: "alpr",
+      event_type: "entry",
       raw_data: { ...result, _pr_payload: payload.data, ...(imageError ? { image_upload_error: imageError } : {}) },
       match_status: matchStatus,
       match_reason: matchReason,
-      matched_at: outcome.kind !== "unmatched" && outcome.kind !== "dedup_suppressed" ? deps.now().toISOString() : null,
+      matched_at: outcome.kind !== "unmatched" && outcome.kind !== "dedup_suppressed" ? t.toISOString() : null,
       ...(outcome.kind === "resident" ? { resident_plate_id: outcome.resident_plate_id } : {}),
       ...(outcome.kind === "visitor_pass" ? { visitor_pass_id: outcome.visitor_pass_id } : {}),
     };

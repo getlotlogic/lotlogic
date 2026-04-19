@@ -80,7 +80,7 @@ Three boundaries (camera → PR, PR → us, us → DB+R2). One edge function on 
         - `normalized_plate` = result.plate stripped of non-alphanumerics, uppercased
         - `confidence` = result.score
         - `image_url` = R2 URL (or NULL if upload failed — see error rules)
-        - `event_type` = `"alpr"`
+        - `event_type` = `"entry"`
         - `raw_data` = the full PR `data` object as jsonb
         - `match_status` = filled in next step
 9. Dedup check: count `plate_events` where `(property_id, normalized_plate, created_at >= now() - PR_DEDUP_WINDOW_SECONDS)`. If > 1, set `match_status = 'dedup_suppressed'`, `match_reason = 'within window'`, **skip violation insert**, done.

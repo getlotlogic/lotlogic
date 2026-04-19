@@ -24,7 +24,7 @@ export function makeR2Uploader(cfg: R2Config): R2Uploader {
     const url = `${endpoint}/${encodeKey(key)}`;
     const signed = await aws.sign(new Request(url, {
       method: "PUT",
-      body: bytes as unknown as BodyInit,
+      body: bytes as BodyInit,
       headers: { "Content-Type": "image/jpeg" },
     }));
     const res = await f(signed);
