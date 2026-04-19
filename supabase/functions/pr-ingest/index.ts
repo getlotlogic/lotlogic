@@ -29,6 +29,12 @@ const r2 = makeR2Uploader({
 });
 
 Deno.serve(async (req: Request) => {
+  // Plate Recognizer's webhook config UI pre-validates the target URL via GET/HEAD/OPTIONS.
+  // Replying 200 here makes the URL accepted; real ingest still requires POST + URL secret.
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+    return json(200, { ok: true, fn: "pr-ingest", accepts: "POST multipart/form-data" });
+  }
+
   if (req.method !== "POST") {
     return json(405, { ok: false, error: "method_not_allowed" });
   }

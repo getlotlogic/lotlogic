@@ -21,6 +21,9 @@ venv/
 node_modules/
 package-lock.json
 
+# Deno (supabase edge functions)
+supabase/functions/**/deno.lock
+
 # OS
 .DS_Store
 Thumbs.db
@@ -37,3 +40,4 @@ leadgen/.env
 
 # Agent
 agent/.env
+.env.local
