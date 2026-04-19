@@ -280,3 +280,65 @@ Deno.test("visitor pass match: writes plate_events with status='visitor_pass', n
   assertEquals(inserts.plateEvents[0].visitor_pass_id, "v1");
   assertEquals(inserts.violations.length, 0);
 });
+
+Deno.test("unknown camera_id returns 200 + reason, no inserts", async () => {
+  const inserts = { plateEvents: [] as any[], violations: [] as any[] };
+  const deps: Deps = {
+    db: makePipelineDb({ cameras: [], inserts }),
+    r2: async () => ({ ok: false, error: "should not be called" }),
+    env: { PR_MIN_SCORE: 0.8, PR_DEDUP_WINDOW_SECONDS: 0 },
+    now: () => NOW,
+  };
+  const req = await buildMultipartRequest();
+  const result = await runPipeline(req, deps);
+  assertEquals(result.status, 200);
+  assertEquals(result.body.reason, "unknown_camera_id");
+  assertEquals(inserts.plateEvents.length, 0);
+});
+
+Deno.test("all results below PR_MIN_SCORE: no inserts, 200", async () => {
+  const inserts = { plateEvents: [] as any[], violations: [] as any[] };
+  const deps: Deps = {
+    db: makePipelineDb({ cameras: [CAMERA_ROW], inserts }),
+    r2: async (key) => ({ ok: true, url: `https://pub-x.r2.dev/${key}` }),
+    env: { PR_MIN_SCORE: 0.99, PR_DEDUP_WINDOW_SECONDS: 0 },  // sample fixture has score 0.91
+    now: () => NOW,
+  };
+  const req = await buildMultipartRequest();
+  const result = await runPipeline(req, deps);
+  assertEquals(result.status, 200);
+  assertEquals(inserts.plateEvents.length, 0);
+});
+
+Deno.test("R2 upload failure: still writes plate_events with image_url=null", async () => {
+  const inserts = { plateEvents: [] as any[], violations: [] as any[] };
+  const deps: Deps = {
+    db: makePipelineDb({ cameras: [CAMERA_ROW], inserts }),
+    r2: async () => ({ ok: false, error: "R2 PutObject 503: backend down" }),
+    env: { PR_MIN_SCORE: 0.8, PR_DEDUP_WINDOW_SECONDS: 0 },
+    now: () => NOW,
+  };
+  const req = await buildMultipartRequest();
+  const result = await runPipeline(req, deps);
+  assertEquals(result.status, 200);
+  assertEquals(inserts.plateEvents.length, 1);
+  assertEquals(inserts.plateEvents[0].image_url, null);
+  assertEquals(inserts.plateEvents[0].raw_data.image_upload_error.includes("503"), true);
+});
+
+Deno.test("dedup window > 0 and recent event exists: skips violation insert", async () => {
+  const inserts = { plateEvents: [] as any[], violations: [] as any[] };
+  const recent = [{ id: "pe1", property_id: PROPERTY, normalized_plate: "FM046SC", created_at: "2026-04-19T14:59:30Z" }];
+  const deps: Deps = {
+    db: makePipelineDb({ cameras: [CAMERA_ROW], recentEvents: recent, inserts }),
+    r2: async (key) => ({ ok: true, url: `https://pub-x.r2.dev/${key}` }),
+    env: { PR_MIN_SCORE: 0.8, PR_DEDUP_WINDOW_SECONDS: 300 },
+    now: () => NOW,
+  };
+  const req = await buildMultipartRequest();
+  const result = await runPipeline(req, deps);
+  assertEquals(result.status, 200);
+  assertEquals(inserts.plateEvents.length, 1);
+  assertEquals(inserts.plateEvents[0].match_status, "dedup_suppressed");
+  assertEquals(inserts.violations.length, 0);
+});
