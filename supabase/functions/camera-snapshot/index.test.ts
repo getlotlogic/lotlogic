@@ -217,3 +217,119 @@ Deno.test("decideExitOutcome: registered but pass already expired -> closed_clea
   const outcome = decideExitOutcome(session, validUntil, exited, 24);
   assertEquals(outcome.kind, "closed_clean");
 });
+
+// ---------------------------------------------------------------------------
+// USDOT OCR fallback (usdot-ocr.ts)
+// ---------------------------------------------------------------------------
+
+import { extractUsdot } from "./usdot-ocr.ts";
+
+function mockVisionFetch(responseBody: unknown, status = 200): typeof fetch {
+  return async () => new Response(JSON.stringify(responseBody), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+Deno.test("extractUsdot: returns DOT number when texts contain USDOT pattern", async () => {
+  const r = await extractUsdot(new Uint8Array([1, 2, 3]), {
+    token: "tok",
+    minScore: 0.7,
+    fetchImpl: mockVisionFetch({
+      object: { label: "usdot", score: 0.95, value: { xmin: 0, ymin: 0, xmax: 1, ymax: 1 } },
+      texts: [{ value: "US DOT 1234567", score: 0.89 }],
+    }),
+  });
+  assertEquals(r.kind, "dot");
+  if (r.kind === "dot") {
+    assertEquals(r.number, "1234567");
+    assertEquals(r.plate, "DOT-1234567");
+  }
+});
+
+Deno.test("extractUsdot: accepts USDOT variant with hash", async () => {
+  const r = await extractUsdot(new Uint8Array([1]), {
+    token: "tok",
+    minScore: 0.7,
+    fetchImpl: mockVisionFetch({ texts: [{ value: "USDOT #987654", score: 0.85 }] }),
+  });
+  assertEquals(r.kind, "dot");
+  if (r.kind === "dot") assertEquals(r.number, "987654");
+});
+
+Deno.test("extractUsdot: falls back to MC when no DOT present", async () => {
+  const r = await extractUsdot(new Uint8Array([1]), {
+    token: "tok",
+    minScore: 0.7,
+    fetchImpl: mockVisionFetch({
+      texts: [
+        { value: "ACME TRUCKING INC", score: 0.95 },
+        { value: "MC 555111", score: 0.82 },
+      ],
+    }),
+  });
+  assertEquals(r.kind, "mc");
+  if (r.kind === "mc") {
+    assertEquals(r.number, "555111");
+    assertEquals(r.plate, "MC-555111");
+  }
+});
+
+Deno.test("extractUsdot: drops below-threshold scores", async () => {
+  const r = await extractUsdot(new Uint8Array([1]), {
+    token: "tok",
+    minScore: 0.9,
+    fetchImpl: mockVisionFetch({
+      texts: [{ value: "US DOT 1234567", score: 0.85 }],  // below threshold
+    }),
+  });
+  assertEquals(r.kind, "none");
+});
+
+Deno.test("extractUsdot: returns none when texts is empty", async () => {
+  const r = await extractUsdot(new Uint8Array([1]), {
+    token: "tok",
+    minScore: 0.7,
+    fetchImpl: mockVisionFetch({ texts: [] }),
+  });
+  assertEquals(r.kind, "none");
+});
+
+Deno.test("extractUsdot: returns none on non-2xx", async () => {
+  const r = await extractUsdot(new Uint8Array([1]), {
+    token: "tok",
+    minScore: 0.7,
+    fetchImpl: mockVisionFetch({ error: "auth" }, 401),
+  });
+  assertEquals(r.kind, "none");
+});
+
+Deno.test("extractUsdot: ignores unrelated numbers", async () => {
+  const r = await extractUsdot(new Uint8Array([1]), {
+    token: "tok",
+    minScore: 0.7,
+    fetchImpl: mockVisionFetch({
+      texts: [
+        { value: "TRUCK #42", score: 0.99 },
+        { value: "CAB 5", score: 0.99 },
+        { value: "PHONE 1-800-555-0000", score: 0.95 },
+      ],
+    }),
+  });
+  assertEquals(r.kind, "none");
+});
+
+Deno.test("extractUsdot: prefers DOT over MC when both present", async () => {
+  const r = await extractUsdot(new Uint8Array([1]), {
+    token: "tok",
+    minScore: 0.7,
+    fetchImpl: mockVisionFetch({
+      texts: [
+        { value: "MC 888888", score: 0.85 },
+        { value: "US DOT 777777", score: 0.90 },
+      ],
+    }),
+  });
+  assertEquals(r.kind, "dot");
+  if (r.kind === "dot") assertEquals(r.number, "777777");
+});
