@@ -109,3 +109,98 @@ export async function insertSession(
   if (error) throw error;
   return { id: data.id };
 }
+
+export type ExitOutcome =
+  | { kind: "closed_clean" }
+  | { kind: "closed_early"; visitorPassId: string; holdUntil: Date }
+  | { kind: "closed_post_violation"; violationId: string; leftBeforeTow: boolean };
+
+export type ExitCloseInput = {
+  session: OpenSessionRow;
+  exitCameraId: string;
+  exitPlateEventId: string;
+  exitedAt: Date;
+  holdDurationHours: number; // 24 for now; kept configurable for tests
+};
+
+/**
+ * Decide the new state + side effects based on the open session's current
+ * state. Pure: returns what should happen. The caller performs the writes.
+ */
+export function decideExitOutcome(
+  session: OpenSessionRow,
+  passValidUntil: Date | null,
+  exitedAt: Date,
+  holdDurationHours: number,
+): ExitOutcome {
+  if (session.state === "registered" && passValidUntil && passValidUntil > exitedAt && session.visitor_pass_id) {
+    const holdUntil = new Date(exitedAt.getTime() + holdDurationHours * 3600 * 1000);
+    return { kind: "closed_early", visitorPassId: session.visitor_pass_id, holdUntil };
+  }
+  if (session.state === "expired" && session.violation_id) {
+    return { kind: "closed_post_violation", violationId: session.violation_id, leftBeforeTow: true };
+  }
+  return { kind: "closed_clean" };
+}
+
+export async function applyExitOutcome(
+  db: SupabaseClient,
+  input: ExitCloseInput,
+  outcome: ExitOutcome,
+): Promise<void> {
+  const nowIso = input.exitedAt.toISOString();
+
+  let newState: "closed_clean" | "closed_early" | "closed_post_violation";
+  switch (outcome.kind) {
+    case "closed_early":
+      newState = "closed_early";
+      break;
+    case "closed_post_violation":
+      newState = "closed_post_violation";
+      break;
+    default:
+      newState = "closed_clean";
+  }
+
+  const sessionUpdate = await db
+    .from("plate_sessions")
+    .update({
+      state: newState,
+      exited_at: nowIso,
+      exit_camera_id: input.exitCameraId,
+      exit_plate_event_id: input.exitPlateEventId,
+      updated_at: nowIso,
+    })
+    .eq("id", input.session.id);
+  if (sessionUpdate.error) throw sessionUpdate.error;
+
+  if (outcome.kind === "closed_early") {
+    const cancelPass = await db
+      .from("visitor_passes")
+      .update({ cancelled_at: nowIso, cancelled_by: "exited_early" })
+      .eq("id", outcome.visitorPassId);
+    if (cancelPass.error) throw cancelPass.error;
+
+    const holdInsert = await db
+      .from("plate_holds")
+      .insert({
+        property_id: input.session.property_id,
+        normalized_plate: input.session.normalized_plate,
+        source_session_id: input.session.id,
+        held_at: nowIso,
+        hold_until: outcome.holdUntil.toISOString(),
+        reason: "early_exit",
+      });
+    if (holdInsert.error) throw holdInsert.error;
+  }
+
+  if (outcome.kind === "closed_post_violation" && outcome.leftBeforeTow) {
+    // Only flag if tow_confirmed_at is still null. Check & set atomically.
+    const update = await db
+      .from("alpr_violations")
+      .update({ left_before_tow_at: nowIso })
+      .eq("id", outcome.violationId)
+      .is("tow_confirmed_at", null);
+    if (update.error) throw update.error;
+  }
+}

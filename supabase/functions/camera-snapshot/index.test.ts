@@ -149,3 +149,71 @@ Deno.test("findActiveVisitorPass respects cancelled_at, valid_from, valid_until"
   const r = await findActiveVisitorPass(db, "p1", "ABC123", now);
   assertEquals(r?.id, "v-good");
 });
+
+// ---------------------------------------------------------------------------
+// sessions.ts exit-path helpers
+// ---------------------------------------------------------------------------
+
+import { decideExitOutcome } from "./sessions.ts";
+
+Deno.test("decideExitOutcome: registered + still-valid pass -> closed_early", () => {
+  const session = {
+    id: "s1", property_id: "p1", normalized_plate: "ABC123", plate_text: "ABC123",
+    state: "registered" as const, entered_at: "2026-04-20T12:00:00Z",
+    visitor_pass_id: "v1", resident_plate_id: null, violation_id: null,
+  };
+  const exited = new Date("2026-04-20T13:00:00Z");
+  const validUntil = new Date("2026-04-21T12:00:00Z");
+  const outcome = decideExitOutcome(session, validUntil, exited, 24);
+  assertEquals(outcome.kind, "closed_early");
+  if (outcome.kind === "closed_early") {
+    assertEquals(outcome.visitorPassId, "v1");
+    assertEquals(outcome.holdUntil.toISOString(), "2026-04-21T13:00:00.000Z");
+  }
+});
+
+Deno.test("decideExitOutcome: expired -> closed_post_violation", () => {
+  const session = {
+    id: "s1", property_id: "p1", normalized_plate: "ABC123", plate_text: "ABC123",
+    state: "expired" as const, entered_at: "2026-04-20T12:00:00Z",
+    visitor_pass_id: null, resident_plate_id: null, violation_id: "viol1",
+  };
+  const outcome = decideExitOutcome(session, null, new Date("2026-04-20T12:20:00Z"), 24);
+  assertEquals(outcome.kind, "closed_post_violation");
+  if (outcome.kind === "closed_post_violation") {
+    assertEquals(outcome.violationId, "viol1");
+    assertEquals(outcome.leftBeforeTow, true);
+  }
+});
+
+Deno.test("decideExitOutcome: grace -> closed_clean", () => {
+  const session = {
+    id: "s1", property_id: "p1", normalized_plate: "ABC123", plate_text: "ABC123",
+    state: "grace" as const, entered_at: "2026-04-20T12:00:00Z",
+    visitor_pass_id: null, resident_plate_id: null, violation_id: null,
+  };
+  const outcome = decideExitOutcome(session, null, new Date("2026-04-20T12:05:00Z"), 24);
+  assertEquals(outcome.kind, "closed_clean");
+});
+
+Deno.test("decideExitOutcome: resident -> closed_clean", () => {
+  const session = {
+    id: "s1", property_id: "p1", normalized_plate: "ABC123", plate_text: "ABC123",
+    state: "resident" as const, entered_at: "2026-04-20T12:00:00Z",
+    visitor_pass_id: null, resident_plate_id: "r1", violation_id: null,
+  };
+  const outcome = decideExitOutcome(session, null, new Date("2026-04-20T18:00:00Z"), 24);
+  assertEquals(outcome.kind, "closed_clean");
+});
+
+Deno.test("decideExitOutcome: registered but pass already expired -> closed_clean (no hold)", () => {
+  const session = {
+    id: "s1", property_id: "p1", normalized_plate: "ABC123", plate_text: "ABC123",
+    state: "registered" as const, entered_at: "2026-04-20T12:00:00Z",
+    visitor_pass_id: "v1", resident_plate_id: null, violation_id: null,
+  };
+  const exited = new Date("2026-04-21T01:00:00Z");
+  const validUntil = new Date("2026-04-21T00:00:00Z"); // passed
+  const outcome = decideExitOutcome(session, validUntil, exited, 24);
+  assertEquals(outcome.kind, "closed_clean");
+});
