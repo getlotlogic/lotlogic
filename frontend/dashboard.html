@@ -8271,6 +8271,45 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         })}
       </div>
 
+      {/* Plate Holds */}
+      <div className="pd-section-head">
+        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+          <span className="pd-section-title">24-Hour Holds</span>
+          <span className="pd-section-count">{activeHolds.length}</span>
+        </div>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+        {activeHolds.length === 0 ? (
+          <div className="pd-empty">No active holds</div>
+        ) : activeHolds.map(h => {
+          const untilMs = new Date(h.hold_until).getTime();
+          const remaining = Math.max(0, Math.floor((untilMs - nowTick) / 60000));
+          return (
+            <div key={h.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
+              <div style={{minWidth:0,flex:1}}>
+                <span style={{fontFamily:"'Courier New',monospace",background:'#fee2e2',color:'#7f1d1d',border:'1.5px solid #f87171',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{h.normalized_plate}</span>
+                <span style={{fontSize:11,color:'var(--text-muted)',marginLeft:8}}>
+                  held {new Date(h.held_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})} · {remaining}m left · reason: {h.reason}
+                </span>
+              </div>
+              <button
+                onClick={async () => {
+                  if (!confirm(`Release the 24h hold on ${h.normalized_plate}?`)) return;
+                  try {
+                    await db.releasePlateHold(h.id);
+                    addToast({ kind:'success', text:`Hold released for ${h.normalized_plate}` });
+                    refreshSessions();
+                  } catch (err) {
+                    addToast({ kind:'error', text:`Release failed: ${err.message}` });
+                  }
+                }}
+                style={{background:'#1f2937',color:'#f9fafb',border:'1px solid #374151',borderRadius:6,padding:'5px 10px',fontSize:11,cursor:'pointer'}}
+              >Release</button>
+            </div>
+          );
+        })}
+      </div>
+
       {/* Recent plate detections (live ALPR feed) */}
       <div className="pd-section-head">
         <div style={{display:'flex',alignItems:'baseline',gap:8}}>
