@@ -167,6 +167,17 @@ Deno.serve(async (req: Request) => {
             .eq("id", ev.data.id);
         }
 
+        // Fire-and-forget tow-confirm so partner tow-truck sightings record.
+        // tow-confirm no-ops if the plate isn't in enforcement_partners.tow_truck_plates.
+        dispatchTowConfirm({
+          plate_event_id: ev.data.id,
+          property_id: camera.property_id,
+          plate_text: plateUpper,
+          event_type: "entry",
+          confidence: result.score,
+          seen_at: now.toISOString(),
+        });
+
         continue;
       }
 
@@ -210,6 +221,18 @@ Deno.serve(async (req: Request) => {
           holdDurationHours: 24,
         }, outcome);
 
+        // Fire-and-forget tow-confirm for exit events too — an exit scan of a
+        // partner tow truck's plate is the typical "tow complete" signal that
+        // correlates back to open violations and sets tow_confirmed_at.
+        dispatchTowConfirm({
+          plate_event_id: ev.data.id,
+          property_id: camera.property_id,
+          plate_text: plateUpper,
+          event_type: "exit",
+          confidence: result.score,
+          seen_at: now.toISOString(),
+        });
+
         continue;
       }
 
@@ -250,6 +273,40 @@ async function callPlateRecognizer(
   }
   const data = await res.json();
   return { ok: true, data };
+}
+
+// Fire tow-confirm fire-and-forget. Errors are logged, never thrown: camera
+// ingest continues to succeed even if the sighting correlation fails. Uses
+// EdgeRuntime.waitUntil when available so the camera response isn't blocked.
+function dispatchTowConfirm(body: {
+  plate_event_id: string;
+  property_id: string;
+  plate_text: string;
+  event_type: "entry" | "exit";
+  confidence: number;
+  seen_at: string;
+}): void {
+  const url = `${SUPABASE_URL}/functions/v1/tow-confirm`;
+  const task = fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+    body: JSON.stringify(body),
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        console.warn(`tow-confirm ${res.status} for ${body.plate_event_id}: ${t.slice(0, 200)}`);
+      }
+    })
+    .catch((err) => {
+      console.warn(`tow-confirm fetch failed for ${body.plate_event_id}: ${String(err)}`);
+    });
+
+  const runtime = (globalThis as unknown as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+  if (runtime?.waitUntil) runtime.waitUntil(task);
 }
 
 function json(status: number, body: unknown): Response {
