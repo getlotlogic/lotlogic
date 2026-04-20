@@ -7597,7 +7597,15 @@ function TruckParkingLog({ propertyId }) {
                   <td style={tdStyle}>{r.created_at ? new Date(r.created_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}</td>
                   <td style={tdStyle}>{r.company_name || '—'}</td>
                   <td style={tdStyle}>{r.visitor_name || '—'}</td>
-                  <td style={{...tdStyle,fontFamily:"'Courier New',monospace",fontWeight:700,letterSpacing:'.05em'}}>{r.plate_text}</td>
+                  <td style={{...tdStyle,fontFamily:"'Courier New',monospace",fontWeight:700,letterSpacing:'.05em'}}>
+                    {r.plate_text}
+                    {r.usdot_number && (
+                      <span title={`USDOT ${r.usdot_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>USDOT</span>
+                    )}
+                    {r.mc_number && (
+                      <span title={`MC ${r.mc_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC#</span>
+                    )}
+                  </td>
                   <td style={tdStyle}>{r.parking_spot || '—'}</td>
                   <td style={tdStyle}>{r.phone || '—'}</td>
                   <td style={tdStyle}>{r.stay_days ? `${r.stay_days}d` : '—'}</td>
@@ -8053,7 +8061,15 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
                 <div style={{minWidth:0,flex:1}}>
                   <span style={{fontWeight:800,fontSize:15,color:'var(--text-primary)',letterSpacing:'.03em',fontFamily:"'Courier New',monospace"}}>{p.plate_text}</span>
                   {p.status === 'pending' && <span style={{fontSize:10,fontWeight:700,color:'#fbbf24',background:'rgba(251,191,36,.12)',padding:'2px 6px',borderRadius:4,marginLeft:6,border:'1px solid rgba(251,191,36,.25)'}}>PENDING</span>}
+                  {p.usdot_number && (
+                    <span title={`USDOT ${p.usdot_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>USDOT</span>
+                  )}
+                  {p.mc_number && (
+                    <span title={`MC ${p.mc_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC#</span>
+                  )}
                   <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>{p.holder_name || ''}{p.vehicle_type ? ` · ${p.vehicle_type}` : ''}{p.phone ? ` · ${p.phone}` : ''}</span>
+                  {p.usdot_number && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>USDOT {p.usdot_number}</div>}
+                  {p.mc_number && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>MC {p.mc_number}</div>}
                 </div>
                 <div style={{display:'flex',gap:6,flexShrink:0}}>
                   {p.status === 'pending' && (
