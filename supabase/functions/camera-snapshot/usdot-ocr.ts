@@ -9,7 +9,10 @@
 //   supabase secrets set PARKPOW_USDOT_TOKEN=<token from parkpow.com trial>
 //   supabase secrets set ENABLE_USDOT_FALLBACK=true
 
-const USDOT_ENDPOINT = "https://usdot-api.parkpow.com/api/v1/predict/";
+// Real endpoint per OpenAPI (GET https://usdot.parkpow.com/api/v1/schema/).
+// An earlier marketing page mentioned `usdot-api.parkpow.com` which does not
+// resolve — ignore that.
+const USDOT_ENDPOINT = "https://usdot.parkpow.com/api/v1/predict/";
 
 // 5-8 digits per FMCSA. Accept USDOT / U.S.DOT / US DOT / USDOT# forms.
 const DOT_RE = /\b(?:U\.?\s?S\.?\s?D\.?O\.?T\.?|USDOT)\s*#?\s*(\d{5,8})\b/i;
@@ -42,7 +45,7 @@ export async function extractUsdot(
   const f = cfg.fetchImpl ?? fetch;
   const fd = new FormData();
   fd.append("image", new Blob([imageBytes as BlobPart], { type: "image/jpeg" }), "snap.jpg");
-  if (cfg.cameraId) fd.append("camera", cfg.cameraId);
+  if (cfg.cameraId) fd.append("camera_id", cfg.cameraId);
 
   let res: Response;
   try {
@@ -61,47 +64,68 @@ export async function extractUsdot(
     return { kind: "none" };
   }
 
-  let payload: { texts?: Array<{ value?: string; score?: number }> };
+  // Real response shape (from https://usdot.parkpow.com/api/v1/schema/):
+  //   { results: [ { texts: [{value, score}], object: {label, score, value:{...}} } ],
+  //     original_width, original_height, processing_time, timestamp }
+  type OcrText = { value?: string; score?: number };
+  type SinglePrediction = { texts?: OcrText[]; object?: { label?: string } };
+  type PredictionResult = { results?: SinglePrediction[] };
+
+  let payload: PredictionResult;
   try {
-    payload = await res.json();
+    payload = await res.json() as PredictionResult;
   } catch (err) {
     console.warn(`usdot-ocr json parse failed: ${String(err)}`);
     return { kind: "none" };
   }
 
-  const texts = Array.isArray(payload.texts) ? payload.texts : [];
+  // Flatten every text from every detection so the regex search doesn't care
+  // which detection box it came from. Keep the parent label in case we want
+  // to log it for tuning.
+  const allTexts: Array<{ text: OcrText; label: string }> = [];
+  for (const r of payload.results ?? []) {
+    const label = r.object?.label ?? "";
+    for (const t of r.texts ?? []) allTexts.push({ text: t, label });
+  }
 
   // First pass: DOT regex on any text above the score threshold.
-  for (const t of texts) {
+  for (const { text: t, label } of allTexts) {
     const score = typeof t.score === "number" ? t.score : 0;
     if (score < cfg.minScore) continue;
     const val = String(t.value ?? "");
     const m = val.match(DOT_RE);
     if (m) {
-      return {
-        kind: "dot",
-        number: m[1],
-        plate: `DOT-${m[1]}`,
-        raw_score: score,
-        raw_text: val,
-      };
+      console.log(`usdot-ocr matched DOT from label=${label} score=${score}`);
+      return { kind: "dot", number: m[1], plate: `DOT-${m[1]}`, raw_score: score, raw_text: val };
     }
   }
 
   // Second pass: MC regex.
-  for (const t of texts) {
+  for (const { text: t, label } of allTexts) {
     const score = typeof t.score === "number" ? t.score : 0;
     if (score < cfg.minScore) continue;
     const val = String(t.value ?? "");
     const m = val.match(MC_RE);
     if (m) {
-      return {
-        kind: "mc",
-        number: m[1],
-        plate: `MC-${m[1]}`,
-        raw_score: score,
-        raw_text: val,
-      };
+      console.log(`usdot-ocr matched MC from label=${label} score=${score}`);
+      return { kind: "mc", number: m[1], plate: `MC-${m[1]}`, raw_score: score, raw_text: val };
+    }
+  }
+
+  // Third pass: labels include strings like "USDOT"; if the OCR returned a
+  // pure-digit value alongside a USDOT-ish label, synthesize a match.
+  for (const { text: t, label } of allTexts) {
+    const score = typeof t.score === "number" ? t.score : 0;
+    if (score < cfg.minScore) continue;
+    const val = String(t.value ?? "").trim();
+    if (!/^\d{5,8}$/.test(val)) continue;
+    const labelUp = label.toUpperCase();
+    if (labelUp.includes("USDOT") || labelUp.includes("US DOT") || labelUp.includes("DOT ")) {
+      console.log(`usdot-ocr matched digits-with-label label=${label} score=${score}`);
+      return { kind: "dot", number: val, plate: `DOT-${val}`, raw_score: score, raw_text: val };
+    }
+    if (labelUp.includes("MC ") || labelUp === "MC") {
+      return { kind: "mc", number: val, plate: `MC-${val}`, raw_score: score, raw_text: val };
     }
   }
 

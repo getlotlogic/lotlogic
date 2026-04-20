@@ -101,6 +101,7 @@ Deno.serve(async (req: Request) => {
         reason: "all_below_threshold",
         pr_results: results.length,
         usdot_fallback_tried: USDOT_ENABLED && !!USDOT_TOKEN,
+        usdot_fallback_used: usdotFallbackUsed,
       });
     }
 
