@@ -5589,6 +5589,7 @@ function computeBillingStatus(v) {
   const a = v.action_taken;
   const conf = !!v.tow_confirmed_at;
   const dispatched = v.dispatched_at ? new Date(v.dispatched_at) : null;
+  if (v.left_before_tow_at)                     return 'left_before_tow';
   if (a === 'plate_correction')                 return 'no_tow';
   if (a === 'tow'     && conf)                  return 'confirmed';
   if (a == null       && conf)                  return 'unreported_confirmed';
@@ -5604,6 +5605,7 @@ function computeBillingStatus(v) {
 // rows (billing_held_at / force_bill_at) are handled at call-site, not here.
 function displayBucketFor(rawStatus) {
   switch (rawStatus) {
+    case 'left_before_tow':       return 'left_before_tow';
     case 'disputed':              return 'fraud';
     case 'reported_unconfirmed':  return 'verify';
     case 'unreported_confirmed':  return 'unreported_confirmed';
@@ -5621,6 +5623,7 @@ function displayBucketFor(rawStatus) {
 // Glyphs make the tone distinguishable without relying on color alone
 // (WCAG 1.4.1 — Use of Color). Mirror glyphs are used by status chips below.
 const REVIEW_QUEUES = [
+  { id: 'left_before_tow',      title: 'Left before tow',       desc: 'Driver exited after dispatch but before the tow truck arrived.',   empty: 'No drivers exited before the tow truck arrived in this window.',               tone: 'amber', glyph: '\u25C6' /* ◆ */ },
   { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             empty: 'No disputes \u2014 partners and cameras agree on every tow.',                  tone: 'red',   glyph: '!'  },
   { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', empty: 'No pending manual verifications.',                                            tone: 'amber', glyph: '\u25C6' /* ◆ */ },
   { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              empty: 'No camera-confirmed tows missing partner action.',                             tone: 'amber', glyph: '\u25C6' },
