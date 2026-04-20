@@ -338,6 +338,22 @@
       const isPlaza = property.property_type === 'truck_plaza';
       const headline = isPlaza ? 'Employee Plate Registration' : 'Permanent Pass Request';
       const submitLabel = isPlaza ? 'Register Employee Plate' : 'Request Permanent Pass';
+
+      const extraFields = isPlaza ? `
+          <label for="usdot" style="margin-top:14px;">USDOT Number <span style="color:#6b7280;font-size:12px;">(optional, 5-8 digits)</span></label>
+          <input type="text" id="usdot" inputmode="numeric" pattern="\\d{5,8}" placeholder="1234567" maxlength="8" autocomplete="off">
+
+          <label for="mc" style="margin-top:8px;">MC Number <span style="color:#6b7280;font-size:12px;">(optional, 5-8 digits)</span></label>
+          <input type="text" id="mc" inputmode="numeric" pattern="\\d{5,8}" placeholder="567890" maxlength="8" autocomplete="off">
+
+          <div style="font-size:12px;color:#9ca3af;margin-top:6px;margin-bottom:6px;">If your tractor has no license plate visible, enter your USDOT or MC number so our cameras can identify it.</div>
+      ` : '';
+
+      const plateLabel = isPlaza
+        ? `License Plate <span style="color:#6b7280;font-size:12px;">(required unless you enter USDOT or MC)</span>`
+        : `License Plate <span class="required">*</span>`;
+      const plateAttr = isPlaza ? '' : 'required';
+
       app.innerHTML = `
         <div class="logo">
           <div class="shield">LL</div>
@@ -354,8 +370,10 @@
           <label for="phone">Phone Number <span class="required">*</span></label>
           <input type="tel" id="phone" placeholder="(555) 123-4567" required>
 
-          <label for="plate">License Plate <span class="required">*</span></label>
-          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
+          <label for="plate">${plateLabel}</label>
+          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" ${plateAttr} maxlength="10" autocomplete="off">
+
+          ${extraFields}
 
           <label for="vehicleType">Vehicle Type <span class="required">*</span></label>
           <select id="vehicleType" required>
@@ -392,8 +410,22 @@
         const plateText = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
         const vehicleType = document.getElementById('vehicleType').value;
         const phone = document.getElementById('phone').value.trim();
+        const isPlaza = property.property_type === 'truck_plaza';
+        const usdotRaw = isPlaza ? ((document.getElementById('usdot') || {}).value || '').trim() : '';
+        const mcRaw    = isPlaza ? ((document.getElementById('mc')    || {}).value || '').trim() : '';
+        const usdot = /^\d{5,8}$/.test(usdotRaw) ? usdotRaw : null;
+        const mc    = /^\d{5,8}$/.test(mcRaw)    ? mcRaw    : null;
+        if (usdotRaw && !usdot) throw new Error('USDOT must be 5-8 digits.');
+        if (mcRaw    && !mc)    throw new Error('MC number must be 5-8 digits.');
 
-        if (!plateText || plateText.length < 2) {
+        let effectivePlate = plateText;
+        if (!effectivePlate) {
+          if (isPlaza && usdot)    effectivePlate = `DOT-${usdot}`;
+          else if (isPlaza && mc)  effectivePlate = `MC-${mc}`;
+          else                     throw new Error(isPlaza
+            ? 'Enter a license plate or a USDOT / MC number.'
+            : 'Please enter a valid license plate number.');
+        } else if (effectivePlate.length < 2) {
           throw new Error('Please enter a valid license plate number.');
         }
 
@@ -405,12 +437,14 @@
         try {
           await backendRegister('/resident_plates/register', {
             property_id: property.id,
-            plate_text: plateText,
+            plate_text: effectivePlate,
             holder_name: holderName,
             holder_role: property.property_type === 'truck_plaza' ? 'employee' : 'resident',
             vehicle_type: vehicleType || 'car',
             phone: phone,
             recaptcha_token: recaptchaToken,
+            usdot_number: usdot,
+            mc_number: mc,
           });
         } catch (error) {
           if (error.status === 409) {
@@ -421,7 +455,7 @@
           throw error;
         }
 
-        showSuccess(plateText);
+        showSuccess(effectivePlate);
       } catch (err) {
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
