@@ -224,21 +224,39 @@ Deno.test("decideExitOutcome: registered but pass already expired -> closed_clea
 
 import { extractUsdot } from "./usdot-ocr.ts";
 
-function mockVisionFetch(responseBody: unknown, status = 200): typeof fetch {
+function mockParkpowFetch(responseBody: unknown, status = 200): typeof fetch {
   return async () => new Response(JSON.stringify(responseBody), {
     status,
     headers: { "Content-Type": "application/json" },
   });
 }
 
+// Helper: wrap one or more { texts, label } entries into the real ParkPow
+// response shape: { results: [ { texts: [...], object: { label } } ] }.
+function pp(detections: Array<{ texts: Array<{ value: string; score: number }>; label?: string }>) {
+  return {
+    original_width: 100,
+    original_height: 100,
+    processing_time: 10,
+    timestamp: "2026-04-20T00:00:00Z",
+    results: detections.map(d => ({
+      texts: d.texts,
+      object: {
+        score: 0.9,
+        label: d.label ?? "",
+        value: { xmin: 0, ymin: 0, xmax: 1, ymax: 1 },
+      },
+    })),
+  };
+}
+
 Deno.test("extractUsdot: returns DOT number when texts contain USDOT pattern", async () => {
   const r = await extractUsdot(new Uint8Array([1, 2, 3]), {
     token: "tok",
     minScore: 0.7,
-    fetchImpl: mockVisionFetch({
-      object: { label: "usdot", score: 0.95, value: { xmin: 0, ymin: 0, xmax: 1, ymax: 1 } },
-      texts: [{ value: "US DOT 1234567", score: 0.89 }],
-    }),
+    fetchImpl: mockParkpowFetch(pp([
+      { label: "USDOT", texts: [{ value: "US DOT 1234567", score: 0.89 }] },
+    ])),
   });
   assertEquals(r.kind, "dot");
   if (r.kind === "dot") {
@@ -251,7 +269,9 @@ Deno.test("extractUsdot: accepts USDOT variant with hash", async () => {
   const r = await extractUsdot(new Uint8Array([1]), {
     token: "tok",
     minScore: 0.7,
-    fetchImpl: mockVisionFetch({ texts: [{ value: "USDOT #987654", score: 0.85 }] }),
+    fetchImpl: mockParkpowFetch(pp([
+      { texts: [{ value: "USDOT #987654", score: 0.85 }] },
+    ])),
   });
   assertEquals(r.kind, "dot");
   if (r.kind === "dot") assertEquals(r.number, "987654");
@@ -261,12 +281,10 @@ Deno.test("extractUsdot: falls back to MC when no DOT present", async () => {
   const r = await extractUsdot(new Uint8Array([1]), {
     token: "tok",
     minScore: 0.7,
-    fetchImpl: mockVisionFetch({
-      texts: [
-        { value: "ACME TRUCKING INC", score: 0.95 },
-        { value: "MC 555111", score: 0.82 },
-      ],
-    }),
+    fetchImpl: mockParkpowFetch(pp([
+      { texts: [{ value: "ACME TRUCKING INC", score: 0.95 }] },
+      { texts: [{ value: "MC 555111", score: 0.82 }] },
+    ])),
   });
   assertEquals(r.kind, "mc");
   if (r.kind === "mc") {
@@ -279,18 +297,18 @@ Deno.test("extractUsdot: drops below-threshold scores", async () => {
   const r = await extractUsdot(new Uint8Array([1]), {
     token: "tok",
     minScore: 0.9,
-    fetchImpl: mockVisionFetch({
-      texts: [{ value: "US DOT 1234567", score: 0.85 }],  // below threshold
-    }),
+    fetchImpl: mockParkpowFetch(pp([
+      { texts: [{ value: "US DOT 1234567", score: 0.85 }] },  // below threshold
+    ])),
   });
   assertEquals(r.kind, "none");
 });
 
-Deno.test("extractUsdot: returns none when texts is empty", async () => {
+Deno.test("extractUsdot: returns none when results is empty", async () => {
   const r = await extractUsdot(new Uint8Array([1]), {
     token: "tok",
     minScore: 0.7,
-    fetchImpl: mockVisionFetch({ texts: [] }),
+    fetchImpl: mockParkpowFetch({ results: [], original_width: 0, original_height: 0, processing_time: 1, timestamp: "" }),
   });
   assertEquals(r.kind, "none");
 });
@@ -299,7 +317,7 @@ Deno.test("extractUsdot: returns none on non-2xx", async () => {
   const r = await extractUsdot(new Uint8Array([1]), {
     token: "tok",
     minScore: 0.7,
-    fetchImpl: mockVisionFetch({ error: "auth" }, 401),
+    fetchImpl: mockParkpowFetch({ error: "auth" }, 401),
   });
   assertEquals(r.kind, "none");
 });
@@ -308,13 +326,11 @@ Deno.test("extractUsdot: ignores unrelated numbers", async () => {
   const r = await extractUsdot(new Uint8Array([1]), {
     token: "tok",
     minScore: 0.7,
-    fetchImpl: mockVisionFetch({
-      texts: [
-        { value: "TRUCK #42", score: 0.99 },
-        { value: "CAB 5", score: 0.99 },
-        { value: "PHONE 1-800-555-0000", score: 0.95 },
-      ],
-    }),
+    fetchImpl: mockParkpowFetch(pp([
+      { texts: [{ value: "TRUCK #42", score: 0.99 }] },
+      { texts: [{ value: "CAB 5", score: 0.99 }] },
+      { texts: [{ value: "PHONE 1-800-555-0000", score: 0.95 }] },
+    ])),
   });
   assertEquals(r.kind, "none");
 });
@@ -323,13 +339,25 @@ Deno.test("extractUsdot: prefers DOT over MC when both present", async () => {
   const r = await extractUsdot(new Uint8Array([1]), {
     token: "tok",
     minScore: 0.7,
-    fetchImpl: mockVisionFetch({
-      texts: [
-        { value: "MC 888888", score: 0.85 },
-        { value: "US DOT 777777", score: 0.90 },
-      ],
-    }),
+    fetchImpl: mockParkpowFetch(pp([
+      { texts: [{ value: "MC 888888", score: 0.85 }] },
+      { texts: [{ value: "US DOT 777777", score: 0.90 }] },
+    ])),
   });
   assertEquals(r.kind, "dot");
   if (r.kind === "dot") assertEquals(r.number, "777777");
+});
+
+Deno.test("extractUsdot: digits-only with USDOT label is synthesized as DOT", async () => {
+  // The ParkPow model sometimes labels a detection "USDOT" and returns the
+  // number as pure digits in texts[0].value. Third-pass fallback should catch it.
+  const r = await extractUsdot(new Uint8Array([1]), {
+    token: "tok",
+    minScore: 0.7,
+    fetchImpl: mockParkpowFetch(pp([
+      { label: "USDOT", texts: [{ value: "2179839", score: 0.95 }] },
+    ])),
+  });
+  assertEquals(r.kind, "dot");
+  if (r.kind === "dot") assertEquals(r.number, "2179839");
 });
