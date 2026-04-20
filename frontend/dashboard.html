@@ -8262,6 +8262,12 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
               <div style={{minWidth:0,flex:1}}>
                 <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                   <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{s.plate_text}</span>
+                  {(s.plate_text || '').startsWith('DOT-') && (
+                    <span title="No license plate visible — read via USDOT OCR" style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>USDOT</span>
+                  )}
+                  {(s.plate_text || '').startsWith('MC-') && (
+                    <span title="Matched by Motor Carrier number, not plate" style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC#</span>
+                  )}
                   <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${stateColor}20`,color:stateColor,border:`1px solid ${stateColor}40`}}>{s.state.replace('_',' ')}</span>
                   {s.vehicle_type && <span style={{fontSize:11,color:'var(--text-muted)'}}>{s.vehicle_type}</span>}
                 </div>
@@ -8346,6 +8352,12 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
               <div style={{minWidth:0,flex:1}}>
                 <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                   <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{ev.plate_text}</span>
+                  {(ev.plate_text || '').startsWith('DOT-') && (
+                    <span title="No license plate visible — read via USDOT OCR (ParkPow)" style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>USDOT</span>
+                  )}
+                  {(ev.plate_text || '').startsWith('MC-') && (
+                    <span title="Matched by Motor Carrier number" style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC#</span>
+                  )}
                   <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${evColor}20`,color:evColor,border:`1px solid ${evColor}40`}}>{evType}</span>
                   {ev.match_status && (
                     <span title={ev.match_reason || ev.match_status} style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${statusColor}18`,color:statusColor,border:`1px solid ${statusColor}40`}}>{ev.match_status.replace('_', ' ')}</span>

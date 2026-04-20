@@ -29,12 +29,45 @@ export async function findOpenSession(
   return (data ?? [])[0] ?? null;
 }
 
+// Extract a pure DOT or MC number from a synthesized plate like "DOT-1234567"
+// or "MC-789012". Returns null if the plate is a real license plate (no
+// prefix).
+function extractFmcsaNumber(normalizedPlate: string): { kind: "dot" | "mc"; number: string } | null {
+  // normalizedPlate is already uppercase-alphanumeric-only via normalizePlate,
+  // so "DOT-1234567" becomes "DOT1234567". We also accept the raw form.
+  const dotM = normalizedPlate.match(/^DOT(\d{5,8})$/);
+  if (dotM) return { kind: "dot", number: dotM[1] };
+  const mcM = normalizedPlate.match(/^MC(\d{5,8})$/);
+  if (mcM) return { kind: "mc", number: mcM[1] };
+  return null;
+}
+
 export type ResidentRow = { id: string };
 export async function findActiveResident(
   db: SupabaseClient,
   propertyId: string,
   normalizedPlate: string,
 ): Promise<ResidentRow | null> {
+  const fmcsa = extractFmcsaNumber(normalizedPlate);
+
+  // DOT/MC path: match resident_plates by usdot_number / mc_number instead of
+  // plate_text. This is how a truck plaza employee driving a plateless
+  // tractor gets allowlisted — they register with USDOT, and the camera's
+  // synthesized DOT-xxx plate matches back to their resident row.
+  if (fmcsa) {
+    const col = fmcsa.kind === "dot" ? "usdot_number" : "mc_number";
+    const { data, error } = await db
+      .from("resident_plates")
+      .select("id")
+      .eq("property_id", propertyId)
+      .eq("active", true)
+      .eq(col, fmcsa.number)
+      .limit(1);
+    if (error) throw error;
+    return (data ?? [])[0] ? { id: data![0].id } : null;
+  }
+
+  // Standard plate path.
   const { data, error } = await db
     .from("resident_plates")
     .select("id,plate_text,active,property_id")
@@ -55,6 +88,28 @@ export async function findActiveVisitorPass(
   normalizedPlate: string,
   now: Date,
 ): Promise<PassRow | null> {
+  const fmcsa = extractFmcsaNumber(normalizedPlate);
+
+  // DOT/MC path: visitor_passes.usdot_number or .mc_number.
+  if (fmcsa) {
+    const col = fmcsa.kind === "dot" ? "usdot_number" : "mc_number";
+    const { data, error } = await db
+      .from("visitor_passes")
+      .select("id,valid_from,valid_until,cancelled_at")
+      .eq("property_id", propertyId)
+      .eq(col, fmcsa.number)
+      .is("cancelled_at", null)
+      .limit(10);
+    if (error) throw error;
+    for (const r of data ?? []) {
+      if (r.valid_from && new Date(r.valid_from) > now) continue;
+      if (!r.valid_until || new Date(r.valid_until) <= now) continue;
+      return { id: r.id, valid_until: r.valid_until };
+    }
+    return null;
+  }
+
+  // Standard plate path.
   const { data, error } = await db
     .from("visitor_passes")
     .select("id,plate_text,valid_from,valid_until,cancelled_at,property_id")
