@@ -406,8 +406,8 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <label for="driverName">Driver Name <span class="required">*</span></label>
           <input type="text" id="driverName" placeholder="John Smith" required maxlength="80">
 
-          <label for="plate">Truck License Plate <span class="required">*</span></label>
-          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
+          <label for="plate">Truck License Plate <span style="color:#6b7280;font-size:12px;">(required unless you enter USDOT or MC)</span></label>
+          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" maxlength="10" autocomplete="off">
           <div id="preflightMsg" style="font-size:13px;color:#fbbf24;margin-top:-8px;margin-bottom:8px;"></div>
 
           <label for="parkingSpot">Parking Space # <span class="required">*</span></label>
@@ -436,6 +436,14 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
 
           <label for="placardColor" style="margin-top:18px;">Color Placard <span style="color:#6b7280;font-size:12px;">(optional)</span></label>
           <input type="text" id="placardColor" placeholder="yellow / red / blue / etc." maxlength="30">
+
+          <label for="usdot" style="margin-top:14px;">USDOT Number <span style="color:#6b7280;font-size:12px;">(optional, 5-8 digits)</span></label>
+          <input type="text" id="usdot" inputmode="numeric" pattern="\\d{5,8}" placeholder="1234567" maxlength="8" autocomplete="off">
+
+          <label for="mc" style="margin-top:8px;">MC Number <span style="color:#6b7280;font-size:12px;">(optional, 5-8 digits)</span></label>
+          <input type="text" id="mc" inputmode="numeric" pattern="\\d{5,8}" placeholder="567890" maxlength="8" autocomplete="off">
+
+          <div style="font-size:12px;color:#9ca3af;margin-top:6px;">If your tractor has no license plate visible, enter your USDOT or MC number so our cameras can identify it.</div>
 
           <div style="margin-top:24px;background:rgba(255,255,255,0.03);border:1px solid #2b2f3a;border-radius:8px;padding:16px;max-height:280px;overflow-y:auto;">
             <pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;color:#cbd5e1;margin:0;">${escapeHtml(policyText)}</pre>
@@ -566,10 +574,26 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const stayHours   = stayHoursEl ? parseInt(stayHoursEl.value, 10) : 0;
         const placardColor = (document.getElementById('placardColor').value || '').trim();
         const policyAck = document.getElementById('policyAck').checked;
+        const usdotRaw = (document.getElementById('usdot').value || '').trim();
+        const mcRaw    = (document.getElementById('mc').value    || '').trim();
+        const usdot = /^\d{5,8}$/.test(usdotRaw) ? usdotRaw : null;
+        const mc    = /^\d{5,8}$/.test(mcRaw)    ? mcRaw    : null;
+        if (usdotRaw && !usdot) throw new Error('USDOT must be 5-8 digits.');
+        if (mcRaw    && !mc)    throw new Error('MC number must be 5-8 digits.');
 
         if (!companyName) throw new Error('Company name is required.');
         if (!driverName) throw new Error('Driver name is required.');
-        if (!plateText || plateText.length < 2) throw new Error('Please enter a valid plate number.');
+        // At least one of plate / USDOT / MC is required. Synthesize the
+        // plate when the driver leaves it blank so the backend's min_length=2
+        // constraint on plate_text still holds.
+        let effectivePlate = plateText;
+        if (!effectivePlate) {
+          if (usdot)    effectivePlate = `DOT-${usdot}`;
+          else if (mc)  effectivePlate = `MC-${mc}`;
+          else          throw new Error('Enter a license plate or a USDOT / MC number.');
+        } else if (effectivePlate.length < 2) {
+          throw new Error('Please enter a valid plate number.');
+        }
         if (!parkingSpot) throw new Error('Parking space is required.');
         if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
         if (stayHours !== 24 && stayHours !== 48) throw new Error('Choose 24 or 48 hours.');
@@ -583,7 +607,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const now = new Date();
         const result = await backendRegister('/visitor_passes/register', {
           property_id: property.id,
-          plate_text: plateText,
+          plate_text: effectivePlate,
           visitor_name: driverName,
           company_name: companyName,
           vehicle_type: vehicleType,
@@ -596,12 +620,14 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           policy_acknowledged_at: now.toISOString(),
           submission_idempotency_key: idempotencyKey,
           recaptcha_token: recaptchaToken,
+          usdot_number: usdot,
+          mc_number: mc,
         });
 
         const validUntil = result.valid_until ? new Date(result.valid_until)
           : new Date(now.getTime() + stayHours * 60 * 60 * 1000);
         const refId = (result.reference_id || '').toString().toUpperCase();
-        showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot, placardColor, companyName});
+        showSuccess({plate: result.plate_text || effectivePlate, validUntil, stayHours, refId: refId || null, parkingSpot, placardColor, companyName});
       } catch (err) {
         // Cooldown rejection (409 with detail "COOLDOWN: ...") — friendly message.
         const msg = (err && err.message) || '';
