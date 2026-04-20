@@ -1,15 +1,15 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import { makeR2Uploader } from "../pr-ingest/r2.ts";
-import { matchPlate } from "../pr-ingest/match.ts";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { extractFromRequest } from "./extract.ts";
 import { parsePath } from "./path.ts";
+import { findOpenSession, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
+import { isPlateHeld } from "./holds.ts";
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
 const PR_MIN_SCORE = Number(Deno.env.get("PR_MIN_SCORE") ?? "0.8");
-const PR_DEDUP_WINDOW_SECONDS = Number(Deno.env.get("PR_DEDUP_WINDOW_SECONDS") ?? "0");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const R2_ACCOUNT_ID = Deno.env.get("R2_ACCOUNT_ID")!;
@@ -47,7 +47,7 @@ Deno.serve(async (req: Request) => {
 
     const cameraQ = await db
       .from("alpr_cameras")
-      .select("id,property_id,api_key,active")
+      .select("id,property_id,api_key,active,orientation")
       .eq("api_key", cameraApiKey)
       .eq("active", true)
       .limit(1);
@@ -69,132 +69,167 @@ Deno.serve(async (req: Request) => {
     }
 
     let eventCount = 0;
-    let violationCount = 0;
+    let violationCount = 0;  // Always 0 in the new model; cron creates violations now.
     let dedupCount = 0;
     const now = new Date();
 
     for (const result of surviving) {
       const plateUpper = (result.plate as string).toUpperCase();
       const normalized = normalizePlate(result.plate as string);
+      const vehicleType = (result as { vehicle?: { type?: string | null } }).vehicle?.type ?? null;
 
-      // Dedup FIRST — cheaper than an R2 PUT and avoids an endless chain of
-      // suppressed rows each resetting the window on the next iteration.
-      // We compare against real (non-suppressed) plate_events rows; suppressed
-      // rows don't exist anymore, but the filter also tolerates legacy rows.
-      if (PR_DEDUP_WINDOW_SECONDS > 0) {
-        const since = new Date(now.getTime() - PR_DEDUP_WINDOW_SECONDS * 1000).toISOString();
-        const recent = await db
-          .from("plate_events")
-          .select("id")
-          .eq("property_id", camera.property_id)
-          .eq("normalized_plate", normalized)
-          .neq("match_status", "dedup_suppressed")
-          .gte("created_at", since)
-          .limit(1);
-        if (recent.error) throw recent.error;
-        if ((recent.data ?? []).length > 0) {
-          dedupCount++;
-          continue;
-        }
-      }
-
+      // Upload the snapshot to R2 once per surviving result. Key is
+      // property / day / camera / epoch / plate so evidence is easy to find.
       const epochMs = now.getTime();
       const dateStr = now.toISOString().slice(0, 10);
       const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${plateUpper}.jpg`;
-
       let imageUrl: string | null = null;
       let imageError: string | null = null;
       const upRes = await r2(key, extracted.bytes);
       if (upRes.ok) imageUrl = upRes.url;
       else imageError = upRes.error;
 
-      const outcome = await matchPlate(db, camera.property_id, normalized, now);
-
-      const eventRow: Record<string, unknown> = {
+      const baseEventRow = (sessionId: string | null, matchStatus: string) => ({
         camera_id: camera.id,
         property_id: camera.property_id,
         plate_text: plateUpper,
         normalized_plate: normalized,
         confidence: result.score,
         image_url: imageUrl,
-        event_type: "entry",
+        event_type: camera.orientation === "exit" ? "exit" : "entry",
         raw_data: {
           ...result,
           _pr_response: prResp.data,
           _source: `camera-snapshot:${extracted.source}`,
+          _orientation: camera.orientation,
           ...(extracted.rawMeta ?? {}),
           ...(imageError ? { image_upload_error: imageError } : {}),
         },
-        match_status: outcome.kind,
+        match_status: matchStatus,
         match_reason: null,
-        matched_at: outcome.kind !== "unmatched" ? now.toISOString() : null,
-        ...(outcome.kind === "resident" ? { resident_plate_id: outcome.resident_plate_id } : {}),
-        ...(outcome.kind === "visitor_pass" ? { visitor_pass_id: outcome.visitor_pass_id } : {}),
-      };
+        matched_at: null,
+        session_id: sessionId,
+      });
 
-      const evIns = await db.from("plate_events").insert(eventRow).select().single();
-      if (evIns.error) throw evIns.error;
-      eventCount++;
+      if (camera.orientation === "entry") {
+        // --- ENTRY ---
+        const openSession = await findOpenSession(db, camera.property_id, normalized);
+        if (openSession) {
+          // Noise: second entry with no exit. Append an event for visibility;
+          // do not open a new session; do not modify existing session.
+          const ev = await db.from("plate_events")
+            .insert(baseEventRow(openSession.id, "unmatched"))
+            .select().single();
+          if (ev.error) throw ev.error;
+          dedupCount++;
+          continue;
+        }
 
-      if (outcome.kind === "unmatched") {
-        const vIns = await db.from("alpr_violations").insert({
-          property_id: camera.property_id,
-          plate_event_id: evIns.data.id,
-          plate_text: plateUpper,
-          status: "pending",
-          violation_type: "alpr_unmatched",
-        }).select().single();
-        if (vIns.error) throw vIns.error;
-        violationCount++;
+        const resident = await findActiveResident(db, camera.property_id, normalized);
+        const pass     = resident ? null : await findActiveVisitorPass(db, camera.property_id, normalized, now);
+        const held     = resident || pass ? false : await isPlateHeld(db, camera.property_id, normalized, now);
+        const state = resident ? "resident" : pass ? "registered" : "grace";
+        const matchStatus = resident ? "resident" : pass ? "visitor_pass" : "unmatched";
 
-        // Fire tow-dispatch-email for the partner. Fire-and-forget via
-        // EdgeRuntime.waitUntil so we return fast; email delivery failures
-        // are logged but don't fail the ingest. No grace period during
-        // testing — every unmatched violation notifies immediately.
-        dispatchTowEmail(vIns.data.id);
+        // Insert plate_events first so session can reference it.
+        const ev = await db.from("plate_events")
+          .insert(baseEventRow(null, matchStatus))
+          .select("id").single();
+        if (ev.error) throw ev.error;
+        eventCount++;
+
+        const sess = await insertSession(db, {
+          propertyId: camera.property_id,
+          normalizedPlate: normalized,
+          plateText: plateUpper,
+          vehicleType,
+          entryCameraId: camera.id,
+          entryPlateEventId: ev.data.id,
+          state,
+          visitorPassId: pass?.id ?? null,
+          residentPlateId: resident?.id ?? null,
+          enteredAt: now,
+        });
+
+        // Backfill the event with the session_id so evidence queries work.
+        const backfill = await db.from("plate_events")
+          .update({ session_id: sess.id })
+          .eq("id", ev.data.id);
+        if (backfill.error) throw backfill.error;
+
+        // Note: held plates open state='grace'. The cron will issue a tow at
+        // t+15m because the backend blocks registration during the hold.
+        // We log the hold context in raw_data for operator visibility.
+        if (held) {
+          const existing = baseEventRow(sess.id, matchStatus).raw_data as Record<string, unknown>;
+          await db.from("plate_events")
+            .update({ raw_data: { ...existing, _on_hold: true } })
+            .eq("id", ev.data.id);
+        }
+
+        continue;
       }
+
+      if (camera.orientation === "exit") {
+        // --- EXIT ---
+        const openSession = await findOpenSession(db, camera.property_id, normalized);
+        if (!openSession) {
+          // Stray exit. Log an event with no session; alert via raw_data.
+          const ev = await db.from("plate_events")
+            .insert(baseEventRow(null, "unmatched"))
+            .select().single();
+          if (ev.error) throw ev.error;
+          console.warn(`stray exit: no open session for plate=${normalized} property=${camera.property_id}`);
+          continue;
+        }
+
+        // Record the exit event first, then close the session.
+        const ev = await db.from("plate_events")
+          .insert(baseEventRow(openSession.id, "unmatched"))
+          .select("id").single();
+        if (ev.error) throw ev.error;
+        eventCount++;
+
+        // Need pass.valid_until if the session is registered to decide early-exit.
+        let passValidUntil: Date | null = null;
+        if (openSession.state === "registered" && openSession.visitor_pass_id) {
+          const p = await db.from("visitor_passes")
+            .select("valid_until")
+            .eq("id", openSession.visitor_pass_id)
+            .single();
+          if (p.error) throw p.error;
+          passValidUntil = p.data.valid_until ? new Date(p.data.valid_until) : null;
+        }
+
+        const outcome = decideExitOutcome(openSession, passValidUntil, now, 24);
+        await applyExitOutcome(db, {
+          session: openSession,
+          exitCameraId: camera.id,
+          exitPlateEventId: ev.data.id,
+          exitedAt: now,
+          holdDurationHours: 24,
+        }, outcome);
+
+        continue;
+      }
+
+      // Defensive: shouldn't happen because CHECK constraint allows only two values.
+      console.warn(`unexpected camera.orientation=${camera.orientation}; skipping`);
     }
 
     return json(200, {
       ok: true,
       events: eventCount,
-      violations: violationCount,
+      violations: violationCount,  // always 0 in the new model; violations fire from cron
       dedup_suppressed: dedupCount,
       source: extracted.source,
+      orientation: camera.orientation,
     });
   } catch (err) {
     console.error("camera-snapshot unhandled error:", err instanceof Error ? err.stack ?? err.message : err);
     return json(500, { ok: false, error: "internal_error" });
   }
 });
-
-// Fire tow-dispatch-email asynchronously. Uses EdgeRuntime.waitUntil when
-// available so the response can return before Resend acks; falls back to a
-// best-effort unawaited fetch otherwise. Delivery errors are logged only —
-// never surface to the camera, which would cause it to retry the ingest.
-function dispatchTowEmail(violationId: string): void {
-  const url = `${SUPABASE_URL}/functions/v1/tow-dispatch-email`;
-  const task = fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-    },
-    body: JSON.stringify({ violation_id: violationId }),
-  })
-    .then(async (res) => {
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        console.warn(`tow-dispatch-email ${res.status} for ${violationId}: ${body.slice(0, 200)}`);
-      }
-    })
-    .catch((err) => {
-      console.warn(`tow-dispatch-email fetch failed for ${violationId}: ${String(err)}`);
-    });
-
-  const runtime = (globalThis as unknown as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
-  if (runtime?.waitUntil) runtime.waitUntil(task);
-}
 
 async function callPlateRecognizer(
   imageBytes: Uint8Array,
