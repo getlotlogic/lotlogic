@@ -2767,7 +2767,7 @@ const db = {
     if (supabase) {
       const { data, error } = await supabase
         .from('plate_events')
-        .select('id, plate_text, normalized_plate, confidence, image_url, event_type, camera_id, created_at, visitor_pass_id, resident_plate_id, match_status, match_reason, matched_at')
+        .select('id, plate_text, normalized_plate, confidence, image_url, event_type, camera_id, created_at, visitor_pass_id, resident_plate_id, match_status, match_reason, matched_at, session_id, plate_sessions(state)')
         .eq('property_id', propertyId)
         .order('created_at', { ascending: false })
         .limit(limit);
@@ -8349,6 +8349,9 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
                   <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${evColor}20`,color:evColor,border:`1px solid ${evColor}40`}}>{evType}</span>
                   {ev.match_status && (
                     <span title={ev.match_reason || ev.match_status} style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${statusColor}18`,color:statusColor,border:`1px solid ${statusColor}40`}}>{ev.match_status.replace('_', ' ')}</span>
+                  )}
+                  {ev.plate_sessions?.state && (
+                    <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'#1f293720',color:'#9ca3af',border:'1px solid #37415140'}}>session: {ev.plate_sessions.state.replace('_',' ')}</span>
                   )}
                   {conf != null && <span style={{fontSize:11,color:'var(--text-faint)'}}>{conf}%</span>}
                 </div>
