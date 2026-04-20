@@ -6,10 +6,14 @@ import { extractFromRequest } from "./extract.ts";
 import { parsePath } from "./path.ts";
 import { findOpenSession, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
 import { isPlateHeld } from "./holds.ts";
+import { extractUsdot } from "./usdot-ocr.ts";
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
 const PR_MIN_SCORE = Number(Deno.env.get("PR_MIN_SCORE") ?? "0.8");
+const USDOT_TOKEN = Deno.env.get("PARKPOW_USDOT_TOKEN") ?? "";
+const USDOT_ENABLED = (Deno.env.get("ENABLE_USDOT_FALLBACK") ?? "false").toLowerCase() === "true";
+const USDOT_MIN_SCORE = Number(Deno.env.get("USDOT_MIN_SCORE") ?? "0.70");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const R2_ACCOUNT_ID = Deno.env.get("R2_ACCOUNT_ID")!;
@@ -63,9 +67,41 @@ Deno.serve(async (req: Request) => {
     }
 
     const results = Array.isArray(prResp.data?.results) ? prResp.data.results : [];
-    const surviving = results.filter((r: { score: number }) => r.score >= PR_MIN_SCORE);
+    let surviving = results.filter((r: { score: number }) => r.score >= PR_MIN_SCORE);
+    let usdotFallbackUsed = false;
+
+    // USDOT OCR fallback: when PR returns zero plates, try extracting a
+    // DOT/MC number from the truck side panel and synthesize a plate-shaped
+    // result so the rest of the state machine runs unchanged.
+    if (surviving.length === 0 && USDOT_ENABLED && USDOT_TOKEN) {
+      const usdot = await extractUsdot(extracted.bytes, {
+        token: USDOT_TOKEN,
+        minScore: USDOT_MIN_SCORE,
+        cameraId: cameraApiKey,
+      });
+      if (usdot.kind !== "none") {
+        // Synthesize a PR-shaped result so downstream code doesn't branch.
+        // vehicle.type stays null — we didn't get it from PR here, and the
+        // ParkPow USDOT endpoint doesn't return vehicle metadata.
+        surviving = [{
+          plate: usdot.plate,
+          score: usdot.raw_score,
+          _synthesized_from: usdot.kind,
+          _synthesized_raw_text: usdot.raw_text,
+        }];
+        usdotFallbackUsed = true;
+        console.log(`usdot-ocr fallback matched: kind=${usdot.kind} plate=${usdot.plate} score=${usdot.raw_score}`);
+      }
+    }
+
     if (surviving.length === 0) {
-      return json(200, { ok: true, events: 0, reason: "all_below_threshold", pr_results: results.length });
+      return json(200, {
+        ok: true,
+        events: 0,
+        reason: "all_below_threshold",
+        pr_results: results.length,
+        usdot_fallback_tried: USDOT_ENABLED && !!USDOT_TOKEN,
+      });
     }
 
     let eventCount = 0;
