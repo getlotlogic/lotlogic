@@ -2767,13 +2767,48 @@ const db = {
     if (supabase) {
       const { data, error } = await supabase
         .from('plate_events')
-        .select('id, plate_text, normalized_plate, confidence, image_url, event_type, camera_id, created_at, visitor_pass_id, resident_plate_id, match_status, match_reason, matched_at')
+        .select('id, plate_text, normalized_plate, confidence, image_url, event_type, camera_id, created_at, visitor_pass_id, resident_plate_id, match_status, match_reason, matched_at, session_id, plate_sessions(state)')
         .eq('property_id', propertyId)
         .order('created_at', { ascending: false })
         .limit(limit);
       if (!error && data) return data;
     }
     return [];
+  },
+  async getOpenSessions(propertyId) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('plate_sessions')
+        .select('id, normalized_plate, plate_text, vehicle_type, entered_at, state, visitor_pass_id, resident_plate_id, entry_camera_id, exit_camera_id, violation_id')
+        .eq('property_id', propertyId)
+        .is('exited_at', null)
+        .order('entered_at', { ascending: false });
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async getActiveHolds(propertyId) {
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('plate_holds')
+        .select('id, normalized_plate, held_at, hold_until, reason, source_session_id')
+        .eq('property_id', propertyId)
+        .gt('hold_until', new Date().toISOString())
+        .order('held_at', { ascending: false });
+      if (!error && data) return data;
+    }
+    return [];
+  },
+  async releasePlateHold(holdId) {
+    if (supabase) {
+      const { error } = await supabase
+        .from('plate_holds')
+        .update({ hold_until: new Date().toISOString() })
+        .eq('id', holdId);
+      if (error) throw new Error(error.message);
+      return { success: true };
+    }
+    return { success: true };
   },
   async removeALPRCamera(id) {
     if (supabase) {
@@ -5554,6 +5589,7 @@ function computeBillingStatus(v) {
   const a = v.action_taken;
   const conf = !!v.tow_confirmed_at;
   const dispatched = v.dispatched_at ? new Date(v.dispatched_at) : null;
+  if (v.left_before_tow_at)                     return 'left_before_tow';
   if (a === 'plate_correction')                 return 'no_tow';
   if (a === 'tow'     && conf)                  return 'confirmed';
   if (a == null       && conf)                  return 'unreported_confirmed';
@@ -5569,6 +5605,7 @@ function computeBillingStatus(v) {
 // rows (billing_held_at / force_bill_at) are handled at call-site, not here.
 function displayBucketFor(rawStatus) {
   switch (rawStatus) {
+    case 'left_before_tow':       return 'left_before_tow';
     case 'disputed':              return 'fraud';
     case 'reported_unconfirmed':  return 'verify';
     case 'unreported_confirmed':  return 'unreported_confirmed';
@@ -5586,6 +5623,7 @@ function displayBucketFor(rawStatus) {
 // Glyphs make the tone distinguishable without relying on color alone
 // (WCAG 1.4.1 — Use of Color). Mirror glyphs are used by status chips below.
 const REVIEW_QUEUES = [
+  { id: 'left_before_tow',      title: 'Left before tow',       desc: 'Driver exited after dispatch but before the tow truck arrived.',   empty: 'No drivers exited before the tow truck arrived in this window.',               tone: 'amber', glyph: '\u25C6' /* ◆ */ },
   { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             empty: 'No disputes \u2014 partners and cameras agree on every tow.',                  tone: 'red',   glyph: '!'  },
   { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', empty: 'No pending manual verifications.',                                            tone: 'amber', glyph: '\u25C6' /* ◆ */ },
   { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              empty: 'No camera-confirmed tows missing partner action.',                             tone: 'amber', glyph: '\u25C6' },
@@ -7632,6 +7670,8 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState(null);
   const [passTotalCount, setPassTotalCount] = useState(0);
+  const [openSessions, setOpenSessions] = useState([]);
+  const [activeHolds, setActiveHolds] = useState([]);
   const nowTick = useNowTick();
   const tempQrRef = useRef(null);
   const permQrRef = useRef(null);
@@ -7641,13 +7681,15 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
     setLoading(true);
-    const [prop, pl, cam, ev, vp, pCount] = await Promise.all([
+    const [prop, pl, cam, ev, vp, pCount, os, ah] = await Promise.all([
       db.getProperty(propertyId),
       db.getResidentPlates(propertyId),
       db.getALPRCameras(propertyId),
       db.getRecentPlateEvents(propertyId, 50),
       db.getVisitorPasses(propertyId, { limit: 50 }),
       db.countVisitorPasses(propertyId),
+      db.getOpenSessions(propertyId),
+      db.getActiveHolds(propertyId),
     ]);
     setProperty(prop);
     setPlates(pl);
@@ -7655,6 +7697,8 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     setEvents(ev);
     setVisitorPasses(vp);
     setPassTotalCount(pCount);
+    setOpenSessions(os);
+    setActiveHolds(ah);
     setLoading(false);
   }, [propertyId]);
 
@@ -7764,6 +7808,29 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
   }, [refreshEvents]);
+
+  // ── Open sessions + active holds ──
+  const refreshSessions = useCallback(async () => {
+    if (!propertyId) return;
+    const [s, h] = await Promise.all([
+      db.getOpenSessions(propertyId),
+      db.getActiveHolds(propertyId),
+    ]);
+    setOpenSessions(s);
+    setActiveHolds(h);
+  }, [propertyId]);
+  useIntervalFetch(refreshSessions, 20000, [refreshSessions]);
+  useEffect(() => {
+    if (!supabase || !propertyId) return;
+    const debouncedRefresh = makeDebounced(refreshSessions, 200);
+    const ch1 = supabase.channel('plate-sessions-' + propertyId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'plate_sessions', filter: 'property_id=eq.' + propertyId }, debouncedRefresh)
+      .subscribe();
+    const ch2 = supabase.channel('plate-holds-' + propertyId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'plate_holds', filter: 'property_id=eq.' + propertyId }, debouncedRefresh)
+      .subscribe();
+    return () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2); };
+  }, [propertyId, refreshSessions]);
 
   const cameraById = useMemo(() => Object.fromEntries((cameras || []).map(c => [c.id, c])), [cameras]);
 
@@ -8172,6 +8239,80 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         );
       })()}
 
+      {/* In Lot Now */}
+      <div className="pd-section-head">
+        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+          <span className="pd-section-title">In Lot Now</span>
+          <span className="pd-section-count">{openSessions.length}</span>
+        </div>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+        {openSessions.length === 0 ? (
+          <div className="pd-empty">Lot is empty</div>
+        ) : openSessions.map(s => {
+          const enteredMs = new Date(s.entered_at).getTime();
+          const mins = Math.floor((nowTick - enteredMs) / 60000);
+          const stateColor = s.state === 'registered' ? '#4ade80'
+            : s.state === 'resident' ? '#60a5fa'
+            : s.state === 'grace'    ? '#fbbf24'
+            : s.state === 'expired'  ? '#f87171'
+            : 'var(--text-faint)';
+          return (
+            <div key={s.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                  <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{s.plate_text}</span>
+                  <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${stateColor}20`,color:stateColor,border:`1px solid ${stateColor}40`}}>{s.state.replace('_',' ')}</span>
+                  {s.vehicle_type && <span style={{fontSize:11,color:'var(--text-muted)'}}>{s.vehicle_type}</span>}
+                </div>
+                <div style={{fontSize:11,color:'var(--text-muted)',marginTop:3}}>
+                  Here {mins}m · entered {new Date(s.entered_at).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Plate Holds */}
+      <div className="pd-section-head">
+        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+          <span className="pd-section-title">24-Hour Holds</span>
+          <span className="pd-section-count">{activeHolds.length}</span>
+        </div>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+        {activeHolds.length === 0 ? (
+          <div className="pd-empty">No active holds</div>
+        ) : activeHolds.map(h => {
+          const untilMs = new Date(h.hold_until).getTime();
+          const remaining = Math.max(0, Math.floor((untilMs - nowTick) / 60000));
+          return (
+            <div key={h.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
+              <div style={{minWidth:0,flex:1}}>
+                <span style={{fontFamily:"'Courier New',monospace",background:'#fee2e2',color:'#7f1d1d',border:'1.5px solid #f87171',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{h.normalized_plate}</span>
+                <span style={{fontSize:11,color:'var(--text-muted)',marginLeft:8}}>
+                  held {new Date(h.held_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})} · {remaining}m left · reason: {h.reason}
+                </span>
+              </div>
+              <button
+                onClick={async () => {
+                  if (!confirm(`Release the 24h hold on ${h.normalized_plate}?`)) return;
+                  try {
+                    await db.releasePlateHold(h.id);
+                    addToast({ kind:'success', text:`Hold released for ${h.normalized_plate}` });
+                    refreshSessions();
+                  } catch (err) {
+                    addToast({ kind:'error', text:`Release failed: ${err.message}` });
+                  }
+                }}
+                style={{background:'#1f2937',color:'#f9fafb',border:'1px solid #374151',borderRadius:6,padding:'5px 10px',fontSize:11,cursor:'pointer'}}
+              >Release</button>
+            </div>
+          );
+        })}
+      </div>
+
       {/* Recent plate detections (live ALPR feed) */}
       <div className="pd-section-head">
         <div style={{display:'flex',alignItems:'baseline',gap:8}}>
@@ -8208,6 +8349,9 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
                   <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${evColor}20`,color:evColor,border:`1px solid ${evColor}40`}}>{evType}</span>
                   {ev.match_status && (
                     <span title={ev.match_reason || ev.match_status} style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${statusColor}18`,color:statusColor,border:`1px solid ${statusColor}40`}}>{ev.match_status.replace('_', ' ')}</span>
+                  )}
+                  {ev.plate_sessions?.state && (
+                    <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'#1f293720',color:'#9ca3af',border:'1px solid #37415140'}}>session: {ev.plate_sessions.state.replace('_',' ')}</span>
                   )}
                   {conf != null && <span style={{fontSize:11,color:'var(--text-faint)'}}>{conf}%</span>}
                 </div>

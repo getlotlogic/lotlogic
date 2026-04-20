@@ -1,3 +1,9 @@
+// Image extraction from whatever a camera posted. Returns the JPEG + a
+// camera hint + source + any rawMeta we want to preserve. Note: per-detection
+// fields like `vehicle.type` come back from Plate Recognizer, NOT from the
+// camera, so they're extracted later in index.ts from the PR response per
+// result.
+//
 // Accept anything a dumb ANPR-less camera might POST:
 //
 //  * Milesight 4G Traffic Sensing Camera — JSON body with the JPEG embedded as
