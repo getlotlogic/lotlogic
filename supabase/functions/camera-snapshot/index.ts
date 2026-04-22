@@ -606,9 +606,11 @@ async function inferDirection(
   }
 
   // ─── Branch 2: silence-gap ─────────────────────────────────────────
-  // Scope to registered sessions — grace sessions expire on their own
-  // 15-min timer, expired sessions are closed by closeExpired cron.
-  if (session.state !== "registered") return;
+  // Scope to registered + resident sessions. Grace sessions expire on
+  // their own 15-min timer, expired sessions are closed by closeExpired
+  // cron. Residents need silence-gap so their open session actually
+  // closes (no exit camera at some properties = no applyExitOutcome path).
+  if (session.state !== "registered" && session.state !== "resident") return;
   if (!session.last_detected_at) return;
 
   // Strong-identity guard: findSimilarOpenSession attaches events to a

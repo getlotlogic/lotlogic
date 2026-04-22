@@ -38,6 +38,7 @@ Deno.serve(async (_req: Request) => {
     const graceExpired = await graceExpiry();
     const overstayExpired = await overstayExpiry();
     const closedRegistered = await closeRegistered();
+    const closedResident = await closeResident();
     const closedExpired = await closeExpired();
 
     return json(200, {
@@ -46,6 +47,7 @@ Deno.serve(async (_req: Request) => {
       grace_expired: graceExpired,
       overstay_expired: overstayExpired,
       closed_registered: closedRegistered,
+      closed_resident: closedResident,
       closed_expired: closedExpired,
       duration_ms: Date.now() - started,
     });
@@ -181,8 +183,16 @@ async function closeRegistered(): Promise<number> {
 
     if (!fastPath && !slowPath) continue;
 
-    // Close the session. exited_at = best estimate of physical exit.
-    const exitedAt = s.exit_hinted_at ?? s.last_detected_at;
+    // Close the session. exited_at = best estimate of physical exit:
+    // - fast path: exit_hinted_at is when silence-gap or depth-pair
+    //   inferred the truck crossed the throat again → real exit time.
+    // - slow path: we never detected an exit. last_detected_at could be
+    //   days stale (truck parked silently for its whole stay), which
+    //   would make a (last_detected_at + 24h) cooldown already expired
+    //   by the time we write it. Use close-time instead so the 24h hold
+    //   runs from the moment we decide the truck is gone. Slightly
+    //   conservative vs. pass expiry, but never in-the-past.
+    const exitedAt = s.exit_hinted_at ?? new Date().toISOString();
     const sUpd = await db.from("plate_sessions")
       .update({
         state: "closed_clean",
@@ -205,6 +215,46 @@ async function closeRegistered(): Promise<number> {
     if (hIns.error) console.warn("plate_holds insert failed:", hIns.error.message);
 
     console.log(`close_registered session=${s.id} path=${fastPath ? "hint" : "buffer"} exited_at=${exitedAt}`);
+    closed++;
+  }
+  return closed;
+}
+
+// NEW — close resident sessions (permanent allowlisted plates) when
+// silence-gap set exit_hinted_at 5+ min ago. Residents come and go
+// freely; their one open session represents "currently on property."
+// At properties without an orientation='exit' camera, applyExitOutcome
+// never fires, so resident sessions would otherwise accumulate forever.
+// No cooldown hold inserted — residents aren't subject to the 24h
+// between-visits policy (that's a visitor-only guardrail).
+async function closeResident(): Promise<number> {
+  const nowMs = Date.now();
+  const { data: sessions, error } = await db
+    .from("plate_sessions")
+    .select("id, last_detected_at, exit_hinted_at")
+    .eq("state", "resident")
+    .is("exited_at", null)
+    .not("exit_hinted_at", "is", null);
+  if (error) throw error;
+  if (!sessions || sessions.length === 0) return 0;
+
+  let closed = 0;
+  for (const s of sessions) {
+    if (!s.exit_hinted_at) continue;
+    const hintMs = new Date(s.exit_hinted_at).getTime();
+    if (nowMs - hintMs <= EXIT_HINT_BUFFER_MINUTES * 60 * 1000) continue;
+
+    const exitedAt = s.exit_hinted_at;
+    const sUpd = await db.from("plate_sessions")
+      .update({
+        state: "closed_clean",
+        exited_at: exitedAt,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", s.id);
+    if (sUpd.error) throw sUpd.error;
+
+    console.log(`close_resident session=${s.id} exited_at=${exitedAt}`);
     closed++;
   }
   return closed;
