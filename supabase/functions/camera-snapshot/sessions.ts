@@ -29,6 +29,104 @@ export async function findOpenSession(
   return (data ?? [])[0] ?? null;
 }
 
+// Fuzzy plate equality for OCR drift. ALPR engines routinely misread one
+// character per frame and sometimes drop/add leading characters as a vehicle
+// moves through the frame. Without this, one physical truck becomes multiple
+// "plates" and therefore multiple sessions/violations/emails.
+//
+// Match rule: a ≡ b iff
+//   (1) Levenshtein(a, b) ≤ 1  (single char substitution/insertion/deletion)
+//   OR
+//   (2) one is a substring of the other AND length difference ≤ 3
+//       (catches partial reads like HD4183 vs VHD4183)
+export function plateSimilar(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length === 0 || b.length === 0) return false;
+  if (Math.abs(a.length - b.length) <= 3 && (a.includes(b) || b.includes(a))) return true;
+  return levenshteinBounded(a, b, 1) <= 1;
+}
+
+// Levenshtein distance with early exit when distance exceeds `max`.
+// Returns min(actual_distance, max+1).
+function levenshteinBounded(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const m = a.length, n = b.length;
+  let prev = new Array(n + 1);
+  let curr = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    let rowMin = curr[0];
+    for (let j = 1; j <= n; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      if (curr[j] < rowMin) rowMin = curr[j];
+    }
+    if (rowMin > max) return max + 1;
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
+// Find an open session whose plate is EQUAL OR FUZZY-SIMILAR to the incoming
+// plate, scoped to the property and the last `withinSeconds` seconds of entry.
+// Fast path: exact match via findOpenSession. Slow path: pull recent open
+// sessions and run plateSimilar() client-side. At a truck plaza we typically
+// have 0-10 open sessions, so client-side is cheap and avoids a pg extension.
+export async function findSimilarOpenSession(
+  db: SupabaseClient,
+  propertyId: string,
+  normalizedPlate: string,
+  withinSeconds: number = 120,
+  usdotNumber: string | null = null,
+  mcNumber: string | null = null,
+): Promise<OpenSessionRow | null> {
+  const exact = await findOpenSession(db, propertyId, normalizedPlate);
+  if (exact) return exact;
+
+  // If we have a USDOT, check for an open session with that USDOT first —
+  // one physical truck can read plate in one frame and DOT in another.
+  if (usdotNumber) {
+    const { data, error } = await db
+      .from("plate_sessions")
+      .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+      .eq("property_id", propertyId)
+      .eq("usdot_number", usdotNumber)
+      .is("exited_at", null)
+      .limit(1);
+    if (error) throw error;
+    if ((data ?? [])[0]) return data![0] as OpenSessionRow;
+  }
+  if (mcNumber) {
+    const { data, error } = await db
+      .from("plate_sessions")
+      .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+      .eq("property_id", propertyId)
+      .eq("mc_number", mcNumber)
+      .is("exited_at", null)
+      .limit(1);
+    if (error) throw error;
+    if ((data ?? [])[0]) return data![0] as OpenSessionRow;
+  }
+
+  const cutoffIso = new Date(Date.now() - withinSeconds * 1000).toISOString();
+  const { data, error } = await db
+    .from("plate_sessions")
+    .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+    .eq("property_id", propertyId)
+    .is("exited_at", null)
+    .gte("entered_at", cutoffIso)
+    .order("entered_at", { ascending: false })
+    .limit(20);
+  if (error) throw error;
+  for (const row of data ?? []) {
+    if (plateSimilar(row.normalized_plate, normalizedPlate)) {
+      return row as OpenSessionRow;
+    }
+  }
+  return null;
+}
+
 // Extract a pure DOT or MC number from a synthesized plate like "DOT-1234567"
 // or "MC-789012". Returns null if the plate is a real license plate (no
 // prefix).
@@ -137,6 +235,8 @@ export type NewSessionInput = {
   state: "grace" | "registered" | "resident";
   visitorPassId?: string | null;
   residentPlateId?: string | null;
+  usdotNumber?: string | null;
+  mcNumber?: string | null;
   enteredAt: Date;
 };
 
@@ -155,6 +255,8 @@ export async function insertSession(
     state: input.state,
     visitor_pass_id: input.visitorPassId ?? null,
     resident_plate_id: input.residentPlateId ?? null,
+    usdot_number: input.usdotNumber ?? null,
+    mc_number: input.mcNumber ?? null,
   };
   const { data, error } = await db
     .from("plate_sessions")

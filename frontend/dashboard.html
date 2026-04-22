@@ -2829,7 +2829,7 @@ const db = {
   },
   async getALPRViolations(propertyId, status) {
     if (supabase) {
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at)');
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, alpr_cameras:camera_id(id, name))');
       if (propertyId) q = q.eq('property_id', propertyId);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
@@ -2848,7 +2848,7 @@ const db = {
     if (supabase) {
       const propIds = await this._getPropertyIds(userId, role);
       if (propIds.length === 0) return [];
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at), properties(name, address)').in('property_id', propIds);
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, alpr_cameras:camera_id(id, name)), properties(name, address)').in('property_id', propIds);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
       const { data, error } = await q;
@@ -4203,7 +4203,9 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     plate_text: av.plate_text,
     vehicle_color: null, vehicle_type: null, vehicle_make: null, vehicle_model: null,
     violation_type: 'parking_pass',
-    zone_id: null, space_number: null, camera_id: null,
+    zone_id: null, space_number: null,
+    camera_id: av.plate_events?.camera_id || null,
+    _camera_name: av.plate_events?.alpr_cameras?.name || null,
     confidence: av.plate_events?.confidence || null,
     our_revenue: 0, gross_revenue: 0,
     sms_sent_at: null, sms_delivered: null, reminder_sent_at: null,
@@ -4854,6 +4856,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                   </div>
                   <div className="job-lot-addr" style={{display:'flex', alignItems:'center', gap:6}}>
                     {fmtTime(v.detected_at)} · {(v.violation_type || 'violation').replace(/_/g, ' ')}
+                    {v._camera_name && <span style={{fontSize:11,color:'var(--text-muted)'}}>· {v._camera_name}</span>}
                     {v.sms_sent_at && (
                       <span style={{fontSize:10, fontWeight:600, color: v.sms_delivered ? 'var(--green)' : 'var(--yellow)'}}>
                         {v.sms_delivered ? '✓ SMS' : '○ SMS'}

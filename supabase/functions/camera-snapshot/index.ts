@@ -4,16 +4,24 @@ import { makeR2Uploader } from "../pr-ingest/r2.ts";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { extractFromRequest } from "./extract.ts";
 import { parsePath } from "./path.ts";
-import { findOpenSession, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
+import { findOpenSession, findSimilarOpenSession, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
 import { isPlateHeld } from "./holds.ts";
 import { extractUsdot } from "./usdot-ocr.ts";
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
 const PR_MIN_SCORE = Number(Deno.env.get("PR_MIN_SCORE") ?? "0.8");
+// Reject PR reads shorter than this many alphanumeric chars. Two- or three-
+// character "HH" / "AB" reads are partial captures, not plates, and produce
+// bogus violations. 4 is the floor for every US plate format we care about.
+const PR_MIN_PLATE_LEN = Number(Deno.env.get("PR_MIN_PLATE_LEN") ?? "4");
 const USDOT_TOKEN = Deno.env.get("PARKPOW_USDOT_TOKEN") ?? "";
 const USDOT_ENABLED = (Deno.env.get("ENABLE_USDOT_FALLBACK") ?? "false").toLowerCase() === "true";
 const USDOT_MIN_SCORE = Number(Deno.env.get("USDOT_MIN_SCORE") ?? "0.70");
+// Burst mode: when a no-plate / short-plate frame triggers OCR, keep OCR
+// firing for this many seconds on this camera regardless of subsequent PR
+// results. Gives the DOT reader multiple angles on the same vehicle.
+const USDOT_BURST_SECONDS = Number(Deno.env.get("USDOT_BURST_SECONDS") ?? "10");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const R2_ACCOUNT_ID = Deno.env.get("R2_ACCOUNT_ID")!;
@@ -51,7 +59,7 @@ Deno.serve(async (req: Request) => {
 
     const cameraQ = await db
       .from("alpr_cameras")
-      .select("id,property_id,api_key,active,orientation")
+      .select("id,property_id,api_key,active,orientation,usdot_active_until")
       .eq("api_key", cameraApiKey)
       .eq("active", true)
       .limit(1);
@@ -59,7 +67,9 @@ Deno.serve(async (req: Request) => {
     const camera = (cameraQ.data ?? [])[0];
     if (!camera) return json(200, { ok: false, reason: "unknown_camera", api_key: cameraApiKey });
 
-    // Call Plate Recognizer synchronously.
+    // Call PR first. Only call USDOT when PR returned NO plate — i.e. the
+    // camera angle didn't catch the plate. When PR sees a plate at all (even
+    // at lowish confidence), we trust that read and skip the ParkPow call.
     const prResp = await callPlateRecognizer(extracted.bytes, cameraApiKey);
     if (!prResp.ok) {
       console.warn("camera-snapshot PR call failed:", prResp.status, prResp.bodyText.slice(0, 200));
@@ -67,31 +77,56 @@ Deno.serve(async (req: Request) => {
     }
 
     const results = Array.isArray(prResp.data?.results) ? prResp.data.results : [];
-    let surviving = results.filter((r: { score: number }) => r.score >= PR_MIN_SCORE);
-    let usdotFallbackUsed = false;
+    // Drop low-score AND short-plate reads. "HH" at 0.82 passes the score
+    // gate but isn't a plate — it's a partial OCR crop. Treat it as no-plate
+    // so USDOT fallback can try to read the DOT off the side panel.
+    let surviving = results.filter((r: { score: number; plate: string }) =>
+      r.score >= PR_MIN_SCORE &&
+      normalizePlate(r.plate).length >= PR_MIN_PLATE_LEN
+    );
 
-    // USDOT OCR fallback: when PR returns zero plates, try extracting a
-    // DOT/MC number from the truck side panel and synthesize a plate-shaped
-    // result so the rest of the state machine runs unchanged.
-    if (surviving.length === 0 && USDOT_ENABLED && USDOT_TOKEN) {
-      const usdot = await extractUsdot(extracted.bytes, {
-        token: USDOT_TOKEN,
-        minScore: USDOT_MIN_SCORE,
-        cameraId: cameraApiKey,
-      });
-      if (usdot.kind !== "none") {
-        // Synthesize a PR-shaped result so downstream code doesn't branch.
-        // vehicle.type stays null — we didn't get it from PR here, and the
-        // ParkPow USDOT endpoint doesn't return vehicle metadata.
-        surviving = [{
-          plate: usdot.plate,
-          score: usdot.raw_score,
-          _synthesized_from: usdot.kind,
-          _synthesized_raw_text: usdot.raw_text,
-        }];
-        usdotFallbackUsed = true;
-        console.log(`usdot-ocr fallback matched: kind=${usdot.kind} plate=${usdot.plate} score=${usdot.raw_score}`);
-      }
+    // Burst mode: if a recent frame had no usable plate, usdot_active_until
+    // is set N seconds in the future. While that window is open, fire OCR
+    // on every frame regardless of PR result — the vehicle is moving and
+    // later frames may show the DOT at a better angle.
+    const nowMs = Date.now();
+    const burstActive = !!camera.usdot_active_until &&
+      new Date(camera.usdot_active_until).getTime() > nowMs;
+    const noUsablePlate = surviving.length === 0;
+
+    const shouldCallUsdot = (USDOT_ENABLED && !!USDOT_TOKEN) &&
+      (noUsablePlate || burstActive);
+
+    const usdotResult = shouldCallUsdot
+      ? await extractUsdot(extracted.bytes, { token: USDOT_TOKEN, minScore: USDOT_MIN_SCORE, cameraId: cameraApiKey })
+      : { kind: "none" as const };
+
+    // Extend or clear the burst window. A no-plate frame extends the window
+    // another USDOT_BURST_SECONDS; a clean plate frame with no active burst
+    // does nothing. We fire this as a fire-and-forget update — the main
+    // flow continues regardless of whether it lands.
+    if (shouldCallUsdot && noUsablePlate) {
+      const until = new Date(nowMs + USDOT_BURST_SECONDS * 1000).toISOString();
+      db.from("alpr_cameras").update({ usdot_active_until: until }).eq("id", camera.id)
+        .then(({ error }) => { if (error) console.warn("usdot_active_until update failed:", error.message); });
+    }
+
+    const frameUsdot = usdotResult.kind === "dot" ? usdotResult.number : null;
+    const frameMc    = usdotResult.kind === "mc"  ? usdotResult.number : null;
+    let usdotSynthesizedPlate = false;
+
+    // If PR returned nothing but ParkPow found a DOT/MC, synthesize a plate
+    // row so the state machine still runs. This preserves the plateless-
+    // tractor flow from before.
+    if (surviving.length === 0 && usdotResult.kind !== "none") {
+      surviving = [{
+        plate: usdotResult.plate,
+        score: usdotResult.raw_score,
+        _synthesized_from: usdotResult.kind,
+        _synthesized_raw_text: usdotResult.raw_text,
+      }];
+      usdotSynthesizedPlate = true;
+      console.log(`usdot-ocr synthesized plate: kind=${usdotResult.kind} plate=${usdotResult.plate} score=${usdotResult.raw_score}`);
     }
 
     if (surviving.length === 0) {
@@ -100,8 +135,8 @@ Deno.serve(async (req: Request) => {
         events: 0,
         reason: "all_below_threshold",
         pr_results: results.length,
-        usdot_fallback_tried: USDOT_ENABLED && !!USDOT_TOKEN,
-        usdot_fallback_used: usdotFallbackUsed,
+        usdot_called: USDOT_ENABLED && !!USDOT_TOKEN,
+        usdot_found: usdotResult.kind !== "none",
       });
     }
 
@@ -134,11 +169,24 @@ Deno.serve(async (req: Request) => {
         confidence: result.score,
         image_url: imageUrl,
         event_type: camera.orientation === "exit" ? "exit" : "entry",
+        // USDOT/MC from ParkPow on the same frame — attached regardless of
+        // whether PR also returned a plate. Null when ParkPow found nothing
+        // or synthesized this plate itself (in which case plate_text already
+        // encodes DOT-xxx and usdot_number stores the bare digits).
+        usdot_number: usdotSynthesizedPlate
+          ? (usdotResult.kind === "dot" ? usdotResult.number : null)
+          : frameUsdot,
+        mc_number: usdotSynthesizedPlate
+          ? (usdotResult.kind === "mc" ? usdotResult.number : null)
+          : frameMc,
         raw_data: {
           ...result,
           _pr_response: prResp.data,
           _source: `camera-snapshot:${extracted.source}`,
           _orientation: camera.orientation,
+          _usdot_ocr: usdotResult.kind === "none"
+            ? null
+            : { kind: usdotResult.kind, number: usdotResult.number, score: usdotResult.raw_score },
           ...(extracted.rawMeta ?? {}),
           ...(imageError ? { image_upload_error: imageError } : {}),
         },
@@ -150,7 +198,12 @@ Deno.serve(async (req: Request) => {
 
       if (camera.orientation === "entry") {
         // --- ENTRY ---
-        const openSession = await findOpenSession(db, camera.property_id, normalized);
+        // Use fuzzy match so OCR drift across frames (HD4183 vs VHD4183 vs
+        // HZ4183 — all the same physical truck) collapses onto one session
+        // instead of spawning one session + one violation + one email per
+        // misread character. Also match on USDOT/MC: frame 1 reads plate,
+        // frame 2 reads DOT — both collapse onto the same session.
+        const openSession = await findSimilarOpenSession(db, camera.property_id, normalized, 120, frameUsdot, frameMc);
         if (openSession) {
           // Noise: second entry with no exit. Append an event for visibility;
           // do not open a new session; do not modify existing session.
@@ -162,8 +215,16 @@ Deno.serve(async (req: Request) => {
           continue;
         }
 
-        const resident = await findActiveResident(db, camera.property_id, normalized);
-        const pass     = resident ? null : await findActiveVisitorPass(db, camera.property_id, normalized, now);
+        // Allowlist match: try the plate first, then the USDOT/MC number if
+        // we have one. Either hit upgrades the session to resident/registered.
+        let resident = await findActiveResident(db, camera.property_id, normalized);
+        if (!resident && frameUsdot)   resident = await findActiveResident(db, camera.property_id, `DOT${frameUsdot}`);
+        if (!resident && frameMc)      resident = await findActiveResident(db, camera.property_id, `MC${frameMc}`);
+
+        let pass = resident ? null : await findActiveVisitorPass(db, camera.property_id, normalized, now);
+        if (!resident && !pass && frameUsdot) pass = await findActiveVisitorPass(db, camera.property_id, `DOT${frameUsdot}`, now);
+        if (!resident && !pass && frameMc)    pass = await findActiveVisitorPass(db, camera.property_id, `MC${frameMc}`, now);
+
         const held     = resident || pass ? false : await isPlateHeld(db, camera.property_id, normalized, now);
         const state = resident ? "resident" : pass ? "registered" : "grace";
         const matchStatus = resident ? "resident" : pass ? "visitor_pass" : "unmatched";
@@ -185,6 +246,8 @@ Deno.serve(async (req: Request) => {
           state,
           visitorPassId: pass?.id ?? null,
           residentPlateId: resident?.id ?? null,
+          usdotNumber: usdotSynthesizedPlate && usdotResult.kind === "dot" ? usdotResult.number : frameUsdot,
+          mcNumber:    usdotSynthesizedPlate && usdotResult.kind === "mc"  ? usdotResult.number : frameMc,
           enteredAt: now,
         });
 
