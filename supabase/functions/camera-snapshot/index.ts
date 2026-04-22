@@ -24,6 +24,12 @@ const REQUIRE_VEHICLE_SCORE = Number(Deno.env.get("REQUIRE_VEHICLE_SCORE") ?? "0
 // the plate + session from the recent event. Cuts PR calls for same-truck-
 // in-frame bursts (Milesight fires ~1/sec while a vehicle is in view).
 const INHERIT_WINDOW_SECONDS = Number(Deno.env.get("INHERIT_WINDOW_SECONDS") ?? "5");
+// Direction inference: if a plate is detected on camera B within this
+// window after being detected on camera A (different position_order), we
+// infer direction of travel. Entries → no action. Exits → set session's
+// exit_hinted_at so cron closes it on a short buffer instead of the
+// default 2h buffer.
+const DIRECTION_WINDOW_SECONDS = Number(Deno.env.get("DIRECTION_WINDOW_SECONDS") ?? "30");
 const USDOT_TOKEN = Deno.env.get("PARKPOW_USDOT_TOKEN") ?? "";
 const USDOT_ENABLED = (Deno.env.get("ENABLE_USDOT_FALLBACK") ?? "false").toLowerCase() === "true";
 const USDOT_MIN_SCORE = Number(Deno.env.get("USDOT_MIN_SCORE") ?? "0.70");
@@ -68,7 +74,7 @@ Deno.serve(async (req: Request) => {
 
     const cameraQ = await db
       .from("alpr_cameras")
-      .select("id,property_id,api_key,active,orientation,usdot_active_until")
+      .select("id,property_id,api_key,active,orientation,usdot_active_until,position_order")
       .eq("api_key", cameraApiKey)
       .eq("active", true)
       .limit(1);
@@ -138,6 +144,9 @@ Deno.serve(async (req: Request) => {
       await db.from("plate_sessions")
         .update({ last_detected_at: nowDate.toISOString() })
         .eq("id", recent.session_id);
+
+      // Direction inference across cameras.
+      await inferDirection(db, recent.session_id, camera.property_id, recent.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
 
       return json(200, {
         ok: true,
@@ -295,6 +304,8 @@ Deno.serve(async (req: Request) => {
           await db.from("plate_sessions")
             .update({ last_detected_at: now.toISOString() })
             .eq("id", openSession.id);
+          // Direction inference across cameras.
+          await inferDirection(db, openSession.id, camera.property_id, normalized, camera.id, camera.position_order ?? null, now);
           dedupCount++;
           continue;
         }
@@ -340,6 +351,9 @@ Deno.serve(async (req: Request) => {
           .update({ session_id: sess.id })
           .eq("id", ev.data.id);
         if (backfill.error) throw backfill.error;
+
+        // Direction inference across cameras.
+        await inferDirection(db, sess.id, camera.property_id, normalized, camera.id, camera.position_order ?? null, now);
 
         // Note: held plates open state='grace'. The cron will issue a tow at
         // t+15m because the backend blocks registration during the hold.
@@ -511,6 +525,54 @@ type PrResult = {
 // positives (trailer numbers, police unit numbers, URLs, decals, industrial
 // labels). Real plates pass all three layers; text-that-isn't-a-plate fails
 // one of them.
+// Direction inference from multi-camera timing. If this plate was detected
+// on a DIFFERENT camera within DIRECTION_WINDOW_SECONDS, compare
+// position_order values to infer direction:
+//   prior_order < this_order  → entering (toward interior). Do nothing.
+//   prior_order > this_order  → exiting (toward street). Set exit_hinted_at.
+//   equal or either null      → no direction signal. Skip.
+//
+// The hint is a SIGNAL, not a command — cron still decides whether to close
+// the session. A wrong hint gets corrected by subsequent detections (if the
+// truck keeps getting detected, cron waits). Safe to fire optimistically.
+async function inferDirection(
+  // deno-lint-ignore no-explicit-any
+  db: any,
+  sessionId: string,
+  propertyId: string,
+  normalizedPlate: string,
+  currentCameraId: string,
+  currentPositionOrder: number | null,
+  now: Date,
+): Promise<void> {
+  if (currentPositionOrder == null) return;  // this camera unconfigured
+
+  const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
+  const { data: prior, error } = await db
+    .from("plate_events")
+    .select("camera_id, created_at, alpr_cameras!inner(position_order)")
+    .eq("property_id", propertyId)
+    .eq("normalized_plate", normalizedPlate)
+    .neq("camera_id", currentCameraId)
+    .gt("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) { console.warn("inferDirection query failed:", error.message); return; }
+  const first = (prior ?? [])[0];
+  if (!first) return;  // no cross-camera correlation
+
+  const priorOrder = first.alpr_cameras?.position_order;
+  if (priorOrder == null) return;  // prior camera unconfigured
+  if (priorOrder <= currentPositionOrder) return;  // entering or same rank
+
+  // prior_order > current_order: movement toward entrance = exit direction
+  const upd = await db.from("plate_sessions")
+    .update({ exit_hinted_at: now.toISOString() })
+    .eq("id", sessionId);
+  if (upd.error) console.warn("exit_hinted_at update failed:", upd.error.message);
+  else console.log(`exit inferred for session ${sessionId}: ${priorOrder} → ${currentPositionOrder}`);
+}
+
 function isPlausiblePlate(r: PrResult): boolean {
   const normalized = normalizePlate(r.plate ?? "");
 
