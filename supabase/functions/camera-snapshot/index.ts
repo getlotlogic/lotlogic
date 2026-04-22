@@ -14,7 +14,11 @@ const PR_MIN_SCORE = Number(Deno.env.get("PR_MIN_SCORE") ?? "0.8");
 // Reject PR reads shorter than this many alphanumeric chars. Two- or three-
 // character "HH" / "AB" reads are partial captures, not plates, and produce
 // bogus violations. 4 is the floor for every US plate format we care about.
-const PR_MIN_PLATE_LEN = Number(Deno.env.get("PR_MIN_PLATE_LEN") ?? "4");
+const PR_MIN_PLATE_LEN = Number(Deno.env.get("PR_MIN_PLATE_LEN") ?? "5");
+// Layer 1: require a vehicle detection with at least this score. Rejects
+// plate-shaped text (trailer numbers, police unit numbers, URLs, decals)
+// that PR OCRs without actually seeing a vehicle around the plate.
+const REQUIRE_VEHICLE_SCORE = Number(Deno.env.get("REQUIRE_VEHICLE_SCORE") ?? "0.7");
 const USDOT_TOKEN = Deno.env.get("PARKPOW_USDOT_TOKEN") ?? "";
 const USDOT_ENABLED = (Deno.env.get("ENABLE_USDOT_FALLBACK") ?? "false").toLowerCase() === "true";
 const USDOT_MIN_SCORE = Number(Deno.env.get("USDOT_MIN_SCORE") ?? "0.70");
@@ -77,13 +81,13 @@ Deno.serve(async (req: Request) => {
     }
 
     const results = Array.isArray(prResp.data?.results) ? prResp.data.results : [];
-    // Drop low-score AND short-plate reads. "HH" at 0.82 passes the score
-    // gate but isn't a plate — it's a partial OCR crop. Treat it as no-plate
-    // so USDOT fallback can try to read the DOT off the side panel.
-    let surviving = results.filter((r: { score: number; plate: string }) =>
-      r.score >= PR_MIN_SCORE &&
-      normalizePlate(r.plate).length >= PR_MIN_PLATE_LEN
-    );
+    // Three-layer plate plausibility filter. See isPlausiblePlate() at the
+    // bottom of this file: requires (1) a vehicle detection alongside the
+    // plate, (2) plate-shape validation (letter+digit mix, length 5-8),
+    // and (3) length-scaled confidence thresholds. Rejects trailer IDs,
+    // police unit numbers, URLs, decals, and industrial labels that PR
+    // OCRs as plate-shaped text.
+    let surviving = results.filter((r: PrResult) => isPlausiblePlate(r));
 
     // Burst mode: if a recent frame had no usable plate, usdot_active_until
     // is set N seconds in the future. While that window is open, fire OCR
@@ -414,4 +418,44 @@ function json(status: number, body: unknown): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+type PrResult = {
+  plate: string;
+  score: number;
+  vehicle?: { score?: number; type?: string; box?: unknown };
+  box?: unknown;
+};
+
+// Three-layer plausibility check that rejects PR's plate-like false
+// positives (trailer numbers, police unit numbers, URLs, decals, industrial
+// labels). Real plates pass all three layers; text-that-isn't-a-plate fails
+// one of them.
+function isPlausiblePlate(r: PrResult): boolean {
+  const normalized = normalizePlate(r.plate ?? "");
+
+  // ─── Layer 2: plate SHAPE ──────────────────────────────────────────
+  // Length 5-8 covers all US plate formats
+  if (normalized.length < PR_MIN_PLATE_LEN || normalized.length > 8) return false;
+  // Must have at least one letter AND one digit — rejects "8266" (trailer
+  // ID) and "1199" (police unit number) which are pure-digit reads.
+  if (!/[A-Z]/.test(normalized) || !/\d/.test(normalized)) return false;
+  // No run of 6+ consecutive digits — real plates interleave letters+digits
+  if (/\d{6,}/.test(normalized)) return false;
+
+  // ─── Layer 1: VEHICLE must have been detected ──────────────────────
+  // PR returns a vehicle object on each result when a car/truck was
+  // detected around the plate. Missing or low-confidence vehicle means
+  // the plate is probably background text (decal, sign, trailer label).
+  const vehicleScore = typeof r.vehicle?.score === "number" ? r.vehicle.score : 0;
+  if (vehicleScore < REQUIRE_VEHICLE_SCORE) return false;
+
+  // ─── Layer 3: CONFIDENCE scales with length ────────────────────────
+  // Shorter reads are riskier — require higher confidence to pass.
+  const minConf = normalized.length === 5 ? 0.95
+                : normalized.length === 6 ? 0.85
+                : 0.80;
+  if (r.score < Math.max(minConf, PR_MIN_SCORE)) return false;
+
+  return true;
 }

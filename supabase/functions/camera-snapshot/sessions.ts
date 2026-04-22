@@ -39,11 +39,49 @@ export async function findOpenSession(
 //   OR
 //   (2) one is a substring of the other AND length difference ≤ 3
 //       (catches partial reads like HD4183 vs VHD4183)
-export function plateSimilar(a: string, b: string): boolean {
+// ALPR OCR confusion pairs — character substitutions that PR makes
+// predictably due to character shape similarity. These count as zero-cost
+// substitutions in plateSimilar so e.g. "LFV2510" and "LFV25IO" match.
+const OCR_CONFUSIONS: Array<[string, string]> = [
+  ["O", "0"], ["I", "1"], ["I", "L"], ["1", "L"],
+  ["5", "S"], ["8", "B"], ["2", "Z"],
+  ["7", "T"], ["T", "Y"], ["7", "Y"],
+  ["6", "G"], ["D", "0"], ["D", "Q"], ["0", "Q"],
+];
+
+function areCharsConfusable(a: string, b: string): boolean {
+  if (a === b) return true;
+  for (const [x, y] of OCR_CONFUSIONS) {
+    if ((a === x && b === y) || (a === y && b === x)) return true;
+  }
+  return false;
+}
+
+// Two plates match if:
+//  - Equal
+//  - One is a substring of the other with length diff ≤ 3 (partial reads)
+//  - Same-length reads differ only in OCR-confusable chars + up to N true edits
+//    where N = 2 for anchored sessions, 1 otherwise
+//  - Different-length reads within bounded Levenshtein
+export function plateSimilar(a: string, b: string, anchored: boolean = false): boolean {
   if (a === b) return true;
   if (a.length === 0 || b.length === 0) return false;
   if (Math.abs(a.length - b.length) <= 3 && (a.includes(b) || b.includes(a))) return true;
-  return levenshteinBounded(a, b, 1) <= 1;
+
+  const maxEdits = anchored ? 2 : 1;
+
+  if (a.length === b.length) {
+    let trueEdits = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (!areCharsConfusable(a[i], b[i])) {
+        trueEdits++;
+        if (trueEdits > maxEdits) return false;
+      }
+    }
+    return true;
+  }
+
+  return levenshteinBounded(a, b, maxEdits) <= maxEdits;
 }
 
 // Levenshtein distance with early exit when distance exceeds `max`.
@@ -110,26 +148,42 @@ export async function findSimilarOpenSession(
   }
 
   // Fuzzy match by RECENT PLATE-EVENT ACTIVITY, not by session entry time.
-  // A truck that sits in frame for 2+ minutes would fall out of an
-  // entered_at-based window while still being actively detected. Keying on
-  // plate_events.created_at instead means every new frame refreshes the
-  // dedup eligibility of its own session.
+  // Activity-window = every new frame refreshes its own session's eligibility.
+  //
+  // Also determines per-session "anchored" status from the same query: a
+  // session with ≥3 detections at ≥0.9 confidence gets wider matching
+  // tolerance (anchored=true in plateSimilar). Anchored sessions absorb
+  // OCR drift liberally because we're statistically certain of the plate.
   const cutoffIso = new Date(Date.now() - withinSeconds * 1000).toISOString();
   const { data: recentEvents, error: evErr } = await db
     .from("plate_events")
-    .select("session_id, normalized_plate, created_at")
+    .select("session_id, normalized_plate, confidence, created_at")
     .eq("property_id", propertyId)
     .gte("created_at", cutoffIso)
     .not("session_id", "is", null)
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(200);
   if (evErr) throw evErr;
 
-  // Collect candidate session_ids whose recent event plates are fuzzy-similar.
-  const candidateIds = new Set<string>();
+  // Bucket events by session_id: distinct plates + count hi-conf detections.
+  type Bucket = { plates: Set<string>; hiConfCount: number };
+  const perSession = new Map<string, Bucket>();
   for (const ev of recentEvents ?? []) {
-    if (plateSimilar(ev.normalized_plate, normalizedPlate)) {
-      if (ev.session_id) candidateIds.add(ev.session_id);
+    if (!ev.session_id) continue;
+    let b = perSession.get(ev.session_id);
+    if (!b) { b = { plates: new Set(), hiConfCount: 0 }; perSession.set(ev.session_id, b); }
+    if (ev.normalized_plate) b.plates.add(ev.normalized_plate);
+    if (typeof ev.confidence === "number" && ev.confidence >= 0.9) b.hiConfCount++;
+  }
+
+  const candidateIds = new Set<string>();
+  for (const [sessionId, bucket] of perSession) {
+    const anchored = bucket.hiConfCount >= 3;
+    for (const plate of bucket.plates) {
+      if (plateSimilar(plate, normalizedPlate, anchored)) {
+        candidateIds.add(sessionId);
+        break;
+      }
     }
   }
   if (candidateIds.size === 0) return null;
