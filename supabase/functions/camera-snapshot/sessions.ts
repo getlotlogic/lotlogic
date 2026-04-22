@@ -109,22 +109,40 @@ export async function findSimilarOpenSession(
     if ((data ?? [])[0]) return data![0] as OpenSessionRow;
   }
 
+  // Fuzzy match by RECENT PLATE-EVENT ACTIVITY, not by session entry time.
+  // A truck that sits in frame for 2+ minutes would fall out of an
+  // entered_at-based window while still being actively detected. Keying on
+  // plate_events.created_at instead means every new frame refreshes the
+  // dedup eligibility of its own session.
   const cutoffIso = new Date(Date.now() - withinSeconds * 1000).toISOString();
-  const { data, error } = await db
-    .from("plate_sessions")
-    .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+  const { data: recentEvents, error: evErr } = await db
+    .from("plate_events")
+    .select("session_id, normalized_plate, created_at")
     .eq("property_id", propertyId)
-    .is("exited_at", null)
-    .gte("entered_at", cutoffIso)
-    .order("entered_at", { ascending: false })
-    .limit(20);
-  if (error) throw error;
-  for (const row of data ?? []) {
-    if (plateSimilar(row.normalized_plate, normalizedPlate)) {
-      return row as OpenSessionRow;
+    .gte("created_at", cutoffIso)
+    .not("session_id", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (evErr) throw evErr;
+
+  // Collect candidate session_ids whose recent event plates are fuzzy-similar.
+  const candidateIds = new Set<string>();
+  for (const ev of recentEvents ?? []) {
+    if (plateSimilar(ev.normalized_plate, normalizedPlate)) {
+      if (ev.session_id) candidateIds.add(ev.session_id);
     }
   }
-  return null;
+  if (candidateIds.size === 0) return null;
+
+  const { data: openRows, error: sErr } = await db
+    .from("plate_sessions")
+    .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+    .in("id", Array.from(candidateIds))
+    .is("exited_at", null)
+    .order("entered_at", { ascending: false })
+    .limit(1);
+  if (sErr) throw sErr;
+  return ((openRows ?? [])[0] as OpenSessionRow) ?? null;
 }
 
 // Extract a pure DOT or MC number from a synthesized plate like "DOT-1234567"

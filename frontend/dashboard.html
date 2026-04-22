@@ -2829,7 +2829,7 @@ const db = {
   },
   async getALPRViolations(propertyId, status) {
     if (supabase) {
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, alpr_cameras:camera_id(id, name))');
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, alpr_cameras:camera_id(id, name))');
       if (propertyId) q = q.eq('property_id', propertyId);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
@@ -2848,7 +2848,7 @@ const db = {
     if (supabase) {
       const propIds = await this._getPropertyIds(userId, role);
       if (propIds.length === 0) return [];
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, alpr_cameras:camera_id(id, name)), properties(name, address)').in('property_id', propIds);
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, alpr_cameras:camera_id(id, name)), properties(name, address)').in('property_id', propIds);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
       const { data, error } = await q;
@@ -4206,6 +4206,8 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     zone_id: null, space_number: null,
     camera_id: av.plate_events?.camera_id || null,
     _camera_name: av.plate_events?.alpr_cameras?.name || null,
+    _usdot_number: av.plate_events?.usdot_number || null,
+    _mc_number: av.plate_events?.mc_number || null,
     confidence: av.plate_events?.confidence || null,
     our_revenue: 0, gross_revenue: 0,
     sms_sent_at: null, sms_delivered: null, reminder_sent_at: null,
@@ -4818,6 +4820,12 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                 {v._isALPR ? (
                   <span className="vs-item">
                     <span style={{fontWeight:800, letterSpacing:'.04em', fontFamily:'SFMono-Regular, Consolas, monospace'}}>{v.plate_text}</span>
+                    {v._usdot_number && (
+                      <span title={`USDOT ${v._usdot_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>USDOT {v._usdot_number}</span>
+                    )}
+                    {v._mc_number && (
+                      <span title={`MC ${v._mc_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC {v._mc_number}</span>
+                    )}
                     <span style={{color:'var(--text-muted)', marginLeft:6}}>Unregistered plate</span>
                   </span>
                 ) : (
