@@ -19,6 +19,11 @@ const PR_MIN_PLATE_LEN = Number(Deno.env.get("PR_MIN_PLATE_LEN") ?? "5");
 // plate-shaped text (trailer numbers, police unit numbers, URLs, decals)
 // that PR OCRs without actually seeing a vehicle around the plate.
 const REQUIRE_VEHICLE_SCORE = Number(Deno.env.get("REQUIRE_VEHICLE_SCORE") ?? "0.7");
+// Tier 3 inherit-from-recent: if THIS camera produced a plate_event with a
+// session in the last INHERIT_WINDOW_SECONDS, skip the PR call and inherit
+// the plate + session from the recent event. Cuts PR calls for same-truck-
+// in-frame bursts (Milesight fires ~1/sec while a vehicle is in view).
+const INHERIT_WINDOW_SECONDS = Number(Deno.env.get("INHERIT_WINDOW_SECONDS") ?? "5");
 const USDOT_TOKEN = Deno.env.get("PARKPOW_USDOT_TOKEN") ?? "";
 const USDOT_ENABLED = (Deno.env.get("ENABLE_USDOT_FALLBACK") ?? "false").toLowerCase() === "true";
 const USDOT_MIN_SCORE = Number(Deno.env.get("USDOT_MIN_SCORE") ?? "0.70");
@@ -74,6 +79,76 @@ Deno.serve(async (req: Request) => {
     // Call PR first. Only call USDOT when PR returned NO plate — i.e. the
     // camera angle didn't catch the plate. When PR sees a plate at all (even
     // at lowish confidence), we trust that read and skip the ParkPow call.
+    // ── Tier 3 inherit-from-recent (PR cost reduction) ─────────────────
+    // If THIS camera just produced a plate_event with an active session,
+    // skip the PR API call and inherit the plate from that recent event.
+    // A truck sitting in frame triggers ~1 POST/sec on Milesight; without
+    // this guard, every frame = 1 PR call. With it, one PR call covers
+    // the whole time the truck is in view.
+    const inheritCutoff = new Date(Date.now() - INHERIT_WINDOW_SECONDS * 1000).toISOString();
+    const recentQuery = await db
+      .from("plate_events")
+      .select("session_id, plate_text, normalized_plate, usdot_number, mc_number, confidence, plate_sessions!inner(id, state, exited_at)")
+      .eq("camera_id", camera.id)
+      .gt("created_at", inheritCutoff)
+      .not("session_id", "is", null)
+      .is("plate_sessions.exited_at", null)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const recent = (recentQuery.data ?? [])[0] as
+      | { session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number }
+      | undefined;
+
+    if (recent && recent.session_id) {
+      // Upload the image for evidence, skip PR, write an inherited plate_event.
+      const nowDate = new Date();
+      const epochMs = nowDate.getTime();
+      const dateStr = nowDate.toISOString().slice(0, 10);
+      const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${recent.plate_text}-inherited.jpg`;
+      let imageUrl: string | null = null;
+      let imageError: string | null = null;
+      const upRes = await r2(key, extracted.bytes);
+      if (upRes.ok) imageUrl = upRes.url;
+      else imageError = upRes.error;
+
+      const ev = await db.from("plate_events").insert({
+        camera_id: camera.id,
+        property_id: camera.property_id,
+        plate_text: recent.plate_text,
+        normalized_plate: recent.normalized_plate,
+        confidence: recent.confidence,
+        image_url: imageUrl,
+        event_type: "entry",
+        usdot_number: recent.usdot_number,
+        mc_number: recent.mc_number,
+        raw_data: {
+          _source: `camera-snapshot:${extracted.source}:inherited`,
+          _inherited_from_session: recent.session_id,
+          ...(extracted.rawMeta ?? {}),
+          ...(imageError ? { image_upload_error: imageError } : {}),
+        },
+        match_status: "dedup_suppressed",
+        match_reason: `inherited from prior detection within ${INHERIT_WINDOW_SECONDS}s`,
+        matched_at: nowDate.toISOString(),
+        session_id: recent.session_id,
+      });
+      if (ev.error) throw ev.error;
+
+      // Bump session activity timestamp.
+      await db.from("plate_sessions")
+        .update({ last_detected_at: nowDate.toISOString() })
+        .eq("id", recent.session_id);
+
+      return json(200, {
+        ok: true,
+        events: 1,
+        source: extracted.source,
+        inherited: true,
+        session_id: recent.session_id,
+        plate_text: recent.plate_text,
+      });
+    }
+
     const prResp = await callPlateRecognizer(extracted.bytes, cameraApiKey);
     if (!prResp.ok) {
       console.warn("camera-snapshot PR call failed:", prResp.status, prResp.bodyText.slice(0, 200));
@@ -215,6 +290,11 @@ Deno.serve(async (req: Request) => {
             .insert(baseEventRow(openSession.id, "unmatched"))
             .select().single();
           if (ev.error) throw ev.error;
+          // Tier 3 priming: bump session activity so subsequent POSTs from
+          // this camera within INHERIT_WINDOW_SECONDS skip the PR call.
+          await db.from("plate_sessions")
+            .update({ last_detected_at: now.toISOString() })
+            .eq("id", openSession.id);
           dedupCount++;
           continue;
         }
