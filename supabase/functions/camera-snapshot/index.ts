@@ -572,7 +572,7 @@ async function inferDirection(
 ): Promise<void> {
   const { data: session, error: sErr } = await db
     .from("plate_sessions")
-    .select("state, last_detected_at")
+    .select("state, last_detected_at, normalized_plate, usdot_number, mc_number")
     .eq("id", sessionId)
     .maybeSingle();
   if (sErr) { console.warn("inferDirection session fetch failed:", sErr.message); return; }
@@ -610,6 +610,29 @@ async function inferDirection(
   // 15-min timer, expired sessions are closed by closeExpired cron.
   if (session.state !== "registered") return;
   if (!session.last_detected_at) return;
+
+  // Strong-identity guard: findSimilarOpenSession attaches events to a
+  // session via FUZZY plate match (Levenshtein ≤ 1, OCR confusion pairs,
+  // substring with length-diff ≤ 3). Fuzzy matching is correct for dedup
+  // (collapsing OCR drift of one physical truck), but DANGEROUS for
+  // state mutation: a DIFFERENT truck arriving with a similar-looking
+  // plate (e.g. HD4183 parked + VHD4183 entering) would silence-gap-
+  // close the parked truck and drop a 24h cooldown hold it never earned.
+  //
+  // Require exact plate-or-USDOT/MC match before firing exit_hinted_at.
+  // Fuzzy-matched events still get logged; they just don't trigger state
+  // transitions on the "wrong" session. OCR-drift exits on the SAME
+  // physical truck fall back to the 2h slow-path close in cron.
+  const plateMatches = normalizedPlate === session.normalized_plate;
+  const dotM = normalizedPlate.match(/^DOT(\d{5,8})$/);
+  const mcM  = normalizedPlate.match(/^MC(\d{5,8})$/);
+  const usdotMatches = !!(dotM && session.usdot_number && dotM[1] === session.usdot_number);
+  const mcMatches    = !!(mcM  && session.mc_number    && mcM[1]  === session.mc_number);
+  if (!plateMatches && !usdotMatches && !mcMatches) {
+    console.log(`silence-gap skipped (fuzzy session match) session=${sessionId} inbound=${normalizedPlate} session_plate=${session.normalized_plate}`);
+    return;
+  }
+
   const idleCutoffMs = now.getTime() - SESSION_IDLE_MINUTES * 60 * 1000;
   if (new Date(session.last_detected_at).getTime() >= idleCutoffMs) return;
 
