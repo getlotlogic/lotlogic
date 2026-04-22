@@ -30,6 +30,13 @@ const INHERIT_WINDOW_SECONDS = Number(Deno.env.get("INHERIT_WINDOW_SECONDS") ?? 
 // exit_hinted_at so cron closes it on a short buffer instead of the
 // default 2h buffer.
 const DIRECTION_WINDOW_SECONDS = Number(Deno.env.get("DIRECTION_WINDOW_SECONDS") ?? "30");
+// Silence-gap exit signal. For flanking entrances where position_order
+// can't disambiguate direction, detection on an open registered session
+// after this much idle time is treated as the truck passing through the
+// throat again — i.e. exiting. Entrance cameras only fire at throats, so
+// a large gap between events means the vehicle left the camera zone to
+// park and has now returned to the throat.
+const SESSION_IDLE_MINUTES = Number(Deno.env.get("SESSION_IDLE_MINUTES") ?? "5");
 const USDOT_TOKEN = Deno.env.get("PARKPOW_USDOT_TOKEN") ?? "";
 const USDOT_ENABLED = (Deno.env.get("ENABLE_USDOT_FALLBACK") ?? "false").toLowerCase() === "true";
 const USDOT_MIN_SCORE = Number(Deno.env.get("USDOT_MIN_SCORE") ?? "0.70");
@@ -140,13 +147,14 @@ Deno.serve(async (req: Request) => {
       });
       if (ev.error) throw ev.error;
 
+      // Direction inference MUST run before the last_detected_at bump so the
+      // silence-gap branch inside inferDirection sees the prior timestamp.
+      await inferDirection(db, recent.session_id, camera.property_id, recent.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
+
       // Bump session activity timestamp.
       await db.from("plate_sessions")
         .update({ last_detected_at: nowDate.toISOString() })
         .eq("id", recent.session_id);
-
-      // Direction inference across cameras.
-      await inferDirection(db, recent.session_id, camera.property_id, recent.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
 
       return json(200, {
         ok: true,
@@ -299,13 +307,15 @@ Deno.serve(async (req: Request) => {
             .insert(baseEventRow(openSession.id, "unmatched"))
             .select().single();
           if (ev.error) throw ev.error;
+          // Direction inference MUST run before the last_detected_at bump so
+          // the silence-gap branch inside inferDirection sees the prior
+          // timestamp.
+          await inferDirection(db, openSession.id, camera.property_id, normalized, camera.id, camera.position_order ?? null, now);
           // Tier 3 priming: bump session activity so subsequent POSTs from
           // this camera within INHERIT_WINDOW_SECONDS skip the PR call.
           await db.from("plate_sessions")
             .update({ last_detected_at: now.toISOString() })
             .eq("id", openSession.id);
-          // Direction inference across cameras.
-          await inferDirection(db, openSession.id, camera.property_id, normalized, camera.id, camera.position_order ?? null, now);
           dedupCount++;
           continue;
         }
@@ -525,12 +535,27 @@ type PrResult = {
 // positives (trailer numbers, police unit numbers, URLs, decals, industrial
 // labels). Real plates pass all three layers; text-that-isn't-a-plate fails
 // one of them.
-// Direction inference from multi-camera timing. If this plate was detected
-// on a DIFFERENT camera within DIRECTION_WINDOW_SECONDS, compare
-// position_order values to infer direction:
-//   prior_order < this_order  → entering (toward interior). Do nothing.
-//   prior_order > this_order  → exiting (toward street). Set exit_hinted_at.
-//   equal or either null      → no direction signal. Skip.
+// Direction inference. Two branches, either can set exit_hinted_at:
+//
+// Branch 1 — cross-camera depth-pair (fast, ~seconds):
+//   If this plate was detected on a DIFFERENT camera within
+//   DIRECTION_WINDOW_SECONDS, compare position_order:
+//     prior_order < this_order  → entering (toward interior). Do nothing.
+//     prior_order > this_order  → exiting (toward street). Set exit_hinted_at.
+//   Only fires when BOTH paired cameras capture the same pass. For rear-
+//   plate-only trucks (most tractor-trailers in US fleets) each camera at a
+//   depth pair only sees the vehicle for ONE direction of travel, so this
+//   branch fires rarely. Useful bonus for 2-plated vehicles.
+//
+// Branch 2 — silence-gap (works everywhere, ~minutes):
+//   Entrance cameras only fire at throats — parked trucks don't trigger
+//   motion. So a detection on an open REGISTERED session whose
+//   last_detected_at is > SESSION_IDLE_MINUTES ago means the truck just
+//   crossed a throat again = exit. Topology-agnostic: works on flanking,
+//   depth-pair, or single-camera setups. Primary exit signal.
+//
+// IMPORTANT: the caller MUST invoke this BEFORE bumping last_detected_at to
+// now, or the silence-gap branch sees a zero gap and never fires.
 //
 // The hint is a SIGNAL, not a command — cron still decides whether to close
 // the session. A wrong hint gets corrected by subsequent detections (if the
@@ -545,32 +570,57 @@ async function inferDirection(
   currentPositionOrder: number | null,
   now: Date,
 ): Promise<void> {
-  if (currentPositionOrder == null) return;  // this camera unconfigured
+  const { data: session, error: sErr } = await db
+    .from("plate_sessions")
+    .select("state, last_detected_at")
+    .eq("id", sessionId)
+    .maybeSingle();
+  if (sErr) { console.warn("inferDirection session fetch failed:", sErr.message); return; }
+  if (!session) return;
 
-  const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
-  const { data: prior, error } = await db
-    .from("plate_events")
-    .select("camera_id, created_at, alpr_cameras!inner(position_order)")
-    .eq("property_id", propertyId)
-    .eq("normalized_plate", normalizedPlate)
-    .neq("camera_id", currentCameraId)
-    .gt("created_at", cutoff)
-    .order("created_at", { ascending: false })
-    .limit(1);
-  if (error) { console.warn("inferDirection query failed:", error.message); return; }
-  const first = (prior ?? [])[0];
-  if (!first) return;  // no cross-camera correlation
+  // ─── Branch 1: cross-camera depth-pair ─────────────────────────────
+  if (currentPositionOrder != null) {
+    const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
+    const { data: prior, error } = await db
+      .from("plate_events")
+      .select("camera_id, created_at, alpr_cameras!inner(position_order)")
+      .eq("property_id", propertyId)
+      .eq("normalized_plate", normalizedPlate)
+      .neq("camera_id", currentCameraId)
+      .gt("created_at", cutoff)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) console.warn("inferDirection depth-pair query failed:", error.message);
+    else {
+      const first = (prior ?? [])[0];
+      const priorOrder = first?.alpr_cameras?.position_order;
+      if (priorOrder != null && priorOrder > currentPositionOrder) {
+        const upd = await db.from("plate_sessions")
+          .update({ exit_hinted_at: now.toISOString() })
+          .eq("id", sessionId);
+        if (upd.error) console.warn("exit_hinted_at depth-pair update failed:", upd.error.message);
+        else console.log(`exit inferred (depth-pair) for session ${sessionId}: ${priorOrder} → ${currentPositionOrder}`);
+        return;
+      }
+    }
+  }
 
-  const priorOrder = first.alpr_cameras?.position_order;
-  if (priorOrder == null) return;  // prior camera unconfigured
-  if (priorOrder <= currentPositionOrder) return;  // entering or same rank
+  // ─── Branch 2: silence-gap ─────────────────────────────────────────
+  // Scope to registered sessions — grace sessions expire on their own
+  // 15-min timer, expired sessions are closed by closeExpired cron.
+  if (session.state !== "registered") return;
+  if (!session.last_detected_at) return;
+  const idleCutoffMs = now.getTime() - SESSION_IDLE_MINUTES * 60 * 1000;
+  if (new Date(session.last_detected_at).getTime() >= idleCutoffMs) return;
 
-  // prior_order > current_order: movement toward entrance = exit direction
   const upd = await db.from("plate_sessions")
     .update({ exit_hinted_at: now.toISOString() })
     .eq("id", sessionId);
-  if (upd.error) console.warn("exit_hinted_at update failed:", upd.error.message);
-  else console.log(`exit inferred for session ${sessionId}: ${priorOrder} → ${currentPositionOrder}`);
+  if (upd.error) console.warn("exit_hinted_at silence-gap update failed:", upd.error.message);
+  else {
+    const gapSec = Math.round((now.getTime() - new Date(session.last_detected_at).getTime()) / 1000);
+    console.log(`exit inferred (silence-gap) for session ${sessionId}: gap=${gapSec}s`);
+  }
 }
 
 function isPlausiblePlate(r: PrResult): boolean {
