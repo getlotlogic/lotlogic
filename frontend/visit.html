@@ -491,12 +491,19 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
             data = text ? JSON.parse(text) : null;
           }
         } finally { clearTimeout(t); }
-        if (data && data.active && data.valid_until) {
+        if (data && data.held && data.hold_until) {
+          const until = new Date(data.hold_until).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+          msg.textContent = `24-hour cooldown in effect — this plate cannot register again until ${until}. Please contact the property if you believe this is in error.`;
+          msg.style.color = '#b91c1c';
+        } else if (data && data.active && data.valid_until) {
           const expires = new Date(data.valid_until).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
           const ref = (data.reference_id || '').toString().toUpperCase();
           msg.textContent = ref
             ? `Already registered: pass active until ${expires} (Ref ${ref})`
             : `Already registered: pass active until ${expires}`;
+          msg.style.color = '';
+        } else {
+          msg.style.color = '';
         }
       } catch (_) { /* non-fatal — let submit handle it */ }
     }

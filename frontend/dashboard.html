@@ -2779,7 +2779,7 @@ const db = {
     if (supabase) {
       const { data, error } = await supabase
         .from('plate_sessions')
-        .select('id, normalized_plate, plate_text, vehicle_type, entered_at, state, visitor_pass_id, resident_plate_id, entry_camera_id, exit_camera_id, violation_id')
+        .select('id, normalized_plate, plate_text, vehicle_type, entered_at, state, visitor_pass_id, resident_plate_id, entry_camera_id, exit_camera_id, violation_id, last_detected_at, exit_hinted_at')
         .eq('property_id', propertyId)
         .is('exited_at', null)
         .order('entered_at', { ascending: false });
@@ -8300,7 +8300,15 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
                 </div>
                 <div style={{fontSize:11,color:'var(--text-muted)',marginTop:3}}>
                   Here {mins}m · entered {new Date(s.entered_at).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}
+                  {s.last_detected_at && s.last_detected_at !== s.entered_at && (
+                    <> · last seen {Math.max(0, Math.floor((nowTick - new Date(s.last_detected_at).getTime()) / 60000))}m ago</>
+                  )}
                 </div>
+                {s.exit_hinted_at && (
+                  <div style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',marginTop:4,color:'#fb923c'}}>
+                    Closing soon · exit inferred {Math.max(0, Math.floor((nowTick - new Date(s.exit_hinted_at).getTime()) / 60000))}m ago
+                  </div>
+                )}
               </div>
             </div>
           );
