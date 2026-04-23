@@ -11,3 +11,33 @@ port = 54322
 [studio]
 enabled = true
 port = 54323
+
+# Edge function deploy-time settings. Default is verify_jwt=true but:
+# - camera-snapshot has its own URL-secret auth for untrusted camera POSTs
+# - cron-sessions-sweep is invoked by pg_cron with no auth header
+# Both MUST be false, or pg_cron returns 401 every tick and cameras
+# get rejected. This config.toml is read by `supabase functions deploy`
+# so settings persist across redeploys.
+[functions.cron-sessions-sweep]
+verify_jwt = false
+
+[functions.camera-snapshot]
+verify_jwt = false
+
+[functions.pr-ingest]
+verify_jwt = false
+
+[functions.tow-dispatch-email]
+verify_jwt = false
+
+[functions.tow-confirm]
+verify_jwt = false
+
+[functions.check-violations]
+verify_jwt = false
+
+[functions.notify-expiring-plates]
+verify_jwt = false
+
+[functions.camera-debug]
+verify_jwt = false
