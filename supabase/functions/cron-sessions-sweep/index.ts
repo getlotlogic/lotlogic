@@ -28,18 +28,16 @@ const OVERSTAY_GRACE_MINUTES = Number(Deno.env.get("OVERSTAY_GRACE_MINUTES") ?? 
 const CLOSE_BUFFER_HOURS = Number(Deno.env.get("CLOSE_BUFFER_HOURS") ?? "2");
 const EXIT_HINT_BUFFER_MINUTES = Number(Deno.env.get("EXIT_HINT_BUFFER_MINUTES") ?? "5");
 const COOLDOWN_HOURS = Number(Deno.env.get("COOLDOWN_HOURS") ?? "24");
-// Grace window — how long a truck has after entry to either buy a pass
-// or leave the property. Was 15 min when the property was assumed to be
-// truck-only; bumped to 45 to cover pass-through visits at multi-tenant
-// sites (Shell, adjacent businesses sharing the driveway).
-const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "45");
-// Only fire violations for these vehicle types. At a truck plaza the
-// paying customer is a semi; cars/pickups/SUVs passing through to the
-// Shell etc. are not subject to truck parking policy. Other vehicle
-// types auto-close as presumed pass-through with no violation and no
-// partner email.
-const VIOLATION_VEHICLE_TYPES = (Deno.env.get("VIOLATION_VEHICLE_TYPES") ?? "truck")
-  .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+// Grace window — how long an unregistered plate has after entry before
+// we fire a violation. Generous by design: the priority is avoiding
+// false-positive partner emails at multi-tenant properties (Charlotte
+// shares driveways with Shell and adjacent businesses). A legitimate
+// pass-through visit — fuel + food + bathroom + maybe wait in line —
+// essentially never exceeds 2 hours. Real truck parkers overstay for
+// hours or overnight, so a 2h grace still catches them cleanly.
+// Silence-gap closes the session earlier (clean, no violation) if any
+// camera sees the vehicle leaving within the window.
+const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "120");
 
 const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -112,36 +110,28 @@ async function registrationTransition(): Promise<number> {
   return promoted;
 }
 
-// Grace expiry. Two paths diverge based on vehicle_type:
-//   - If vehicle_type matches VIOLATION_VEHICLE_TYPES (default: 'truck')
-//     and no exit was detected, fire a violation + partner email.
-//   - Otherwise (car/suv/pickup/unknown/null) — presume pass-through
-//     customer for an adjacent business (Shell, gear store, pool store
-//     at Charlotte). Close the session clean with no violation and no
-//     partner email.
-//
-// Also handles grace sessions where silence-gap already set
-// exit_hinted_at — close clean regardless of vehicle type. These are
-// trucks that entered but left via any camera within the dwell window,
-// proving they didn't park.
-async function graceExpiry(): Promise<{ violated: number; closed_pass_through: number; closed_exit_hint: number }> {
+// Grace expiry. Two close paths:
+//   - Silence-gap fired during grace window (vehicle detected leaving on
+//     any camera after 3+ min silence) → close clean, no violation.
+//   - No exit detected and GRACE_EXPIRY_MINUTES elapsed → fire violation
+//     + partner email.
+async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: number }> {
   const cutoff = new Date(Date.now() - GRACE_EXPIRY_MINUTES * 60 * 1000).toISOString();
   const { data: sessions, error } = await db
     .from("plate_sessions")
-    .select("id, property_id, plate_text, entry_plate_event_id, vehicle_type, exit_hinted_at, entered_at")
+    .select("id, property_id, plate_text, entry_plate_event_id, exit_hinted_at, entered_at")
     .eq("state", "grace")
     .is("exited_at", null);
   if (error) throw error;
-  if (!sessions || sessions.length === 0) return { violated: 0, closed_pass_through: 0, closed_exit_hint: 0 };
+  if (!sessions || sessions.length === 0) return { violated: 0, closed_exit_hint: 0 };
 
   let violated = 0;
-  let closedPassThrough = 0;
   let closedExitHint = 0;
   const nowIso = new Date().toISOString();
 
   for (const s of sessions) {
-    // Branch 1 — silence-gap fired during grace window. Vehicle was
-    // detected leaving (on any camera) after silence. Close clean.
+    // Branch 1 — silence-gap fired. Vehicle was detected leaving on any
+    // camera after silence. Close clean, no violation.
     if (s.exit_hinted_at) {
       const upd = await db.from("plate_sessions")
         .update({ state: "closed_clean", exited_at: s.exit_hinted_at, updated_at: nowIso })
@@ -152,26 +142,12 @@ async function graceExpiry(): Promise<{ violated: number; closed_pass_through: n
       continue;
     }
 
-    // Branch 2 — grace window expired. Decide: violate or pass-through?
+    // Branch 2 — grace window expired, no exit detected → violation.
     if (s.entered_at >= cutoff) continue; // not yet expired
-
-    const vt = (s.vehicle_type ?? "").toLowerCase();
-    const shouldViolate = VIOLATION_VEHICLE_TYPES.includes(vt);
-
-    if (shouldViolate) {
-      await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "grace");
-      violated++;
-    } else {
-      // Presumed pass-through. No violation, no partner email, no hold.
-      const upd = await db.from("plate_sessions")
-        .update({ state: "closed_clean", exited_at: nowIso, updated_at: nowIso })
-        .eq("id", s.id)
-        .eq("state", "grace");
-      if (upd.error) throw upd.error;
-      closedPassThrough++;
-    }
+    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "grace");
+    violated++;
   }
-  return { violated, closed_pass_through: closedPassThrough, closed_exit_hint: closedExitHint };
+  return { violated, closed_exit_hint: closedExitHint };
 }
 
 // NEW — registered session + pass expired > OVERSTAY_GRACE_MINUTES ago =
