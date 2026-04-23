@@ -653,6 +653,25 @@ async function inferDirection(
     return;
   }
 
+  // Exit signal requires a STREET-FACING (position_order=1) camera.
+  // Interior cameras (position_order=2) see transit movement — a vehicle
+  // that entered south, fueled at Shell, and is now crossing the interior
+  // on its way to truck parking should NOT be treated as exiting. Only
+  // detections at the property boundary cameras count as exit signals.
+  //
+  // Real-world flow this guards against:
+  //   t=0   Camera 6 entry (session opens)
+  //   t=20  truck at Shell fuel pumps (invisible)
+  //   t=20  Camera 5 fires (truck heading east into parking)
+  //     → WITHOUT this guard: silence-gap sees 20-min gap, closes
+  //       session clean, truck then parks illegally with no session.
+  //     → WITH this guard: Camera 5 is order=2, silence-gap skipped,
+  //       session remains open through grace → violation fires at 30m.
+  if (currentPositionOrder !== 1) {
+    console.log(`silence-gap skipped (non-exit camera) session=${sessionId} current_order=${currentPositionOrder}`);
+    return;
+  }
+
   const idleCutoffMs = now.getTime() - SESSION_IDLE_MINUTES * 60 * 1000;
   if (new Date(session.last_detected_at).getTime() >= idleCutoffMs) return;
 
