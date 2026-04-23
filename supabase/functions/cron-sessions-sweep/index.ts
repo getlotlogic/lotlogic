@@ -111,7 +111,7 @@ async function graceExpiry(): Promise<number> {
 
   let n = 0;
   for (const s of sessions) {
-    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id);
+    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "grace");
     n++;
   }
   return n;
@@ -143,7 +143,7 @@ async function overstayExpiry(): Promise<number> {
     if (!pass?.valid_until) continue;
     if (new Date(pass.valid_until).getTime() >= graceCutoffMs) continue;
 
-    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id);
+    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "registered");
     n++;
   }
   return n;
@@ -212,7 +212,9 @@ async function closeRegistered(): Promise<number> {
       hold_until: holdUntil.toISOString(),
       reason: "post_visit_cooldown",
     });
-    if (hIns.error) console.warn("plate_holds insert failed:", hIns.error.message);
+    // Throw on insert failure — session already closed; silent failure here
+    // would leave the truck free to return immediately with no cooldown.
+    if (hIns.error) throw hIns.error;
 
     console.log(`close_registered session=${s.id} path=${fastPath ? "hint" : "buffer"} exited_at=${exitedAt}`);
     closed++;
@@ -287,14 +289,19 @@ async function closeExpired(): Promise<number> {
       (v.status && ["resolved", "dismissed", "no_tow"].includes(v.status));
     if (!resolved) continue;
 
-    const exitedAt = s.last_detected_at;
+    // Same null-fallback as closeRegistered. last_detected_at can be null
+    // on older sessions (pre-migration-018 inserts) — if we pass null into
+    // new Date() we get epoch (1970), which creates an already-expired
+    // 24h hold that doesn't actually block anything.
+    const exitedAt = s.last_detected_at ?? new Date().toISOString();
     const sUpd = await db.from("plate_sessions")
       .update({
         state: v.tow_confirmed_at ? "closed_post_violation" : "closed_clean",
         exited_at: exitedAt,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", s.id);
+      .eq("id", s.id)
+      .eq("state", "expired");
     if (sUpd.error) throw sUpd.error;
 
     const holdUntil = new Date(new Date(exitedAt).getTime() + COOLDOWN_HOURS * 60 * 60 * 1000);
@@ -306,7 +313,9 @@ async function closeExpired(): Promise<number> {
       hold_until: holdUntil.toISOString(),
       reason: "post_visit_cooldown",
     });
-    if (hIns.error) console.warn("plate_holds insert failed:", hIns.error.message);
+    // Throw, don't warn — a silent insert failure means the session was
+    // closed with NO cooldown enforcement, which is worse than failing loud.
+    if (hIns.error) throw hIns.error;
 
     closed++;
   }
@@ -318,7 +327,27 @@ async function createViolationAndDispatch(
   plateText: string,
   entryPlateEventId: string,
   sessionId: string,
+  expectedState: "grace" | "registered",
 ): Promise<void> {
+  // Guard against a concurrent cron tick having already transitioned this
+  // session. Try to claim the transition first via a conditional UPDATE;
+  // only if the claim succeeds do we insert the violation + dispatch email.
+  // This prevents the race where graceExpiry/overstayExpiry both pick up
+  // the same session during a slow SendGrid roundtrip (2-5s) and produce
+  // duplicate violations + duplicate partner emails.
+  const claim = await db
+    .from("plate_sessions")
+    .update({ state: "expired", updated_at: new Date().toISOString() })
+    .eq("id", sessionId)
+    .eq("state", expectedState)
+    .is("exited_at", null)
+    .select("id");
+  if (claim.error) throw claim.error;
+  if (!claim.data || claim.data.length === 0) {
+    console.log(`createViolationAndDispatch: session ${sessionId} no longer in state=${expectedState}, skipping (another cron tick won the race)`);
+    return;
+  }
+
   const vIns = await db
     .from("alpr_violations")
     .insert({
@@ -336,7 +365,7 @@ async function createViolationAndDispatch(
 
   const sUpd = await db
     .from("plate_sessions")
-    .update({ state: "expired", violation_id: violationId, updated_at: new Date().toISOString() })
+    .update({ violation_id: violationId, updated_at: new Date().toISOString() })
     .eq("id", sessionId);
   if (sUpd.error) throw sUpd.error;
 

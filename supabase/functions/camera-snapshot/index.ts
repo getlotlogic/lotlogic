@@ -124,12 +124,20 @@ Deno.serve(async (req: Request) => {
       if (upRes.ok) imageUrl = upRes.url;
       else imageError = upRes.error;
 
+      // Clamp inherited confidence. Reusing the prior event's score as-is
+      // lets a single hi-confidence read propagate forever — every subsequent
+      // inherited frame gets that same 0.9+ value, which inflates the
+      // "anchored" fuzzy-match tolerance in findSimilarOpenSession (≥3
+      // hi-conf events → maxEdits=2). Cap inherited confidence at 0.70 so
+      // these events never count toward the anchor threshold. The real
+      // plate confidence lives on the original burst events.
+      const inheritedConfidence = Math.min(recent.confidence ?? 0.70, 0.70);
       const ev = await db.from("plate_events").insert({
         camera_id: camera.id,
         property_id: camera.property_id,
         plate_text: recent.plate_text,
         normalized_plate: recent.normalized_plate,
-        confidence: recent.confidence,
+        confidence: inheritedConfidence,
         image_url: imageUrl,
         event_type: "entry",
         usdot_number: recent.usdot_number,
@@ -137,6 +145,7 @@ Deno.serve(async (req: Request) => {
         raw_data: {
           _source: `camera-snapshot:${extracted.source}:inherited`,
           _inherited_from_session: recent.session_id,
+          _original_confidence: recent.confidence,
           ...(extracted.rawMeta ?? {}),
           ...(imageError ? { image_upload_error: imageError } : {}),
         },
