@@ -615,11 +615,15 @@ async function inferDirection(
   }
 
   // ─── Branch 2: silence-gap ─────────────────────────────────────────
-  // Scope to registered + resident sessions. Grace sessions expire on
-  // their own 15-min timer, expired sessions are closed by closeExpired
-  // cron. Residents need silence-gap so their open session actually
-  // closes (no exit camera at some properties = no applyExitOutcome path).
-  if (session.state !== "registered" && session.state !== "resident") return;
+  // Scope to grace + registered + resident sessions. Expired sessions
+  // are closed by closeExpired cron (requires violation resolution).
+  //
+  // For grace: silence-gap signals the vehicle is leaving via any camera
+  // — proof they're not actually parking. Cron's graceExpiry will close
+  // the session clean (no violation, no partner email) because
+  // exit_hinted_at is set. Critical for multi-tenant properties where
+  // Shell/neighbor-business customers share the camered driveway.
+  if (session.state !== "grace" && session.state !== "registered" && session.state !== "resident") return;
   if (!session.last_detected_at) return;
 
   // Strong-identity guard: findSimilarOpenSession attaches events to a
