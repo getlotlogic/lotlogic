@@ -38,6 +38,16 @@ const COOLDOWN_HOURS = Number(Deno.env.get("COOLDOWN_HOURS") ?? "24");
 // Silence-gap closes the session earlier (clean, no violation) if any
 // camera sees the vehicle leaving within the window.
 const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "120");
+// Presence-evidence gate. A violation only fires if we have strong
+// evidence the vehicle was actually AT the property (not just a single
+// drive-by read). Either:
+//   - Events captured by ≥2 different cameras, OR
+//   - Events spanning ≥ PRESENCE_EVIDENCE_MINUTES of real time.
+// A single-camera burst that lasted < this duration is treated as
+// inconclusive → auto-close clean, no violation, no partner email.
+// This is the "absolutely sure they are in the wrong" guardrail: we'd
+// rather miss a borderline case than send a wrong enforcement email.
+const PRESENCE_EVIDENCE_MINUTES = Number(Deno.env.get("PRESENCE_EVIDENCE_MINUTES") ?? "5");
 
 const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -55,7 +65,7 @@ Deno.serve(async (_req: Request) => {
       ok: true,
       promoted,
       grace_violated: grace.violated,
-      grace_closed_pass_through: grace.closed_pass_through,
+      grace_closed_no_evidence: grace.closed_no_evidence,
       grace_closed_exit_hint: grace.closed_exit_hint,
       overstay_expired: overstayExpired,
       closed_registered: closedRegistered,
@@ -110,12 +120,15 @@ async function registrationTransition(): Promise<number> {
   return promoted;
 }
 
-// Grace expiry. Two close paths:
+// Grace expiry. Three close paths:
 //   - Silence-gap fired during grace window (vehicle detected leaving on
-//     any camera after 3+ min silence) → close clean, no violation.
-//   - No exit detected and GRACE_EXPIRY_MINUTES elapsed → fire violation
-//     + partner email.
-async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: number }> {
+//     any camera after idle threshold) → close clean, no violation.
+//   - Grace window expired but no strong presence evidence (single
+//     camera, short burst) → close clean, no violation. "Not sure they
+//     were actually there" = don't enforce.
+//   - Grace window expired AND strong presence evidence (≥2 cameras or
+//     events spanning ≥ PRESENCE_EVIDENCE_MINUTES) → fire violation.
+async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: number; closed_no_evidence: number }> {
   const cutoff = new Date(Date.now() - GRACE_EXPIRY_MINUTES * 60 * 1000).toISOString();
   const { data: sessions, error } = await db
     .from("plate_sessions")
@@ -123,10 +136,11 @@ async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: numb
     .eq("state", "grace")
     .is("exited_at", null);
   if (error) throw error;
-  if (!sessions || sessions.length === 0) return { violated: 0, closed_exit_hint: 0 };
+  if (!sessions || sessions.length === 0) return { violated: 0, closed_exit_hint: 0, closed_no_evidence: 0 };
 
   let violated = 0;
   let closedExitHint = 0;
+  let closedNoEvidence = 0;
   const nowIso = new Date().toISOString();
 
   for (const s of sessions) {
@@ -142,12 +156,44 @@ async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: numb
       continue;
     }
 
-    // Branch 2 — grace window expired, no exit detected → violation.
-    if (s.entered_at >= cutoff) continue; // not yet expired
+    if (s.entered_at >= cutoff) continue; // grace not yet expired
+
+    // Branch 2/3 — check presence evidence before violating. A violation
+    // is only fair if we have proof the vehicle was actually AT the
+    // property, not just a single drive-by read we mistakenly opened a
+    // session for. Count distinct cameras and measure event time span.
+    const { data: evRows, error: evErr } = await db
+      .from("plate_events")
+      .select("camera_id, created_at")
+      .eq("session_id", s.id)
+      .order("created_at", { ascending: true });
+    if (evErr) throw evErr;
+
+    const events = evRows ?? [];
+    const distinctCameras = new Set(events.map((e) => e.camera_id)).size;
+    const timeSpanMs = events.length >= 2
+      ? new Date(events[events.length - 1].created_at).getTime() - new Date(events[0].created_at).getTime()
+      : 0;
+    const hasStrongEvidence = distinctCameras >= 2 ||
+      timeSpanMs >= PRESENCE_EVIDENCE_MINUTES * 60 * 1000;
+
+    if (!hasStrongEvidence) {
+      // Inconclusive — only saw them briefly, may have been a drive-by.
+      // Close clean, no violation, no partner email.
+      const upd = await db.from("plate_sessions")
+        .update({ state: "closed_clean", exited_at: nowIso, updated_at: nowIso })
+        .eq("id", s.id)
+        .eq("state", "grace");
+      if (upd.error) throw upd.error;
+      console.log(`grace_closed_no_evidence session=${s.id} cameras=${distinctCameras} span_min=${Math.round(timeSpanMs/60000)}`);
+      closedNoEvidence++;
+      continue;
+    }
+
     await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "grace");
     violated++;
   }
-  return { violated, closed_exit_hint: closedExitHint };
+  return { violated, closed_exit_hint: closedExitHint, closed_no_evidence: closedNoEvidence };
 }
 
 // NEW — registered session + pass expired > OVERSTAY_GRACE_MINUTES ago =

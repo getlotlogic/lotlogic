@@ -30,13 +30,18 @@ const INHERIT_WINDOW_SECONDS = Number(Deno.env.get("INHERIT_WINDOW_SECONDS") ?? 
 // exit_hinted_at so cron closes it on a short buffer instead of the
 // default 2h buffer.
 const DIRECTION_WINDOW_SECONDS = Number(Deno.env.get("DIRECTION_WINDOW_SECONDS") ?? "30");
-// Silence-gap exit signal. For flanking entrances where position_order
-// can't disambiguate direction, detection on an open registered session
-// after this much idle time is treated as the truck passing through the
-// throat again — i.e. exiting. Entrance cameras only fire at throats, so
-// a large gap between events means the vehicle left the camera zone to
-// park and has now returned to the throat.
-const SESSION_IDLE_MINUTES = Number(Deno.env.get("SESSION_IDLE_MINUTES") ?? "5");
+// Silence-gap exit signal. Detection on an open session after this
+// much idle time is treated as the vehicle passing through the throat
+// again — i.e. exiting. Entrance cameras only fire at throats, so a
+// gap between events means the vehicle left the camera zone to park
+// (or leave the property) and has now returned to a throat.
+// Priority at multi-tenant properties is NO FALSE FLAGS — shorter is
+// better because it closes more sessions cleanly before grace expiry.
+// Directionality handled naturally: cross-camera events (south entry
+// → north exit or vice versa) trigger this branch via the session's
+// prior last_detected_at regardless of which camera fires the new
+// event.
+const SESSION_IDLE_MINUTES = Number(Deno.env.get("SESSION_IDLE_MINUTES") ?? "3");
 const USDOT_TOKEN = Deno.env.get("PARKPOW_USDOT_TOKEN") ?? "";
 const USDOT_ENABLED = (Deno.env.get("ENABLE_USDOT_FALLBACK") ?? "false").toLowerCase() === "true";
 const USDOT_MIN_SCORE = Number(Deno.env.get("USDOT_MIN_SCORE") ?? "0.70");
