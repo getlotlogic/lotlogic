@@ -38,16 +38,25 @@ const COOLDOWN_HOURS = Number(Deno.env.get("COOLDOWN_HOURS") ?? "24");
 // Silence-gap closes the session earlier (clean, no violation) if any
 // camera sees the vehicle leaving within the window.
 const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "120");
-// Presence-evidence gate. A violation only fires if we have strong
-// evidence the vehicle was actually AT the property (not just a single
-// drive-by read). Either:
-//   - Events captured by ≥2 different cameras, OR
-//   - Events spanning ≥ PRESENCE_EVIDENCE_MINUTES of real time.
-// A single-camera burst that lasted < this duration is treated as
-// inconclusive → auto-close clean, no violation, no partner email.
-// This is the "absolutely sure they are in the wrong" guardrail: we'd
-// rather miss a borderline case than send a wrong enforcement email.
+// Presence-evidence gate. A violation only fires if the session passes
+// both checks:
+//
+//   1. Minimum dwell: events must span at least MIN_DWELL_SECONDS of
+//      real time. Under this, it's a cross-property transit (enter one
+//      gate, exit another in seconds) even if multiple cameras fired.
+//      The AJ82908 false positive on 2026-04-24 taught us this the
+//      hard way — drive-through hit 2 cameras in 57 seconds and
+//      previously passed the gate.
+//
+//   2. Either multiple cameras (≥2) OR long dwell
+//      (≥ PRESENCE_EVIDENCE_MINUTES). Single-camera short bursts are
+//      inconclusive.
+//
+// Otherwise auto-close clean with no violation, no partner email.
+// This is the "absolutely sure they are in the wrong" guardrail — we'd
+// rather miss borderline cases than dispatch a wrong tow.
 const PRESENCE_EVIDENCE_MINUTES = Number(Deno.env.get("PRESENCE_EVIDENCE_MINUTES") ?? "5");
+const MIN_DWELL_SECONDS = Number(Deno.env.get("MIN_DWELL_SECONDS") ?? "120");
 
 const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -174,8 +183,17 @@ async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: numb
     const timeSpanMs = events.length >= 2
       ? new Date(events[events.length - 1].created_at).getTime() - new Date(events[0].created_at).getTime()
       : 0;
-    const hasStrongEvidence = distinctCameras >= 2 ||
-      timeSpanMs >= PRESENCE_EVIDENCE_MINUTES * 60 * 1000;
+
+    // Hard floor: total event span must exceed MIN_DWELL_SECONDS (default
+    // 120s = 2 min). Drive-through vehicles cross both gates in under a
+    // minute and would otherwise pass the "2+ cameras" check. A real
+    // parker takes longer even just to arrive and position.
+    const dwelledLongEnough = timeSpanMs >= MIN_DWELL_SECONDS * 1000;
+
+    const hasStrongEvidence = dwelledLongEnough && (
+      distinctCameras >= 2 ||
+      timeSpanMs >= PRESENCE_EVIDENCE_MINUTES * 60 * 1000
+    );
 
     if (!hasStrongEvidence) {
       // Inconclusive — only saw them briefly, may have been a drive-by.
