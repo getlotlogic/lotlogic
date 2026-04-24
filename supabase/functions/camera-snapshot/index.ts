@@ -437,7 +437,7 @@ Deno.serve(async (req: Request) => {
             let imageUrl: string | null = null;
             const upRes = await r2(key, extracted.bytes);
             if (upRes.ok) imageUrl = upRes.url;
-            await db.from("plate_events").insert({
+            const diag = await db.from("plate_events").insert({
               camera_id: camera.id,
               property_id: camera.property_id,
               plate_text: "",
@@ -459,6 +459,10 @@ Deno.serve(async (req: Request) => {
               match_reason: `sidecar ${reason} (rawDetections=${sidecar.rawDetectionCount})`,
               session_id: null,
             });
+            // Surface insert errors loudly. The CHECK constraint that
+            // initially rejected match_status='sidecar_rejected' was a
+            // silent failure for hours; never again.
+            if (diag.error) console.error(`diagnostic insert failed: ${diag.error.message}`);
           }
           return json(200, {
             ok: true,
