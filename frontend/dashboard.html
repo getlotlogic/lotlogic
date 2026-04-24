@@ -8511,34 +8511,50 @@ function ALPRPropertiesPage({ user }) {
   );
 }
 
-// ── Training Page (sidecar-rejected frame labeling) ─────────────
-// Pulls plate_events with match_status='sidecar_rejected' and lets the
-// operator mark each frame "Real plate missed" or "Junk (correctly
-// rejected)". Labels are written to raw_data.operator_label and feed
-// the training-curator agent which auto-tunes the sidecar.
+// ── Training Page (camera frame labeling) ─────────────
+// Two modes:
+//   "rejected" — sidecar-rejected frames. User confirms the gate was
+//     right (junk) or flags a missed plate (real_plate too aggressive).
+//   "detected" — frames where PR (or sidecar) returned a plate. User
+//     confirms it's actually a plate (real_plate) or flags a misread
+//     trailer number / decal / sign (false_positive).
+// Labels are written to raw_data.operator_label and feed the
+// training-curator agent which auto-tunes the sidecar gate.
 function TrainingPage({ user, isOwner }) {
+  const [mode, setMode] = useState('detected'); // start with what we have data for
   const [queue, setQueue] = useState([]);
   const [idx, setIdx] = useState(0);
-  const [stats, setStats] = useState({ unlabeled: 0, labeled_real: 0, labeled_junk: 0 });
+  const [stats, setStats] = useState({ unlabeled: 0, labels: {} });
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   async function loadQueue() {
     setLoading(true);
     try {
-      const { data: rejected, error } = await supabase
+      let q = supabase
         .from('plate_events')
-        .select('id, camera_id, property_id, image_url, image_sha256, image_dhash, raw_data, created_at')
-        .eq('match_status', 'sidecar_rejected')
+        .select('id, camera_id, property_id, plate_text, confidence, image_url, raw_data, created_at, match_status')
+        .not('image_url', 'is', null)
         .order('created_at', { ascending: false })
-        .limit(200);
+        .limit(300);
+      if (mode === 'rejected') {
+        q = q.eq('match_status', 'sidecar_rejected');
+      } else {
+        // PR-confirmed (or sidecar-confirmed) plate detections —
+        // anything not a rejection and not an inherited dedup row.
+        q = q.in('match_status', ['unmatched', 'resident', 'visitor_pass']);
+      }
+      const { data: rows, error } = await q;
       if (error) throw error;
-      const unlabeled = (rejected || []).filter(r => !r.raw_data?.operator_label);
+      const unlabeled = (rows || []).filter(r => !r.raw_data?.operator_label);
       setQueue(unlabeled);
       setIdx(0);
-      const labeled_real = (rejected || []).filter(r => r.raw_data?.operator_label === 'real_plate').length;
-      const labeled_junk = (rejected || []).filter(r => r.raw_data?.operator_label === 'junk').length;
-      setStats({ unlabeled: unlabeled.length, labeled_real, labeled_junk });
+      const labels = {};
+      for (const r of (rows || [])) {
+        const lbl = r.raw_data?.operator_label;
+        if (lbl) labels[lbl] = (labels[lbl] || 0) + 1;
+      }
+      setStats({ unlabeled: unlabeled.length, labels });
     } catch (err) {
       console.error('TrainingPage loadQueue', err);
     } finally {
@@ -8546,7 +8562,7 @@ function TrainingPage({ user, isOwner }) {
     }
   }
 
-  useEffect(() => { loadQueue(); }, []);
+  useEffect(() => { loadQueue(); }, [mode]); // eslint-disable-line
 
   async function label(verdict) {
     if (submitting || !queue[idx]) return;
@@ -8561,8 +8577,7 @@ function TrainingPage({ user, isOwner }) {
       if (error) throw error;
       setStats(s => ({
         unlabeled: Math.max(0, s.unlabeled - 1),
-        labeled_real: s.labeled_real + (verdict === 'real_plate' ? 1 : 0),
-        labeled_junk: s.labeled_junk + (verdict === 'junk' ? 1 : 0),
+        labels: { ...s.labels, [verdict]: (s.labels[verdict] || 0) + 1 },
       }));
       if (idx + 1 >= queue.length) {
         await loadQueue();
@@ -8577,44 +8592,80 @@ function TrainingPage({ user, isOwner }) {
     }
   }
 
+  // Keyboard shortcuts: 1 = first verdict, 2 = second, S = skip
+  useEffect(() => {
+    function onKey(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (!queue[idx]) return;
+      const verdicts = mode === 'rejected'
+        ? ['real_plate', 'junk']
+        : ['real_plate', 'false_positive'];
+      if (e.key === '1') label(verdicts[0]);
+      else if (e.key === '2') label(verdicts[1]);
+      else if (e.key.toLowerCase() === 's') setIdx(i => Math.min(queue.length - 1, i + 1));
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [queue, idx, mode]); // eslint-disable-line
+
   if (!isOwner) {
     return <div style={{padding:20, color:'var(--text-secondary)'}}>Owner-only page.</div>;
   }
-  if (loading) {
-    return <div style={{padding:20, color:'var(--text-secondary)'}}>Loading rejection queue…</div>;
-  }
+
   const cur = queue[idx];
+  const isRejected = mode === 'rejected';
+  const verdictA = { id: 'real_plate', label: isRejected ? '✗ Real plate missed' : '✓ Real plate', color: isRejected ? '#dc2626' : '#16a34a' };
+  const verdictB = { id: isRejected ? 'junk' : 'false_positive', label: isRejected ? '✓ Correctly rejected' : '✗ Not a real plate', color: isRejected ? '#16a34a' : '#dc2626' };
 
   return (
     <div className="page-section" style={{padding:'12px 14px'}}>
       <div style={{marginBottom:12}}>
         <h2 style={{margin:0, fontSize:18, fontWeight:800}}>Camera Training</h2>
         <p style={{margin:'4px 0 0', fontSize:13, color:'var(--text-secondary)'}}>
-          Label what the sidecar threw away. Real plates here = the gate is too aggressive. Junk = it's working.
+          {isRejected
+            ? 'Frames the sidecar threw away. Real plate = gate too aggressive. Junk = working.'
+            : 'Frames where a plate was detected. Confirm real or flag false positive (trailer #, decal, sign).'}
         </p>
+      </div>
+
+      {/* Mode toggle */}
+      <div style={{display:'flex', gap:6, marginBottom:12, background:'var(--surface)', padding:4, borderRadius:8, border:'1px solid var(--border)', maxWidth:340}}>
+        <button onClick={() => setMode('detected')} style={{
+          flex:1, background: mode === 'detected' ? 'var(--accent)' : 'transparent',
+          color: mode === 'detected' ? '#fff' : 'var(--text-secondary)',
+          border:'none', borderRadius:6, padding:'8px 10px', fontSize:12, fontWeight:700, cursor:'pointer',
+        }}>Detected plates</button>
+        <button onClick={() => setMode('rejected')} style={{
+          flex:1, background: mode === 'rejected' ? 'var(--accent)' : 'transparent',
+          color: mode === 'rejected' ? '#fff' : 'var(--text-secondary)',
+          border:'none', borderRadius:6, padding:'8px 10px', fontSize:12, fontWeight:700, cursor:'pointer',
+        }}>Rejected frames</button>
       </div>
 
       <div style={{display:'flex', gap:8, marginBottom:14, flexWrap:'wrap'}}>
         <span style={{background:'rgba(59,130,246,.15)', color:'#60a5fa', padding:'4px 10px', borderRadius:6, fontSize:12, fontWeight:700}}>
           {stats.unlabeled} unlabeled
         </span>
-        <span style={{background:'rgba(34,197,94,.15)', color:'#4ade80', padding:'4px 10px', borderRadius:6, fontSize:12, fontWeight:700}}>
-          {stats.labeled_real} real plates
-        </span>
-        <span style={{background:'rgba(107,114,128,.15)', color:'#9ca3af', padding:'4px 10px', borderRadius:6, fontSize:12, fontWeight:700}}>
-          {stats.labeled_junk} junk
-        </span>
+        {Object.entries(stats.labels).map(([k, v]) => (
+          <span key={k} style={{background:'rgba(34,197,94,.15)', color:'#4ade80', padding:'4px 10px', borderRadius:6, fontSize:12, fontWeight:700}}>
+            {v} {k.replace('_', ' ')}
+          </span>
+        ))}
         <button onClick={loadQueue} style={{
           background:'transparent', color:'var(--text-secondary)', border:'1px solid var(--border)',
           borderRadius:6, padding:'4px 10px', fontSize:12, cursor:'pointer', marginLeft:'auto',
         }}>Refresh</button>
       </div>
 
-      {!cur ? (
+      {loading ? (
+        <div style={{padding:20, color:'var(--text-secondary)'}}>Loading…</div>
+      ) : !cur ? (
         <div style={{padding:30, textAlign:'center', color:'var(--text-secondary)'}}>
           <div style={{fontSize:40, marginBottom:8}}>✓</div>
           <div style={{fontSize:16, fontWeight:700, color:'var(--text-primary)'}}>Queue is empty</div>
-          <div style={{fontSize:13, marginTop:6}}>Nothing to label right now. Check back when the cameras have run.</div>
+          <div style={{fontSize:13, marginTop:6}}>
+            {isRejected ? 'No rejected frames to label yet.' : 'All detected plates have been labeled. Switch tabs.'}
+          </div>
         </div>
       ) : (
         <div style={{
@@ -8622,7 +8673,7 @@ function TrainingPage({ user, isOwner }) {
           padding:14, maxWidth:680, margin:'0 auto',
         }}>
           {cur.image_url ? (
-            <img src={cur.image_url} alt="Rejected frame"
+            <img src={cur.image_url} alt="Frame"
               style={{width:'100%', borderRadius:8, display:'block', background:'#000'}}
               onError={(e) => { e.target.style.opacity = 0.3; }}
             />
@@ -8633,34 +8684,44 @@ function TrainingPage({ user, isOwner }) {
           )}
 
           <div style={{marginTop:10, fontSize:12, color:'var(--text-secondary)', display:'grid', gridTemplateColumns:'auto 1fr', gap:'4px 12px'}}>
-            <span>Reason</span>
-            <span style={{color:'var(--text-primary)', fontFamily:'monospace'}}>{cur.raw_data?._sidecar_reason || '?'}</span>
-            <span>Detections</span>
-            <span style={{color:'var(--text-primary)'}}>{cur.raw_data?._sidecar_raw_detection_count ?? '?'}</span>
-            <span>Best conf</span>
-            <span style={{color:'var(--text-primary)'}}>{(cur.raw_data?._sidecar_best_confidence ?? 0).toFixed(2)}</span>
+            {!isRejected && (
+              <>
+                <span>Plate read</span>
+                <span style={{color:'var(--text-primary)', fontFamily:'monospace', fontWeight:700}}>{cur.plate_text || '—'}</span>
+                <span>Confidence</span>
+                <span style={{color:'var(--text-primary)'}}>{((cur.confidence ?? 0) * 100).toFixed(1)}%</span>
+              </>
+            )}
+            {isRejected && (
+              <>
+                <span>Reason</span>
+                <span style={{color:'var(--text-primary)', fontFamily:'monospace'}}>{cur.raw_data?._sidecar_reason || '?'}</span>
+                <span>Detections</span>
+                <span style={{color:'var(--text-primary)'}}>{cur.raw_data?._sidecar_raw_detection_count ?? '?'}</span>
+              </>
+            )}
             <span>Captured</span>
             <span style={{color:'var(--text-primary)'}}>{new Date(cur.created_at).toLocaleString()}</span>
           </div>
 
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:14}}>
-            <button onClick={() => label('real_plate')} disabled={submitting}
+            <button onClick={() => label(verdictA.id)} disabled={submitting}
               style={{
-                background:'#dc2626', color:'#fff', border:'none', borderRadius:10,
+                background: verdictA.color, color:'#fff', border:'none', borderRadius:10,
                 padding:'14px 12px', fontSize:14, fontWeight:800, cursor:submitting?'wait':'pointer',
               }}>
-              ✗ Real plate missed
+              {verdictA.label} <span style={{opacity:.6, fontSize:11, fontWeight:600}}>(1)</span>
             </button>
-            <button onClick={() => label('junk')} disabled={submitting}
+            <button onClick={() => label(verdictB.id)} disabled={submitting}
               style={{
-                background:'#16a34a', color:'#fff', border:'none', borderRadius:10,
+                background: verdictB.color, color:'#fff', border:'none', borderRadius:10,
                 padding:'14px 12px', fontSize:14, fontWeight:800, cursor:submitting?'wait':'pointer',
               }}>
-              ✓ Correctly rejected
+              {verdictB.label} <span style={{opacity:.6, fontSize:11, fontWeight:600}}>(2)</span>
             </button>
           </div>
           <div style={{marginTop:8, textAlign:'center', fontSize:11, color:'var(--text-secondary)'}}>
-            {idx + 1} of {queue.length} in this batch
+            {idx + 1} of {queue.length} • Press 1 / 2 to label, S to skip
           </div>
         </div>
       )}
