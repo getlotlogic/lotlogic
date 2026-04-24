@@ -15,7 +15,7 @@ RUN echo "deb http://archive.ubuntu.com/ubuntu bionic universe" >> /etc/apt/sour
     && curl -fsSL 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF23C5A6CF475977595C89F51BA6932366A755776' | apt-key add - \
     && echo "deb http://ppa.launchpad.net/deadsnakes/ppa/ubuntu bionic main" > /etc/apt/sources.list.d/deadsnakes.list \
     && apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3.10-venv python3.10-distutils \
+    python3.10 python3.10-dev \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
     && rm -rf /var/lib/apt/lists/*
 
