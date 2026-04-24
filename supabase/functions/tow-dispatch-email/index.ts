@@ -87,17 +87,19 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
-  // Primary provider is SendGrid (Twilio's email product). We keep the
-  // RESEND_API_KEY fallback so the function degrades gracefully if SendGrid
-  // is unreachable and the old Resend config is still present.
-  const sendgridKey = Deno.env.get("SENDGRID_API_KEY");
+  // Primary provider is Resend (3K/mo free tier easily covers current
+  // volume). SendGrid kept as fallback — we already have the integration
+  // and Twilio's free tier (100/day) absorbs anything Resend misses.
+  // Swapped 2026-04-24 to drop Twilio dependency end-to-end (the Twilio
+  // SMS dispatcher is being decommissioned in the same change).
   const resendKey = Deno.env.get("RESEND_API_KEY");
+  const sendgridKey = Deno.env.get("SENDGRID_API_KEY");
   const fromEmail = Deno.env.get("FROM_EMAIL") || "noreply@lotlogic.com";
   const fromName = Deno.env.get("FROM_NAME") || "LotLogic";
   const jwtSecret = Deno.env.get("JWT_SECRET") || "";
   const backendUrl = Deno.env.get("BACKEND_URL") || "https://lotlogic-backend-production.up.railway.app";
-  if (!sendgridKey && !resendKey) {
-    return json({ error: "No email provider configured (set SENDGRID_API_KEY or RESEND_API_KEY)" }, 500);
+  if (!resendKey && !sendgridKey) {
+    return json({ error: "No email provider configured (set RESEND_API_KEY or SENDGRID_API_KEY)" }, 500);
   }
 
   const supabase = createClient(
@@ -241,9 +243,9 @@ ${buttonsBlock}
   const overrideTo = Deno.env.get("EMAIL_OVERRIDE_TO");
   const recipient = overrideTo && overrideTo.includes("@") ? overrideTo : partner.email;
 
-  const sendResult = sendgridKey
-    ? await sendViaSendGrid(sendgridKey, fromEmail, fromName, recipient, subject, textBody, html)
-    : await sendViaResend(resendKey!, fromEmail, recipient, subject, textBody, html);
+  const sendResult = resendKey
+    ? await sendViaResend(resendKey, fromEmail, recipient, subject, textBody, html)
+    : await sendViaSendGrid(sendgridKey!, fromEmail, fromName, recipient, subject, textBody, html);
 
   if (!sendResult.ok) {
     return json({
