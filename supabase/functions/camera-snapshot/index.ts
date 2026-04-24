@@ -120,16 +120,41 @@ Deno.serve(async (req: Request) => {
     // can match against them.
     const imageHashes = await computeImageHashes(extracted.bytes);
 
-    // Call PR first. Only call USDOT when PR returned NO plate — i.e. the
-    // camera angle didn't catch the plate. When PR sees a plate at all (even
-    // at lowish confidence), we trust that read and skip the ParkPow call.
+    // ── Tier 0: in-flight race guard ──────────────────────────────────
+    // If ANY recent event exists on this camera — even one whose session
+    // hasn't been backfilled yet — another frame is mid-processing. The
+    // previous code required session_id IS NOT NULL, which meant rapid
+    // bursts of a new plate all hit PR before the first frame finished
+    // creating its session (observed in prod 2026-04-24: 11 events on
+    // plate 210CYL within 50s, all full-PR, all on the same session once
+    // backfills resolved). Skip PR without writing a row — the in-flight
+    // frame will create the canonical event.
+    const inheritCutoff = new Date(Date.now() - INHERIT_WINDOW_SECONDS * 1000).toISOString();
+    const inflightProbe = await db
+      .from("plate_events")
+      .select("id, session_id, created_at")
+      .eq("camera_id", camera.id)
+      .gt("created_at", inheritCutoff)
+      .is("session_id", null)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (inflightProbe.data && inflightProbe.data.length > 0) {
+      console.log(`inflight-dedup skip: camera=${camera.api_key} prior_event=${inflightProbe.data[0].id}`);
+      return json(200, {
+        ok: true,
+        events: 0,
+        source: extracted.source,
+        deduped: true,
+        inherit_tier: "inflight",
+      });
+    }
+
     // ── Tier 3 inherit-from-recent (PR cost reduction) ─────────────────
     // If THIS camera just produced a plate_event with an active session,
     // skip the PR API call and inherit the plate from that recent event.
     // A truck sitting in frame triggers ~1 POST/sec on Milesight; without
     // this guard, every frame = 1 PR call. With it, one PR call covers
     // the whole time the truck is in view.
-    const inheritCutoff = new Date(Date.now() - INHERIT_WINDOW_SECONDS * 1000).toISOString();
     const recentQuery = await db
       .from("plate_events")
       .select("session_id, plate_text, normalized_plate, usdot_number, mc_number, confidence, plate_sessions!inner(id, state, exited_at)")
