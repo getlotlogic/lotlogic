@@ -381,18 +381,39 @@ Deno.serve(async (req: Request) => {
         // Sidecar read a plate but no matching open session — fall through
         // to PR so we get a pro read and open a real session.
         console.log(`openalpr-sidecar read "${sidecar.bestPlate}" conf=${sidecar.bestConfidence} but no matching session; falling through to PR`);
-      } else if (sidecar.rawDetectionCount === 0) {
-        // Sidecar ran on the image and found ZERO text regions at all.
-        // No plate could possibly be readable. PR would also return
-        // nothing — skip the call entirely, don't write a row.
-        console.log(`openalpr-sidecar empty_scene: rawDetections=0, skipping PR`);
-        return json(200, {
-          ok: true,
-          events: 0,
-          source: extracted.source,
-          deduped: true,
-          inherit_tier: "sidecar_empty_scene",
-        });
+      } else if (sidecar.ok && !sidecar.bestPlate) {
+        // Sidecar ran successfully but returned no usable plate. Three
+        // sub-reasons (set by callOpenAlprSidecar based on the response):
+        //
+        //   • empty_scene           → zero text regions in the frame
+        //   • no_plate_shaped_text  → text regions found, none passed the
+        //                              plate-shape filter (signs, decals,
+        //                              trailer numbers, distant cars)
+        //   • below_min_confidence  → easyocr saw plate-shaped text but
+        //                              wasn't confident enough; PR's
+        //                              higher-quality model might catch it
+        //
+        // The user goal is "only confirmed plates to PR." For
+        // empty_scene + no_plate_shaped_text, PR will return nothing —
+        // the paid call is pure waste (50%+ of historical PR spend).
+        // Skip PR, no row written.
+        //
+        // For below_min_confidence we DO call PR. easyocr is a worse OCR
+        // than PR; a borderline read that fails our 0.80 threshold can
+        // still be a real plate at PR's quality bar.
+        if (sidecar.reason === "below_min_confidence") {
+          console.log(`openalpr-sidecar below_min_confidence (${sidecar.bestConfidence.toFixed(2)}), falling through to PR for confirmation`);
+          // fall through to PR
+        } else {
+          console.log(`openalpr-sidecar ${sidecar.reason ?? "no_plate"}: skipping PR (rawDetections=${sidecar.rawDetectionCount})`);
+          return json(200, {
+            ok: true,
+            events: 0,
+            source: extracted.source,
+            deduped: true,
+            inherit_tier: `sidecar_${sidecar.reason ?? "no_plate"}`,
+          });
+        }
       }
     }
 
