@@ -5,6 +5,11 @@ dockerfilePath = "Dockerfile"
 [deploy]
 startCommand = "uvicorn app:app --host 0.0.0.0 --port ${PORT}"
 healthcheckPath = "/health"
-healthcheckTimeout = 60
+# easyocr Reader initialization loads ~200MB of model weights into
+# Python memory during the FastAPI startup event. Takes 30-90 seconds
+# on a cold slim container. 60s default is too tight; 300s gives plenty
+# of margin and only applies during first boot — runtime requests are
+# unaffected.
+healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
