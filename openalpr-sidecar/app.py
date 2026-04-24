@@ -1,54 +1,63 @@
-"""OpenALPR sidecar for cost-efficient ALPR.
+"""Lightweight ALPR sidecar for cost-efficient plate pre-filtering.
 
-Runs on Railway. Accepts a base64-encoded JPEG via POST /recognize, returns
-the top plate candidates. Invoked by the camera-snapshot edge function
-BEFORE the Plate Recognizer API call — if OpenALPR returns a plate we
-already have an open session for, we skip PR entirely. Only when OpenALPR
-returns empty or no-match do we fall through to PR for a "pro" read.
+Runs on Railway. Accepts a base64-encoded JPEG via POST /recognize and
+returns plate candidates extracted via easyocr (pure-Python OCR, runs
+on CPU, ships with English model).
 
-Binary call: `alpr -j -c us -n 3 <image_path>` → JSON with top-3 candidates
-per detected plate region. We pass a temp file path because the CLI wants
-a filesystem handle.
+Invoked by the camera-snapshot edge function BEFORE the paid Plate
+Recognizer API. If easyocr reads a plate-shaped text region and we
+already have an open session for that plate, we skip PR entirely.
+
+Rationale for easyocr vs OpenALPR binary: openalpr binary installs via
+apt were broken on current Ubuntu bases (removed from 22.04 main, no
+longer distributed for Debian). easyocr is pure pip + English model
+shipped with the package — no OS-level gymnastics, predictable builds.
+Accuracy is lower than a dedicated ALPR engine but sufficient to
+pre-filter known plates already in our DB.
 """
 
 import base64
-import json
 import os
-import shutil
-import subprocess
-import tempfile
+import re
 import time
 from typing import List, Optional
 
+import cv2
+import easyocr
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 APP_AUTH_TOKEN = os.environ.get("SIDECAR_AUTH_TOKEN", "")
-ALPR_COUNTRY = os.environ.get("ALPR_COUNTRY", "us")
-ALPR_TOP_N = int(os.environ.get("ALPR_TOP_N", "3"))
-ALPR_TIMEOUT_SEC = float(os.environ.get("ALPR_TIMEOUT_SEC", "5.0"))
+MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.55"))
+MIN_PLATE_LEN = int(os.environ.get("ALPR_MIN_PLATE_LEN", "5"))
+MAX_PLATE_LEN = int(os.environ.get("ALPR_MAX_PLATE_LEN", "8"))
 
 app = FastAPI(
-    title="LotLogic OpenALPR sidecar",
-    description="Free/local ALPR pre-filter in front of Plate Recognizer.",
-    version="1.0.0",
+    title="LotLogic ALPR sidecar",
+    description="Free pre-filter in front of Plate Recognizer.",
+    version="2.0.0",
 )
+
+# Lazy-initialized at startup. Holds the heavy easyocr model so every
+# request reuses it instead of paying startup cost per call.
+reader: Optional[easyocr.Reader] = None
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    global reader
+    reader = easyocr.Reader(["en"], gpu=False, verbose=False)
 
 
 class RecognizeRequest(BaseModel):
-    image_base64: str = Field(
-        ...,
-        description="Base64-encoded JPEG bytes (data: URI prefix optional).",
-    )
-    auth_token: Optional[str] = Field(
-        None,
-        description="Shared secret. Must match SIDECAR_AUTH_TOKEN env var.",
-    )
+    image_base64: str = Field(..., description="Base64-encoded JPEG (data: URI prefix optional).")
+    auth_token: Optional[str] = Field(None, description="Shared secret; must match SIDECAR_AUTH_TOKEN.")
 
 
 class PlateCandidate(BaseModel):
     plate: str
-    confidence: float  # 0.0 - 1.0
+    confidence: float
 
 
 class RecognizeResponse(BaseModel):
@@ -60,14 +69,16 @@ class RecognizeResponse(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
-    alpr_ok = shutil.which("alpr") is not None
-    return {"ok": True, "alpr_binary_present": alpr_ok}
+    return {"ok": True, "reader_loaded": reader is not None}
 
 
 @app.post("/recognize", response_model=RecognizeResponse)
 def recognize(req: RecognizeRequest) -> RecognizeResponse:
     if APP_AUTH_TOKEN and req.auth_token != APP_AUTH_TOKEN:
         raise HTTPException(status_code=401, detail="unauthorized")
+
+    if reader is None:
+        raise HTTPException(status_code=503, detail="reader not loaded yet")
 
     started = time.monotonic()
 
@@ -83,72 +94,33 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
     if not image_bytes:
         raise HTTPException(status_code=400, detail="empty image")
 
-    # OpenALPR CLI wants a file path. Temp file cleaned up in finally.
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            suffix=".jpg", delete=False, dir="/tmp"
-        ) as fh:
-            fh.write(image_bytes)
-            tmp_path = fh.name
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="cannot decode jpeg")
 
-        try:
-            proc = subprocess.run(
-                [
-                    "alpr",
-                    "-c", ALPR_COUNTRY,
-                    "-j",
-                    "-n", str(ALPR_TOP_N),
-                    tmp_path,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=ALPR_TIMEOUT_SEC,
-            )
-        except subprocess.TimeoutExpired:
-            return RecognizeResponse(
-                ok=False,
-                plates=[],
-                processing_time_ms=(time.monotonic() - started) * 1000,
-                reason="alpr_timeout",
-            )
+    # easyocr returns [(bbox, text, confidence), ...] — text may contain
+    # spaces/punctuation; plates never do, so we normalize and filter.
+    detections = reader.readtext(img)
 
-        if proc.returncode != 0:
-            return RecognizeResponse(
-                ok=False,
-                plates=[],
-                processing_time_ms=(time.monotonic() - started) * 1000,
-                reason=f"alpr_exit_{proc.returncode}: {proc.stderr[:200]}",
-            )
+    plates: List[PlateCandidate] = []
+    for _bbox, text, conf in detections:
+        cleaned = re.sub(r"[^A-Z0-9]", "", (text or "").upper())
+        if not (MIN_PLATE_LEN <= len(cleaned) <= MAX_PLATE_LEN):
+            continue
+        # Plate shape rule: must contain at least one letter AND one digit.
+        # Rejects pure text strings ("EXITONLY") and pure numbers ("123456").
+        if not re.search(r"[A-Z]", cleaned) or not re.search(r"[0-9]", cleaned):
+            continue
+        if float(conf) < MIN_CONFIDENCE:
+            continue
+        plates.append(PlateCandidate(plate=cleaned, confidence=float(conf)))
 
-        try:
-            parsed = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError as err:
-            return RecognizeResponse(
-                ok=False,
-                plates=[],
-                processing_time_ms=(time.monotonic() - started) * 1000,
-                reason=f"alpr_json_parse: {err}",
-            )
+    # Sort highest confidence first so the caller can just read plates[0].
+    plates.sort(key=lambda p: p.confidence, reverse=True)
 
-        # OpenALPR CLI JSON shape: {"results": [{"plate": "...", "confidence": N,
-        # "candidates": [{"plate": "...", "confidence": N}, ...]}]}
-        candidates: List[PlateCandidate] = []
-        for det in parsed.get("results", []):
-            for cand in det.get("candidates", [])[: ALPR_TOP_N]:
-                plate = str(cand.get("plate") or "").upper().strip()
-                conf = float(cand.get("confidence") or 0) / 100.0
-                if plate:
-                    candidates.append(PlateCandidate(plate=plate, confidence=conf))
-
-        return RecognizeResponse(
-            ok=True,
-            plates=candidates,
-            processing_time_ms=(time.monotonic() - started) * 1000,
-        )
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+    return RecognizeResponse(
+        ok=True,
+        plates=plates,
+        processing_time_ms=(time.monotonic() - started) * 1000,
+    )
