@@ -198,17 +198,15 @@ Deno.serve(async (req: Request) => {
     }
 
     if (recent && recent.session_id) {
-      // Upload the image for evidence, skip PR, write an inherited plate_event.
+      // We've already confirmed this plate on a recent frame in this session.
+      // Skip the R2 upload — operators have the canonical image from the entry
+      // event; subsequent inherited frames are timeline noise visually. Keep
+      // the plate_events row though: silence-gap exit detection, dwell-time
+      // calculation, and direction inference all key off `created_at` of the
+      // row, not the image. Killing the row breaks the state machine.
+      // Net cost: 200-byte DB row vs. 60-100KB R2 upload. ~99% R2 savings.
       const nowDate = new Date();
-      const epochMs = nowDate.getTime();
-      const dateStr = nowDate.toISOString().slice(0, 10);
-      const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${recent.plate_text}-inherited.jpg`;
-      let imageUrl: string | null = null;
-      let imageError: string | null = null;
-      const upRes = await r2(key, extracted.bytes);
-      if (upRes.ok) imageUrl = upRes.url;
-      else imageError = upRes.error;
-
+      const imageUrl: string | null = null;
       // Clamp inherited confidence. Reusing the prior event's score as-is
       // lets a single hi-confidence read propagate forever — every subsequent
       // inherited frame gets that same 0.9+ value, which inflates the
@@ -233,8 +231,8 @@ Deno.serve(async (req: Request) => {
           _source: `camera-snapshot:${extracted.source}:inherited`,
           _inherited_from_session: recent.session_id,
           _original_confidence: recent.confidence,
+          _image_suppressed: "session_already_confirmed",
           ...(extracted.rawMeta ?? {}),
-          ...(imageError ? { image_upload_error: imageError } : {}),
         },
         match_status: "dedup_suppressed",
         match_reason: `inherited from prior detection within ${INHERIT_WINDOW_SECONDS}s`,
@@ -328,42 +326,49 @@ Deno.serve(async (req: Request) => {
     // sidecar reads fall through to PR for the "pro" read.
     if (!hashMatch && OPENALPR_SIDECAR_URL) {
       const sidecar = await callOpenAlprSidecar(extracted.bytes);
-      if (sidecar.ok && sidecar.bestPlate) {
-        const sidecarNormalized = normalizePlate(sidecar.bestPlate);
+      // Cross-camera burst killer: try to match the sidecar's read against
+      // an OPEN session on this property even if the read is below the
+      // 0.80 confidence gate that normally protects against false positives.
+      // Rationale: if the session is already open, it was anchored by a
+      // confirmed PR read. A weak sidecar read (e.g. plate visible but
+      // motion-blurred) that fuzzy-matches the existing open plate is far
+      // more likely "same truck still here" than "different truck whose
+      // plate happens to look like ours". Without this gate, simultaneous
+      // multi-camera triggers of the same vehicle each cost a PR call.
+      const candidatePlate = sidecar.bestPlate ?? sidecar.topReadPlate;
+      const candidateConf = sidecar.bestPlate ? sidecar.bestConfidence : sidecar.topReadConfidence;
+      const lowConfMatchAttempt = !sidecar.bestPlate && sidecar.topReadPlate && candidateConf >= 0.50;
+      if (sidecar.ok && candidatePlate) {
+        const sidecarNormalized = normalizePlate(candidatePlate);
         const sidecarSession = await findSimilarOpenSession(db, camera.property_id, sidecarNormalized, 600);
         if (sidecarSession) {
+          // Inherit. Skip R2 upload — we already have the canonical image
+          // from this session's entry event; subsequent inherited frames
+          // are timeline noise visually. Keep the row for state-machine
+          // dwell/silence-gap logic and audit trail.
           const nowDate = new Date();
-          const epochMs = nowDate.getTime();
-          const dateStr = nowDate.toISOString().slice(0, 10);
-          const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${sidecarSession.plate_text}-openalpr.jpg`;
-          let imageUrl: string | null = null;
-          let imageError: string | null = null;
-          const upRes = await r2(key, extracted.bytes);
-          if (upRes.ok) imageUrl = upRes.url;
-          else imageError = upRes.error;
-
-          const inheritedConfidence = Math.min(sidecar.bestConfidence, 0.70);
+          const inheritedConfidence = Math.min(candidateConf, 0.70);
           const ev = await db.from("plate_events").insert({
             camera_id: camera.id,
             property_id: camera.property_id,
             plate_text: sidecarSession.plate_text,
             normalized_plate: sidecarSession.normalized_plate,
             confidence: inheritedConfidence,
-            image_url: imageUrl,
+            image_url: null,
             image_sha256: imageHashes.sha256,
             image_dhash: imageHashes.dhash,
             event_type: "entry",
             raw_data: {
-              _source: `camera-snapshot:${extracted.source}:openalpr`,
+              _source: `camera-snapshot:${extracted.source}:openalpr${lowConfMatchAttempt ? ":lowconf" : ""}`,
               _inherited_from_session: sidecarSession.id,
-              _sidecar_plate: sidecar.bestPlate,
-              _sidecar_confidence: sidecar.bestConfidence,
+              _sidecar_plate: candidatePlate,
+              _sidecar_confidence: candidateConf,
               _sidecar_processing_ms: sidecar.processingMs,
+              _image_suppressed: "session_already_confirmed",
               ...(extracted.rawMeta ?? {}),
-              ...(imageError ? { image_upload_error: imageError } : {}),
             },
             match_status: "dedup_suppressed",
-            match_reason: `openalpr sidecar read "${sidecar.bestPlate}" (${sidecar.bestConfidence.toFixed(2)}) matched session plate "${sidecarSession.plate_text}"`,
+            match_reason: `openalpr sidecar read "${candidatePlate}" (${candidateConf.toFixed(2)}${lowConfMatchAttempt ? ", below threshold" : ""}) matched session plate "${sidecarSession.plate_text}"`,
             matched_at: nowDate.toISOString(),
             session_id: sidecarSession.id,
           });
@@ -374,21 +379,27 @@ Deno.serve(async (req: Request) => {
             .update({ last_detected_at: nowDate.toISOString() })
             .eq("id", sidecarSession.id);
 
-          console.log(`openalpr-sidecar inherit session=${sidecarSession.id} plate=${sidecar.bestPlate} conf=${sidecar.bestConfidence}`);
+          console.log(`openalpr-sidecar inherit session=${sidecarSession.id} plate=${candidatePlate} conf=${candidateConf} lowconf=${lowConfMatchAttempt}`);
           return json(200, {
             ok: true,
             events: 1,
             source: extracted.source,
             inherited: true,
-            inherit_tier: "openalpr",
+            inherit_tier: lowConfMatchAttempt ? "openalpr_lowconf" : "openalpr",
             session_id: sidecarSession.id,
             plate_text: sidecarSession.plate_text,
           });
         }
-        // Sidecar read a plate but no matching open session — fall through
-        // to PR so we get a pro read and open a real session.
-        console.log(`openalpr-sidecar read "${sidecar.bestPlate}" conf=${sidecar.bestConfidence} but no matching session; falling through to PR`);
-      } else if (sidecar.ok && !sidecar.bestPlate) {
+        // No matching session. If sidecar's read was BELOW the confidence
+        // gate, treat as no plate (fall to the next branch, may skip PR).
+        // If above gate, fall through to PR — could be a new vehicle.
+        if (sidecar.bestPlate) {
+          console.log(`openalpr-sidecar read "${sidecar.bestPlate}" conf=${sidecar.bestConfidence} but no matching session; falling through to PR`);
+        }
+        // Below-threshold reads with no session match: treat exactly like
+        // no_plate (fall to the no-plate branch below).
+      }
+      if (sidecar.ok && !sidecar.bestPlate) {
         // Sidecar ran successfully but returned no usable plate. Three
         // sub-reasons (set by callOpenAlprSidecar based on the response):
         //
@@ -462,16 +473,10 @@ Deno.serve(async (req: Request) => {
     }
 
     if (hashMatch && hashMatch.session_id) {
+      // Hash-dedup match — same image bytes (or near-identical dHash) as a
+      // recent frame on this camera. Skip the R2 upload; we already have
+      // the canonical image from the prior frame.
       const nowDate = new Date();
-      const epochMs = nowDate.getTime();
-      const dateStr = nowDate.toISOString().slice(0, 10);
-      const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${hashMatch.plate_text}-${hashMatch.tier}.jpg`;
-      let imageUrl: string | null = null;
-      let imageError: string | null = null;
-      const upRes = await r2(key, extracted.bytes);
-      if (upRes.ok) imageUrl = upRes.url;
-      else imageError = upRes.error;
-
       const inheritedConfidence = Math.min(hashMatch.confidence ?? 0.70, 0.70);
       const ev = await db.from("plate_events").insert({
         camera_id: camera.id,
@@ -479,7 +484,7 @@ Deno.serve(async (req: Request) => {
         plate_text: hashMatch.plate_text,
         normalized_plate: hashMatch.normalized_plate,
         confidence: inheritedConfidence,
-        image_url: imageUrl,
+        image_url: null,
         image_sha256: imageHashes.sha256,
         image_dhash: imageHashes.dhash,
         event_type: "entry",
@@ -491,8 +496,8 @@ Deno.serve(async (req: Request) => {
           _hash_tier: hashMatch.tier,
           _hash_distance: hashMatch.distance ?? 0,
           _original_confidence: hashMatch.confidence,
+          _image_suppressed: "session_already_confirmed",
           ...(extracted.rawMeta ?? {}),
-          ...(imageError ? { image_upload_error: imageError } : {}),
         },
         match_status: "dedup_suppressed",
         match_reason: `image similarity (${hashMatch.tier}) within ${IMAGE_HASH_WINDOW_SECONDS}s`,
@@ -849,14 +854,20 @@ async function callOpenAlprSidecar(
   imageBytes: Uint8Array,
 ): Promise<{
   ok: boolean;
-  bestPlate: string | null;
+  bestPlate: string | null;       // gated by OPENALPR_MIN_CONFIDENCE
   bestConfidence: number;
+  // ALWAYS-set fields — let the call site decide whether to use a low-conf
+  // read for open-session matching even when bestPlate is null because of
+  // the threshold gate. Without this the plate string is lost forever and
+  // the caller has no way to attempt fuzzy matching against active sessions.
+  topReadPlate: string | null;
+  topReadConfidence: number;
   rawDetectionCount: number;
   processingMs: number;
   reason?: string;
 }> {
   if (!OPENALPR_SIDECAR_URL) {
-    return { ok: false, bestPlate: null, bestConfidence: 0, rawDetectionCount: 0, processingMs: 0, reason: "sidecar_disabled" };
+    return { ok: false, bestPlate: null, bestConfidence: 0, topReadPlate: null, topReadConfidence: 0, rawDetectionCount: 0, processingMs: 0, reason: "sidecar_disabled" };
   }
 
   // Base64-encode the JPEG bytes for JSON transport.
@@ -882,7 +893,7 @@ async function callOpenAlprSidecar(
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       console.warn(`openalpr-sidecar ${res.status}: ${text.slice(0, 200)}`);
-      return { ok: false, bestPlate: null, bestConfidence: 0, rawDetectionCount: 0, processingMs: 0, reason: `sidecar_http_${res.status}` };
+      return { ok: false, bestPlate: null, bestConfidence: 0, topReadPlate: null, topReadConfidence: 0, rawDetectionCount: 0, processingMs: 0, reason: `sidecar_http_${res.status}` };
     }
     const body = await res.json();
     const plates: Array<{ plate: string; confidence: number }> = body.plates ?? [];
@@ -892,6 +903,8 @@ async function callOpenAlprSidecar(
         ok: true,
         bestPlate: null,
         bestConfidence: 0,
+        topReadPlate: null,
+        topReadConfidence: 0,
         rawDetectionCount,
         processingMs: Number(body.processing_time_ms ?? 0),
         reason: rawDetectionCount === 0 ? "empty_scene" : "no_plate_shaped_text",
@@ -905,6 +918,8 @@ async function callOpenAlprSidecar(
         ok: true,
         bestPlate: null,
         bestConfidence: best.confidence,
+        topReadPlate: best.plate,           // ← preserved for open-session matching
+        topReadConfidence: best.confidence,
         rawDetectionCount,
         processingMs: Number(body.processing_time_ms ?? 0),
         reason: "below_min_confidence",
@@ -914,13 +929,15 @@ async function callOpenAlprSidecar(
       ok: true,
       bestPlate: best.plate,
       bestConfidence: best.confidence,
+      topReadPlate: best.plate,
+      topReadConfidence: best.confidence,
       rawDetectionCount,
       processingMs: Number(body.processing_time_ms ?? 0),
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`openalpr-sidecar call failed: ${msg}`);
-    return { ok: false, bestPlate: null, bestConfidence: 0, rawDetectionCount: 0, processingMs: 0, reason: `sidecar_error:${msg.slice(0, 80)}` };
+    return { ok: false, bestPlate: null, bestConfidence: 0, topReadPlate: null, topReadConfidence: 0, rawDetectionCount: 0, processingMs: 0, reason: `sidecar_error:${msg.slice(0, 80)}` };
   } finally {
     clearTimeout(timer);
   }

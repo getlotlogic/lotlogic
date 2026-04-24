@@ -7678,6 +7678,15 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
   const [plates, setPlates] = useState([]);
   const [cameras, setCameras] = useState([]);
   const [events, setEvents] = useState([]);
+  // Group-by-session toggle for the Plate Detections list. Default ON to match
+  // the user's expectation: "1-2 shots per vehicle, not 100." Off shows the raw
+  // per-frame timeline. Persisted to localStorage so it survives reloads.
+  const [groupBySession, setGroupBySession] = useState(() => {
+    try { return localStorage.getItem('lotlogic_pd_group') !== '0'; } catch { return true; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_pd_group', groupBySession ? '1' : '0'); } catch {}
+  }, [groupBySession]);
   const [loading, setLoading] = useState(true);
   const [showAddPlate, setShowAddPlate] = useState(false);
   const [showAddCam, setShowAddCam] = useState(false);
@@ -8360,15 +8369,55 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
           <span className="pd-section-title">Plate Detections</span>
           <span className="pd-section-count">{events.length}</span>
         </div>
-        <div className="pd-section-meta">
-          <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
-          Live
+        <div className="pd-section-meta" style={{display:'flex',alignItems:'center',gap:10}}>
+          <button onClick={() => setGroupBySession(g => !g)}
+            title={groupBySession ? 'Showing one row per vehicle visit. Click to see every individual frame.' : 'Showing every individual frame. Click to collapse same-vehicle frames into one row.'}
+            style={{
+              fontSize:10, fontWeight:700, padding:'3px 9px', borderRadius:14,
+              background: groupBySession ? 'rgba(59,130,246,.18)' : 'transparent',
+              color: groupBySession ? '#60a5fa' : 'var(--text-muted)',
+              border: groupBySession ? '1px solid #3b82f655' : '1px solid var(--border)',
+              cursor:'pointer', textTransform:'uppercase', letterSpacing:'.05em',
+            }}>
+            {groupBySession ? '◉ Grouped' : '○ Group by vehicle'}
+          </button>
+          <span style={{display:'flex',alignItems:'center',gap:4}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80',animation:'pulse-dot 1.5s infinite'}} />
+            Live
+          </span>
         </div>
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:6}}>
         {events.length === 0 ? (
           <div className="pd-empty">No plate detections yet</div>
-        ) : events.map(ev => {
+        ) : (() => {
+          // When groupBySession is on, collapse all events sharing a session_id
+          // into a single representative row (the most recent confirmed-plate
+          // event in the session, or the most recent overall if none was a
+          // confirmed match). Show a "+N more" badge so the operator knows
+          // how many frames are hidden. Click to expand inline.
+          let displayRows;
+          if (groupBySession) {
+            const groups = new Map();
+            for (const ev of events) {
+              const key = ev.session_id || ev.id; // events without a session stand alone
+              if (!groups.has(key)) groups.set(key, []);
+              groups.get(key).push(ev);
+            }
+            displayRows = Array.from(groups.values()).map(grp => {
+              // Pick representative: prefer the highest-confidence non-suppressed
+              // event (the canonical PR read), fall back to the most recent.
+              const canonical = grp
+                .filter(e => e.match_status !== 'dedup_suppressed' && e.match_status !== 'sidecar_rejected')
+                .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0]
+                || grp.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+              const groupCount = grp.length;
+              return { ...canonical, _groupCount: groupCount, _groupAll: grp };
+            }).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+          } else {
+            displayRows = events;
+          }
+          return displayRows.map(ev => {
           const cam = cameraById[ev.camera_id];
           const conf = typeof ev.confidence === 'number' ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) : null;
           const evType = ev.event_type || 'patrol';
@@ -8400,6 +8449,12 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
                   {ev.plate_sessions?.state && (
                     <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'#1f293720',color:'#9ca3af',border:'1px solid #37415140'}}>session: {ev.plate_sessions.state.replace('_',' ')}</span>
                   )}
+                  {ev._groupCount > 1 && (
+                    <span title="Same-vehicle frames collapsed; click 'Group by vehicle' off to see all"
+                      style={{fontSize:10,fontWeight:700,padding:'3px 8px',borderRadius:20,background:'rgba(59,130,246,.18)',color:'#60a5fa',border:'1px solid #3b82f655'}}>
+                      +{ev._groupCount - 1} more frame{ev._groupCount > 2 ? 's' : ''}
+                    </span>
+                  )}
                   {conf != null && <span style={{fontSize:11,color:'var(--text-faint)'}}>{conf}%</span>}
                 </div>
                 <div style={{fontSize:11,color:'var(--text-muted)',marginTop:3,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
@@ -8408,7 +8463,8 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
               </div>
             </div>
           );
-        })}
+        });
+        })()}
       </div>
     </div>
   );
