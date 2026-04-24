@@ -411,19 +411,33 @@ Deno.serve(async (req: Request) => {
         //                              wasn't confident enough; PR's
         //                              higher-quality model might catch it
         //
-        // The user goal is "only confirmed plates to PR." For
-        // empty_scene + no_plate_shaped_text, PR will return nothing —
-        // the paid call is pure waste (50%+ of historical PR spend).
-        // Skip PR, no row written.
+        // The gate is now LOOSE. easyocr is a text detector, not a plate
+        // detector — its plate-shape filter rejects valid plates at angles,
+        // motion blur, or unusual formats (4-char trucks, vanity plates,
+        // foreign formats). Operator feedback 2026-04-24: "the filter is
+        // too tight" — too many real plates being skipped.
         //
-        // For below_min_confidence we DO call PR. easyocr is a worse OCR
-        // than PR; a borderline read that fails our 0.80 threshold can
-        // still be a real plate at PR's quality bar.
-        if (sidecar.reason === "below_min_confidence") {
-          console.log(`openalpr-sidecar below_min_confidence (${sidecar.bestConfidence.toFixed(2)}), falling through to PR for confirmation`);
-          // fall through to PR
+        // New behavior:
+        //   • empty_scene (rawDetections === 0) → still skip PR. PR can't
+        //     find what's not there. Safe to gate.
+        //   • no_plate_shaped_text → fall through to PR. Trust PR's better
+        //     OCR over easyocr's heuristic. Cost goes up but recall is the
+        //     priority — missing real plates means missing violations.
+        //   • below_min_confidence → fall through to PR (unchanged).
+        //
+        // Diagnostic rows still written for both empty_scene and
+        // no_plate_shaped_text so the labeling UI can show them. This
+        // means LOG_REJECTED rows happen even when we DO call PR — the
+        // diagnostic captures sidecar's verdict regardless of downstream.
+        const isHardSkip = sidecar.reason === "empty_scene";
+        const fallThroughReason = sidecar.reason === "below_min_confidence"
+          ? `below_min_confidence (${sidecar.bestConfidence.toFixed(2)})`
+          : sidecar.reason ?? "no_plate";
+        if (!isHardSkip) {
+          console.log(`openalpr-sidecar ${fallThroughReason}, falling through to PR (loose gate)`);
+          // fall through to PR — do not return here
         } else {
-          console.log(`openalpr-sidecar ${sidecar.reason ?? "no_plate"}: skipping PR (rawDetections=${sidecar.rawDetectionCount})`);
+          console.log(`openalpr-sidecar empty_scene: skipping PR (rawDetections=0)`);
           if (LOG_REJECTED) {
             // Diagnostic: capture the rejected frame so an operator (or a
             // future training pipeline) can verify whether the gate threw
