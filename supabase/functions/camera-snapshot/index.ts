@@ -7,6 +7,7 @@ import { parsePath } from "./path.ts";
 import { findOpenSession, findSimilarOpenSession, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
 import { isPlateHeld } from "./holds.ts";
 import { extractUsdot } from "./usdot-ocr.ts";
+import { computeImageHashes, hammingDistance } from "./image-hash.ts";
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
@@ -23,7 +24,18 @@ const REQUIRE_VEHICLE_SCORE = Number(Deno.env.get("REQUIRE_VEHICLE_SCORE") ?? "0
 // session in the last INHERIT_WINDOW_SECONDS, skip the PR call and inherit
 // the plate + session from the recent event. Cuts PR calls for same-truck-
 // in-frame bursts (Milesight fires ~1/sec while a vehicle is in view).
-const INHERIT_WINDOW_SECONDS = Number(Deno.env.get("INHERIT_WINDOW_SECONDS") ?? "5");
+const INHERIT_WINDOW_SECONDS = Number(Deno.env.get("INHERIT_WINDOW_SECONDS") ?? "30");
+// Image-similarity dedup window. Stationary vehicles (parked in FoV) can
+// trigger motion events for minutes or hours — wind, shadow, trailer sway,
+// engine idle vibration. This window governs how far back we look for a
+// matching image hash. Larger = more PR savings but more risk of stale
+// inherit when a new vehicle arrives at the same spot.
+const IMAGE_HASH_WINDOW_SECONDS = Number(Deno.env.get("IMAGE_HASH_WINDOW_SECONDS") ?? "300");
+// Hamming-distance threshold for dHash similarity. 0 = byte-identical,
+// 1-5 = visually same scene with noise/compression variance, 6-10 =
+// similar scene with minor lighting shift, 15+ = different scene.
+// Default 5 is tight enough to only match "same scene" reliably.
+const DHASH_SIMILARITY_THRESHOLD = Number(Deno.env.get("DHASH_SIMILARITY_THRESHOLD") ?? "5");
 // Direction inference: if a plate is detected on camera B within this
 // window after being detected on camera A (different position_order), we
 // infer direction of travel. Entries → no action. Exits → set session's
@@ -94,6 +106,12 @@ Deno.serve(async (req: Request) => {
     const camera = (cameraQ.data ?? [])[0];
     if (!camera) return json(200, { ok: false, reason: "unknown_camera", api_key: cameraApiKey });
 
+    // Compute image hashes for dedup BEFORE any expensive downstream work.
+    // SHA-256 is cheap (~2ms); dHash requires JPEG decode (~100ms) but only
+    // runs once per frame. Both get stored on plate_events so future frames
+    // can match against them.
+    const imageHashes = await computeImageHashes(extracted.bytes);
+
     // Call PR first. Only call USDOT when PR returned NO plate — i.e. the
     // camera angle didn't catch the plate. When PR sees a plate at all (even
     // at lowish confidence), we trust that read and skip the ParkPow call.
@@ -144,6 +162,8 @@ Deno.serve(async (req: Request) => {
         normalized_plate: recent.normalized_plate,
         confidence: inheritedConfidence,
         image_url: imageUrl,
+        image_sha256: imageHashes.sha256,
+        image_dhash: imageHashes.dhash,
         event_type: "entry",
         usdot_number: recent.usdot_number,
         mc_number: recent.mc_number,
@@ -175,8 +195,100 @@ Deno.serve(async (req: Request) => {
         events: 1,
         source: extracted.source,
         inherited: true,
+        inherit_tier: "recent",
         session_id: recent.session_id,
         plate_text: recent.plate_text,
+      });
+    }
+
+    // ── Tier 4 image-similarity dedup (PR cost killer) ─────────────────
+    // Longer window than Tier 3: up to IMAGE_HASH_WINDOW_SECONDS ago. Catches
+    // stationary vehicles that trigger motion sporadically (wind/shadow/sway)
+    // for minutes at a time. Two-layer match:
+    //   (a) SHA-256 equality — truly byte-identical JPEG (fast DB lookup)
+    //   (b) dHash Hamming ≤ threshold — visually same scene (client-side)
+    // Only attempts this if dHash computation succeeded on the incoming frame.
+    const hashCutoff = new Date(Date.now() - IMAGE_HASH_WINDOW_SECONDS * 1000).toISOString();
+    const candidatesQuery = await db
+      .from("plate_events")
+      .select("session_id, plate_text, normalized_plate, usdot_number, mc_number, confidence, image_sha256, image_dhash, plate_sessions!inner(id, state, exited_at)")
+      .eq("camera_id", camera.id)
+      .gt("created_at", hashCutoff)
+      .not("session_id", "is", null)
+      .is("plate_sessions.exited_at", null)
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    let hashMatch: { session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number; tier: "sha256" | "dhash"; distance?: number } | null = null;
+    for (const c of (candidatesQuery.data ?? []) as Array<{ session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number; image_sha256: string | null; image_dhash: string | null }>) {
+      if (c.image_sha256 && c.image_sha256 === imageHashes.sha256) {
+        hashMatch = { ...c, tier: "sha256" };
+        break;
+      }
+      if (imageHashes.dhash && c.image_dhash) {
+        const d = hammingDistance(imageHashes.dhash, c.image_dhash);
+        if (d <= DHASH_SIMILARITY_THRESHOLD) {
+          hashMatch = { ...c, tier: "dhash", distance: d };
+          break;
+        }
+      }
+    }
+
+    if (hashMatch && hashMatch.session_id) {
+      const nowDate = new Date();
+      const epochMs = nowDate.getTime();
+      const dateStr = nowDate.toISOString().slice(0, 10);
+      const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${hashMatch.plate_text}-${hashMatch.tier}.jpg`;
+      let imageUrl: string | null = null;
+      let imageError: string | null = null;
+      const upRes = await r2(key, extracted.bytes);
+      if (upRes.ok) imageUrl = upRes.url;
+      else imageError = upRes.error;
+
+      const inheritedConfidence = Math.min(hashMatch.confidence ?? 0.70, 0.70);
+      const ev = await db.from("plate_events").insert({
+        camera_id: camera.id,
+        property_id: camera.property_id,
+        plate_text: hashMatch.plate_text,
+        normalized_plate: hashMatch.normalized_plate,
+        confidence: inheritedConfidence,
+        image_url: imageUrl,
+        image_sha256: imageHashes.sha256,
+        image_dhash: imageHashes.dhash,
+        event_type: "entry",
+        usdot_number: hashMatch.usdot_number,
+        mc_number: hashMatch.mc_number,
+        raw_data: {
+          _source: `camera-snapshot:${extracted.source}:hash-${hashMatch.tier}`,
+          _inherited_from_session: hashMatch.session_id,
+          _hash_tier: hashMatch.tier,
+          _hash_distance: hashMatch.distance ?? 0,
+          _original_confidence: hashMatch.confidence,
+          ...(extracted.rawMeta ?? {}),
+          ...(imageError ? { image_upload_error: imageError } : {}),
+        },
+        match_status: "dedup_suppressed",
+        match_reason: `image similarity (${hashMatch.tier}) within ${IMAGE_HASH_WINDOW_SECONDS}s`,
+        matched_at: nowDate.toISOString(),
+        session_id: hashMatch.session_id,
+      });
+      if (ev.error) throw ev.error;
+
+      // Run direction inference + last_detected_at bump, same as Tier 3.
+      await inferDirection(db, hashMatch.session_id, camera.property_id, hashMatch.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
+      await db.from("plate_sessions")
+        .update({ last_detected_at: nowDate.toISOString() })
+        .eq("id", hashMatch.session_id);
+
+      console.log(`hash-dedup match session=${hashMatch.session_id} tier=${hashMatch.tier} dist=${hashMatch.distance ?? 0}`);
+      return json(200, {
+        ok: true,
+        events: 1,
+        source: extracted.source,
+        inherited: true,
+        inherit_tier: hashMatch.tier,
+        session_id: hashMatch.session_id,
+        plate_text: hashMatch.plate_text,
       });
     }
 
@@ -278,6 +390,8 @@ Deno.serve(async (req: Request) => {
         normalized_plate: normalized,
         confidence: result.score,
         image_url: imageUrl,
+        image_sha256: imageHashes.sha256,
+        image_dhash: imageHashes.dhash,
         event_type: camera.orientation === "exit" ? "exit" : "entry",
         // USDOT/MC from ParkPow on the same frame — attached regardless of
         // whether PR also returned a plate. Null when ParkPow found nothing
