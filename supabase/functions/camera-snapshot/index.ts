@@ -591,6 +591,47 @@ Deno.serve(async (req: Request) => {
     }
 
     if (surviving.length === 0) {
+      // PR was called but returned nothing usable. This is the silent PR-
+      // cost leak: we paid for the call, the gate let it through, and now
+      // there's no row to show for it. With LOG_REJECTED on, capture the
+      // frame anyway so the operator can see what PR rejected and the
+      // training-curator has the full picture (sidecar said "maybe plate"
+      // but PR couldn't confirm it). match_status='sidecar_rejected' is
+      // reused — semantically these are "system rejected the frame", and
+      // the raw_data._sidecar_reason='pr_no_plate' identifies them.
+      if (LOG_REJECTED) {
+        const nowDate = new Date();
+        const epochMs = nowDate.getTime();
+        const dateStr = nowDate.toISOString().slice(0, 10);
+        const key = `diagnostic/${dateStr}/${camera.api_key}-${epochMs}-rejected-pr_no_plate.jpg`;
+        let imageUrl: string | null = null;
+        const upRes = await r2(key, extracted.bytes);
+        if (upRes.ok) imageUrl = upRes.url;
+        const diag = await db.from("plate_events").insert({
+          camera_id: camera.id,
+          property_id: camera.property_id,
+          plate_text: "",
+          normalized_plate: "",
+          confidence: 0,
+          image_url: imageUrl,
+          image_sha256: imageHashes.sha256,
+          image_dhash: imageHashes.dhash,
+          event_type: "entry",
+          raw_data: {
+            _source: `camera-snapshot:${extracted.source}:rejected`,
+            _sidecar_reason: "pr_no_plate",
+            _pr_results_count: results.length,
+            _pr_call_made: true,
+            _usdot_called: USDOT_ENABLED && !!USDOT_TOKEN,
+            _usdot_found: usdotResult.kind !== "none",
+            ...(extracted.rawMeta ?? {}),
+          },
+          match_status: "sidecar_rejected",
+          match_reason: `PR called but no usable plate (results=${results.length})`,
+          session_id: null,
+        });
+        if (diag.error) console.error(`pr-no-plate diagnostic insert failed: ${diag.error.message}`);
+      }
       return json(200, {
         ok: true,
         events: 0,
