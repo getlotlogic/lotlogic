@@ -32,6 +32,10 @@ APP_AUTH_TOKEN = os.environ.get("SIDECAR_AUTH_TOKEN", "")
 MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.55"))
 MIN_PLATE_LEN = int(os.environ.get("ALPR_MIN_PLATE_LEN", "5"))
 MAX_PLATE_LEN = int(os.environ.get("ALPR_MAX_PLATE_LEN", "8"))
+# easyocr scan time scales with image pixel count. Downscale large
+# frames before OCR — plates are still readable at 800px width and
+# processing drops from ~30s to ~3-5s per frame. 0 = no resize.
+MAX_IMAGE_WIDTH = int(os.environ.get("ALPR_MAX_IMAGE_WIDTH", "800"))
 
 app = FastAPI(
     title="LotLogic ALPR sidecar",
@@ -98,6 +102,16 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         raise HTTPException(status_code=400, detail="cannot decode jpeg")
+
+    # Downscale large images. easyocr's detection + recognition passes
+    # scale roughly linearly with pixel count; a 1920x1080 frame can take
+    # 20-40s on CPU, 800px-wide under 5s. Plates are still legible at
+    # 800px width for cameras mounted within ~30ft of the vehicle.
+    if MAX_IMAGE_WIDTH > 0 and img.shape[1] > MAX_IMAGE_WIDTH:
+        scale = MAX_IMAGE_WIDTH / img.shape[1]
+        new_w = MAX_IMAGE_WIDTH
+        new_h = int(img.shape[0] * scale)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     # easyocr returns [(bbox, text, confidence), ...] — text may contain
     # spaces/punctuation; plates never do, so we normalize and filter.
