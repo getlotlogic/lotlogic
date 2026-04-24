@@ -36,6 +36,14 @@ const IMAGE_HASH_WINDOW_SECONDS = Number(Deno.env.get("IMAGE_HASH_WINDOW_SECONDS
 // similar scene with minor lighting shift, 15+ = different scene.
 // Default 5 is tight enough to only match "same scene" reliably.
 const DHASH_SIMILARITY_THRESHOLD = Number(Deno.env.get("DHASH_SIMILARITY_THRESHOLD") ?? "5");
+// OpenALPR sidecar on Railway — free local ALPR that runs BEFORE Plate
+// Recognizer. If it reads a plate that matches an existing open session's
+// plate (exact or fuzzy), we skip the PR API call entirely. Falls through
+// to PR when the sidecar is empty, low-confidence, or can't be reached.
+const OPENALPR_SIDECAR_URL = Deno.env.get("OPENALPR_SIDECAR_URL") ?? "";
+const OPENALPR_SIDECAR_TOKEN = Deno.env.get("OPENALPR_SIDECAR_TOKEN") ?? "";
+const OPENALPR_MIN_CONFIDENCE = Number(Deno.env.get("OPENALPR_MIN_CONFIDENCE") ?? "0.80");
+const OPENALPR_TIMEOUT_MS = Number(Deno.env.get("OPENALPR_TIMEOUT_MS") ?? "4000");
 // Direction inference: if a plate is detected on camera B within this
 // window after being detected on camera A (different position_order), we
 // infer direction of travel. Entries → no action. Exits → set session's
@@ -231,6 +239,78 @@ Deno.serve(async (req: Request) => {
           hashMatch = { ...c, tier: "dhash", distance: d };
           break;
         }
+      }
+    }
+
+    // ── Tier 5: OpenALPR sidecar pre-filter (cost killer) ─────────────
+    // Before paying for a Plate Recognizer call, ask our free OpenALPR
+    // sidecar what plate it sees. If the sidecar returns a plate that
+    // matches an existing open session on this property (exact or fuzzy),
+    // inherit that session — PR never gets called.
+    // Only runs when the sidecar URL is configured. Empty or low-conf
+    // sidecar reads fall through to PR for the "pro" read.
+    if (!hashMatch && OPENALPR_SIDECAR_URL) {
+      const sidecar = await callOpenAlprSidecar(extracted.bytes);
+      if (sidecar.ok && sidecar.bestPlate) {
+        const sidecarNormalized = normalizePlate(sidecar.bestPlate);
+        const sidecarSession = await findSimilarOpenSession(db, camera.property_id, sidecarNormalized, 600);
+        if (sidecarSession) {
+          const nowDate = new Date();
+          const epochMs = nowDate.getTime();
+          const dateStr = nowDate.toISOString().slice(0, 10);
+          const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${sidecarSession.plate_text}-openalpr.jpg`;
+          let imageUrl: string | null = null;
+          let imageError: string | null = null;
+          const upRes = await r2(key, extracted.bytes);
+          if (upRes.ok) imageUrl = upRes.url;
+          else imageError = upRes.error;
+
+          const inheritedConfidence = Math.min(sidecar.bestConfidence, 0.70);
+          const ev = await db.from("plate_events").insert({
+            camera_id: camera.id,
+            property_id: camera.property_id,
+            plate_text: sidecarSession.plate_text,
+            normalized_plate: sidecarSession.normalized_plate,
+            confidence: inheritedConfidence,
+            image_url: imageUrl,
+            image_sha256: imageHashes.sha256,
+            image_dhash: imageHashes.dhash,
+            event_type: "entry",
+            raw_data: {
+              _source: `camera-snapshot:${extracted.source}:openalpr`,
+              _inherited_from_session: sidecarSession.id,
+              _sidecar_plate: sidecar.bestPlate,
+              _sidecar_confidence: sidecar.bestConfidence,
+              _sidecar_processing_ms: sidecar.processingMs,
+              ...(extracted.rawMeta ?? {}),
+              ...(imageError ? { image_upload_error: imageError } : {}),
+            },
+            match_status: "dedup_suppressed",
+            match_reason: `openalpr sidecar read "${sidecar.bestPlate}" (${sidecar.bestConfidence.toFixed(2)}) matched session plate "${sidecarSession.plate_text}"`,
+            matched_at: nowDate.toISOString(),
+            session_id: sidecarSession.id,
+          });
+          if (ev.error) throw ev.error;
+
+          await inferDirection(db, sidecarSession.id, camera.property_id, sidecarSession.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
+          await db.from("plate_sessions")
+            .update({ last_detected_at: nowDate.toISOString() })
+            .eq("id", sidecarSession.id);
+
+          console.log(`openalpr-sidecar inherit session=${sidecarSession.id} plate=${sidecar.bestPlate} conf=${sidecar.bestConfidence}`);
+          return json(200, {
+            ok: true,
+            events: 1,
+            source: extracted.source,
+            inherited: true,
+            inherit_tier: "openalpr",
+            session_id: sidecarSession.id,
+            plate_text: sidecarSession.plate_text,
+          });
+        }
+        // Sidecar read a plate but no matching open session — fall through
+        // to PR so we get a pro read and open a real session.
+        console.log(`openalpr-sidecar read "${sidecar.bestPlate}" conf=${sidecar.bestConfidence} but no matching session; falling through to PR`);
       }
     }
 
@@ -609,6 +689,86 @@ async function callPlateRecognizer(
   }
   const data = await res.json();
   return { ok: true, data };
+}
+
+// Call the OpenALPR sidecar (Railway-hosted Python service running OpenALPR
+// binary). Returns the best candidate plate that meets the confidence
+// threshold, or indicates no usable result. Never throws — any failure
+// returns ok: false and the caller falls through to the paid PR API.
+async function callOpenAlprSidecar(
+  imageBytes: Uint8Array,
+): Promise<{
+  ok: boolean;
+  bestPlate: string | null;
+  bestConfidence: number;
+  processingMs: number;
+  reason?: string;
+}> {
+  if (!OPENALPR_SIDECAR_URL) {
+    return { ok: false, bestPlate: null, bestConfidence: 0, processingMs: 0, reason: "sidecar_disabled" };
+  }
+
+  // Base64-encode the JPEG bytes for JSON transport.
+  const chunkSize = 32 * 1024;
+  let binary = "";
+  for (let i = 0; i < imageBytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...imageBytes.subarray(i, i + chunkSize));
+  }
+  const b64 = btoa(binary);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OPENALPR_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${OPENALPR_SIDECAR_URL}/recognize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_base64: b64,
+        auth_token: OPENALPR_SIDECAR_TOKEN || undefined,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.warn(`openalpr-sidecar ${res.status}: ${text.slice(0, 200)}`);
+      return { ok: false, bestPlate: null, bestConfidence: 0, processingMs: 0, reason: `sidecar_http_${res.status}` };
+    }
+    const body = await res.json();
+    const plates: Array<{ plate: string; confidence: number }> = body.plates ?? [];
+    if (plates.length === 0) {
+      return {
+        ok: true,
+        bestPlate: null,
+        bestConfidence: 0,
+        processingMs: Number(body.processing_time_ms ?? 0),
+        reason: "no_plates",
+      };
+    }
+    // Pick the highest-confidence candidate meeting the threshold.
+    const sorted = plates.slice().sort((a, b) => b.confidence - a.confidence);
+    const best = sorted[0];
+    if (best.confidence < OPENALPR_MIN_CONFIDENCE) {
+      return {
+        ok: true,
+        bestPlate: null,
+        bestConfidence: best.confidence,
+        processingMs: Number(body.processing_time_ms ?? 0),
+        reason: "below_min_confidence",
+      };
+    }
+    return {
+      ok: true,
+      bestPlate: best.plate,
+      bestConfidence: best.confidence,
+      processingMs: Number(body.processing_time_ms ?? 0),
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`openalpr-sidecar call failed: ${msg}`);
+    return { ok: false, bestPlate: null, bestConfidence: 0, processingMs: 0, reason: `sidecar_error:${msg.slice(0, 80)}` };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Fire tow-confirm fire-and-forget. Errors are logged, never thrown: camera
