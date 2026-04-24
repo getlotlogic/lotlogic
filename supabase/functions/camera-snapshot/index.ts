@@ -149,24 +149,33 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ── Tier 3 inherit-from-recent (PR cost reduction) ─────────────────
-    // If THIS camera just produced a plate_event with an active session,
-    // skip the PR API call and inherit the plate from that recent event.
-    // A truck sitting in frame triggers ~1 POST/sec on Milesight; without
-    // this guard, every frame = 1 PR call. With it, one PR call covers
-    // the whole time the truck is in view.
+    // ── Tier 1: inherit from recent event on this camera ──────────────
+    // Two-query approach — the !inner JOIN syntax in PostgREST was
+    // silently returning empty in some cases, causing Tier 1 to miss
+    // legitimate dedup opportunities. Splitting into plate_events query
+    // + plate_sessions query is more reliable.
     const recentQuery = await db
       .from("plate_events")
-      .select("session_id, plate_text, normalized_plate, usdot_number, mc_number, confidence, plate_sessions!inner(id, state, exited_at)")
+      .select("session_id, plate_text, normalized_plate, usdot_number, mc_number, confidence")
       .eq("camera_id", camera.id)
       .gt("created_at", inheritCutoff)
       .not("session_id", "is", null)
-      .is("plate_sessions.exited_at", null)
       .order("created_at", { ascending: false })
       .limit(1);
-    const recent = (recentQuery.data ?? [])[0] as
-      | { session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number }
-      | undefined;
+
+    let recent: { session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number } | undefined;
+    const recentRaw = (recentQuery.data ?? [])[0] as typeof recent;
+    if (recentRaw?.session_id) {
+      // Validate the session is still open
+      const sessCheck = await db
+        .from("plate_sessions")
+        .select("exited_at")
+        .eq("id", recentRaw.session_id)
+        .maybeSingle();
+      if (sessCheck.data && !sessCheck.data.exited_at) {
+        recent = recentRaw;
+      }
+    }
 
     if (recent && recent.session_id) {
       // Upload the image for evidence, skip PR, write an inherited plate_event.
@@ -336,6 +345,18 @@ Deno.serve(async (req: Request) => {
         // Sidecar read a plate but no matching open session — fall through
         // to PR so we get a pro read and open a real session.
         console.log(`openalpr-sidecar read "${sidecar.bestPlate}" conf=${sidecar.bestConfidence} but no matching session; falling through to PR`);
+      } else if (sidecar.rawDetectionCount === 0) {
+        // Sidecar ran on the image and found ZERO text regions at all.
+        // No plate could possibly be readable. PR would also return
+        // nothing — skip the call entirely, don't write a row.
+        console.log(`openalpr-sidecar empty_scene: rawDetections=0, skipping PR`);
+        return json(200, {
+          ok: true,
+          events: 0,
+          source: extracted.source,
+          deduped: true,
+          inherit_tier: "sidecar_empty_scene",
+        });
       }
     }
 
@@ -726,11 +747,12 @@ async function callOpenAlprSidecar(
   ok: boolean;
   bestPlate: string | null;
   bestConfidence: number;
+  rawDetectionCount: number;
   processingMs: number;
   reason?: string;
 }> {
   if (!OPENALPR_SIDECAR_URL) {
-    return { ok: false, bestPlate: null, bestConfidence: 0, processingMs: 0, reason: "sidecar_disabled" };
+    return { ok: false, bestPlate: null, bestConfidence: 0, rawDetectionCount: 0, processingMs: 0, reason: "sidecar_disabled" };
   }
 
   // Base64-encode the JPEG bytes for JSON transport.
@@ -756,17 +778,19 @@ async function callOpenAlprSidecar(
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       console.warn(`openalpr-sidecar ${res.status}: ${text.slice(0, 200)}`);
-      return { ok: false, bestPlate: null, bestConfidence: 0, processingMs: 0, reason: `sidecar_http_${res.status}` };
+      return { ok: false, bestPlate: null, bestConfidence: 0, rawDetectionCount: 0, processingMs: 0, reason: `sidecar_http_${res.status}` };
     }
     const body = await res.json();
     const plates: Array<{ plate: string; confidence: number }> = body.plates ?? [];
+    const rawDetectionCount = Number(body.raw_detection_count ?? 0);
     if (plates.length === 0) {
       return {
         ok: true,
         bestPlate: null,
         bestConfidence: 0,
+        rawDetectionCount,
         processingMs: Number(body.processing_time_ms ?? 0),
-        reason: "no_plates",
+        reason: rawDetectionCount === 0 ? "empty_scene" : "no_plate_shaped_text",
       };
     }
     // Pick the highest-confidence candidate meeting the threshold.
@@ -777,6 +801,7 @@ async function callOpenAlprSidecar(
         ok: true,
         bestPlate: null,
         bestConfidence: best.confidence,
+        rawDetectionCount,
         processingMs: Number(body.processing_time_ms ?? 0),
         reason: "below_min_confidence",
       };
@@ -785,12 +810,13 @@ async function callOpenAlprSidecar(
       ok: true,
       bestPlate: best.plate,
       bestConfidence: best.confidence,
+      rawDetectionCount,
       processingMs: Number(body.processing_time_ms ?? 0),
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`openalpr-sidecar call failed: ${msg}`);
-    return { ok: false, bestPlate: null, bestConfidence: 0, processingMs: 0, reason: `sidecar_error:${msg.slice(0, 80)}` };
+    return { ok: false, bestPlate: null, bestConfidence: 0, rawDetectionCount: 0, processingMs: 0, reason: `sidecar_error:${msg.slice(0, 80)}` };
   } finally {
     clearTimeout(timer);
   }

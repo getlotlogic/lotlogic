@@ -67,6 +67,12 @@ class PlateCandidate(BaseModel):
 class RecognizeResponse(BaseModel):
     ok: bool
     plates: List[PlateCandidate]
+    # Total easyocr detections regardless of whether they passed the
+    # plate-shape filter. Edge function uses this to distinguish:
+    #   raw_detection_count == 0  → empty scene, skip PR entirely
+    #   raw_detection_count > 0 + plates == []  → text present but not
+    #     plate-shaped (could be dirty/angled plate) → fall through to PR
+    raw_detection_count: int = 0
     processing_time_ms: float
     reason: Optional[str] = None
 
@@ -116,6 +122,7 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
     # easyocr returns [(bbox, text, confidence), ...] — text may contain
     # spaces/punctuation; plates never do, so we normalize and filter.
     detections = reader.readtext(img)
+    raw_detection_count = len(detections)
 
     plates: List[PlateCandidate] = []
     for _bbox, text, conf in detections:
@@ -136,5 +143,6 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
     return RecognizeResponse(
         ok=True,
         plates=plates,
+        raw_detection_count=raw_detection_count,
         processing_time_ms=(time.monotonic() - started) * 1000,
     )
