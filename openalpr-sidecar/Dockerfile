@@ -1,48 +1,18 @@
-FROM ubuntu:22.04
+FROM ubuntu:20.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Install gpg-agent first (needed for PPA key import in containerized builds),
-# then add universe repo for openalpr, install everything.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gpg-agent software-properties-common curl ca-certificates \
-    && add-apt-repository -y universe \
-    && apt-get update && apt-get install -y --no-install-recommends \
+# Enable universe repo — openalpr is available in Ubuntu 20.04 (focal) universe.
+# Use echo instead of add-apt-repository to avoid gpg-agent issues in
+# Railway's sandboxed builder.
+RUN echo "deb http://archive.ubuntu.com/ubuntu focal universe" >> /etc/apt/sources.list && \
+    echo "deb http://archive.ubuntu.com/ubuntu focal-updates universe" >> /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
     openalpr \
     openalpr-daemon \
     python3 python3-venv python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
-
-COPY app.py .
-
-ENV PORT=8000
-EXPOSE 8000
-
-# Railway injects $PORT at runtime; default 8000 for local testing.
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]FROM ubuntu:20.04
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-
-# Ubuntu 20.04 (focal) is the last LTS with the openalpr package in the
-# main archive. On 22.04+ the package was dropped, so we pin this base
-# to avoid a build-from-source step that'd add ~10 min to every deploy.
-# Python 3.8 is the distro default on 20.04 — adequate for FastAPI 0.110
-# + pydantic 2.6.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    openalpr \
-    openalpr-daemon \
-    python3 \
-    python3-pip \
-    python3-venv \
-    ca-certificates \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
