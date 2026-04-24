@@ -32,10 +32,19 @@ const INHERIT_WINDOW_SECONDS = Number(Deno.env.get("INHERIT_WINDOW_SECONDS") ?? 
 // inherit when a new vehicle arrives at the same spot.
 const IMAGE_HASH_WINDOW_SECONDS = Number(Deno.env.get("IMAGE_HASH_WINDOW_SECONDS") ?? "300");
 // Hamming-distance threshold for dHash similarity. 0 = byte-identical,
-// 1-5 = visually same scene with noise/compression variance, 6-10 =
-// similar scene with minor lighting shift, 15+ = different scene.
-// Default 5 is tight enough to only match "same scene" reliably.
-const DHASH_SIMILARITY_THRESHOLD = Number(Deno.env.get("DHASH_SIMILARITY_THRESHOLD") ?? "5");
+// 1-5 = visually same scene with noise/compression variance, 6-12 =
+// similar scene with minor lighting/motion shift, 15+ = different scene.
+// Moving vehicles on consecutive frames produce dHash drift in the 6-12
+// range (plate bytes shift position even when the scene is "the same
+// truck"). 12 is tight enough to reject totally different scenes but
+// loose enough to match same-truck-moving frames. Guard-railed by a
+// tight time gate (DHASH_TIME_WINDOW_SECONDS) so visually-similar but
+// temporally-distant scenes don't falsely inherit.
+const DHASH_SIMILARITY_THRESHOLD = Number(Deno.env.get("DHASH_SIMILARITY_THRESHOLD") ?? "12");
+// Time gate for dHash matches. A similar-looking frame more than this
+// many seconds away is almost certainly a DIFFERENT vehicle happening
+// to sit in the same spot. 20s covers "same truck still in FOV".
+const DHASH_TIME_WINDOW_SECONDS = Number(Deno.env.get("DHASH_TIME_WINDOW_SECONDS") ?? "20");
 // OpenALPR sidecar on Railway — free local ALPR that runs BEFORE Plate
 // Recognizer. If it reads a plate that matches an existing open session's
 // plate (exact or fuzzy), we skip the PR API call entirely. Falls through
@@ -114,26 +123,23 @@ Deno.serve(async (req: Request) => {
     const camera = (cameraQ.data ?? [])[0];
     if (!camera) return json(200, { ok: false, reason: "unknown_camera", api_key: cameraApiKey });
 
-    // Compute image hashes for dedup BEFORE any expensive downstream work.
-    // SHA-256 is cheap (~2ms); dHash requires JPEG decode (~100ms) but only
-    // runs once per frame. Both get stored on plate_events so future frames
-    // can match against them.
-    const imageHashes = await computeImageHashes(extracted.bytes);
-
     // ── Tier 0: in-flight race guard ──────────────────────────────────
-    // If ANY recent event exists on this camera — even one whose session
+    // If ANY recent event exists on this PROPERTY — even one whose session
     // hasn't been backfilled yet — another frame is mid-processing. The
     // previous code required session_id IS NOT NULL, which meant rapid
     // bursts of a new plate all hit PR before the first frame finished
     // creating its session (observed in prod 2026-04-24: 11 events on
     // plate 210CYL within 50s, all full-PR, all on the same session once
-    // backfills resolved). Skip PR without writing a row — the in-flight
-    // frame will create the canonical event.
+    // backfills resolved). Scope is property-wide (not camera-wide) because
+    // the same truck can arrive at gate A and trigger gate B within the
+    // inherit window — both frames race to create the session. Skip PR
+    // without writing a row — the in-flight frame will create the
+    // canonical event.
     const inheritCutoff = new Date(Date.now() - INHERIT_WINDOW_SECONDS * 1000).toISOString();
     const inflightProbe = await db
       .from("plate_events")
       .select("id, session_id, created_at")
-      .eq("camera_id", camera.id)
+      .eq("property_id", camera.property_id)
       .gt("created_at", inheritCutoff)
       .is("session_id", null)
       .order("created_at", { ascending: false })
@@ -148,6 +154,13 @@ Deno.serve(async (req: Request) => {
         inherit_tier: "inflight",
       });
     }
+
+    // Compute image hashes for dedup AFTER the Tier 0 check.
+    // SHA-256 is cheap (~2ms); dHash requires JPEG decode (~100ms). Computing
+    // before Tier 0 wastes ~100ms on every frame that would have deduped
+    // upstream anyway. Both get stored on plate_events so future frames
+    // can match against them.
+    const imageHashes = await computeImageHashes(extracted.bytes);
 
     // ── Tier 1: inherit from recent event on this camera ──────────────
     // Two-query approach — the !inner JOIN syntax in PostgREST was
@@ -248,31 +261,54 @@ Deno.serve(async (req: Request) => {
     // stationary vehicles that trigger motion sporadically (wind/shadow/sway)
     // for minutes at a time. Two-layer match:
     //   (a) SHA-256 equality — truly byte-identical JPEG (fast DB lookup)
-    //   (b) dHash Hamming ≤ threshold — visually same scene (client-side)
-    // Only attempts this if dHash computation succeeded on the incoming frame.
+    //   (b) dHash Hamming ≤ threshold AND within DHASH_TIME_WINDOW_SECONDS —
+    //       visually same scene, temporally close (same truck still there).
+    // Two-query approach — same !inner PostgREST silent-empty bug that bit
+    // Tier 1 also applies here; explicit session lookup is reliable.
     const hashCutoff = new Date(Date.now() - IMAGE_HASH_WINDOW_SECONDS * 1000).toISOString();
+    const dhashCutoffMs = Date.now() - DHASH_TIME_WINDOW_SECONDS * 1000;
     const candidatesQuery = await db
       .from("plate_events")
-      .select("session_id, plate_text, normalized_plate, usdot_number, mc_number, confidence, image_sha256, image_dhash, plate_sessions!inner(id, state, exited_at)")
+      .select("session_id, plate_text, normalized_plate, usdot_number, mc_number, confidence, image_sha256, image_dhash, created_at")
       .eq("camera_id", camera.id)
       .gt("created_at", hashCutoff)
       .not("session_id", "is", null)
-      .is("plate_sessions.exited_at", null)
       .order("created_at", { ascending: false })
       .limit(20);
 
     let hashMatch: { session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number; tier: "sha256" | "dhash"; distance?: number } | null = null;
-    for (const c of (candidatesQuery.data ?? []) as Array<{ session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number; image_sha256: string | null; image_dhash: string | null }>) {
+    const candidates = (candidatesQuery.data ?? []) as Array<{ session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number; image_sha256: string | null; image_dhash: string | null; created_at: string }>;
+    for (const c of candidates) {
+      const ageMs = Date.now() - new Date(c.created_at).getTime();
       if (c.image_sha256 && c.image_sha256 === imageHashes.sha256) {
+        // SHA-256 exact match — any age within IMAGE_HASH_WINDOW_SECONDS.
         hashMatch = { ...c, tier: "sha256" };
         break;
       }
-      if (imageHashes.dhash && c.image_dhash) {
+      if (imageHashes.dhash && c.image_dhash && new Date(c.created_at).getTime() >= dhashCutoffMs) {
+        // dHash near-match — only if candidate is within the tight time
+        // window. Prevents stale "same parking spot, different truck"
+        // false inherits after the original truck left.
         const d = hammingDistance(imageHashes.dhash, c.image_dhash);
         if (d <= DHASH_SIMILARITY_THRESHOLD) {
           hashMatch = { ...c, tier: "dhash", distance: d };
           break;
         }
+      }
+      // Suppress ageMs lint — reserved for future age-weighted scoring.
+      void ageMs;
+    }
+
+    // Verify the candidate's session is still open (replaces the !inner
+    // JOIN that was silently returning empty in some cases).
+    if (hashMatch) {
+      const sessCheck = await db
+        .from("plate_sessions")
+        .select("exited_at")
+        .eq("id", hashMatch.session_id)
+        .maybeSingle();
+      if (!sessCheck.data || sessCheck.data.exited_at) {
+        hashMatch = null;
       }
     }
 
@@ -434,29 +470,32 @@ Deno.serve(async (req: Request) => {
     let surviving = results.filter((r: PrResult) => isPlausiblePlate(r));
 
     // Burst mode: if a recent frame had no usable plate, usdot_active_until
-    // is set N seconds in the future. While that window is open, fire OCR
-    // on every frame regardless of PR result — the vehicle is moving and
-    // later frames may show the DOT at a better angle.
+    // is set N seconds in the future. USDOT OCR only fires when THIS frame
+    // has no usable plate — if PR already returned a plate, we already know
+    // what vehicle is here and a ParkPow call would be wasted money. The
+    // burst window just means "the last frame on this camera had no plate,
+    // so keep trying ParkPow on subsequent no-plate frames without waiting
+    // for another grace period." It does NOT mean "call ParkPow on every
+    // frame during the window" — that was the old OR behavior which doubled
+    // the OCR spend every time a truck's plate wasn't readable for a beat.
     const nowMs = Date.now();
-    const burstActive = !!camera.usdot_active_until &&
-      new Date(camera.usdot_active_until).getTime() > nowMs;
     const noUsablePlate = surviving.length === 0;
 
-    const shouldCallUsdot = (USDOT_ENABLED && !!USDOT_TOKEN) &&
-      (noUsablePlate || burstActive);
+    const shouldCallUsdot = (USDOT_ENABLED && !!USDOT_TOKEN) && noUsablePlate;
 
     const usdotResult = shouldCallUsdot
       ? await extractUsdot(extracted.bytes, { token: USDOT_TOKEN, minScore: USDOT_MIN_SCORE, cameraId: cameraApiKey })
       : { kind: "none" as const };
 
-    // Extend or clear the burst window. A no-plate frame extends the window
-    // another USDOT_BURST_SECONDS; a clean plate frame with no active burst
-    // does nothing. We fire this as a fire-and-forget update — the main
-    // flow continues regardless of whether it lands.
-    if (shouldCallUsdot && noUsablePlate) {
+    // Extend the burst window. A no-plate frame extends the window another
+    // USDOT_BURST_SECONDS — the next frame might still be no-plate and we
+    // want ParkPow to keep firing on it. shouldCallUsdot already requires
+    // noUsablePlate, so this runs iff we just did a ParkPow call. Fire-
+    // and-forget — the main flow continues regardless.
+    if (shouldCallUsdot) {
       const until = new Date(nowMs + USDOT_BURST_SECONDS * 1000).toISOString();
       db.from("alpr_cameras").update({ usdot_active_until: until }).eq("id", camera.id)
-        .then(({ error }) => { if (error) console.warn("usdot_active_until update failed:", error.message); });
+        .then(({ error }: { error: { message: string } | null }) => { if (error) console.warn("usdot_active_until update failed:", error.message); });
     }
 
     const frameUsdot = usdotResult.kind === "dot" ? usdotResult.number : null;

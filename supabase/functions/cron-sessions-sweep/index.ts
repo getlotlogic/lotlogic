@@ -150,12 +150,19 @@ async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: numb
   let violated = 0;
   let closedExitHint = 0;
   let closedNoEvidence = 0;
-  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
 
   for (const s of sessions) {
     // Branch 1 — silence-gap fired. Vehicle was detected leaving on any
-    // camera after silence. Close clean, no violation.
+    // camera after silence. Close clean, no violation. Respect the
+    // EXIT_HINT_BUFFER_MINUTES age floor — a hint set seconds ago might
+    // get revoked by a subsequent detection, and we'd rather wait a few
+    // minutes than close a session that turns out to still be on-site.
+    // Mirrors closeRegistered / closeResident which already gate on this.
     if (s.exit_hinted_at) {
+      const hintAgeMs = nowMs - new Date(s.exit_hinted_at).getTime();
+      if (hintAgeMs <= EXIT_HINT_BUFFER_MINUTES * 60 * 1000) continue;
       const upd = await db.from("plate_sessions")
         .update({ state: "closed_clean", exited_at: s.exit_hinted_at, updated_at: nowIso })
         .eq("id", s.id)
