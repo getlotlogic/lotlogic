@@ -87,19 +87,17 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
-  // Primary provider is Resend (3K/mo free tier easily covers current
-  // volume). SendGrid kept as fallback — we already have the integration
-  // and Twilio's free tier (100/day) absorbs anything Resend misses.
-  // Swapped 2026-04-24 to drop Twilio dependency end-to-end (the Twilio
-  // SMS dispatcher is being decommissioned in the same change).
+  // Resend is the sole email provider (3K/mo free tier). SendGrid +
+  // Twilio dependencies removed 2026-04-24 to zero out outbound-comms
+  // billing surface. If Resend is unreachable we return 502 and the
+  // cron will re-attempt on the next sweep — the violation row is not
+  // marked dispatched until a 200 comes back.
   const resendKey = Deno.env.get("RESEND_API_KEY");
-  const sendgridKey = Deno.env.get("SENDGRID_API_KEY");
   const fromEmail = Deno.env.get("FROM_EMAIL") || "noreply@lotlogic.com";
-  const fromName = Deno.env.get("FROM_NAME") || "LotLogic";
   const jwtSecret = Deno.env.get("JWT_SECRET") || "";
   const backendUrl = Deno.env.get("BACKEND_URL") || "https://lotlogic-backend-production.up.railway.app";
-  if (!resendKey && !sendgridKey) {
-    return json({ error: "No email provider configured (set RESEND_API_KEY or SENDGRID_API_KEY)" }, 500);
+  if (!resendKey) {
+    return json({ error: "Email provider not configured (set RESEND_API_KEY)" }, 500);
   }
 
   const supabase = createClient(
@@ -243,9 +241,7 @@ ${buttonsBlock}
   const overrideTo = Deno.env.get("EMAIL_OVERRIDE_TO");
   const recipient = overrideTo && overrideTo.includes("@") ? overrideTo : partner.email;
 
-  const sendResult = resendKey
-    ? await sendViaResend(resendKey, fromEmail, recipient, subject, textBody, html)
-    : await sendViaSendGrid(sendgridKey!, fromEmail, fromName, recipient, subject, textBody, html);
+  const sendResult = await sendViaResend(resendKey, fromEmail, recipient, subject, textBody, html);
 
   if (!sendResult.ok) {
     return json({
@@ -282,50 +278,8 @@ ${buttonsBlock}
 });
 
 type SendResult =
-  | { ok: true; provider: "sendgrid" | "resend"; messageId: string | null }
-  | { ok: false; provider: "sendgrid" | "resend"; status: number; body: unknown };
-
-async function sendViaSendGrid(
-  apiKey: string,
-  fromEmail: string,
-  fromName: string,
-  to: string,
-  subject: string,
-  textBody: string,
-  htmlBody: string,
-): Promise<SendResult> {
-  const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      personalizations: [{ to: [{ email: to }] }],
-      from: { email: fromEmail, name: fromName },
-      subject,
-      content: [
-        { type: "text/plain", value: textBody },
-        { type: "text/html", value: htmlBody },
-      ],
-      // Partners need the raw action URL, not SendGrid's tracking redirector.
-      // Analytics are nice-to-have; a broken button is not.
-      tracking_settings: {
-        click_tracking: { enable: false, enable_text: false },
-        open_tracking: { enable: false },
-        subscription_tracking: { enable: false },
-      },
-    }),
-  });
-  // SendGrid returns 202 Accepted with empty body on success; X-Message-Id header has the id.
-  if (res.status === 202 || res.status === 200) {
-    return { ok: true, provider: "sendgrid", messageId: res.headers.get("x-message-id") };
-  }
-  const text = await res.text().catch(() => "");
-  let body: unknown;
-  try { body = JSON.parse(text); } catch { body = text; }
-  return { ok: false, provider: "sendgrid", status: res.status, body };
-}
+  | { ok: true; provider: "resend"; messageId: string | null }
+  | { ok: false; provider: "resend"; status: number; body: unknown };
 
 async function sendViaResend(
   apiKey: string,
