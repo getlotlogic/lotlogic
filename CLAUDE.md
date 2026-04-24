@@ -1,5 +1,21 @@
 # LotLogic - Project Context & Learnings
 
+## Proactive agent / skill triggers (default-on, no need to ask)
+
+These are durable instructions: fire the agent automatically when the trigger fits. Don't ask permission for read-only auditors, reviewers, monitors, or researchers — Gabe has pre-authorized these.
+
+| Trigger | Auto-dispatch |
+|---|---|
+| About to edit `supabase/functions/{camera-snapshot,cron-sessions-sweep,tow-dispatch-email,tow-confirm}/**` | `feature-dev:code-explorer` + `brainstormer` + `contrarian-reviewer` in parallel before the first edit |
+| Just shipped an ALPR pipeline edge-function fix | `contrarian-reviewer` + `feature-dev:code-reviewer` in parallel after the deploy |
+| User says "turn on cameras", "go live", "ship it" for production traffic | `launch-readiness-auditor` first, block enable until green |
+| Live monitoring session (cameras on, watching DB) | Background `general-purpose` agent polling DB + edge logs every 60–120s |
+| User mentions cost, spend, billing, calls, savings | `brainstormer` + `researcher` in parallel |
+| Library / API / Deno / Postgres syntax question | `mcp__claude_ai_Context7__query-docs` before answering from memory |
+| Pre-commit-hook block on edge-function drift | Diff against `mcp__supabase__get_edge_function` before retrying |
+
+**Skip the dispatch when** the change is a typo, doc-only edit, or single-line config flip and dispatching would take longer than the work itself.
+
 ## What This Is
 AI-powered parking enforcement platform. Cameras detect vehicles in zones, create violations, operators take action (boot/tow/dismiss).
 
