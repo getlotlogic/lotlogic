@@ -1,4 +1,31 @@
-FROM ubuntu:20.04
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Install gpg-agent first (needed for PPA key import in containerized builds),
+# then add universe repo for openalpr, install everything.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gpg-agent software-properties-common curl ca-certificates \
+    && add-apt-repository -y universe \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    openalpr \
+    openalpr-daemon \
+    python3 python3-venv python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+
+COPY app.py .
+
+ENV PORT=8000
+EXPOSE 8000
+
+# Railway injects $PORT at runtime; default 8000 for local testing.
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]FROM ubuntu:20.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
