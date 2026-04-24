@@ -45,6 +45,13 @@ const DHASH_SIMILARITY_THRESHOLD = Number(Deno.env.get("DHASH_SIMILARITY_THRESHO
 // many seconds away is almost certainly a DIFFERENT vehicle happening
 // to sit in the same spot. 20s covers "same truck still in FOV".
 const DHASH_TIME_WINDOW_SECONDS = Number(Deno.env.get("DHASH_TIME_WINDOW_SECONDS") ?? "20");
+// Diagnostic mode for sidecar rejections. When on, every frame the
+// sidecar throws away gets uploaded to R2 + a thin plate_events row
+// inserted with match_status='sidecar_rejected'. This is the only way
+// to audit whether the sidecar gate is over-rejecting (i.e. tossing
+// frames with real plates) — without it, rejected frames are gone
+// forever. Toggle off via env once the gate is trusted.
+const LOG_REJECTED = (Deno.env.get("DIAGNOSTIC_LOG_REJECTED") ?? "false").toLowerCase() === "true";
 // OpenALPR sidecar on Railway — free local ALPR that runs BEFORE Plate
 // Recognizer. If it reads a plate that matches an existing open session's
 // plate (exact or fuzzy), we skip the PR API call entirely. Falls through
@@ -406,12 +413,49 @@ Deno.serve(async (req: Request) => {
           // fall through to PR
         } else {
           console.log(`openalpr-sidecar ${sidecar.reason ?? "no_plate"}: skipping PR (rawDetections=${sidecar.rawDetectionCount})`);
+          if (LOG_REJECTED) {
+            // Diagnostic: capture the rejected frame so an operator (or a
+            // future training pipeline) can verify whether the gate threw
+            // away anything that contained a real plate. Upload + thin
+            // event row, no session, no violation.
+            const nowDate = new Date();
+            const epochMs = nowDate.getTime();
+            const dateStr = nowDate.toISOString().slice(0, 10);
+            const reason = sidecar.reason ?? "no_plate";
+            const key = `diagnostic/${dateStr}/${camera.api_key}-${epochMs}-rejected-${reason}.jpg`;
+            let imageUrl: string | null = null;
+            const upRes = await r2(key, extracted.bytes);
+            if (upRes.ok) imageUrl = upRes.url;
+            await db.from("plate_events").insert({
+              camera_id: camera.id,
+              property_id: camera.property_id,
+              plate_text: "",
+              normalized_plate: "",
+              confidence: 0,
+              image_url: imageUrl,
+              image_sha256: imageHashes.sha256,
+              image_dhash: imageHashes.dhash,
+              event_type: "entry",
+              raw_data: {
+                _source: `camera-snapshot:${extracted.source}:rejected`,
+                _sidecar_reason: reason,
+                _sidecar_raw_detection_count: sidecar.rawDetectionCount,
+                _sidecar_best_confidence: sidecar.bestConfidence,
+                _sidecar_processing_ms: sidecar.processingMs,
+                ...(extracted.rawMeta ?? {}),
+              },
+              match_status: "sidecar_rejected",
+              match_reason: `sidecar ${reason} (rawDetections=${sidecar.rawDetectionCount})`,
+              session_id: null,
+            });
+          }
           return json(200, {
             ok: true,
             events: 0,
             source: extracted.source,
             deduped: true,
             inherit_tier: `sidecar_${sidecar.reason ?? "no_plate"}`,
+            logged: LOG_REJECTED,
           });
         }
       }
