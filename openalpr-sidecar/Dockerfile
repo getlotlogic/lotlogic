@@ -1,27 +1,27 @@
-FROM ubuntu:22.04
+FROM ubuntu:20.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# OpenALPR + dependencies. The openalpr package in Ubuntu's repos ships with
-# US-plate trained data ready to go. Python 3.11 via deadsnakes for modern
-# FastAPI compatibility.
+# Ubuntu 20.04 (focal) is the last LTS with the openalpr package in the
+# main archive. On 22.04+ the package was dropped, so we pin this base
+# to avoid a build-from-source step that'd add ~10 min to every deploy.
+# Python 3.8 is the distro default on 20.04 — adequate for FastAPI 0.110
+# + pydantic 2.6.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common curl ca-certificates \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
     openalpr \
     openalpr-daemon \
-    python3.11 python3.11-venv python3-pip \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
-
-# Put python3.11 first on PATH
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY app.py .
 
