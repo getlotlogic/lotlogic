@@ -8511,6 +8511,163 @@ function ALPRPropertiesPage({ user }) {
   );
 }
 
+// ── Training Page (sidecar-rejected frame labeling) ─────────────
+// Pulls plate_events with match_status='sidecar_rejected' and lets the
+// operator mark each frame "Real plate missed" or "Junk (correctly
+// rejected)". Labels are written to raw_data.operator_label and feed
+// the training-curator agent which auto-tunes the sidecar.
+function TrainingPage({ user, isOwner }) {
+  const [queue, setQueue] = useState([]);
+  const [idx, setIdx] = useState(0);
+  const [stats, setStats] = useState({ unlabeled: 0, labeled_real: 0, labeled_junk: 0 });
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function loadQueue() {
+    setLoading(true);
+    try {
+      const { data: rejected, error } = await supabase
+        .from('plate_events')
+        .select('id, camera_id, property_id, image_url, image_sha256, image_dhash, raw_data, created_at')
+        .eq('match_status', 'sidecar_rejected')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      const unlabeled = (rejected || []).filter(r => !r.raw_data?.operator_label);
+      setQueue(unlabeled);
+      setIdx(0);
+      const labeled_real = (rejected || []).filter(r => r.raw_data?.operator_label === 'real_plate').length;
+      const labeled_junk = (rejected || []).filter(r => r.raw_data?.operator_label === 'junk').length;
+      setStats({ unlabeled: unlabeled.length, labeled_real, labeled_junk });
+    } catch (err) {
+      console.error('TrainingPage loadQueue', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadQueue(); }, []);
+
+  async function label(verdict) {
+    if (submitting || !queue[idx]) return;
+    setSubmitting(true);
+    try {
+      const cur = queue[idx];
+      const newRaw = { ...(cur.raw_data || {}), operator_label: verdict, operator_labeled_at: new Date().toISOString() };
+      const { error } = await supabase
+        .from('plate_events')
+        .update({ raw_data: newRaw })
+        .eq('id', cur.id);
+      if (error) throw error;
+      setStats(s => ({
+        unlabeled: Math.max(0, s.unlabeled - 1),
+        labeled_real: s.labeled_real + (verdict === 'real_plate' ? 1 : 0),
+        labeled_junk: s.labeled_junk + (verdict === 'junk' ? 1 : 0),
+      }));
+      if (idx + 1 >= queue.length) {
+        await loadQueue();
+      } else {
+        setIdx(idx + 1);
+      }
+    } catch (err) {
+      console.error('TrainingPage label', err);
+      alert('Failed to save label: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!isOwner) {
+    return <div style={{padding:20, color:'var(--text-secondary)'}}>Owner-only page.</div>;
+  }
+  if (loading) {
+    return <div style={{padding:20, color:'var(--text-secondary)'}}>Loading rejection queue…</div>;
+  }
+  const cur = queue[idx];
+
+  return (
+    <div className="page-section" style={{padding:'12px 14px'}}>
+      <div style={{marginBottom:12}}>
+        <h2 style={{margin:0, fontSize:18, fontWeight:800}}>Camera Training</h2>
+        <p style={{margin:'4px 0 0', fontSize:13, color:'var(--text-secondary)'}}>
+          Label what the sidecar threw away. Real plates here = the gate is too aggressive. Junk = it's working.
+        </p>
+      </div>
+
+      <div style={{display:'flex', gap:8, marginBottom:14, flexWrap:'wrap'}}>
+        <span style={{background:'rgba(59,130,246,.15)', color:'#60a5fa', padding:'4px 10px', borderRadius:6, fontSize:12, fontWeight:700}}>
+          {stats.unlabeled} unlabeled
+        </span>
+        <span style={{background:'rgba(34,197,94,.15)', color:'#4ade80', padding:'4px 10px', borderRadius:6, fontSize:12, fontWeight:700}}>
+          {stats.labeled_real} real plates
+        </span>
+        <span style={{background:'rgba(107,114,128,.15)', color:'#9ca3af', padding:'4px 10px', borderRadius:6, fontSize:12, fontWeight:700}}>
+          {stats.labeled_junk} junk
+        </span>
+        <button onClick={loadQueue} style={{
+          background:'transparent', color:'var(--text-secondary)', border:'1px solid var(--border)',
+          borderRadius:6, padding:'4px 10px', fontSize:12, cursor:'pointer', marginLeft:'auto',
+        }}>Refresh</button>
+      </div>
+
+      {!cur ? (
+        <div style={{padding:30, textAlign:'center', color:'var(--text-secondary)'}}>
+          <div style={{fontSize:40, marginBottom:8}}>✓</div>
+          <div style={{fontSize:16, fontWeight:700, color:'var(--text-primary)'}}>Queue is empty</div>
+          <div style={{fontSize:13, marginTop:6}}>Nothing to label right now. Check back when the cameras have run.</div>
+        </div>
+      ) : (
+        <div style={{
+          background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12,
+          padding:14, maxWidth:680, margin:'0 auto',
+        }}>
+          {cur.image_url ? (
+            <img src={cur.image_url} alt="Rejected frame"
+              style={{width:'100%', borderRadius:8, display:'block', background:'#000'}}
+              onError={(e) => { e.target.style.opacity = 0.3; }}
+            />
+          ) : (
+            <div style={{padding:30, textAlign:'center', color:'var(--text-secondary)', background:'#111', borderRadius:8}}>
+              No image stored
+            </div>
+          )}
+
+          <div style={{marginTop:10, fontSize:12, color:'var(--text-secondary)', display:'grid', gridTemplateColumns:'auto 1fr', gap:'4px 12px'}}>
+            <span>Reason</span>
+            <span style={{color:'var(--text-primary)', fontFamily:'monospace'}}>{cur.raw_data?._sidecar_reason || '?'}</span>
+            <span>Detections</span>
+            <span style={{color:'var(--text-primary)'}}>{cur.raw_data?._sidecar_raw_detection_count ?? '?'}</span>
+            <span>Best conf</span>
+            <span style={{color:'var(--text-primary)'}}>{(cur.raw_data?._sidecar_best_confidence ?? 0).toFixed(2)}</span>
+            <span>Captured</span>
+            <span style={{color:'var(--text-primary)'}}>{new Date(cur.created_at).toLocaleString()}</span>
+          </div>
+
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:14}}>
+            <button onClick={() => label('real_plate')} disabled={submitting}
+              style={{
+                background:'#dc2626', color:'#fff', border:'none', borderRadius:10,
+                padding:'14px 12px', fontSize:14, fontWeight:800, cursor:submitting?'wait':'pointer',
+              }}>
+              ✗ Real plate missed
+            </button>
+            <button onClick={() => label('junk')} disabled={submitting}
+              style={{
+                background:'#16a34a', color:'#fff', border:'none', borderRadius:10,
+                padding:'14px 12px', fontSize:14, fontWeight:800, cursor:submitting?'wait':'pointer',
+              }}>
+              ✓ Correctly rejected
+            </button>
+          </div>
+          <div style={{marginTop:8, textAlign:'center', fontSize:11, color:'var(--text-secondary)'}}>
+            {idx + 1} of {queue.length} in this batch
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────
 function App() {
   const { addToast } = useToast();
@@ -8693,6 +8850,28 @@ function App() {
     };
   }); // eslint-disable-line -- intentionally re-runs to capture latest handlePullRefresh/showPTR
 
+  // Training tab badge — count of unlabeled sidecar-rejected frames.
+  // Refreshed on tab change and every 60s so the operator sees the
+  // queue grow live. Owner-only; partners never see this tab.
+  const [trainingBadge, setTrainingBadge] = useState(0);
+  useEffect(() => {
+    if (!owner) return;
+    let cancelled = false;
+    async function refreshTrainingBadge() {
+      try {
+        const { count, error } = await supabase
+          .from('plate_events')
+          .select('id', { count: 'exact', head: true })
+          .eq('match_status', 'sidecar_rejected')
+          .is('raw_data->>operator_label', null);
+        if (!error && !cancelled) setTrainingBadge(count || 0);
+      } catch { /* ignore */ }
+    }
+    refreshTrainingBadge();
+    const t = setInterval(refreshTrainingBadge, 60_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [owner]);
+
   // Load data on mount if session was restored
   useEffect(() => { if (owner) loadData(owner); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -8854,7 +9033,7 @@ function App() {
   // Operator (or viewing-as): Jobs + Lots + Activity + Earnings + Account
   const NavIconInvoices = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('path', {d:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'}), React.createElement('polyline', {points:'14 2 14 8 20 8'}), React.createElement('line', {x1:'8',y1:'13',x2:'16',y2:'13'}), React.createElement('line', {x1:'8',y1:'17',x2:'12',y2:'17'}));
   const NavIconAnalytics = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('line', {x1:'18',y1:'20',x2:'18',y2:'10'}), React.createElement('line', {x1:'12',y1:'20',x2:'12',y2:'4'}), React.createElement('line', {x1:'6',y1:'20',x2:'6',y2:'14'}));
-  const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics };
+  const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, training: NavIconAnalytics };
   // Tab roles (kept intentionally narrow so each surface has one meaning):
   //   Jobs     → every violation needing action (enforcement + ALPR unified)
   //   Lots     → register + manage properties (plates, passes, cameras, plate detections)
@@ -8864,6 +9043,7 @@ function App() {
     { id: 'jobs',     label: 'Jobs',     badge: pending + alprPending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'analytics',label: 'Analytics',badge: 0 },
+    { id: 'training', label: 'Training', badge: trainingBadge },
     { id: 'earnings', label: 'Earnings', badge: 0 },
     { id: 'invoices', label: 'Billing',  badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
@@ -8949,6 +9129,7 @@ function App() {
           {tab === 'overview' && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
+          {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
           {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
           {tab === 'invoices' && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} />}
