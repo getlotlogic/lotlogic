@@ -36,7 +36,7 @@ DETECTOR_MODEL = os.environ.get("DETECTOR_MODEL", "yolo-v9-s-608-license-plate-e
 # default in the upstream README and supports US plate formats. Switch to
 # 'cct-xs-v1-global-model' for a smaller / faster variant.
 OCR_MODEL = os.environ.get("OCR_MODEL", "cct-s-v2-global-model")
-DETECTOR_MIN_CONF = float(os.environ.get("DETECTOR_MIN_CONF", "0.15"))
+DETECTOR_MIN_CONF = float(os.environ.get("DETECTOR_MIN_CONF", "0.20"))
 ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.50"))
 MAX_IMAGE_WIDTH = int(os.environ.get("ALPR_MAX_IMAGE_WIDTH", "1280"))
 ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").lower() == "true"
