@@ -4,7 +4,7 @@ import { makeR2Uploader } from "../pr-ingest/r2.ts";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { extractFromRequest } from "./extract.ts";
 import { parsePath } from "./path.ts";
-import { findOpenSession, findSimilarOpenSession, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
+import { findOpenSession, findSimilarOpenSession, findRecentSessionByCamera, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
 import { isPlateHeld } from "./holds.ts";
 import { extractUsdot } from "./usdot-ocr.ts";
 import { computeImageHashes } from "./image-hash.ts";
@@ -66,6 +66,23 @@ const USDOT_MIN_SCORE = Number(Deno.env.get("USDOT_MIN_SCORE") ?? "0.70");
 // firing for this many seconds on this camera regardless of subsequent PR
 // results. Gives the DOT reader multiple angles on the same vehicle.
 const USDOT_BURST_SECONDS = Number(Deno.env.get("USDOT_BURST_SECONDS") ?? "10");
+// Pre-PR camera cooldown. If THIS camera has an open session whose last
+// frame was within this many seconds, every subsequent frame inherits onto
+// that session — no sidecar, no PR, no R2 upload. Stops the parked-vehicle
+// PR-cost leak (one truck sitting still was costing N×$0.0024 per minute
+// because each frame that the sidecar couldn't read fell through to PR,
+// and post-PR session dedup only saved the database row, not the API call).
+// Tunable: shorter window = tighter back-to-back-different-vehicle accuracy
+// at slightly higher PR cost. Disable entirely with CAMERA_COOLDOWN_SECONDS=0.
+const CAMERA_COOLDOWN_SECONDS = Number(Deno.env.get("CAMERA_COOLDOWN_SECONDS") ?? "60");
+// Pre-PR delay. Always wait this many ms before calling PR so any in-flight
+// PR call from a previous frame (parallel arrival from another camera, or
+// the previous frame from THIS camera that's still mid-PR) has a chance to
+// land its session row first. Then we can inherit onto it instead of
+// duplicating the PR call. The recheck after the delay covers BOTH the
+// parallel-arrival case (plate-anchored) and the parked-vehicle case
+// (camera-anchored).
+const PRE_PR_DELAY_MS = Number(Deno.env.get("PRE_PR_DELAY_MS") ?? "1500");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const R2_ACCOUNT_ID = Deno.env.get("R2_ACCOUNT_ID")!;
@@ -321,20 +338,84 @@ Deno.serve(async (req: Request) => {
     // Hash-dedup consumer block removed 2026-04-25. Sidecar's plate-match
     // against open sessions covers this case (and more) directly above.
 
-    // Pre-PR delay + recheck. Solves the parallel-arrival case: if Camera A
-    // and Camera B both fire on the same vehicle within a few hundred ms,
-    // both sidecars run, neither finds an open session yet, and both would
-    // race to PR. By delaying briefly here and re-checking findSimilar-
-    // OpenSession, the second-to-arrive frame can pick up the session
-    // created by the first (its PR + entry path is fast, ~1-2s).
-    // Only runs when the sidecar gave us a plate to look up — no plate, no
-    // recheck (fall straight to PR or whatever the sidecar block decided).
+    // ── Pre-PR delay + recheck (ALWAYS runs) ─────────────────────────
+    // We're about to spend a PR API call. Before paying, hold the frame
+    // briefly and re-query the DB. Two ways an in-flight PR call from a
+    // previous frame could have just created a session we should inherit
+    // onto:
+    //
+    //   A. CAMERA-ANCHORED — same camera, parked vehicle. The previous
+    //      frame from THIS camera produced a session in the last
+    //      CAMERA_COOLDOWN_SECONDS. Every subsequent frame collapses
+    //      onto it without paying for sidecar+PR. Fixes the parked-
+    //      vehicle PR-cost leak (one truck = N×$0.0024/min).
+    //
+    //   B. PLATE-ANCHORED — different camera (or same camera, different
+    //      sidecar read), parallel arrivals. The previous frame's
+    //      sidecar read this same plate. The window here is 600s
+    //      because plate-text dedup is safer than camera-anchored
+    //      (it requires a fuzzy plate match, so it can't false-merge
+    //      different vehicles).
+    //
+    // Order: (A) first because it handles the common case (parked
+    // vehicle) and doesn't need the sidecar to have produced a plate.
+    // Then (B) only if sidecar gave us something to look up.
+    const delayMs = Math.max(0, PRE_PR_DELAY_MS);
+    if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
+
+    // (A) Camera-anchored: any open session whose entry was on this camera
+    // AND whose last_detected_at is within the cooldown window.
+    if (CAMERA_COOLDOWN_SECONDS > 0) {
+      const cameraSession = await findRecentSessionByCamera(db, camera.id, CAMERA_COOLDOWN_SECONDS);
+      if (cameraSession) {
+        const nowDate = new Date();
+        const ev = await db.from("plate_events").insert({
+          camera_id: camera.id,
+          property_id: camera.property_id,
+          plate_text: cameraSession.plate_text,
+          normalized_plate: cameraSession.normalized_plate,
+          confidence: 0.70,
+          image_url: null,
+          image_sha256: imageHashes.sha256,
+          image_dhash: imageHashes.dhash,
+          event_type: "entry",
+          raw_data: {
+            _source: `camera-snapshot:${extracted.source}:camera_cooldown`,
+            _inherited_from_session: cameraSession.id,
+            _camera_cooldown_seconds: CAMERA_COOLDOWN_SECONDS,
+            _sidecar_plate: sidecarReadForRecheck ?? null,
+            _image_suppressed: "session_already_confirmed",
+            ...(extracted.rawMeta ?? {}),
+          },
+          match_status: "dedup_suppressed",
+          match_reason: `camera cooldown: session ${cameraSession.id.slice(0,8)} on this camera was active in last ${CAMERA_COOLDOWN_SECONDS}s`,
+          matched_at: nowDate.toISOString(),
+          session_id: cameraSession.id,
+        });
+        if (ev.error) throw ev.error;
+        await db.from("plate_sessions")
+          .update({ last_detected_at: nowDate.toISOString() })
+          .eq("id", cameraSession.id);
+        console.log(`camera-cooldown inherit session=${cameraSession.id} plate=${cameraSession.plate_text} (saved a PR call)`);
+        return json(200, {
+          ok: true,
+          events: 1,
+          source: extracted.source,
+          inherited: true,
+          inherit_tier: "camera_cooldown",
+          session_id: cameraSession.id,
+          plate_text: cameraSession.plate_text,
+        });
+      }
+    }
+
+    // (B) Plate-anchored: parallel-arrival across cameras. Only fires when
+    // the sidecar gave us a plate to look up. Window is wider (600s) and
+    // safer because plate-similarity gates the match.
     if (sidecarReadForRecheck) {
-      await new Promise(r => setTimeout(r, 1500));
       const recheckPlate = normalizePlate(sidecarReadForRecheck);
       const recheckSession = await findSimilarOpenSession(db, camera.property_id, recheckPlate, 600);
       if (recheckSession) {
-        // A parallel frame just created a session for this vehicle. Inherit.
         const nowDate = new Date();
         const ev = await db.from("plate_events").insert({
           camera_id: camera.id,
@@ -373,8 +454,8 @@ Deno.serve(async (req: Request) => {
           plate_text: recheckSession.plate_text,
         });
       }
-      // Still no matching session — really is a new vehicle. Call PR.
     }
+    // Both rechecks missed — really is a new vehicle. Pay for PR.
 
     const prResp = await callPlateRecognizer(extracted.bytes, cameraApiKey);
     if (!prResp.ok) {
