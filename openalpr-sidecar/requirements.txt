@@ -1,6 +1,11 @@
 fastapi==0.110.0
 uvicorn[standard]==0.29.0
 pydantic==2.6.4
-easyocr==1.7.1
-opencv-python-headless==4.8.1.78
+opencv-python-headless==4.9.0.80
 numpy==1.26.4
+onnxruntime==1.18.1
+open-image-models==0.2.0
+fast-plate-ocr[onnxruntime]==0.4.0
+# Optional easyocr fallback for graceful degradation when ONNX models
+# fail to load. Default OFF via ENABLE_EASYOCR_FALLBACK.
+easyocr==1.7.1

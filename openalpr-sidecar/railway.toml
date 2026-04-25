@@ -4,11 +4,9 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 healthcheckPath = "/health"
-# easyocr Reader initialization loads ~200MB of model weights into
-# Python memory during the FastAPI startup event. Takes 30-90 seconds
-# on a cold slim container. 60s default is too tight; 300s gives plenty
-# of margin and only applies during first boot — runtime requests are
-# unaffected.
-healthcheckTimeout = 300
+# Both ONNX models load in <10s on Railway hobby tier. 60s gives 6× margin
+# vs the 30-35s cold-start estimate for the v3 stack (down from 90s on the
+# easyocr-only v2 stack which needed 300s).
+healthcheckTimeout = 60
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
