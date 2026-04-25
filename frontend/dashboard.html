@@ -8643,29 +8643,47 @@ function TrainingPage({ user, isOwner }) {
         .update({ raw_data: newRaw })
         .eq('id', cur.id);
       if (error) throw error;
-      // Auto-propagate the label to all visually-identical sibling frames
-      // from the same camera with the same dHash. Cameras fire 30+ times/min
-      // on a static scene; we don't want the operator to label the same view
-      // 30 times. dHash is computed at ingest and stored on every row, so an
-      // exact match means same scene structure (lighting changes don't matter
-      // for empty-scene rejections).
+      // Auto-propagate the label to sibling frames so the operator doesn't
+      // see the same scene 30 times in a row. Two propagation modes by
+      // verdict (different aggression):
+      //
+      //   junk / correctly rejected / false_positive:
+      //     Propagate to ALL unlabeled rows from same camera with the same
+      //     _sidecar_reason in a ±2-minute window. Cameras burst empty-scene
+      //     frames continuously when nothing changes; one click clears the
+      //     whole burst. Different vehicles within 2 min would have a
+      //     different reason or come from a different camera, so this is safe.
+      //
+      //   real_plate:
+      //     Propagate only on exact dHash match (visually identical scenes).
+      //     A "real plate" verdict is content-specific — don't apply it to
+      //     other frames that might be different vehicles.
       let autoLabeled = 0;
-      if (cur.image_dhash && cur.camera_id) {
-        const siblings = queue.filter((r, i) => i !== idx
-          && r.image_dhash === cur.image_dhash
-          && r.camera_id === cur.camera_id
-          && !r.raw_data?.operator_label);
-        if (siblings.length > 0) {
-          const sibIds = siblings.map(s => s.id);
-          // Build per-row updates so each row's other raw_data fields stay intact
-          for (const sib of siblings) {
-            const sibRaw = { ...(sib.raw_data || {}), operator_label: verdict, operator_labeled_at: labeledAt, _auto_propagated_from: cur.id };
-            await supabase.from('plate_events').update({ raw_data: sibRaw }).eq('id', sib.id);
-          }
-          autoLabeled = sibIds.length;
-          // Drop the labeled siblings from the queue so they don't reappear.
-          setQueue(q => q.filter(r => !sibIds.includes(r.id)));
+      const aggressiveVerdicts = new Set(['junk', 'false_positive']);
+      const isAggressive = aggressiveVerdicts.has(verdict);
+      const curReason = cur.raw_data?._sidecar_reason;
+      const curCreated = new Date(cur.created_at).getTime();
+      const siblings = queue.filter((r, i) => {
+        if (i === idx) return false;
+        if (r.raw_data?.operator_label) return false;
+        if (r.camera_id !== cur.camera_id) return false;
+        if (isAggressive) {
+          // Same reason, ±2 min window
+          if (curReason && r.raw_data?._sidecar_reason !== curReason) return false;
+          const ageMs = Math.abs(new Date(r.created_at).getTime() - curCreated);
+          return ageMs <= 120_000;
         }
+        // real_plate: only exact dHash match
+        return cur.image_dhash && r.image_dhash === cur.image_dhash;
+      });
+      if (siblings.length > 0) {
+        const sibIds = siblings.map(s => s.id);
+        for (const sib of siblings) {
+          const sibRaw = { ...(sib.raw_data || {}), operator_label: verdict, operator_labeled_at: labeledAt, _auto_propagated_from: cur.id };
+          await supabase.from('plate_events').update({ raw_data: sibRaw }).eq('id', sib.id);
+        }
+        autoLabeled = sibIds.length;
+        setQueue(q => q.filter(r => !sibIds.includes(r.id)));
       }
       setStats(s => ({
         unlabeled: Math.max(0, s.unlabeled - 1 - autoLabeled),
