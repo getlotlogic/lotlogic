@@ -7,7 +7,7 @@ import { parsePath } from "./path.ts";
 import { findOpenSession, findSimilarOpenSession, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
 import { isPlateHeld } from "./holds.ts";
 import { extractUsdot } from "./usdot-ocr.ts";
-import { computeImageHashes, hammingDistance } from "./image-hash.ts";
+import { computeImageHashes } from "./image-hash.ts";
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
@@ -20,46 +20,12 @@ const PR_MIN_PLATE_LEN = Number(Deno.env.get("PR_MIN_PLATE_LEN") ?? "5");
 // plate-shaped text (trailer numbers, police unit numbers, URLs, decals)
 // that PR OCRs without actually seeing a vehicle around the plate.
 const REQUIRE_VEHICLE_SCORE = Number(Deno.env.get("REQUIRE_VEHICLE_SCORE") ?? "0.7");
-// Tier 3 inherit-from-recent: if THIS camera produced a plate_event with a
-// session in the last INHERIT_WINDOW_SECONDS, skip the PR call and inherit
-// the plate + session from the recent event. Cuts PR calls for same-truck-
-// in-frame bursts (Milesight fires ~1/sec while a vehicle is in view).
-const INHERIT_WINDOW_SECONDS = Number(Deno.env.get("INHERIT_WINDOW_SECONDS") ?? "30");
-// Image-similarity dedup window. Stationary vehicles (parked in FoV) can
-// trigger motion events for minutes or hours — wind, shadow, trailer sway,
-// engine idle vibration. This window governs how far back we look for a
-// matching image hash. Larger = more PR savings but more risk of stale
-// inherit when a new vehicle arrives at the same spot.
-const IMAGE_HASH_WINDOW_SECONDS = Number(Deno.env.get("IMAGE_HASH_WINDOW_SECONDS") ?? "300");
-// Hamming-distance threshold for dHash similarity. 0 = byte-identical,
-// 1-5 = visually same scene with noise/compression variance, 6-12 =
-// similar scene with minor lighting/motion shift, 15+ = different scene.
-// Moving vehicles on consecutive frames produce dHash drift in the 6-12
-// range (plate bytes shift position even when the scene is "the same
-// truck"). 12 is tight enough to reject totally different scenes but
-// loose enough to match same-truck-moving frames. Guard-railed by a
-// tight time gate (DHASH_TIME_WINDOW_SECONDS) so visually-similar but
-// temporally-distant scenes don't falsely inherit.
-const DHASH_SIMILARITY_THRESHOLD = Number(Deno.env.get("DHASH_SIMILARITY_THRESHOLD") ?? "12");
-// Time gate for dHash matches. A similar-looking frame more than this
-// many seconds away is almost certainly a DIFFERENT vehicle happening
-// to sit in the same spot. 20s covers "same truck still in FOV".
-const DHASH_TIME_WINDOW_SECONDS = Number(Deno.env.get("DHASH_TIME_WINDOW_SECONDS") ?? "20");
-// Pure-black frame detector. Mean luminance over the 9x8 dHash grid.
-// 0 = pitch black, 255 = pure white. Real outdoor scenes rarely drop
-// below ~30 even at night with IR. Anything under 15 is almost
-// certainly a frame with no useful content (covered lens, camera
-// failure, complete darkness). Skip BEFORE sidecar — that saves the
-// ~2s sidecar runtime on garbage frames.
-const PURE_BLACK_LUMA_THRESHOLD = Number(Deno.env.get("PURE_BLACK_LUMA_THRESHOLD") ?? "15");
-// Auto-night-mode threshold. Frames brighter than this trust the sidecar's
-// plate-shape verdict (skip PR on no_plate_shaped_text). Frames dimmer
-// than this bypass the skip and ALWAYS fall through to PR — easyocr
-// misreads IR/grayscale night frames as "no plate-shape" even when a
-// plate is clearly visible to PR's better OCR. Cost ↑ at night but
-// recall ↑↑. Pure-black (< PURE_BLACK_LUMA_THRESHOLD) still skipped
-// regardless. Daylight outdoor scenes typically read 80-200 luma.
-const NIGHT_LUMA_THRESHOLD = Number(Deno.env.get("NIGHT_LUMA_THRESHOLD") ?? "50");
+// Removed 2026-04-25 (gate simplification — sidecar is the only filter):
+//   INHERIT_WINDOW_SECONDS, IMAGE_HASH_WINDOW_SECONDS,
+//   DHASH_SIMILARITY_THRESHOLD, DHASH_TIME_WINDOW_SECONDS,
+//   PURE_BLACK_LUMA_THRESHOLD, NIGHT_LUMA_THRESHOLD.
+// Their corresponding env vars on Supabase secrets can be safely
+// removed — they no longer have any effect on the runtime.
 // Diagnostic mode for sidecar rejections. When on, every frame the
 // sidecar throws away gets uploaded to R2 + a thin plate_events row
 // inserted with match_status='sidecar_rejected'. This is the only way
@@ -153,25 +119,9 @@ Deno.serve(async (req: Request) => {
     // inherit via Tier 5 sidecar matching. The new YOLOv9 + fast-plate-ocr
     // sidecar is reliable enough that those follow-up frames will match
     // the open session even on weak reads.
-    const inheritCutoff = new Date(Date.now() - INHERIT_WINDOW_SECONDS * 1000).toISOString();
-
-    // Compute image hashes for dedup. SHA-256 is cheap (~2ms); dHash
-    // requires JPEG decode (~100ms). Both get stored on plate_events so
-    // future frames can match against them. The dHash decode also yields
-    // a meanLuma value used by the pure-black short-circuit below.
+    // Compute image hashes (sha256 + dhash). Stored on plate_events for
+    // forensics / future use only — no live dedup logic depends on them.
     const imageHashes = await computeImageHashes(extracted.bytes);
-
-    // Pure-black detector removed 2026-04-25 — sidecar's YOLOv9 returns
-    // zero plate boxes on dark frames anyway, which lands as empty_scene
-    // and skips PR. Redundant gate.
-
-    // Tier 1 (same-camera recent inherit) and Tier 4 (image-hash dedup)
-    // were removed 2026-04-25. The new YOLOv9 + fast-plate-ocr sidecar
-    // is reliable enough that its plate-match against open sessions
-    // (sidecar block below) handles dedup correctly without these
-    // intermediate tiers. Operator instruction: "two plate readers will
-    // do it for us, these tiers are unnecessary."
-    void inheritCutoff; // retained for plate_events insert metadata only
 
     // ── Sidecar pre-filter (the only inherit path) ────────────────────
     // Two-stage plate reader. If it returns a plate that matches an
@@ -561,8 +511,8 @@ Deno.serve(async (req: Request) => {
           // the silence-gap branch inside inferDirection sees the prior
           // timestamp.
           await inferDirection(db, openSession.id, camera.property_id, normalized, camera.id, camera.position_order ?? null, now);
-          // Tier 3 priming: bump session activity so subsequent POSTs from
-          // this camera within INHERIT_WINDOW_SECONDS skip the PR call.
+          // Bump session activity so the cron's silence-gap exit logic
+          // sees recent presence.
           await db.from("plate_sessions")
             .update({ last_detected_at: now.toISOString() })
             .eq("id", openSession.id);
