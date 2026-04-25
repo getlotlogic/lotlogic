@@ -29,12 +29,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 APP_AUTH_TOKEN = os.environ.get("SIDECAR_AUTH_TOKEN", "")
-# Reverted to original tight defaults 2026-04-25 — operator confirmed
-# the looser values (0.35 / 4-10 / no letter+digit) sent too much junk
-# to PR (side-of-car frames, sticker text, trailer IDs).
-MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.55"))
-MIN_PLATE_LEN = int(os.environ.get("ALPR_MIN_PLATE_LEN", "5"))
-MAX_PLATE_LEN = int(os.environ.get("ALPR_MAX_PLATE_LEN", "8"))
+# Loosened ~10% from tight defaults 2026-04-25 — operator wanted slight
+# room for borderline reads while keeping the letter+digit rule on.
+#   conf 0.55 → 0.50 (~10% lower bar)
+#   plate length 5-8 → 4-9 (one wider on each end)
+MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.50"))
+MIN_PLATE_LEN = int(os.environ.get("ALPR_MIN_PLATE_LEN", "4"))
+MAX_PLATE_LEN = int(os.environ.get("ALPR_MAX_PLATE_LEN", "9"))
 # easyocr scan time scales with image pixel count. Downscale large
 # frames before OCR — plates are still readable at 800px width and
 # processing drops from ~30s to ~3-5s per frame. 0 = no resize.

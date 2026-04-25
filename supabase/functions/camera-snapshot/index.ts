@@ -199,9 +199,13 @@ Deno.serve(async (req: Request) => {
         const dateStr = nowDate.toISOString().slice(0, 10);
         const key = `diagnostic/${dateStr}/${camera.api_key}-${epochMs}-rejected-pure_black.jpg`;
         let imageUrl: string | null = null;
+        let imageError: string | null = null;
         const upRes = await r2(key, extracted.bytes);
         if (upRes.ok) imageUrl = upRes.url;
-        else console.error(`pure-black R2 upload failed for ${key}: ${upRes.error}`);
+        else {
+          imageError = upRes.error;
+          console.error(`pure-black R2 upload failed for ${key}: ${upRes.error}`);
+        }
         const diag = await db.from("plate_events").insert({
           camera_id: camera.id,
           property_id: camera.property_id,
@@ -217,6 +221,7 @@ Deno.serve(async (req: Request) => {
             _sidecar_reason: "pure_black",
             _mean_luma: imageHashes.meanLuma,
             _luma_threshold: PURE_BLACK_LUMA_THRESHOLD,
+            ...(imageError ? { _r2_error: imageError } : {}),
             ...(extracted.rawMeta ?? {}),
           },
           match_status: "sidecar_rejected",
@@ -519,9 +524,13 @@ Deno.serve(async (req: Request) => {
             const reason = sidecar.reason ?? "no_plate";
             const key = `diagnostic/${dateStr}/${camera.api_key}-${epochMs}-rejected-${reason}.jpg`;
             let imageUrl: string | null = null;
+            let imageError: string | null = null;
             const upRes = await r2(key, extracted.bytes);
             if (upRes.ok) imageUrl = upRes.url;
-            else console.error(`diagnostic R2 upload failed for ${key}: ${upRes.error}`);
+            else {
+              imageError = upRes.error;
+              console.error(`diagnostic R2 upload failed for ${key}: ${upRes.error}`);
+            }
             const diag = await db.from("plate_events").insert({
               camera_id: camera.id,
               property_id: camera.property_id,
@@ -537,6 +546,7 @@ Deno.serve(async (req: Request) => {
                 _sidecar_reason: reason,
                 _sidecar_raw_detection_count: sidecar.rawDetectionCount,
                 _sidecar_best_confidence: sidecar.bestConfidence,
+                ...(imageError ? { _r2_error: imageError } : {}),
                 _sidecar_processing_ms: sidecar.processingMs,
                 ...(extracted.rawMeta ?? {}),
               },
@@ -690,9 +700,13 @@ Deno.serve(async (req: Request) => {
         const dateStr = nowDate.toISOString().slice(0, 10);
         const key = `diagnostic/${dateStr}/${camera.api_key}-${epochMs}-rejected-pr_no_plate.jpg`;
         let imageUrl: string | null = null;
+        let imageError: string | null = null;
         const upRes = await r2(key, extracted.bytes);
         if (upRes.ok) imageUrl = upRes.url;
-        else console.error(`pr-no-plate R2 upload failed for ${key}: ${upRes.error}`);
+        else {
+          imageError = upRes.error;
+          console.error(`pr-no-plate R2 upload failed for ${key}: ${upRes.error}`);
+        }
         const diag = await db.from("plate_events").insert({
           camera_id: camera.id,
           property_id: camera.property_id,
@@ -710,6 +724,7 @@ Deno.serve(async (req: Request) => {
             _pr_call_made: true,
             _usdot_called: USDOT_ENABLED && !!USDOT_TOKEN,
             _usdot_found: usdotResult.kind !== "none",
+            ...(imageError ? { _r2_error: imageError } : {}),
             ...(extracted.rawMeta ?? {}),
           },
           match_status: "sidecar_rejected",
