@@ -8636,15 +8636,40 @@ function TrainingPage({ user, isOwner }) {
     setSubmitting(true);
     try {
       const cur = queue[idx];
-      const newRaw = { ...(cur.raw_data || {}), operator_label: verdict, operator_labeled_at: new Date().toISOString() };
+      const labeledAt = new Date().toISOString();
+      const newRaw = { ...(cur.raw_data || {}), operator_label: verdict, operator_labeled_at: labeledAt };
       const { error } = await supabase
         .from('plate_events')
         .update({ raw_data: newRaw })
         .eq('id', cur.id);
       if (error) throw error;
+      // Auto-propagate the label to all visually-identical sibling frames
+      // from the same camera with the same dHash. Cameras fire 30+ times/min
+      // on a static scene; we don't want the operator to label the same view
+      // 30 times. dHash is computed at ingest and stored on every row, so an
+      // exact match means same scene structure (lighting changes don't matter
+      // for empty-scene rejections).
+      let autoLabeled = 0;
+      if (cur.image_dhash && cur.camera_id) {
+        const siblings = queue.filter((r, i) => i !== idx
+          && r.image_dhash === cur.image_dhash
+          && r.camera_id === cur.camera_id
+          && !r.raw_data?.operator_label);
+        if (siblings.length > 0) {
+          const sibIds = siblings.map(s => s.id);
+          // Build per-row updates so each row's other raw_data fields stay intact
+          for (const sib of siblings) {
+            const sibRaw = { ...(sib.raw_data || {}), operator_label: verdict, operator_labeled_at: labeledAt, _auto_propagated_from: cur.id };
+            await supabase.from('plate_events').update({ raw_data: sibRaw }).eq('id', sib.id);
+          }
+          autoLabeled = sibIds.length;
+          // Drop the labeled siblings from the queue so they don't reappear.
+          setQueue(q => q.filter(r => !sibIds.includes(r.id)));
+        }
+      }
       setStats(s => ({
-        unlabeled: Math.max(0, s.unlabeled - 1),
-        labels: { ...s.labels, [verdict]: (s.labels[verdict] || 0) + 1 },
+        unlabeled: Math.max(0, s.unlabeled - 1 - autoLabeled),
+        labels: { ...s.labels, [verdict]: (s.labels[verdict] || 0) + 1 + autoLabeled },
       }));
       // For real_plate labels with an image, prompt the operator to draw
       // a bbox so we can fine-tune the YOLO detector on Charlotte data.
