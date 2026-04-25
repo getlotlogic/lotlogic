@@ -1187,8 +1187,16 @@ function isPlausiblePlate(r: PrResult): boolean {
   // PR returns a vehicle object on each result when a car/truck was
   // detected around the plate. Missing or low-confidence vehicle means
   // the plate is probably background text (decal, sign, trailer label).
+  //
+  // EXCEPTION: when PR is highly confident in the plate text (>= 0.90),
+  // we trust PR's plate signal and bypass the vehicle gate. This covers
+  // night-IR shots where the truck body is dark/invisible but the plate
+  // is sharp — PR's vehicle detector returns a low score even though the
+  // plate read is clearly real. Layer 2 (letter+digit + length 5-8) and
+  // Layer 3 (length-scaled confidence) still gate against trailer DOTs,
+  // pure-digit reads, and short decal text.
   const vehicleScore = typeof r.vehicle?.score === "number" ? r.vehicle.score : 0;
-  if (vehicleScore < REQUIRE_VEHICLE_SCORE) return false;
+  if (r.score < 0.90 && vehicleScore < REQUIRE_VEHICLE_SCORE) return false;
 
   // ─── Layer 3: CONFIDENCE scales with length ────────────────────────
   // Shorter reads are riskier — require higher confidence to pass.
