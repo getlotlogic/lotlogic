@@ -235,6 +235,66 @@ export async function findRecentSessionByCamera(
   return (data ?? [])[0] ?? null;
 }
 
+// Per-(camera, plate) PR lock. Returns the most recent plate_events row from
+// THIS camera within `withinSeconds` whose raw_data has a real PR response
+// AND whose normalized_plate fuzzy-matches the sidecar's candidate read.
+//
+// Used to suppress new PR calls when this camera already paid for a PR
+// confirmation of (a fuzzy-matching) plate recently. The lock is fixed
+// window from PR's response: 3 min default (PR_LOCK_SECONDS).
+//
+// Cross-camera independence: this function only looks at the given camera_id.
+// Camera B has its own independent lock for the same plate.
+export type RecentPrCall = {
+  session_id: string | null;
+  plate_text: string;
+  normalized_plate: string;
+  created_at: string;
+};
+export async function findRecentPrCallForCamera(
+  db: SupabaseClient,
+  cameraId: string,
+  candidateNormalizedPlate: string,
+  withinSeconds: number,
+): Promise<RecentPrCall | null> {
+  if (!candidateNormalizedPlate) return null;
+  const cutoffIso = new Date(Date.now() - withinSeconds * 1000).toISOString();
+  // Pull recent events from this camera. Plate column-filter is best-effort
+  // — fuzzy match below is the real filter. Limit 30 covers the worst-case
+  // 3-min window even with high frame rate.
+  const { data, error } = await db
+    .from("plate_events")
+    .select("session_id, plate_text, normalized_plate, created_at, raw_data")
+    .eq("camera_id", cameraId)
+    .gte("created_at", cutoffIso)
+    .not("normalized_plate", "is", null)
+    .neq("normalized_plate", "")
+    .order("created_at", { ascending: false })
+    .limit(30);
+  if (error) throw error;
+  if (!data) return null;
+  for (const ev of data) {
+    // Only consider events that were ACTUAL PR calls — raw_data._pr_response
+    // is set by the PR-success branch in camera-snapshot. Inherits and
+    // suppressions don't have it, so they don't reset the lock.
+    const rd = ev.raw_data as { _pr_response?: unknown } | null;
+    if (!rd?._pr_response) continue;
+    // anchored=true gives wider tolerance (≤2 char edits + OCR confusion
+    // pairs). PR's read is high-confidence and we want to absorb sidecar
+    // misreads aggressively here — false-merge risk is bounded by the
+    // 3-min window (resets after).
+    if (plateSimilar(ev.normalized_plate as string, candidateNormalizedPlate, true)) {
+      return {
+        session_id: (ev.session_id as string | null) ?? null,
+        plate_text: ev.plate_text as string,
+        normalized_plate: ev.normalized_plate as string,
+        created_at: ev.created_at as string,
+      };
+    }
+  }
+  return null;
+}
+
 export type ResidentRow = { id: string };
 export async function findActiveResident(
   db: SupabaseClient,

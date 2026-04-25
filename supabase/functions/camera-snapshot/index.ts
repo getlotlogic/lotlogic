@@ -4,7 +4,7 @@ import { makeR2Uploader } from "../pr-ingest/r2.ts";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { extractFromRequest } from "./extract.ts";
 import { parsePath } from "./path.ts";
-import { findOpenSession, findSimilarOpenSession, findRecentSessionByCamera, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
+import { findOpenSession, findSimilarOpenSession, findRecentSessionByCamera, findRecentPrCallForCamera, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
 import { isPlateHeld } from "./holds.ts";
 import { extractUsdot } from "./usdot-ocr.ts";
 import { computeImageHashes } from "./image-hash.ts";
@@ -75,6 +75,13 @@ const USDOT_BURST_SECONDS = Number(Deno.env.get("USDOT_BURST_SECONDS") ?? "10");
 // Tunable: shorter window = tighter back-to-back-different-vehicle accuracy
 // at slightly higher PR cost. Disable entirely with CAMERA_COOLDOWN_SECONDS=0.
 const CAMERA_COOLDOWN_SECONDS = Number(Deno.env.get("CAMERA_COOLDOWN_SECONDS") ?? "60");
+// Per-(camera, plate) PR lock. Once PR confirms plate X for camera A, we
+// suppress new PR calls for fuzzy-matching plates from camera A for this
+// many seconds. Cross-camera independent: camera B has its own lock for
+// the same plate. Fixed window from PR's response (does NOT slide on each
+// new frame) — guarantees a fresh re-confirmation every PR_LOCK_SECONDS
+// while a vehicle remains in front of the camera.
+const PR_LOCK_SECONDS = Number(Deno.env.get("PR_LOCK_SECONDS") ?? "180");
 // Pre-PR delay. Always wait this many ms before calling PR so any in-flight
 // PR call from a previous frame (parallel arrival from another camera, or
 // the previous frame from THIS camera that's still mid-PR) has a chance to
@@ -217,10 +224,63 @@ Deno.serve(async (req: Request) => {
             plate_text: sidecarSession.plate_text,
           });
         }
-        // No matching session. Save the sidecar's read so the pre-PR
-        // recheck below can re-query for an open session after a brief
-        // delay (handles parallel-arrival case: another camera's frame
-        // for the same vehicle is still mid-PR-call).
+        // No matching open session. Before paying for PR, check the
+        // per-(camera, plate) PR lock — if THIS camera already paid for a
+        // PR confirmation of a fuzzy-matching plate within the last
+        // PR_LOCK_SECONDS, suppress this call. The lock is per camera, so
+        // camera B will still get its own first PR call for the same plate.
+        if (PR_LOCK_SECONDS > 0) {
+          const recentPr = await findRecentPrCallForCamera(db, camera.id, sidecarNormalized, PR_LOCK_SECONDS);
+          if (recentPr) {
+            const nowDate = new Date();
+            const lockAgeS = Math.round((nowDate.getTime() - new Date(recentPr.created_at).getTime()) / 1000);
+            const ev = await db.from("plate_events").insert({
+              camera_id: camera.id,
+              property_id: camera.property_id,
+              plate_text: recentPr.plate_text,
+              normalized_plate: recentPr.normalized_plate,
+              confidence: 0.70,
+              image_url: null,
+              image_sha256: imageHashes.sha256,
+              image_dhash: imageHashes.dhash,
+              event_type: "entry",
+              raw_data: {
+                _source: `camera-snapshot:${extracted.source}:pr_lock`,
+                _inherited_from_session: recentPr.session_id,
+                _pr_lock_seconds: PR_LOCK_SECONDS,
+                _pr_lock_age_seconds: lockAgeS,
+                _sidecar_plate: candidatePlate,
+                _sidecar_confidence: candidateConf,
+                _image_suppressed: "session_already_confirmed",
+                ...(extracted.rawMeta ?? {}),
+              },
+              match_status: "dedup_suppressed",
+              match_reason: `pr-lock: camera confirmed "${recentPr.plate_text}" ${lockAgeS}s ago (window ${PR_LOCK_SECONDS}s)`,
+              matched_at: nowDate.toISOString(),
+              session_id: recentPr.session_id,
+            });
+            if (ev.error) throw ev.error;
+            if (recentPr.session_id) {
+              await db.from("plate_sessions")
+                .update({ last_detected_at: nowDate.toISOString() })
+                .eq("id", recentPr.session_id);
+            }
+            console.log(`pr-lock inherit camera=${camera.id} plate=${candidatePlate}~${recentPr.plate_text} age=${lockAgeS}s (saved a PR call)`);
+            return json(200, {
+              ok: true,
+              events: 1,
+              source: extracted.source,
+              inherited: true,
+              inherit_tier: "pr_lock",
+              session_id: recentPr.session_id,
+              plate_text: recentPr.plate_text,
+            });
+          }
+        }
+        // No matching session AND no PR lock. Save the sidecar's read so
+        // the pre-PR recheck below can re-query for an open session after a
+        // brief delay (handles parallel-arrival case: another camera's
+        // frame for the same vehicle is still mid-PR-call).
         sidecarReadForRecheck = candidatePlate;
         if (sidecar.bestPlate) {
           console.log(`openalpr-sidecar read "${sidecar.bestPlate}" conf=${sidecar.bestConfidence} but no matching session; will recheck before PR`);
