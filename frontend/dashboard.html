@@ -8583,6 +8583,14 @@ function TrainingPage({ user, isOwner }) {
   const [stats, setStats] = useState({ unlabeled: 0, labels: {} });
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Bounding box annotation state. After labeling a frame as 'real_plate',
+  // the operator can optionally draw the plate's bbox on the image. Coords
+  // are normalized 0-1 against the original image (not the rendered size).
+  // Stored in raw_data.operator_bbox = {x1,y1,x2,y2} for the YOLO export.
+  const [bboxModal, setBboxModal] = useState(null); // { event, imgEl }
+  const [bboxStart, setBboxStart] = useState(null); // {x,y} in pixel space
+  const [bboxEnd, setBboxEnd] = useState(null);
+  const imgRef = React.useRef(null);
 
   async function loadQueue() {
     setLoading(true);
@@ -8638,6 +8646,15 @@ function TrainingPage({ user, isOwner }) {
         unlabeled: Math.max(0, s.unlabeled - 1),
         labels: { ...s.labels, [verdict]: (s.labels[verdict] || 0) + 1 },
       }));
+      // For real_plate labels with an image, prompt the operator to draw
+      // a bbox so we can fine-tune the YOLO detector on Charlotte data.
+      // Skipping the bbox is fine — it still counts as a classification
+      // label for the OCR side. Only frames with bbox feed the detector
+      // training set.
+      if (verdict === 'real_plate' && cur.image_url) {
+        setBboxModal({ event: cur });
+        return; // don't advance; modal will advance after save/skip
+      }
       if (idx + 1 >= queue.length) {
         await loadQueue();
       } else {
@@ -8649,6 +8666,71 @@ function TrainingPage({ user, isOwner }) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function saveBbox(box) {
+    // box is {x1,y1,x2,y2} normalized 0-1. Persist to operator_bbox so
+    // the YOLO export script can read it. After save, advance the queue.
+    if (!bboxModal) return;
+    try {
+      const cur = bboxModal.event;
+      const newRaw = {
+        ...(cur.raw_data || {}),
+        operator_bbox: box,
+        operator_bbox_at: new Date().toISOString(),
+      };
+      await supabase.from('plate_events').update({ raw_data: newRaw }).eq('id', cur.id);
+    } catch (err) {
+      console.error('saveBbox', err);
+      alert('Failed to save bbox: ' + err.message);
+    } finally {
+      setBboxModal(null);
+      setBboxStart(null);
+      setBboxEnd(null);
+      if (idx + 1 >= queue.length) await loadQueue();
+      else setIdx(idx + 1);
+      setSubmitting(false);
+    }
+  }
+
+  function skipBbox() {
+    setBboxModal(null);
+    setBboxStart(null);
+    setBboxEnd(null);
+    if (idx + 1 >= queue.length) loadQueue();
+    else setIdx(idx + 1);
+    setSubmitting(false);
+  }
+
+  function onCanvasMouseDown(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setBboxStart({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setBboxEnd({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  }
+  function onCanvasMouseMove(e) {
+    if (!bboxStart) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setBboxEnd({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  }
+  function onCanvasMouseUp() {
+    if (!bboxStart || !bboxEnd) return;
+    // Convert pixel coords to normalized 0-1 against the displayed image.
+    // Server-side YOLO conversion handles aspect-ratio mapping to native res.
+    const img = imgRef.current;
+    if (!img) return;
+    const w = img.clientWidth;
+    const h = img.clientHeight;
+    const x1 = Math.max(0, Math.min(bboxStart.x, bboxEnd.x) / w);
+    const y1 = Math.max(0, Math.min(bboxStart.y, bboxEnd.y) / h);
+    const x2 = Math.min(1, Math.max(bboxStart.x, bboxEnd.x) / w);
+    const y2 = Math.min(1, Math.max(bboxStart.y, bboxEnd.y) / h);
+    if (x2 - x1 < 0.02 || y2 - y1 < 0.02) {
+      // Too small — probably a click, not a drag. Reset.
+      setBboxStart(null);
+      setBboxEnd(null);
+      return;
+    }
+    saveBbox({ x1, y1, x2, y2 });
   }
 
   // Keyboard shortcuts: 1 = first verdict, 2 = second, S = skip
@@ -8781,6 +8863,52 @@ function TrainingPage({ user, isOwner }) {
           </div>
           <div style={{marginTop:8, textAlign:'center', fontSize:11, color:'var(--text-secondary)'}}>
             {idx + 1} of {queue.length} • Press 1 / 2 to label, S to skip
+          </div>
+        </div>
+      )}
+
+      {/* Bbox annotation modal — drawn after labeling a frame as real_plate */}
+      {bboxModal && (
+        <div style={{
+          position:'fixed', inset:0, background:'rgba(0,0,0,.85)', zIndex:1000,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:20,
+        }}>
+          <div style={{maxWidth:900, width:'100%', background:'var(--surface)', borderRadius:12, padding:16}}>
+            <div style={{marginBottom:10}}>
+              <h3 style={{margin:0, fontSize:16, fontWeight:800}}>Draw a box around the plate</h3>
+              <p style={{margin:'4px 0 0', fontSize:12, color:'var(--text-secondary)'}}>
+                Click and drag to mark the plate region. Used to fine-tune the detector on Charlotte frames. Skip if no plate visible or you don't have time.
+              </p>
+            </div>
+            <div style={{position:'relative', userSelect:'none', cursor:'crosshair'}}
+              onMouseDown={onCanvasMouseDown}
+              onMouseMove={onCanvasMouseMove}
+              onMouseUp={onCanvasMouseUp}
+              onMouseLeave={() => { setBboxStart(null); setBboxEnd(null); }}
+            >
+              <img ref={imgRef} src={bboxModal.event.image_url} alt="frame"
+                style={{width:'100%', display:'block', borderRadius:6, pointerEvents:'none'}}
+                draggable={false}
+              />
+              {bboxStart && bboxEnd && (
+                <div style={{
+                  position:'absolute',
+                  left: Math.min(bboxStart.x, bboxEnd.x),
+                  top: Math.min(bboxStart.y, bboxEnd.y),
+                  width: Math.abs(bboxEnd.x - bboxStart.x),
+                  height: Math.abs(bboxEnd.y - bboxStart.y),
+                  border:'2px solid #4ade80', background:'rgba(74,222,128,.15)',
+                  pointerEvents:'none',
+                }} />
+              )}
+            </div>
+            <div style={{display:'flex', gap:10, marginTop:12, justifyContent:'flex-end'}}>
+              <button onClick={skipBbox} style={{
+                background:'transparent', color:'var(--text-secondary)',
+                border:'1px solid var(--border)', borderRadius:8,
+                padding:'8px 16px', fontSize:13, fontWeight:700, cursor:'pointer',
+              }}>Skip</button>
+            </div>
           </div>
         </div>
       )}
