@@ -52,6 +52,14 @@ const DHASH_TIME_WINDOW_SECONDS = Number(Deno.env.get("DHASH_TIME_WINDOW_SECONDS
 // failure, complete darkness). Skip BEFORE sidecar — that saves the
 // ~2s sidecar runtime on garbage frames.
 const PURE_BLACK_LUMA_THRESHOLD = Number(Deno.env.get("PURE_BLACK_LUMA_THRESHOLD") ?? "15");
+// Auto-night-mode threshold. Frames brighter than this trust the sidecar's
+// plate-shape verdict (skip PR on no_plate_shaped_text). Frames dimmer
+// than this bypass the skip and ALWAYS fall through to PR — easyocr
+// misreads IR/grayscale night frames as "no plate-shape" even when a
+// plate is clearly visible to PR's better OCR. Cost ↑ at night but
+// recall ↑↑. Pure-black (< PURE_BLACK_LUMA_THRESHOLD) still skipped
+// regardless. Daylight outdoor scenes typically read 80-200 luma.
+const NIGHT_LUMA_THRESHOLD = Number(Deno.env.get("NIGHT_LUMA_THRESHOLD") ?? "50");
 // Diagnostic mode for sidecar rejections. When on, every frame the
 // sidecar throws away gets uploaded to R2 + a thin plate_events row
 // inserted with match_status='sidecar_rejected'. This is the only way
@@ -503,8 +511,15 @@ Deno.serve(async (req: Request) => {
         // Diagnostic rows still written for both skip cases so the labeling
         // UI populates. If real plates ever show up here, operator labels
         // 'real_plate' and the curator surfaces a tuning recommendation.
+        // Night mode: when the frame is dim (IR-illuminated, low ambient
+        // light), do NOT trust easyocr's plate-shape verdict. Real plates
+        // in IR look enough like generic text that easyocr falsely
+        // classifies them as no_plate_shaped. Force fall-through to PR.
+        // empty_scene still skips (true zero-text) regardless.
+        const isNightFrame = imageHashes.dhash !== null
+          && imageHashes.meanLuma < NIGHT_LUMA_THRESHOLD;
         const isHardSkip = sidecar.reason === "empty_scene"
-          || sidecar.reason === "no_plate_shaped_text";
+          || (sidecar.reason === "no_plate_shaped_text" && !isNightFrame);
         const fallThroughReason = sidecar.reason === "below_min_confidence"
           ? `below_min_confidence (${sidecar.bestConfidence.toFixed(2)})`
           : sidecar.reason ?? "no_plate";
