@@ -143,12 +143,21 @@ Deno.serve(async (req: Request) => {
     // without writing a row — the in-flight frame will create the
     // canonical event.
     const inheritCutoff = new Date(Date.now() - INHERIT_WINDOW_SECONDS * 1000).toISOString();
+    // CRITICAL: exclude sidecar_rejected rows from the race guard. Those
+    // are diagnostic rows intentionally written with session_id = null
+    // (they have no session by design). Without this filter, every
+    // diagnostic row poisons Tier 0 for the next 30 seconds — every
+    // subsequent frame on the property sees the rejected row's null
+    // session_id and assumes a frame is mid-processing, silently
+    // dropping itself. Result: system deadlock, ~1 frame logged per
+    // 30s while the rest go to /dev/null.
     const inflightProbe = await db
       .from("plate_events")
-      .select("id, session_id, created_at")
+      .select("id, session_id, created_at, match_status")
       .eq("property_id", camera.property_id)
       .gt("created_at", inheritCutoff)
       .is("session_id", null)
+      .neq("match_status", "sidecar_rejected")
       .order("created_at", { ascending: false })
       .limit(1);
     if (inflightProbe.data && inflightProbe.data.length > 0) {
