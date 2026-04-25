@@ -8590,15 +8590,18 @@ function TrainingPage({ user, isOwner }) {
       let q = supabase
         .from('plate_events')
         .select('id, camera_id, property_id, plate_text, confidence, image_url, raw_data, created_at, match_status')
-        .not('image_url', 'is', null)
         .order('created_at', { ascending: false })
         .limit(300);
       if (mode === 'rejected') {
+        // Rejected frames: image_url may be null when the R2 upload failed
+        // — still show the row so operator sees the rejection happened.
         q = q.eq('match_status', 'sidecar_rejected');
       } else {
         // PR-confirmed (or sidecar-confirmed) plate detections —
         // anything not a rejection and not an inherited dedup row.
-        q = q.in('match_status', ['unmatched', 'resident', 'visitor_pass']);
+        // Require image_url here (no point labeling without an image).
+        q = q.in('match_status', ['unmatched', 'resident', 'visitor_pass'])
+             .not('image_url', 'is', null);
       }
       const { data: rows, error } = await q;
       if (error) throw error;
