@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pre-download ONNX model weights at build time so runtime has zero
 # network dependency and cold-start is bounded by container pull only.
 # Both models cache under ~/.cache.
-RUN python -c "from open_image_models import LicensePlateDetector; LicensePlateDetector(detection_model='yolo-v9-t-640-license-plate-end2end'); from fast_plate_ocr import LicensePlateRecognizer; LicensePlateRecognizer('cct-s-v2-global-model'); print('Model pre-fetch complete')"
+RUN python -c "from open_image_models import LicensePlateDetector; LicensePlateDetector(detection_model='yolo-v9-s-608-license-plate-end2end'); LicensePlateDetector(detection_model='yolo-v9-t-640-license-plate-end2end'); from fast_plate_ocr import LicensePlateRecognizer; LicensePlateRecognizer('cct-s-v2-global-model'); print('Model pre-fetch complete')"
 
 # easyocr fallback model — only used if ENABLE_EASYOCR_FALLBACK=true at
 # runtime, but pre-fetching keeps the fallback path instant.
