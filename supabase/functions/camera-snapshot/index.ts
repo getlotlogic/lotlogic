@@ -123,6 +123,11 @@ Deno.serve(async (req: Request) => {
     // forensics / future use only — no live dedup logic depends on them.
     const imageHashes = await computeImageHashes(extracted.bytes);
 
+    // Hoisted sidecar read — available outside the sidecar block so the
+    // pre-PR delay+recheck below can use it. Set when sidecar finds any
+    // plate (high or low confidence) that didn't match an open session.
+    let sidecarReadForRecheck: string | null = null;
+
     // ── Sidecar pre-filter (the only inherit path) ────────────────────
     // Two-stage plate reader. If it returns a plate that matches an
     // existing open session on this property, inherit — PR never gets
@@ -195,11 +200,13 @@ Deno.serve(async (req: Request) => {
             plate_text: sidecarSession.plate_text,
           });
         }
-        // No matching session. If sidecar's read was BELOW the confidence
-        // gate, treat as no plate (fall to the next branch, may skip PR).
-        // If above gate, fall through to PR — could be a new vehicle.
+        // No matching session. Save the sidecar's read so the pre-PR
+        // recheck below can re-query for an open session after a brief
+        // delay (handles parallel-arrival case: another camera's frame
+        // for the same vehicle is still mid-PR-call).
+        sidecarReadForRecheck = candidatePlate;
         if (sidecar.bestPlate) {
-          console.log(`openalpr-sidecar read "${sidecar.bestPlate}" conf=${sidecar.bestConfidence} but no matching session; falling through to PR`);
+          console.log(`openalpr-sidecar read "${sidecar.bestPlate}" conf=${sidecar.bestConfidence} but no matching session; will recheck before PR`);
         }
         // Below-threshold reads with no session match: treat exactly like
         // no_plate (fall to the no-plate branch below).
@@ -313,6 +320,61 @@ Deno.serve(async (req: Request) => {
 
     // Hash-dedup consumer block removed 2026-04-25. Sidecar's plate-match
     // against open sessions covers this case (and more) directly above.
+
+    // Pre-PR delay + recheck. Solves the parallel-arrival case: if Camera A
+    // and Camera B both fire on the same vehicle within a few hundred ms,
+    // both sidecars run, neither finds an open session yet, and both would
+    // race to PR. By delaying briefly here and re-checking findSimilar-
+    // OpenSession, the second-to-arrive frame can pick up the session
+    // created by the first (its PR + entry path is fast, ~1-2s).
+    // Only runs when the sidecar gave us a plate to look up — no plate, no
+    // recheck (fall straight to PR or whatever the sidecar block decided).
+    if (sidecarReadForRecheck) {
+      await new Promise(r => setTimeout(r, 1500));
+      const recheckPlate = normalizePlate(sidecarReadForRecheck);
+      const recheckSession = await findSimilarOpenSession(db, camera.property_id, recheckPlate, 600);
+      if (recheckSession) {
+        // A parallel frame just created a session for this vehicle. Inherit.
+        const nowDate = new Date();
+        const ev = await db.from("plate_events").insert({
+          camera_id: camera.id,
+          property_id: camera.property_id,
+          plate_text: recheckSession.plate_text,
+          normalized_plate: recheckSession.normalized_plate,
+          confidence: 0.70,
+          image_url: null,
+          image_sha256: imageHashes.sha256,
+          image_dhash: imageHashes.dhash,
+          event_type: "entry",
+          raw_data: {
+            _source: `camera-snapshot:${extracted.source}:pre_pr_recheck`,
+            _inherited_from_session: recheckSession.id,
+            _sidecar_plate: sidecarReadForRecheck,
+            ...(extracted.rawMeta ?? {}),
+          },
+          match_status: "dedup_suppressed",
+          match_reason: `pre-PR recheck: parallel frame created session for ${recheckSession.plate_text}`,
+          matched_at: nowDate.toISOString(),
+          session_id: recheckSession.id,
+        });
+        if (ev.error) throw ev.error;
+        await inferDirection(db, recheckSession.id, camera.property_id, recheckSession.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
+        await db.from("plate_sessions")
+          .update({ last_detected_at: nowDate.toISOString() })
+          .eq("id", recheckSession.id);
+        console.log(`pre-PR recheck inherit session=${recheckSession.id} plate=${recheckSession.plate_text} (saved a PR call)`);
+        return json(200, {
+          ok: true,
+          events: 1,
+          source: extracted.source,
+          inherited: true,
+          inherit_tier: "pre_pr_recheck",
+          session_id: recheckSession.id,
+          plate_text: recheckSession.plate_text,
+        });
+      }
+      // Still no matching session — really is a new vehicle. Call PR.
+    }
 
     const prResp = await callPlateRecognizer(extracted.bytes, cameraApiKey);
     if (!prResp.ok) {
