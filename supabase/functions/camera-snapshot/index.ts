@@ -145,53 +145,20 @@ Deno.serve(async (req: Request) => {
     const camera = (cameraQ.data ?? [])[0];
     if (!camera) return json(200, { ok: false, reason: "unknown_camera", api_key: cameraApiKey });
 
-    // ── Tier 0: in-flight race guard ──────────────────────────────────
-    // If ANY recent event exists on this PROPERTY — even one whose session
-    // hasn't been backfilled yet — another frame is mid-processing. The
-    // previous code required session_id IS NOT NULL, which meant rapid
-    // bursts of a new plate all hit PR before the first frame finished
-    // creating its session (observed in prod 2026-04-24: 11 events on
-    // plate 210CYL within 50s, all full-PR, all on the same session once
-    // backfills resolved). Scope is property-wide (not camera-wide) because
-    // the same truck can arrive at gate A and trigger gate B within the
-    // inherit window — both frames race to create the session. Skip PR
-    // without writing a row — the in-flight frame will create the
-    // canonical event.
+    // Tier 0 race guard removed 2026-04-25. Operator decision: the guard
+    // was killing 30s of property-wide traffic every time the entry path
+    // crashed mid-backfill, leaving an orphan null-session row. Trade
+    // accepted: simultaneous multi-camera arrivals will incur N PR calls
+    // (one per camera) until one creates a session and the others
+    // inherit via Tier 5 sidecar matching. The new YOLOv9 + fast-plate-ocr
+    // sidecar is reliable enough that those follow-up frames will match
+    // the open session even on weak reads.
     const inheritCutoff = new Date(Date.now() - INHERIT_WINDOW_SECONDS * 1000).toISOString();
-    // CRITICAL: exclude sidecar_rejected rows from the race guard. Those
-    // are diagnostic rows intentionally written with session_id = null
-    // (they have no session by design). Without this filter, every
-    // diagnostic row poisons Tier 0 for the next 30 seconds — every
-    // subsequent frame on the property sees the rejected row's null
-    // session_id and assumes a frame is mid-processing, silently
-    // dropping itself. Result: system deadlock, ~1 frame logged per
-    // 30s while the rest go to /dev/null.
-    const inflightProbe = await db
-      .from("plate_events")
-      .select("id, session_id, created_at, match_status")
-      .eq("property_id", camera.property_id)
-      .gt("created_at", inheritCutoff)
-      .is("session_id", null)
-      .neq("match_status", "sidecar_rejected")
-      .order("created_at", { ascending: false })
-      .limit(1);
-    if (inflightProbe.data && inflightProbe.data.length > 0) {
-      console.log(`inflight-dedup skip: camera=${camera.api_key} prior_event=${inflightProbe.data[0].id}`);
-      return json(200, {
-        ok: true,
-        events: 0,
-        source: extracted.source,
-        deduped: true,
-        inherit_tier: "inflight",
-      });
-    }
 
-    // Compute image hashes for dedup AFTER the Tier 0 check.
-    // SHA-256 is cheap (~2ms); dHash requires JPEG decode (~100ms). Computing
-    // before Tier 0 wastes ~100ms on every frame that would have deduped
-    // upstream anyway. Both get stored on plate_events so future frames
-    // can match against them. The dHash decode also yields a meanLuma
-    // value used by the pure-black short-circuit below.
+    // Compute image hashes for dedup. SHA-256 is cheap (~2ms); dHash
+    // requires JPEG decode (~100ms). Both get stored on plate_events so
+    // future frames can match against them. The dHash decode also yields
+    // a meanLuma value used by the pure-black short-circuit below.
     const imageHashes = await computeImageHashes(extracted.bytes);
 
     // ── Pure-black short-circuit ──────────────────────────────────────
