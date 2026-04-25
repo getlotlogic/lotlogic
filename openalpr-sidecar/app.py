@@ -32,7 +32,10 @@ from fast_plate_ocr import LicensePlateRecognizer
 
 SIDECAR_AUTH_TOKEN = os.environ.get("SIDECAR_AUTH_TOKEN", "")
 DETECTOR_MODEL = os.environ.get("DETECTOR_MODEL", "yolo-v9-t-640-license-plate-end2end")
-OCR_MODEL = os.environ.get("OCR_MODEL", "global-plates-mobile-vit-v2-model")
+# fast-plate-ocr v1.x ships several global models. cct-s-v2 is the current
+# default in the upstream README and supports US plate formats. Switch to
+# 'cct-xs-v1-global-model' for a smaller / faster variant.
+OCR_MODEL = os.environ.get("OCR_MODEL", "cct-s-v2-global-model")
 DETECTOR_MIN_CONF = float(os.environ.get("DETECTOR_MIN_CONF", "0.40"))
 ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.50"))
 MAX_IMAGE_WIDTH = int(os.environ.get("ALPR_MAX_IMAGE_WIDTH", "1280"))
@@ -154,9 +157,12 @@ def _run_pipeline(img: np.ndarray) -> RecognizeResponse:
             if not ocr_result:
                 continue
             pred = ocr_result[0]
-            plate_text = pred.plate or ""
+            # API name shifted between v1.0 and v1.1 — try both.
+            plate_text = getattr(pred, "plate", None) or getattr(pred, "text", "") or ""
             if hasattr(pred, "char_probs") and pred.char_probs is not None:
                 ocr_conf = float(pred.char_probs.mean())
+            elif hasattr(pred, "confidence"):
+                ocr_conf = float(pred.confidence)
             else:
                 ocr_conf = 1.0
         except Exception:

@@ -3,9 +3,10 @@ uvicorn[standard]==0.29.0
 pydantic==2.6.4
 opencv-python-headless==4.9.0.80
 numpy==1.26.4
-onnxruntime==1.18.1
-open-image-models==0.2.0
-fast-plate-ocr[onnxruntime]==0.4.0
+# open-image-models[onnx] pulls in onnxruntime-cpu automatically.
+open-image-models[onnx]==0.5.1
+# fast-plate-ocr[onnx] pulls in onnxruntime-cpu automatically.
+fast-plate-ocr[onnx]==1.1.0
 # Optional easyocr fallback for graceful degradation when ONNX models
 # fail to load. Default OFF via ENABLE_EASYOCR_FALLBACK.
 easyocr==1.7.1
