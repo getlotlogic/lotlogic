@@ -1179,9 +1179,11 @@ function isPlausiblePlate(r: PrResult): boolean {
   if (normalized.length < PR_MIN_PLATE_LEN || normalized.length > 8) return false;
   // Must have at least one letter AND one digit — rejects "8266" (trailer
   // ID) and "1199" (police unit number) which are pure-digit reads.
+  // (Removed 2026-04-25: the previous "no 6+ consecutive digits" rule
+  // rejected real plates like Texas R823272 — 1 letter + 6 digits is a
+  // valid US format. The letter+digit + length rules above already
+  // exclude pure-digit trailer IDs and short unit numbers.)
   if (!/[A-Z]/.test(normalized) || !/\d/.test(normalized)) return false;
-  // No run of 6+ consecutive digits — real plates interleave letters+digits
-  if (/\d{6,}/.test(normalized)) return false;
 
   // ─── Layer 1: VEHICLE must have been detected ──────────────────────
   // PR returns a vehicle object on each result when a car/truck was
