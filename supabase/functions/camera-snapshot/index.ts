@@ -45,6 +45,13 @@ const DHASH_SIMILARITY_THRESHOLD = Number(Deno.env.get("DHASH_SIMILARITY_THRESHO
 // many seconds away is almost certainly a DIFFERENT vehicle happening
 // to sit in the same spot. 20s covers "same truck still in FOV".
 const DHASH_TIME_WINDOW_SECONDS = Number(Deno.env.get("DHASH_TIME_WINDOW_SECONDS") ?? "20");
+// Pure-black frame detector. Mean luminance over the 9x8 dHash grid.
+// 0 = pitch black, 255 = pure white. Real outdoor scenes rarely drop
+// below ~30 even at night with IR. Anything under 15 is almost
+// certainly a frame with no useful content (covered lens, camera
+// failure, complete darkness). Skip BEFORE sidecar — that saves the
+// ~2s sidecar runtime on garbage frames.
+const PURE_BLACK_LUMA_THRESHOLD = Number(Deno.env.get("PURE_BLACK_LUMA_THRESHOLD") ?? "15");
 // Diagnostic mode for sidecar rejections. When on, every frame the
 // sidecar throws away gets uploaded to R2 + a thin plate_events row
 // inserted with match_status='sidecar_rejected'. This is the only way
@@ -175,8 +182,58 @@ Deno.serve(async (req: Request) => {
     // SHA-256 is cheap (~2ms); dHash requires JPEG decode (~100ms). Computing
     // before Tier 0 wastes ~100ms on every frame that would have deduped
     // upstream anyway. Both get stored on plate_events so future frames
-    // can match against them.
+    // can match against them. The dHash decode also yields a meanLuma
+    // value used by the pure-black short-circuit below.
     const imageHashes = await computeImageHashes(extracted.bytes);
+
+    // ── Pure-black short-circuit ──────────────────────────────────────
+    // Cameras occasionally send entirely-dark frames (covered lens, sensor
+    // failure, IR-off in pitch dark). Mean luminance over the 9x8 dHash
+    // grid catches these for free — we already paid the JPEG decode for
+    // dHash. Skip sidecar AND PR. Saves ~2s of sidecar latency per frame.
+    if (imageHashes.dhash !== null && imageHashes.meanLuma < PURE_BLACK_LUMA_THRESHOLD) {
+      console.log(`pure-black skip: camera=${camera.api_key} luma=${imageHashes.meanLuma.toFixed(1)} threshold=${PURE_BLACK_LUMA_THRESHOLD}`);
+      if (LOG_REJECTED) {
+        const nowDate = new Date();
+        const epochMs = nowDate.getTime();
+        const dateStr = nowDate.toISOString().slice(0, 10);
+        const key = `diagnostic/${dateStr}/${camera.api_key}-${epochMs}-rejected-pure_black.jpg`;
+        let imageUrl: string | null = null;
+        const upRes = await r2(key, extracted.bytes);
+        if (upRes.ok) imageUrl = upRes.url;
+        else console.error(`pure-black R2 upload failed for ${key}: ${upRes.error}`);
+        const diag = await db.from("plate_events").insert({
+          camera_id: camera.id,
+          property_id: camera.property_id,
+          plate_text: "",
+          normalized_plate: "",
+          confidence: 0,
+          image_url: imageUrl,
+          image_sha256: imageHashes.sha256,
+          image_dhash: imageHashes.dhash,
+          event_type: "entry",
+          raw_data: {
+            _source: `camera-snapshot:${extracted.source}:rejected`,
+            _sidecar_reason: "pure_black",
+            _mean_luma: imageHashes.meanLuma,
+            _luma_threshold: PURE_BLACK_LUMA_THRESHOLD,
+            ...(extracted.rawMeta ?? {}),
+          },
+          match_status: "sidecar_rejected",
+          match_reason: `pure-black frame (luma=${imageHashes.meanLuma.toFixed(1)} < ${PURE_BLACK_LUMA_THRESHOLD})`,
+          session_id: null,
+        });
+        if (diag.error) console.error(`pure-black diagnostic insert failed: ${diag.error.message}`);
+      }
+      return json(200, {
+        ok: true,
+        events: 0,
+        source: extracted.source,
+        deduped: true,
+        inherit_tier: "pure_black",
+        mean_luma: imageHashes.meanLuma,
+      });
+    }
 
     // ── Tier 1: inherit from recent event on this camera ──────────────
     // Two-query approach — the !inner JOIN syntax in PostgREST was
@@ -429,21 +486,25 @@ Deno.serve(async (req: Request) => {
         // New behavior:
         //   • empty_scene (rawDetections === 0) → still skip PR. PR can't
         //     find what's not there. Safe to gate.
-        //   • no_plate_shaped_text → fall through to PR. Trust PR's better
-        //     OCR over easyocr's heuristic. Cost goes up but recall is the
-        //     priority — missing real plates means missing violations.
+        //   • no_plate_shaped_text → SKIP PR. Operator observed many wasted
+        //     PR calls on "side of cars" and "pure black" frames — those are
+        //     exactly the cases where sidecar correctly returns this reason.
+        //     With the looser sidecar plate-shape rules (4-10 chars, no
+        //     letter+digit requirement, conf >= 0.35), real plates are now
+        //     reliably classified as plate-shaped, so the no_plate_shaped
+        //     verdict can be trusted as "no plate to read here."
         //   • below_min_confidence → fall through to PR (unchanged).
         //
-        // Diagnostic rows still written for both empty_scene and
-        // no_plate_shaped_text so the labeling UI can show them. This
-        // means LOG_REJECTED rows happen even when we DO call PR — the
-        // diagnostic captures sidecar's verdict regardless of downstream.
-        const isHardSkip = sidecar.reason === "empty_scene";
+        // Diagnostic rows still written for both skip cases so the labeling
+        // UI populates. If real plates ever show up here, operator labels
+        // 'real_plate' and the curator surfaces a tuning recommendation.
+        const isHardSkip = sidecar.reason === "empty_scene"
+          || sidecar.reason === "no_plate_shaped_text";
         const fallThroughReason = sidecar.reason === "below_min_confidence"
           ? `below_min_confidence (${sidecar.bestConfidence.toFixed(2)})`
           : sidecar.reason ?? "no_plate";
         if (!isHardSkip) {
-          console.log(`openalpr-sidecar ${fallThroughReason}, falling through to PR (loose gate)`);
+          console.log(`openalpr-sidecar ${fallThroughReason}, falling through to PR for confirmation`);
           // fall through to PR — do not return here
         } else {
           console.log(`openalpr-sidecar empty_scene: skipping PR (rawDetections=0)`);

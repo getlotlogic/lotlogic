@@ -23,12 +23,17 @@ import { decode as decodeJpeg } from "https://esm.sh/jpeg-js@0.4.4";
 export type ImageHashes = {
   sha256: string;      // 64 hex chars
   dhash: string | null; // 16 hex chars, or null if JPEG decode failed
+  // Mean luminance over the downsampled 9x8 grid. 0 = pitch black, 255 =
+  // pure white. Useful for skipping pure-black frames before paying for
+  // sidecar/PR — observed in prod where the camera sends entirely-dark
+  // images at night or with a covered lens.
+  meanLuma: number;
 };
 
 export async function computeImageHashes(bytes: Uint8Array): Promise<ImageHashes> {
   const sha256 = await sha256Hex(bytes);
-  const dhash = await computeDHashSafe(bytes);
-  return { sha256, dhash };
+  const result = await computeDHashSafe(bytes);
+  return { sha256, dhash: result.dhash, meanLuma: result.meanLuma };
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -38,7 +43,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
     .join("");
 }
 
-async function computeDHashSafe(bytes: Uint8Array): Promise<string | null> {
+async function computeDHashSafe(bytes: Uint8Array): Promise<{ dhash: string | null; meanLuma: number }> {
   try {
     // Cap memory usage. Typical Milesight JPEGs decode to 2-8MB of raw
     // RGBA. 50MB is far above that ceiling but guards against malformed
@@ -47,22 +52,25 @@ async function computeDHashSafe(bytes: Uint8Array): Promise<string | null> {
     return computeDHash(decoded.data as Uint8Array, decoded.width, decoded.height);
   } catch (err) {
     console.warn("dhash decode failed:", err instanceof Error ? err.message : String(err));
-    return null;
+    return { dhash: null, meanLuma: 0 };
   }
 }
 
 // Difference hash: resize to 9x8 grayscale, then for each row compare
 // adjacent pixels. 8 comparisons × 8 rows = 64 bits.
-function computeDHash(rgba: Uint8Array, width: number, height: number): string {
+// Also returns mean luminance over the 9x8 grid for cheap pure-black detection.
+function computeDHash(rgba: Uint8Array, width: number, height: number): { dhash: string; meanLuma: number } {
   const grayscale = new Float32Array(72); // 9 columns × 8 rows
+  let lumaSum = 0;
   for (let y = 0; y < 8; y++) {
     const srcY = Math.min(height - 1, Math.floor((y * height) / 8));
     for (let x = 0; x < 9; x++) {
       const srcX = Math.min(width - 1, Math.floor((x * width) / 9));
       const idx = (srcY * width + srcX) * 4;
       // Rec. 709 luminance approximation
-      grayscale[y * 9 + x] =
-        0.2126 * rgba[idx] + 0.7152 * rgba[idx + 1] + 0.0722 * rgba[idx + 2];
+      const luma = 0.2126 * rgba[idx] + 0.7152 * rgba[idx + 1] + 0.0722 * rgba[idx + 2];
+      grayscale[y * 9 + x] = luma;
+      lumaSum += luma;
     }
   }
   const hashBytes = new Uint8Array(8);
@@ -73,9 +81,10 @@ function computeDHash(rgba: Uint8Array, width: number, height: number): string {
     }
     hashBytes[y] = byte;
   }
-  return Array.from(hashBytes)
+  const dhash = Array.from(hashBytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+  return { dhash, meanLuma: lumaSum / 72 };
 }
 
 // Hamming distance between two hex-encoded hashes of equal length.
