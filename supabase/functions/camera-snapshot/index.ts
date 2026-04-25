@@ -511,15 +511,14 @@ Deno.serve(async (req: Request) => {
         // Diagnostic rows still written for both skip cases so the labeling
         // UI populates. If real plates ever show up here, operator labels
         // 'real_plate' and the curator surfaces a tuning recommendation.
-        // Night mode: when the frame is dim (IR-illuminated, low ambient
-        // light), do NOT trust easyocr's plate-shape verdict. Real plates
-        // in IR look enough like generic text that easyocr falsely
-        // classifies them as no_plate_shaped. Force fall-through to PR.
-        // empty_scene still skips (true zero-text) regardless.
-        const isNightFrame = imageHashes.dhash !== null
-          && imageHashes.meanLuma < NIGHT_LUMA_THRESHOLD;
-        const isHardSkip = sidecar.reason === "empty_scene"
-          || (sidecar.reason === "no_plate_shaped_text" && !isNightFrame);
+        // The sidecar's job is to filter ONLY obviously useless frames.
+        // PR is better at judging plate vs not-plate — let it decide on
+        // anything ambiguous. So we only hard-skip when:
+        //   • empty_scene (sidecar saw zero text — nothing for PR to read)
+        //   • pure_black is handled separately above the gate
+        // Every other reason (no_plate_shaped_text, below_min_confidence)
+        // falls through to PR. Cost ↑ slightly, recall ↑↑.
+        const isHardSkip = sidecar.reason === "empty_scene";
         const fallThroughReason = sidecar.reason === "below_min_confidence"
           ? `below_min_confidence (${sidecar.bestConfidence.toFixed(2)})`
           : sidecar.reason ?? "no_plate";
