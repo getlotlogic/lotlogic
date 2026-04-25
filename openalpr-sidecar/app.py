@@ -29,9 +29,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 APP_AUTH_TOKEN = os.environ.get("SIDECAR_AUTH_TOKEN", "")
-MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.55"))
-MIN_PLATE_LEN = int(os.environ.get("ALPR_MIN_PLATE_LEN", "5"))
-MAX_PLATE_LEN = int(os.environ.get("ALPR_MAX_PLATE_LEN", "8"))
+# Loosened 2026-04-24 (operator feedback: filter rejecting real plates):
+#   conf 0.55 → 0.35   — let weak reads through; PR confirms downstream
+#   length 5-8 → 4-10  — covers 4-char trucks, DOT-style, vanity plates
+# The edge function's gate falls through to PR on `below_min_confidence`,
+# so anything we accept here that's wrong gets rejected by PR's better OCR.
+MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.35"))
+MIN_PLATE_LEN = int(os.environ.get("ALPR_MIN_PLATE_LEN", "4"))
+MAX_PLATE_LEN = int(os.environ.get("ALPR_MAX_PLATE_LEN", "10"))
 # easyocr scan time scales with image pixel count. Downscale large
 # frames before OCR — plates are still readable at 800px width and
 # processing drops from ~30s to ~3-5s per frame. 0 = no resize.
@@ -129,10 +134,10 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
         cleaned = re.sub(r"[^A-Z0-9]", "", (text or "").upper())
         if not (MIN_PLATE_LEN <= len(cleaned) <= MAX_PLATE_LEN):
             continue
-        # Plate shape rule: must contain at least one letter AND one digit.
-        # Rejects pure text strings ("EXITONLY") and pure numbers ("123456").
-        if not re.search(r"[A-Z]", cleaned) or not re.search(r"[0-9]", cleaned):
-            continue
+        # Letter+digit rule was removed 2026-04-24. It was rejecting
+        # real plates: vanity plates ("STAR"), number-only formats,
+        # 4-char truck plates that happened to read as all-digit on the
+        # camera angle. PR's OCR is better and will reject true junk.
         if float(conf) < MIN_CONFIDENCE:
             continue
         plates.append(PlateCandidate(plate=cleaned, confidence=float(conf)))
