@@ -11,6 +11,14 @@ import { computeImageHashes } from "./image-hash.ts";
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
+// Self-hosted Plate Recognizer Snapshot SDK toggle. When this env is set
+// (e.g. https://parkpow-sdk.railway.app/v1/plate-reader/), camera-snapshot
+// hits the local SDK instead of the paid cloud API. The SDK exposes the
+// SAME endpoint shape and returns the same JSON, so callers don't need
+// any other changes. Unset → falls back to the cloud API. This is the
+// single feature flag for the SDK rollout — flip it on/off in Supabase
+// secrets without redeploying.
+const PR_SDK_URL = Deno.env.get("PR_SDK_URL") ?? "";
 const PR_MIN_SCORE = Number(Deno.env.get("PR_MIN_SCORE") ?? "0.8");
 // Reject PR reads shorter than this many alphanumeric chars. Two- or three-
 // character "HH" / "AB" reads are partial captures, not plates, and produce
@@ -616,6 +624,7 @@ Deno.serve(async (req: Request) => {
             _sidecar_reason: "pr_no_plate",
             _pr_results_count: results.length,
             _pr_call_made: true,
+            _pr_source: prResp.source,
             _usdot_called: USDOT_ENABLED && !!USDOT_TOKEN,
             _usdot_found: usdotResult.kind !== "none",
             ...(imageError ? { _r2_error: imageError } : {}),
@@ -681,6 +690,7 @@ Deno.serve(async (req: Request) => {
         raw_data: {
           ...result,
           _pr_response: prResp.data,
+          _pr_source: prResp.source,
           _source: `camera-snapshot:${extracted.source}`,
           _orientation: camera.orientation,
           _usdot_ocr: usdotResult.kind === "none"
@@ -868,22 +878,30 @@ Deno.serve(async (req: Request) => {
 async function callPlateRecognizer(
   imageBytes: Uint8Array,
   cameraId: string,
-): Promise<{ ok: true; data: any } | { ok: false; status: number; bodyText: string }> {
-  if (!PR_TOKEN) return { ok: false, status: 0, bodyText: "PLATE_RECOGNIZER_TOKEN missing" };
+): Promise<{ ok: true; data: any; source: "sdk" | "cloud" } | { ok: false; status: number; bodyText: string }> {
+  // SDK takes priority when configured. The SDK Docker container exposes the
+  // SAME /v1/plate-reader/ endpoint as the cloud API, so the request shape
+  // is identical — only the host URL and auth differ.
+  const usingSdk = !!PR_SDK_URL;
+  if (!usingSdk && !PR_TOKEN) return { ok: false, status: 0, bodyText: "PLATE_RECOGNIZER_TOKEN missing (and PR_SDK_URL unset)" };
+
   const fd = new FormData();
   fd.append("upload", new Blob([imageBytes], { type: "image/jpeg" }), "snap.jpg");
   fd.append("camera_id", cameraId);
-  const res = await fetch("https://api.platerecognizer.com/v1/plate-reader/", {
-    method: "POST",
-    headers: { Authorization: `Token ${PR_TOKEN}` },
-    body: fd,
-  });
+
+  // Cloud API requires Authorization: Token <api_token>. The self-hosted SDK
+  // validates its license on container startup, so per-request auth is
+  // unnecessary (and the SDK ignores it if sent).
+  const url = usingSdk ? PR_SDK_URL : "https://api.platerecognizer.com/v1/plate-reader/";
+  const headers: Record<string, string> = usingSdk ? {} : { Authorization: `Token ${PR_TOKEN}` };
+
+  const res = await fetch(url, { method: "POST", headers, body: fd });
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
     return { ok: false, status: res.status, bodyText };
   }
   const data = await res.json();
-  return { ok: true, data };
+  return { ok: true, data, source: usingSdk ? "sdk" : "cloud" };
 }
 
 // Call the OpenALPR sidecar (Railway-hosted Python service running OpenALPR
