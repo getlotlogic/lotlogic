@@ -31,7 +31,7 @@ from open_image_models import LicensePlateDetector
 from fast_plate_ocr import LicensePlateRecognizer
 
 SIDECAR_AUTH_TOKEN = os.environ.get("SIDECAR_AUTH_TOKEN", "")
-DETECTOR_MODEL = os.environ.get("DETECTOR_MODEL", "yolo-v9-t-640-license-plate-end2end")
+DETECTOR_MODEL = os.environ.get("DETECTOR_MODEL", "yolo-v9-s-608-license-plate-end2end")
 # fast-plate-ocr v1.x ships several global models. cct-s-v2 is the current
 # default in the upstream README and supports US plate formats. Switch to
 # 'cct-xs-v1-global-model' for a smaller / faster variant.
