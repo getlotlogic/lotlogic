@@ -212,6 +212,29 @@ function extractFmcsaNumber(normalizedPlate: string): { kind: "dot" | "mc"; numb
   return null;
 }
 
+// Pre-PR camera-anchored dedup. Returns the most recent open session whose
+// entry was on this camera and whose last detection was within `withinSeconds`.
+// Used to suppress redundant PR calls on a parked vehicle: once one frame
+// produced a session, the next N frames from the same camera within the
+// cooldown window inherit onto it instead of paying for another PR call.
+export async function findRecentSessionByCamera(
+  db: SupabaseClient,
+  cameraId: string,
+  withinSeconds: number,
+): Promise<OpenSessionRow | null> {
+  const cutoffIso = new Date(Date.now() - withinSeconds * 1000).toISOString();
+  const { data, error } = await db
+    .from("plate_sessions")
+    .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+    .eq("entry_camera_id", cameraId)
+    .is("exited_at", null)
+    .gte("last_detected_at", cutoffIso)
+    .order("last_detected_at", { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  return (data ?? [])[0] ?? null;
+}
+
 export type ResidentRow = { id: string };
 export async function findActiveResident(
   db: SupabaseClient,
