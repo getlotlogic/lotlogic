@@ -161,216 +161,25 @@ Deno.serve(async (req: Request) => {
     // a meanLuma value used by the pure-black short-circuit below.
     const imageHashes = await computeImageHashes(extracted.bytes);
 
-    // ── Pure-black short-circuit ──────────────────────────────────────
-    // Cameras occasionally send entirely-dark frames (covered lens, sensor
-    // failure, IR-off in pitch dark). Mean luminance over the 9x8 dHash
-    // grid catches these for free — we already paid the JPEG decode for
-    // dHash. Skip sidecar AND PR. Saves ~2s of sidecar latency per frame.
-    if (imageHashes.dhash !== null && imageHashes.meanLuma < PURE_BLACK_LUMA_THRESHOLD) {
-      console.log(`pure-black skip: camera=${camera.api_key} luma=${imageHashes.meanLuma.toFixed(1)} threshold=${PURE_BLACK_LUMA_THRESHOLD}`);
-      if (LOG_REJECTED) {
-        const nowDate = new Date();
-        const epochMs = nowDate.getTime();
-        const dateStr = nowDate.toISOString().slice(0, 10);
-        const key = `${camera.property_id}/diagnostic/${dateStr}/${camera.api_key}-${epochMs}-rejected-pure_black.jpg`;
-        let imageUrl: string | null = null;
-        let imageError: string | null = null;
-        const upRes = await r2(key, extracted.bytes);
-        if (upRes.ok) imageUrl = upRes.url;
-        else {
-          imageError = upRes.error;
-          console.error(`pure-black R2 upload failed for ${key}: ${upRes.error}`);
-        }
-        const diag = await db.from("plate_events").insert({
-          camera_id: camera.id,
-          property_id: camera.property_id,
-          plate_text: "",
-          normalized_plate: "",
-          confidence: 0,
-          image_url: imageUrl,
-          image_sha256: imageHashes.sha256,
-          image_dhash: imageHashes.dhash,
-          event_type: "entry",
-          raw_data: {
-            _source: `camera-snapshot:${extracted.source}:rejected`,
-            _sidecar_reason: "pure_black",
-            _mean_luma: imageHashes.meanLuma,
-            _luma_threshold: PURE_BLACK_LUMA_THRESHOLD,
-            ...(imageError ? { _r2_error: imageError } : {}),
-            ...(extracted.rawMeta ?? {}),
-          },
-          match_status: "sidecar_rejected",
-          match_reason: `pure-black frame (luma=${imageHashes.meanLuma.toFixed(1)} < ${PURE_BLACK_LUMA_THRESHOLD})`,
-          session_id: null,
-        });
-        if (diag.error) console.error(`pure-black diagnostic insert failed: ${diag.error.message}`);
-      }
-      return json(200, {
-        ok: true,
-        events: 0,
-        source: extracted.source,
-        deduped: true,
-        inherit_tier: "pure_black",
-        mean_luma: imageHashes.meanLuma,
-      });
-    }
+    // Pure-black detector removed 2026-04-25 — sidecar's YOLOv9 returns
+    // zero plate boxes on dark frames anyway, which lands as empty_scene
+    // and skips PR. Redundant gate.
 
-    // ── Tier 1: inherit from recent event on this camera ──────────────
-    // Two-query approach — the !inner JOIN syntax in PostgREST was
-    // silently returning empty in some cases, causing Tier 1 to miss
-    // legitimate dedup opportunities. Splitting into plate_events query
-    // + plate_sessions query is more reliable.
-    const recentQuery = await db
-      .from("plate_events")
-      .select("session_id, plate_text, normalized_plate, usdot_number, mc_number, confidence")
-      .eq("camera_id", camera.id)
-      .gt("created_at", inheritCutoff)
-      .not("session_id", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(1);
+    // Tier 1 (same-camera recent inherit) and Tier 4 (image-hash dedup)
+    // were removed 2026-04-25. The new YOLOv9 + fast-plate-ocr sidecar
+    // is reliable enough that its plate-match against open sessions
+    // (sidecar block below) handles dedup correctly without these
+    // intermediate tiers. Operator instruction: "two plate readers will
+    // do it for us, these tiers are unnecessary."
+    void inheritCutoff; // retained for plate_events insert metadata only
 
-    let recent: { session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number } | undefined;
-    const recentRaw = (recentQuery.data ?? [])[0] as typeof recent;
-    if (recentRaw?.session_id) {
-      // Validate the session is still open
-      const sessCheck = await db
-        .from("plate_sessions")
-        .select("exited_at")
-        .eq("id", recentRaw.session_id)
-        .maybeSingle();
-      if (sessCheck.data && !sessCheck.data.exited_at) {
-        recent = recentRaw;
-      }
-    }
-
-    if (recent && recent.session_id) {
-      // We've already confirmed this plate on a recent frame in this session.
-      // Skip the R2 upload — operators have the canonical image from the entry
-      // event; subsequent inherited frames are timeline noise visually. Keep
-      // the plate_events row though: silence-gap exit detection, dwell-time
-      // calculation, and direction inference all key off `created_at` of the
-      // row, not the image. Killing the row breaks the state machine.
-      // Net cost: 200-byte DB row vs. 60-100KB R2 upload. ~99% R2 savings.
-      const nowDate = new Date();
-      const imageUrl: string | null = null;
-      // Clamp inherited confidence. Reusing the prior event's score as-is
-      // lets a single hi-confidence read propagate forever — every subsequent
-      // inherited frame gets that same 0.9+ value, which inflates the
-      // "anchored" fuzzy-match tolerance in findSimilarOpenSession (≥3
-      // hi-conf events → maxEdits=2). Cap inherited confidence at 0.70 so
-      // these events never count toward the anchor threshold. The real
-      // plate confidence lives on the original burst events.
-      const inheritedConfidence = Math.min(recent.confidence ?? 0.70, 0.70);
-      const ev = await db.from("plate_events").insert({
-        camera_id: camera.id,
-        property_id: camera.property_id,
-        plate_text: recent.plate_text,
-        normalized_plate: recent.normalized_plate,
-        confidence: inheritedConfidence,
-        image_url: imageUrl,
-        image_sha256: imageHashes.sha256,
-        image_dhash: imageHashes.dhash,
-        event_type: "entry",
-        usdot_number: recent.usdot_number,
-        mc_number: recent.mc_number,
-        raw_data: {
-          _source: `camera-snapshot:${extracted.source}:inherited`,
-          _inherited_from_session: recent.session_id,
-          _original_confidence: recent.confidence,
-          _image_suppressed: "session_already_confirmed",
-          ...(extracted.rawMeta ?? {}),
-        },
-        match_status: "dedup_suppressed",
-        match_reason: `inherited from prior detection within ${INHERIT_WINDOW_SECONDS}s`,
-        matched_at: nowDate.toISOString(),
-        session_id: recent.session_id,
-      });
-      if (ev.error) throw ev.error;
-
-      // Direction inference MUST run before the last_detected_at bump so the
-      // silence-gap branch inside inferDirection sees the prior timestamp.
-      await inferDirection(db, recent.session_id, camera.property_id, recent.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
-
-      // Bump session activity timestamp.
-      await db.from("plate_sessions")
-        .update({ last_detected_at: nowDate.toISOString() })
-        .eq("id", recent.session_id);
-
-      return json(200, {
-        ok: true,
-        events: 1,
-        source: extracted.source,
-        inherited: true,
-        inherit_tier: "recent",
-        session_id: recent.session_id,
-        plate_text: recent.plate_text,
-      });
-    }
-
-    // ── Tier 4 image-similarity dedup (PR cost killer) ─────────────────
-    // Longer window than Tier 3: up to IMAGE_HASH_WINDOW_SECONDS ago. Catches
-    // stationary vehicles that trigger motion sporadically (wind/shadow/sway)
-    // for minutes at a time. Two-layer match:
-    //   (a) SHA-256 equality — truly byte-identical JPEG (fast DB lookup)
-    //   (b) dHash Hamming ≤ threshold AND within DHASH_TIME_WINDOW_SECONDS —
-    //       visually same scene, temporally close (same truck still there).
-    // Two-query approach — same !inner PostgREST silent-empty bug that bit
-    // Tier 1 also applies here; explicit session lookup is reliable.
-    const hashCutoff = new Date(Date.now() - IMAGE_HASH_WINDOW_SECONDS * 1000).toISOString();
-    const dhashCutoffMs = Date.now() - DHASH_TIME_WINDOW_SECONDS * 1000;
-    const candidatesQuery = await db
-      .from("plate_events")
-      .select("session_id, plate_text, normalized_plate, usdot_number, mc_number, confidence, image_sha256, image_dhash, created_at")
-      .eq("camera_id", camera.id)
-      .gt("created_at", hashCutoff)
-      .not("session_id", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(20);
-
-    let hashMatch: { session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number; tier: "sha256" | "dhash"; distance?: number } | null = null;
-    const candidates = (candidatesQuery.data ?? []) as Array<{ session_id: string; plate_text: string; normalized_plate: string; usdot_number: string | null; mc_number: string | null; confidence: number; image_sha256: string | null; image_dhash: string | null; created_at: string }>;
-    for (const c of candidates) {
-      const ageMs = Date.now() - new Date(c.created_at).getTime();
-      if (c.image_sha256 && c.image_sha256 === imageHashes.sha256) {
-        // SHA-256 exact match — any age within IMAGE_HASH_WINDOW_SECONDS.
-        hashMatch = { ...c, tier: "sha256" };
-        break;
-      }
-      if (imageHashes.dhash && c.image_dhash && new Date(c.created_at).getTime() >= dhashCutoffMs) {
-        // dHash near-match — only if candidate is within the tight time
-        // window. Prevents stale "same parking spot, different truck"
-        // false inherits after the original truck left.
-        const d = hammingDistance(imageHashes.dhash, c.image_dhash);
-        if (d <= DHASH_SIMILARITY_THRESHOLD) {
-          hashMatch = { ...c, tier: "dhash", distance: d };
-          break;
-        }
-      }
-      // Suppress ageMs lint — reserved for future age-weighted scoring.
-      void ageMs;
-    }
-
-    // Verify the candidate's session is still open (replaces the !inner
-    // JOIN that was silently returning empty in some cases).
-    if (hashMatch) {
-      const sessCheck = await db
-        .from("plate_sessions")
-        .select("exited_at")
-        .eq("id", hashMatch.session_id)
-        .maybeSingle();
-      if (!sessCheck.data || sessCheck.data.exited_at) {
-        hashMatch = null;
-      }
-    }
-
-    // ── Tier 5: OpenALPR sidecar pre-filter (cost killer) ─────────────
-    // Before paying for a Plate Recognizer call, ask our free OpenALPR
-    // sidecar what plate it sees. If the sidecar returns a plate that
-    // matches an existing open session on this property (exact or fuzzy),
-    // inherit that session — PR never gets called.
-    // Only runs when the sidecar URL is configured. Empty or low-conf
-    // sidecar reads fall through to PR for the "pro" read.
-    if (!hashMatch && OPENALPR_SIDECAR_URL) {
+    // ── Sidecar pre-filter (the only inherit path) ────────────────────
+    // Two-stage plate reader. If it returns a plate that matches an
+    // existing open session on this property, inherit — PR never gets
+    // called. If it returns a plate with no matching open session, fall
+    // through to PR (new vehicle, opens a session). If it returns no
+    // plate, skip PR entirely (sidecar is trusted).
+    if (OPENALPR_SIDECAR_URL) {
       const sidecar = await callOpenAlprSidecar(extracted.bytes);
       // Cross-camera burst killer: try to match the sidecar's read against
       // an OPEN session on this property even if the read is below the
@@ -552,57 +361,8 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    if (hashMatch && hashMatch.session_id) {
-      // Hash-dedup match — same image bytes (or near-identical dHash) as a
-      // recent frame on this camera. Skip the R2 upload; we already have
-      // the canonical image from the prior frame.
-      const nowDate = new Date();
-      const inheritedConfidence = Math.min(hashMatch.confidence ?? 0.70, 0.70);
-      const ev = await db.from("plate_events").insert({
-        camera_id: camera.id,
-        property_id: camera.property_id,
-        plate_text: hashMatch.plate_text,
-        normalized_plate: hashMatch.normalized_plate,
-        confidence: inheritedConfidence,
-        image_url: null,
-        image_sha256: imageHashes.sha256,
-        image_dhash: imageHashes.dhash,
-        event_type: "entry",
-        usdot_number: hashMatch.usdot_number,
-        mc_number: hashMatch.mc_number,
-        raw_data: {
-          _source: `camera-snapshot:${extracted.source}:hash-${hashMatch.tier}`,
-          _inherited_from_session: hashMatch.session_id,
-          _hash_tier: hashMatch.tier,
-          _hash_distance: hashMatch.distance ?? 0,
-          _original_confidence: hashMatch.confidence,
-          _image_suppressed: "session_already_confirmed",
-          ...(extracted.rawMeta ?? {}),
-        },
-        match_status: "dedup_suppressed",
-        match_reason: `image similarity (${hashMatch.tier}) within ${IMAGE_HASH_WINDOW_SECONDS}s`,
-        matched_at: nowDate.toISOString(),
-        session_id: hashMatch.session_id,
-      });
-      if (ev.error) throw ev.error;
-
-      // Run direction inference + last_detected_at bump, same as Tier 3.
-      await inferDirection(db, hashMatch.session_id, camera.property_id, hashMatch.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
-      await db.from("plate_sessions")
-        .update({ last_detected_at: nowDate.toISOString() })
-        .eq("id", hashMatch.session_id);
-
-      console.log(`hash-dedup match session=${hashMatch.session_id} tier=${hashMatch.tier} dist=${hashMatch.distance ?? 0}`);
-      return json(200, {
-        ok: true,
-        events: 1,
-        source: extracted.source,
-        inherited: true,
-        inherit_tier: hashMatch.tier,
-        session_id: hashMatch.session_id,
-        plate_text: hashMatch.plate_text,
-      });
-    }
+    // Hash-dedup consumer block removed 2026-04-25. Sidecar's plate-match
+    // against open sessions covers this case (and more) directly above.
 
     const prResp = await callPlateRecognizer(extracted.bytes, cameraApiKey);
     if (!prResp.ok) {
