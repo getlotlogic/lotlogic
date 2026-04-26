@@ -235,12 +235,21 @@ def train_yolo(
     except Exception:
         pass
 
-    # Upload to R2 under a timestamped key + a "latest" alias
+    # Upload to R2 under a timestamped key + a "latest" alias.
+    # Env var contract: prefer R2_S3_ENDPOINT (full URL, what .env.local
+    # uses); fall back to R2_ACCOUNT_ID for the older docs format.
+    endpoint_url = os.environ.get("R2_S3_ENDPOINT") or (
+        f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com"
+        if os.environ.get("R2_ACCOUNT_ID") else None
+    )
+    if not endpoint_url:
+        raise ValueError("Need R2_S3_ENDPOINT or R2_ACCOUNT_ID in Modal secret")
     s3 = boto3.client(
         "s3",
-        endpoint_url=f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+        endpoint_url=endpoint_url,
         aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
         aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        region_name="auto",
     )
     bucket = os.environ["R2_BUCKET_NAME"]
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
