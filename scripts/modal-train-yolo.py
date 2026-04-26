@@ -81,7 +81,7 @@ def train_yolo(
     epochs: int = 100,
     imgsz: int = 640,
     train_split: float = 0.85,
-    min_labels: int = 50,
+    min_labels: int = 200,
 ) -> dict:
     """Pull labeled frames from Supabase + R2, train YOLOv9t, export ONNX,
     upload back to R2, ping the webhook. Returns a status dict."""
@@ -221,10 +221,13 @@ def train_yolo(
     onnx_path = Path(onnx_path_str)
     onnx_size = onnx_path.stat().st_size
 
-    # Read val metrics for the report
+    # Read val metrics for the report. Run a fresh val on the BEST weights
+    # (early-stop may have restored best.pt — train_result.box reports the
+    # last-epoch metrics which can disagree with what's on disk).
     metrics = {}
     try:
-        m = train_result.box if hasattr(train_result, "box") else None
+        val_result = best_model.val(data=str(dataset_yaml), imgsz=imgsz, verbose=False)
+        m = val_result.box if hasattr(val_result, "box") else None
         if m is not None:
             metrics = {
                 "map50": float(m.map50),
@@ -232,8 +235,35 @@ def train_yolo(
                 "precision": float(m.mp),
                 "recall": float(m.mr),
             }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[train_yolo] val metrics fetch failed: {e}")
+        # Fall back to last-epoch metrics so we still have something to log.
+        try:
+            m = train_result.box if hasattr(train_result, "box") else None
+            if m is not None:
+                metrics = {
+                    "map50": float(m.map50),
+                    "map50_95": float(m.map),
+                    "precision": float(m.mp),
+                    "recall": float(m.mr),
+                }
+        except Exception:
+            pass
+
+    # mAP floor. Refuse to commit if the model's mAP50 is below the floor —
+    # protects against "operator mislabels 200 frames junk → retrain produces
+    # mAP50=0.04 model → ships to prod" scenarios.
+    MIN_MAP50 = float(os.environ.get("MIN_MAP50_TO_COMMIT", "0.60"))
+    map50 = metrics.get("map50", 0.0)
+    if map50 < MIN_MAP50:
+        print(f"[train_yolo] REFUSING TO COMMIT: mAP50 {map50:.3f} < floor {MIN_MAP50}")
+        shutil.rmtree(work, ignore_errors=True)
+        return {
+            "ok": False,
+            "reason": f"map50_below_floor (got {map50:.3f}, need >= {MIN_MAP50})",
+            "labeled_count": len(rows),
+            "metrics": metrics,
+        }
 
     # Commit the ONNX directly to GitHub via the Contents API.
     # Skipping R2 + the training-complete webhook entirely — Modal has
@@ -316,6 +346,22 @@ def train_yolo(
         "commit_sha": commit_sha,
         "commit_url": commit_url,
     }
+
+    # Close the audit row (releases the concurrency lock for the next run).
+    # Best-effort: failure here doesn't roll back the GitHub commit; the
+    # row will simply stay open for an hour, after which the gate auto-clears.
+    try:
+        sb.table("training_runs").update({
+            "status": "completed",
+            "finished_at": "now()",
+            "labels_at_kickoff": len(rows),
+            "metrics": metrics,
+            "commit_sha": commit_sha,
+        }).is_("finished_at", "null").order(
+            "started_at", desc=True
+        ).limit(1).execute()
+    except Exception as e:
+        print(f"[train_yolo] audit close failed (non-fatal): {e}")
 
     shutil.rmtree(work, ignore_errors=True)
     return payload
