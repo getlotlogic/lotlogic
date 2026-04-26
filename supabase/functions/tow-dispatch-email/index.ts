@@ -87,6 +87,17 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
+  // Internal-only function. Until 2026-04-26 this was unauthenticated, which
+  // meant anyone on the internet who could guess a violation UUID could
+  // force-send a tow-dispatch email + burn the Resend free quota. Now gated
+  // by INTERNAL_TOKEN — camera-snapshot supplies it on every fan-out call.
+  // If unset, the function refuses to run.
+  const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
+  const provided = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!internalToken || provided !== internalToken) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
   // Resend is the sole email provider (3K/mo free tier). SendGrid +
   // Twilio dependencies removed 2026-04-24 to zero out outbound-comms
   // billing surface. If Resend is unreachable we return 502 and the

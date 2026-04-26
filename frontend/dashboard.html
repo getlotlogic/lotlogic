@@ -8304,7 +8304,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
                   {(s.plate_text || '').startsWith('MC-') && (
                     <span title="Matched by Motor Carrier number, not plate" style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC#</span>
                   )}
-                  <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${stateColor}20`,color:stateColor,border:`1px solid ${stateColor}40`}}>{s.state.replace('_',' ')}</span>
+                  <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${stateColor}20`,color:stateColor,border:`1px solid ${stateColor}40`}}>{(s.state || 'unknown').replace('_',' ')}</span>
                   {s.vehicle_type && <span style={{fontSize:11,color:'var(--text-muted)'}}>{s.vehicle_type}</span>}
                 </div>
                 <div style={{fontSize:11,color:'var(--text-muted)',marginTop:3}}>
@@ -8708,19 +8708,31 @@ function TrainingPage({ user, isOwner }) {
       const isAggressive = aggressiveVerdicts.has(verdict);
       const curReason = cur.raw_data?._sidecar_reason;
       const curCreated = new Date(cur.created_at).getTime();
+      // Hard cap on propagation count — prevents one click from labeling
+      // hundreds of frames if the burst window is huge (operator can still
+      // walk through the rest manually).
+      const PROPAGATION_CAP = 30;
       const siblings = queue.filter((r, i) => {
         if (i === idx) return false;
         if (r.raw_data?.operator_label) return false;
         if (r.camera_id !== cur.camera_id) return false;
         if (isAggressive) {
-          // Same reason, ±2 min window
-          if (curReason && r.raw_data?._sidecar_reason !== curReason) return false;
+          // Aggressive propagation MUST be gated on a non-null _sidecar_reason
+          // match. In "detected" mode, _sidecar_reason is null on the row the
+          // operator clicked (sidecar reasons attach to rejections, not
+          // detections), so without this guard every sibling in the 2-min
+          // window would propagate regardless of camera state — including
+          // genuine plates caught in the same burst. Keep aggressive
+          // propagation scoped to "rejected" mode (where every row has a
+          // reason) only.
+          if (!curReason) return false;
+          if (r.raw_data?._sidecar_reason !== curReason) return false;
           const ageMs = Math.abs(new Date(r.created_at).getTime() - curCreated);
           return ageMs <= 120_000;
         }
         // real_plate: only exact dHash match
         return cur.image_dhash && r.image_dhash === cur.image_dhash;
-      });
+      }).slice(0, PROPAGATION_CAP);
       if (siblings.length > 0) {
         const sibIds = siblings.map(s => s.id);
         for (const sib of siblings) {
@@ -8940,16 +8952,23 @@ function TrainingPage({ user, isOwner }) {
         }}>Refresh</button>
         <button onClick={async () => {
           const total = (stats.labels.real_plate || 0);
-          if (total < 100) {
-            addToast({ kind:'error', text:`Only ${total} real_plate labels — train more before retraining.` });
+          // Floor matches min_labels in scripts/modal-train-yolo.py — at <200
+          // val mAP is too noisy to trust + the model overfits hard.
+          if (total < 200) {
+            addToast({ kind:'error', text:`Only ${total} real_plate labels — need 200+ before retraining (current floor in modal-train-yolo.py).` });
             return;
           }
-          if (!confirm(`Retrain plate detector on ${total} labeled frames? Runs ~10-15 min on GPU. Result auto-deploys to sidecar when done.`)) return;
+          if (!confirm(`Retrain plate detector on ${total} labeled frames? Runs ~10-15 min on GPU. Auto-deploys to sidecar IF mAP50 >= 0.60.`)) return;
           setRetraining(true);
           try {
             const { data, error } = await supabase.functions.invoke('yolo-retrain', { body: {} });
             if (error) throw error;
-            addToast({ kind:'success', text:`Training kicked off (${data?.call_id?.slice(0,8) ?? 'modal'}). Sidecar will redeploy in ~15 min.` });
+            // 409 = another run is in flight (concurrency guard in yolo-retrain).
+            if (data?.error === 'training_already_in_flight') {
+              addToast({ kind:'error', text:`Already training — wait ~15 min before retrying.` });
+              return;
+            }
+            addToast({ kind:'success', text:`Training kicked off (${data?.call_id?.slice(0,8) ?? 'modal'}). Sidecar will redeploy in ~15 min if mAP holds.` });
           } catch (err) {
             addToast({ kind:'error', text:`Retrain failed: ${err.message || err}` });
           } finally {

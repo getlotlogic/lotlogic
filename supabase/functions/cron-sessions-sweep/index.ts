@@ -474,11 +474,15 @@ async function createViolationAndDispatch(
   if (sUpd.error) throw sUpd.error;
 
   try {
+    // tow-dispatch-email now requires INTERNAL_TOKEN bearer (added 2026-04-26
+    // — previously unauthenticated, exposed an internet-callable email-blast
+    // endpoint).
+    const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
     const res = await fetch(`${SUPABASE_URL}/functions/v1/tow-dispatch-email`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Authorization": `Bearer ${internalToken}`,
       },
       body: JSON.stringify({ violation_id: violationId }),
     });
