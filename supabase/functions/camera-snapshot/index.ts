@@ -326,17 +326,16 @@ Deno.serve(async (req: Request) => {
         //     verdict can be trusted as "no plate to read here."
         //   • below_min_confidence → fall through to PR (unchanged).
         //
-        // Diagnostic rows still written for both skip cases so the labeling
-        // UI populates. If real plates ever show up here, operator labels
-        // 'real_plate' and the curator surfaces a tuning recommendation.
-        // The sidecar's job is to filter ONLY obviously useless frames.
-        // PR is better at judging plate vs not-plate — let it decide on
-        // anything ambiguous. So we only hard-skip when:
-        //   • empty_scene (sidecar saw zero text — nothing for PR to read)
-        //   • pure_black is handled separately above the gate
-        // Every other reason (no_plate_shaped_text, below_min_confidence)
-        // falls through to PR. Cost ↑ slightly, recall ↑↑.
-        const isHardSkip = sidecar.reason === "empty_scene";
+        // 2026-04-25: REMOVED the empty_scene hard-skip after observing 4
+        // sequential frames of a real vehicle on Front Gate get dropped
+        // because YOLOv9-s returned zero detections. Trained-on-clean-data
+        // detectors have well-known blind spots (dark plates, extreme
+        // angles, oversized commercial plates). Trusting "YOLO saw nothing
+        // == no plate exists" was costing real plates. PR is better at
+        // judging plate vs not-plate — let it decide on every frame the
+        // sidecar didn't already inherit. Cost is bounded by the (camera,
+        // plate) PR lock and post-PR session dedup once a plate is found.
+        const isHardSkip = false;
         const fallThroughReason = sidecar.reason === "below_min_confidence"
           ? `below_min_confidence (${sidecar.bestConfidence.toFixed(2)})`
           : sidecar.reason ?? "no_plate";
