@@ -26,7 +26,10 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
 const MODAL_TRAINING_URL = Deno.env.get("MODAL_TRAINING_URL") ?? "";
-const MODAL_TRIGGER_TOKEN = Deno.env.get("MODAL_TRIGGER_TOKEN") ?? "";
+// Modal proxy auth — Modal validates these headers server-side before
+// invoking the kick_off_training function (requires_proxy_auth=True).
+const MODAL_KEY = Deno.env.get("MODAL_KEY") ?? "";
+const MODAL_SECRET = Deno.env.get("MODAL_SECRET") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
@@ -84,7 +87,8 @@ Deno.serve(async (req: Request) => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(MODAL_TRIGGER_TOKEN ? { "Authorization": `Bearer ${MODAL_TRIGGER_TOKEN}` } : {}),
+      ...(MODAL_KEY ? { "Modal-Key": MODAL_KEY } : {}),
+      ...(MODAL_SECRET ? { "Modal-Secret": MODAL_SECRET } : {}),
     },
     body: JSON.stringify({
       epochs: body.epochs ?? 100,

@@ -66,6 +66,7 @@ image = (
         "pillow==10.4.0",
         "pyyaml==6.0.2",
         "requests==2.32.3",
+        "fastapi[standard]==0.115.0",
     )
 )
 
@@ -287,11 +288,14 @@ def train_yolo(
     secrets=[modal.Secret.from_name("lotlogic-train")],
     timeout=30,
 )
-@modal.web_endpoint(method="POST", label="kick-off-training")
+@modal.fastapi_endpoint(method="POST", label="kick-off-training", requires_proxy_auth=True)
 def kick_off_training(request: dict | None = None) -> dict:
     """HTTP endpoint the dashboard / edge function calls to start a run.
-    Returns immediately with a function call id; training runs async."""
-    # Spawn the GPU function in the background — caller doesn't wait for it.
+    Returns immediately with a function call id; training runs async.
+
+    Auth: requires_proxy_auth=True means Modal validates Modal-Key +
+    Modal-Secret headers before invoking. Caller (Supabase edge function
+    yolo-retrain) supplies these from MODAL_KEY / MODAL_SECRET secrets."""
     handle = train_yolo.spawn(
         epochs=int((request or {}).get("epochs", 100)),
         imgsz=int((request or {}).get("imgsz", 640)),
