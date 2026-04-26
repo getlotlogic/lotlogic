@@ -30,8 +30,16 @@ from pydantic import BaseModel, Field
 from open_image_models import LicensePlateDetector
 from fast_plate_ocr import LicensePlateRecognizer
 
+from custom_yolo import CustomYoloDetector
+
 SIDECAR_AUTH_TOKEN = os.environ.get("SIDECAR_AUTH_TOKEN", "")
 DETECTOR_MODEL = os.environ.get("DETECTOR_MODEL", "yolo-v9-s-608-license-plate-end2end")
+# Optional path to a custom-trained YOLO ONNX (e.g. our Charlotte fine-tune).
+# When set, this overrides DETECTOR_MODEL and uses the custom_yolo wrapper
+# (raw-prediction graph + Python NMS). When unset, fall back to the bundled
+# *-end2end model from open-image-models.
+DETECTOR_MODEL_PATH = os.environ.get("DETECTOR_MODEL_PATH", "")
+DETECTOR_IMGSZ = int(os.environ.get("DETECTOR_IMGSZ", "640"))
 # fast-plate-ocr v1.x ships several global models. cct-s-v2 is the current
 # default in the upstream README and supports US plate formats. Switch to
 # 'cct-xs-v1-global-model' for a smaller / faster variant.
@@ -57,7 +65,17 @@ easyocr_reader = None  # only loaded if ENABLE_EASYOCR_FALLBACK=true
 @app.on_event("startup")
 def on_startup() -> None:
     global detector, ocr_reader, easyocr_reader
-    detector = LicensePlateDetector(detection_model=DETECTOR_MODEL)
+    if DETECTOR_MODEL_PATH:
+        # Custom Charlotte-trained model. Conf threshold here is a coarse
+        # pre-filter; the existing DETECTOR_MIN_CONF gate runs again per crop
+        # in _run_pipeline so behavior matches the bundled-detector path.
+        detector = CustomYoloDetector(
+            model_path=DETECTOR_MODEL_PATH,
+            imgsz=DETECTOR_IMGSZ,
+            conf_thresh=DETECTOR_MIN_CONF,
+        )
+    else:
+        detector = LicensePlateDetector(detection_model=DETECTOR_MODEL)
     ocr_reader = LicensePlateRecognizer(OCR_MODEL)
     if ENABLE_EASYOCR_FALLBACK:
         import easyocr as _easyocr

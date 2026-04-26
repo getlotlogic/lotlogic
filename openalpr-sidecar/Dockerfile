@@ -24,6 +24,15 @@ RUN python -c "from open_image_models import LicensePlateDetector; LicensePlateD
 RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False, verbose=False)" || true
 
 COPY app.py .
+COPY custom_yolo.py .
+
+# Custom Charlotte fine-tuned YOLO. Build context must contain models/
+# (gitignored from public release; copy lotlogic-plate.onnx in before build).
+# The COPY uses a glob so the build doesn't fail when the file is absent —
+# in that case DETECTOR_MODEL_PATH should stay unset and the sidecar falls
+# back to the bundled detector.
+RUN mkdir -p /app/models
+COPY models/* /app/models/
 
 ENV PORT=8000
 EXPOSE 8000

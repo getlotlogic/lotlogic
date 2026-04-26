@@ -80,9 +80,13 @@ def main():
 
     # Pull all candidates. supabase-py doesn't expose JSONB filtering for
     # nested keys via the REST helper, so we filter client-side.
+    # match_status filter intentionally omitted — operator_label='real_plate' +
+    # operator_bbox are the only requirements. Filtering operator_label at the
+    # SQL layer would be ideal but supabase-py doesn't expose nested-JSONB ops,
+    # so we filter client-side after the fetch.
     res = sb.table("plate_events").select(
         "id,plate_text,confidence,image_url,raw_data,created_at,camera_id"
-    ).eq("match_status", "unmatched").not_.is_("image_url", "null").limit(args.limit).execute()
+    ).not_.is_("image_url", "null").not_.is_("raw_data->>operator_bbox", "null").limit(args.limit).execute()
 
     rows_with_bbox = []
     for row in res.data or []:
