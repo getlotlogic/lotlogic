@@ -8584,7 +8584,23 @@ function TrainingPage({ user, isOwner }) {
   const [propagationToast, setPropagationToast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const lastLabelWriteRef = useRef(0);
+  // Mirror submitting into a ref so the Realtime debounced callback (which
+  // only closes over its mount-time submitting) can see the latest value.
+  useEffect(() => { submittingRef.current = submitting; }, [submitting]);
   const [retraining, setRetraining] = useState(false);
+  // Client-side admin gate for the Retrain button. Server (yolo-retrain
+  // edge function) is the authority — this just hides the UI affordance
+  // for non-admin owners so they don't get a 403 toast.
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    if (!supabase || !user?.id) return;
+    let cancelled = false;
+    supabase.from('lot_owners').select('is_admin').eq('id', user.id).maybeSingle()
+      .then(({ data }) => { if (!cancelled) setIsAdmin(!!data?.is_admin); });
+    return () => { cancelled = true; };
+  }, [user?.id]);
   // Bounding box annotation state. After labeling a frame as 'real_plate',
   // the operator can optionally draw the plate's bbox on the image. Coords
   // are normalized 0-1 against the original image (not the rendered size).
@@ -8613,7 +8629,7 @@ function TrainingPage({ user, isOwner }) {
       // being refetched.
       let queueQ = supabase
         .from('plate_events')
-        .select('id, camera_id, property_id, plate_text, confidence, image_url, raw_data, created_at, match_status')
+        .select('id, camera_id, property_id, plate_text, confidence, image_url, raw_data, created_at, match_status, image_dhash')
         .is('raw_data->>operator_label', null)
         .order('created_at', { ascending: false })
         .limit(300);
@@ -8641,7 +8657,14 @@ function TrainingPage({ user, isOwner }) {
       if (realPlateRes.count) labels.real_plate = realPlateRes.count;
       if (junkRes.count) labels.junk = junkRes.count;
       if (fpRes.count) labels.false_positive = fpRes.count;
-      setStats({ unlabeled: unlabeledRes.count || 0, labels });
+      // If we wrote a label in the last 3s, the optimistic decrement is
+      // more accurate than the just-fetched COUNT (Postgres replication
+      // lag) — skip the stats overwrite to avoid the counter visibly
+      // bouncing backwards.
+      const recentlyWrote = Date.now() - lastLabelWriteRef.current < 3000;
+      if (!recentlyWrote) {
+        setStats({ unlabeled: unlabeledRes.count || 0, labels });
+      }
     } catch (err) {
       console.error('TrainingPage loadQueue', err);
     } finally {
@@ -8663,10 +8686,19 @@ function TrainingPage({ user, isOwner }) {
   useIntervalFetch(() => { loadQueueRef.current?.(); }, 15000, [mode]); // eslint-disable-line
   useEffect(() => {
     if (!supabase) return;
-    const debounced = makeDebounced(() => loadQueueRef.current?.(), 250);
+    // Only refresh on INSERT — UPDATEs are mostly the operator's own
+    // label() writes, which would round-trip back through Realtime and
+    // reset idx to 0 mid-stream. The 15s interval poll catches anything
+    // we miss.
+    const debounced = makeDebounced(() => {
+      // Skip refresh if the operator is mid-label/skip/bbox — otherwise
+      // setQueue([...]) + setIdx(0) yanks them away from the row they
+      // were just looking at.
+      if (submittingRef.current) return;
+      loadQueueRef.current?.();
+    }, 250);
     const channel = supabase.channel('training-plate-events')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'plate_events' }, debounced)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'plate_events' }, debounced)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, []);
@@ -8753,6 +8785,10 @@ function TrainingPage({ user, isOwner }) {
         unlabeled: Math.max(0, s.unlabeled - 1 - autoLabeled),
         labels: { ...s.labels, [verdict]: (s.labels[verdict] || 0) + 1 + autoLabeled },
       }));
+      // Stamp the last-write time so loadQueue's COUNT queries don't
+      // overwrite our optimistic decrement with a stale (replication-lag)
+      // count. Window is 3s — DB usually catches up well within that.
+      lastLabelWriteRef.current = Date.now();
       // For real_plate labels with an image, prompt the operator to draw
       // a bbox so we can fine-tune the YOLO detector on Charlotte data.
       // Skipping the bbox is fine — it still counts as a classification
@@ -8950,7 +8986,7 @@ function TrainingPage({ user, isOwner }) {
           background:'transparent', color:'var(--text-secondary)', border:'1px solid var(--border)',
           borderRadius:6, padding:'4px 10px', fontSize:12, cursor:'pointer', marginLeft:'auto',
         }}>Refresh</button>
-        <button onClick={async () => {
+        {isAdmin && <button onClick={async () => {
           const total = (stats.labels.real_plate || 0);
           // Floor matches min_labels in scripts/modal-train-yolo.py — at <200
           // val mAP is too noisy to trust + the model overfits hard.
@@ -8978,7 +9014,7 @@ function TrainingPage({ user, isOwner }) {
           background: retraining ? '#3b82f640' : '#3b82f6', color:'#fff', border:'none',
           borderRadius:6, padding:'4px 12px', fontSize:12, fontWeight:700,
           cursor: retraining ? 'wait' : 'pointer', opacity: retraining ? 0.6 : 1,
-        }}>{retraining ? 'Kicking off…' : '🚀 Retrain detector'}</button>
+        }}>{retraining ? 'Kicking off…' : '🚀 Retrain detector'}</button>}
       </div>
 
       {loading ? (
@@ -9076,7 +9112,14 @@ function TrainingPage({ user, isOwner }) {
               onMouseDown={onCanvasMouseDown}
               onMouseMove={onCanvasMouseMove}
               onMouseUp={onCanvasMouseUp}
-              onMouseLeave={() => { setBboxStart(null); setBboxEnd(null); }}
+              onMouseLeave={() => {
+                // If the cursor leaves the canvas mid-drag, COMMIT the
+                // box (treat it like mouseup at the last position) rather
+                // than discarding. Discarding silently was costing real
+                // bboxes when operators briefly grazed off the edge while
+                // tightly cropping a plate.
+                if (bboxStart && bboxEnd) onCanvasMouseUp();
+              }}
             >
               <img ref={imgRef} src={bboxModal.event.image_url} alt="frame"
                 style={{width:'100%', display:'block', borderRadius:6, pointerEvents:'none'}}
