@@ -8721,7 +8721,9 @@ function TrainingPage({ user, isOwner }) {
       // label for the OCR side. Only frames with bbox feed the detector
       // training set.
       if (verdict === 'real_plate' && cur.image_url) {
-        setBboxModal({ event: cur });
+        // Pass the freshly-updated raw_data so saveBbox doesn't spread a stale
+        // copy that lacks operator_label and silently wipe it on bbox write.
+        setBboxModal({ event: { ...cur, raw_data: newRaw } });
         return; // don't advance; modal will advance after save/skip
       }
       if (idx + 1 >= queue.length) {
@@ -8743,10 +8745,15 @@ function TrainingPage({ user, isOwner }) {
     if (!bboxModal) return;
     try {
       const cur = bboxModal.event;
+      const nowIso = new Date().toISOString();
+      // Bbox modal only opens for real_plate verdicts. Pin operator_label
+      // explicitly so a stale raw_data spread can't drop it on the floor.
       const newRaw = {
         ...(cur.raw_data || {}),
+        operator_label: 'real_plate',
+        operator_labeled_at: cur.raw_data?.operator_labeled_at || nowIso,
         operator_bbox: box,
-        operator_bbox_at: new Date().toISOString(),
+        operator_bbox_at: nowIso,
       };
       await supabase.from('plate_events').update({ raw_data: newRaw }).eq('id', cur.id);
     } catch (err) {
