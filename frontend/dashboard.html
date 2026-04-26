@@ -8648,13 +8648,32 @@ function TrainingPage({ user, isOwner }) {
     }
   }
 
-  // Initial load + auto-refresh on mode change AND every 30s. Both tabs need
-  // the poll: rejected tab gets new sidecar_rejected frames every ~5s, and
-  // detected tab gets a real-plate hit every ~1-2 min. Without polling the
-  // detected tab feels stuck because labeling drains it faster than new
-  // frames arrive. useIntervalFetch fires loadQueue immediately on mount
-  // and on every mode change, so it replaces the standalone useEffect.
-  useIntervalFetch(() => { loadQueue(); }, 30000, [mode]); // eslint-disable-line
+  // Always-fresh queue. Three layers of refresh, in order of immediacy:
+  //   1. Supabase Realtime — fires the moment a new plate_events row is
+  //      inserted (sub-second latency). This is the primary path.
+  //   2. 15s interval poll — safety net for missed Realtime events
+  //      (network blips, channel reconnects, etc.).
+  //   3. Tab-focus refresh — when the operator switches back to the tab
+  //      after a while away, pull fresh state immediately.
+  // Mode change still triggers an immediate load via the interval's first
+  // fire (useIntervalFetch runs fn() once on mount + whenever deps change).
+  const loadQueueRef = useRef();
+  loadQueueRef.current = loadQueue;
+  useIntervalFetch(() => { loadQueueRef.current?.(); }, 15000, [mode]); // eslint-disable-line
+  useEffect(() => {
+    if (!supabase) return;
+    const debounced = makeDebounced(() => loadQueueRef.current?.(), 250);
+    const channel = supabase.channel('training-plate-events')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'plate_events' }, debounced)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'plate_events' }, debounced)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible') loadQueueRef.current?.(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
 
   async function label(verdict) {
     if (submitting || !queue[idx]) return;
