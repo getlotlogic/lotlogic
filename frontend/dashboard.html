@@ -8648,7 +8648,13 @@ function TrainingPage({ user, isOwner }) {
     }
   }
 
-  useEffect(() => { loadQueue(); }, [mode]); // eslint-disable-line
+  // Initial load + auto-refresh on mode change AND every 30s. Both tabs need
+  // the poll: rejected tab gets new sidecar_rejected frames every ~5s, and
+  // detected tab gets a real-plate hit every ~1-2 min. Without polling the
+  // detected tab feels stuck because labeling drains it faster than new
+  // frames arrive. useIntervalFetch fires loadQueue immediately on mount
+  // and on every mode change, so it replaces the standalone useEffect.
+  useIntervalFetch(() => { loadQueue(); }, 30000, [mode]); // eslint-disable-line
 
   async function label(verdict) {
     if (submitting || !queue[idx]) return;
