@@ -66,22 +66,38 @@ function areCharsConfusable(a: string, b: string): boolean {
 export function plateSimilar(a: string, b: string, anchored: boolean = false): boolean {
   if (a === b) return true;
   if (a.length === 0 || b.length === 0) return false;
-  if (Math.abs(a.length - b.length) <= 3 && (a.includes(b) || b.includes(a))) return true;
-
-  const maxEdits = anchored ? 2 : 1;
-
-  if (a.length === b.length) {
+  // Anchored mode is used when matching against an EXISTING session's plate
+  // — false positives there cross two different real vehicles' sessions.
+  // The substring shortcut + levenshtein-≤-2 was loose enough to collide
+  // legitimately distinct plates ("HD4183" vs "VHD4188" → 2 edits, hit).
+  // Tighten anchored mode to: same length, ≤1 non-confusion difference.
+  if (anchored) {
+    if (a.length !== b.length) return false;
     let trueEdits = 0;
     for (let i = 0; i < a.length; i++) {
       if (!areCharsConfusable(a[i], b[i])) {
         trueEdits++;
-        if (trueEdits > maxEdits) return false;
+        if (trueEdits > 1) return false;
       }
     }
     return true;
   }
 
-  return levenshteinBounded(a, b, maxEdits) <= maxEdits;
+  // Unanchored mode (used for NEW session matching) keeps the looser
+  // behavior — false positives there just collapse two reads of the same
+  // plate into one session, which is the desired effect.
+  if (Math.abs(a.length - b.length) <= 3 && (a.includes(b) || b.includes(a))) return true;
+  if (a.length === b.length) {
+    let trueEdits = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (!areCharsConfusable(a[i], b[i])) {
+        trueEdits++;
+        if (trueEdits > 1) return false;
+      }
+    }
+    return true;
+  }
+  return levenshteinBounded(a, b, 1) <= 1;
 }
 
 // Levenshtein distance with early exit when distance exceeds `max`.

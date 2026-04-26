@@ -283,7 +283,14 @@ async function closeRegistered(): Promise<number> {
     const validUntilMs = new Date(pass.valid_until).getTime();
     const fastPath = s.exit_hinted_at &&
       nowMs - new Date(s.exit_hinted_at).getTime() > EXIT_HINT_BUFFER_MINUTES * 60 * 1000;
-    const slowPath = nowMs - validUntilMs > CLOSE_BUFFER_HOURS * 60 * 60 * 1000;
+    // Slow path now also requires the truck to have been silent for at
+    // least CLOSE_BUFFER_HOURS. Without this, a registered truck that
+    // overstays but is still being detected by an interior camera gets
+    // auto-closed at pass-expiry + buffer, with no overstay violation
+    // ever opened. Failure mode reported in the 2026-04-26 audit.
+    const lastSeenMs = s.last_detected_at ? new Date(s.last_detected_at).getTime() : nowMs;
+    const stillBeingSeen = nowMs - lastSeenMs <= CLOSE_BUFFER_HOURS * 60 * 60 * 1000;
+    const slowPath = (nowMs - validUntilMs > CLOSE_BUFFER_HOURS * 60 * 60 * 1000) && !stillBeingSeen;
 
     if (!fastPath && !slowPath) continue;
 
