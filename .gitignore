@@ -41,3 +41,10 @@ leadgen/.env
 # Agent
 agent/.env
 .env.local
+
+# YOLO training artifacts (export script regenerates these on demand)
+yolo-dataset/
+yolo-dataset.zip
+camera-health-*.md
+.wrangler/
+supabase/.temp/
