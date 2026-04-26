@@ -8771,6 +8771,36 @@ function TrainingPage({ user, isOwner }) {
     setSubmitting(false);
   }
 
+  // Persistent skip: marks the frame as 'skipped' in raw_data so the SQL
+  // filter excludes it on next loadQueue. Also removes from the in-memory
+  // queue so the operator doesn't see it again in this session.
+  async function skipFrame() {
+    if (submitting || !queue[idx]) return;
+    setSubmitting(true);
+    const cur = queue[idx];
+    try {
+      const newRaw = {
+        ...(cur.raw_data || {}),
+        operator_label: 'skipped',
+        operator_labeled_at: new Date().toISOString(),
+      };
+      await supabase.from('plate_events').update({ raw_data: newRaw }).eq('id', cur.id);
+      setQueue(q => q.filter(r => r.id !== cur.id));
+      setStats(s => ({
+        ...s,
+        unlabeled: Math.max(0, s.unlabeled - 1),
+      }));
+      // idx stays the same — the queue shrunk, so what was idx+1 is now idx.
+      // But if we just popped the last item, advance to keep the cursor valid.
+      if (idx >= queue.length - 1) setIdx(Math.max(0, queue.length - 2));
+    } catch (err) {
+      console.error('skipFrame', err);
+      alert('Failed to skip: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   function onCanvasMouseDown(e) {
     const rect = e.currentTarget.getBoundingClientRect();
     setBboxStart({ x: e.clientX - rect.left, y: e.clientY - rect.top });
@@ -8812,7 +8842,7 @@ function TrainingPage({ user, isOwner }) {
         : ['real_plate', 'false_positive'];
       if (e.key === '1') label(verdicts[0]);
       else if (e.key === '2') label(verdicts[1]);
-      else if (e.key.toLowerCase() === 's') setIdx(i => Math.min(queue.length - 1, i + 1));
+      else if (e.key.toLowerCase() === 's') skipFrame();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -8940,6 +8970,15 @@ function TrainingPage({ user, isOwner }) {
               {verdictB.label} <span style={{opacity:.6, fontSize:11, fontWeight:600}}>(2)</span>
             </button>
           </div>
+          <button onClick={skipFrame} disabled={submitting}
+            style={{
+              width:'100%', marginTop:8,
+              background:'rgba(100,116,139,.15)', color:'var(--text-secondary)',
+              border:'1px solid rgba(100,116,139,.3)', borderRadius:10,
+              padding:'10px 12px', fontSize:13, fontWeight:600, cursor:submitting?'wait':'pointer',
+            }}>
+            Skip — don't show me this one again <span style={{opacity:.6, fontSize:11}}>(S)</span>
+          </button>
           <div style={{marginTop:8, textAlign:'center', fontSize:11, color:'var(--text-secondary)'}}>
             {idx + 1} of {queue.length} • Press 1 / 2 to label, S to skip
           </div>
