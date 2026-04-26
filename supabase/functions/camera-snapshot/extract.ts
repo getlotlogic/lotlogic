@@ -110,6 +110,11 @@ export function extractMilesightPayload(obj: Record<string, unknown>): Extracted
     return null;
   }
   if (bytes.byteLength === 0) return null;
+  // Reject obviously-truncated payloads (4G modem stalls produce
+  // a JFIF header + EOI marker totaling ~22 bytes — see the 290-row
+  // 2026-04-19 incident). 1KB floor catches them. Real Milesight
+  // captures are typically 30-200KB.
+  if (bytes.byteLength < 1024) return null;
 
   const devMac = typeof values.devMac === "string" ? (values.devMac as string) : null;
 

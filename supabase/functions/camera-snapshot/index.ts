@@ -754,26 +754,37 @@ Deno.serve(async (req: Request) => {
         if (ev.error) throw ev.error;
         eventCount++;
 
-        const sess = await insertSession(db, {
-          propertyId: camera.property_id,
-          normalizedPlate: normalized,
-          plateText: plateUpper,
-          vehicleType,
-          entryCameraId: camera.id,
-          entryPlateEventId: ev.data.id,
-          state,
-          visitorPassId: pass?.id ?? null,
-          residentPlateId: resident?.id ?? null,
-          usdotNumber: usdotSynthesizedPlate && usdotResult.kind === "dot" ? usdotResult.number : frameUsdot,
-          mcNumber:    usdotSynthesizedPlate && usdotResult.kind === "mc"  ? usdotResult.number : frameMc,
-          enteredAt: now,
-        });
+        // Wrap session creation in a try so we can roll back the orphan
+        // plate_event if insertSession or backfill fails. Without this
+        // cleanup, transient DB errors leave plate_events rows with
+        // session_id=null forever — they pollute Training-tab queues and
+        // evidence joins.
+        let sess;
+        try {
+          sess = await insertSession(db, {
+            propertyId: camera.property_id,
+            normalizedPlate: normalized,
+            plateText: plateUpper,
+            vehicleType,
+            entryCameraId: camera.id,
+            entryPlateEventId: ev.data.id,
+            state,
+            visitorPassId: pass?.id ?? null,
+            residentPlateId: resident?.id ?? null,
+            usdotNumber: usdotSynthesizedPlate && usdotResult.kind === "dot" ? usdotResult.number : frameUsdot,
+            mcNumber:    usdotSynthesizedPlate && usdotResult.kind === "mc"  ? usdotResult.number : frameMc,
+            enteredAt: now,
+          });
 
-        // Backfill the event with the session_id so evidence queries work.
-        const backfill = await db.from("plate_events")
-          .update({ session_id: sess.id })
-          .eq("id", ev.data.id);
-        if (backfill.error) throw backfill.error;
+          // Backfill the event with the session_id so evidence queries work.
+          const backfill = await db.from("plate_events")
+            .update({ session_id: sess.id })
+            .eq("id", ev.data.id);
+          if (backfill.error) throw backfill.error;
+        } catch (err) {
+          await db.from("plate_events").delete().eq("id", ev.data.id);
+          throw err;
+        }
 
         // Direction inference across cameras.
         await inferDirection(db, sess.id, camera.property_id, normalized, camera.id, camera.position_order ?? null, now);

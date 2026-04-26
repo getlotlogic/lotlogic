@@ -18,7 +18,12 @@ function normalizePlate(s: string): string {
   return (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
-const MIN_CONFIDENCE = Number(Deno.env.get("TOW_CONFIRM_MIN_CONFIDENCE") ?? "0.85");
+// 0.85 was too tight for night-IR Charlotte frames where PR routinely returns
+// 0.5-0.7 on real plates. Inherit-path frames carry confidence 0.70 by
+// design. With 0.85 we drop both, and partner-truck sightings never make it
+// to partner_truck_sightings → tow-confirm correlation never fires →
+// violations stay open after a real tow. Lowered to 0.65 on 2026-04-26.
+const MIN_CONFIDENCE = Number(Deno.env.get("TOW_CONFIRM_MIN_CONFIDENCE") ?? "0.65");
 const LOOKBACK_MIN   = Number(Deno.env.get("TOW_CONFIRM_LOOKBACK_MINUTES") ?? "180");
 
 serve(async (req) => {
