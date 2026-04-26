@@ -52,12 +52,22 @@ export async function findOpenSession(
 // predictably due to character shape similarity. These count as zero-cost
 // substitutions in plateSimilar so e.g. "LFV2510" and "LFV25IO" match.
 //
-// Curated from Plate Recognizer drift logs on Charlotte data 2026-04-19
-// onward + standard ALPR misread literature. Order doesn't matter; pairs
-// are bidirectional. Adding too many here loosens cross-vehicle matching,
-// so each addition needs a real-world precedent — don't add character
-// pairs that LOOK similar in a font but PR has never actually misread.
-const OCR_CONFUSIONS: Array<[string, string]> = [
+// The base list below is curated from Plate Recognizer drift logs on
+// Charlotte data + standard ALPR misread literature. Order doesn't
+// matter; pairs are bidirectional. Adding too many here loosens cross-
+// vehicle matching, so each addition needs a real-world precedent —
+// don't add character pairs that LOOK similar in a font but PR has
+// never actually misread.
+//
+// The auto-tuner (scripts/modal-tune-fuzzy.py) runs weekly, mines
+// plate_events grouped by session_id (ground truth from matching +
+// downstream allowlist hits), and commits additional pairs to
+// auto-fuzzy-config.json. The base list and the auto-mined list merge
+// here at startup — auto-mined pairs are ADDITIVE, never replace the
+// base.
+import autoFuzzyConfig from "./auto-fuzzy-config.json" with { type: "json" };
+
+const OCR_CONFUSIONS_BASE: Array<[string, string]> = [
   // Letter ↔ digit (most common in production)
   ["O", "0"], ["D", "0"], ["Q", "0"],
   ["I", "1"], ["L", "1"],
@@ -80,6 +90,24 @@ const OCR_CONFUSIONS: Array<[string, string]> = [
   ["O", "Q"],
   ["E", "F"],
 ];
+
+const OCR_CONFUSIONS: Array<[string, string]> = (() => {
+  const seen = new Set<string>();
+  const merged: Array<[string, string]> = [];
+  const add = (a: string, b: string) => {
+    const key = [a, b].sort().join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push([a, b]);
+  };
+  for (const [a, b] of OCR_CONFUSIONS_BASE) add(a, b);
+  // Auto-mined pairs; ignored if the JSON is the stub (length 0).
+  const auto = (autoFuzzyConfig as { ocr_confusions?: Array<{ pair: [string, string] }> }).ocr_confusions ?? [];
+  for (const entry of auto) {
+    if (entry.pair && entry.pair.length === 2) add(entry.pair[0], entry.pair[1]);
+  }
+  return merged;
+})();
 
 function areCharsConfusable(a: string, b: string): boolean {
   if (a === b) return true;

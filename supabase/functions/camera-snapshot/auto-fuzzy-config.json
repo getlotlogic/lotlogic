@@ -1,0 +1,9 @@
+{
+  "version": 0,
+  "trained_at": null,
+  "lookback_days": 0,
+  "stats": null,
+  "ocr_confusions": [],
+  "dhash_threshold": null,
+  "dhash_f1_sweep": []
+}
