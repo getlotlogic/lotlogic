@@ -361,3 +361,112 @@ Deno.test("extractUsdot: digits-only with USDOT label is synthesized as DOT", as
   assertEquals(r.kind, "dot");
   if (r.kind === "dot") assertEquals(r.number, "2179839");
 });
+
+// ---------------------------------------------------------------------------
+// plateSimilar (sessions.ts)
+// ---------------------------------------------------------------------------
+
+import { plateSimilar } from "./sessions.ts";
+
+// --- ANCHORED MODE (existing-session match — must NOT cross vehicles) ----
+
+Deno.test("plateSimilar anchored: identical plates match", () => {
+  assertEquals(plateSimilar("ABC1234", "ABC1234", true), true);
+});
+
+Deno.test("plateSimilar anchored: OCR confusion pair matches (8↔B)", () => {
+  assertEquals(plateSimilar("ABC1234", "ABCB234", true), true);
+});
+
+Deno.test("plateSimilar anchored: OCR confusion pair matches (C↔G — Charlotte)", () => {
+  assertEquals(plateSimilar("CHL1234", "GHL1234", true), true);
+});
+
+Deno.test("plateSimilar anchored: M↔N at multiple positions still matches (both are confusions)", () => {
+  // Both positions sit within the M↔N confusion pair, counted as zero
+  // true edits. Documents the table's behavior — if M↔N is removed,
+  // this would need to flip to false.
+  assertEquals(plateSimilar("AMN1234", "ANM1234", true), true);
+});
+
+Deno.test("plateSimilar anchored: single non-confusion edit matches", () => {
+  // P↔R is in confusion table now; pick a non-confusion: A↔X
+  assertEquals(plateSimilar("ABC1234", "XBC1234", true), true);
+});
+
+Deno.test("plateSimilar anchored: TWO non-confusion edits do NOT match", () => {
+  assertEquals(plateSimilar("ABC1234", "XBC1Y34", true), false);
+});
+
+Deno.test("plateSimilar anchored: different lengths do NOT match (the HD4183 vs VHD4188 case)", () => {
+  // PR #113 regression test: this combo previously triggered a false
+  // cross-vehicle session collision.
+  assertEquals(plateSimilar("HD4183", "VHD4188", true), false);
+});
+
+Deno.test("plateSimilar anchored: substring relation does NOT match (different lengths)", () => {
+  assertEquals(plateSimilar("ABC123", "ABC1234", true), false);
+});
+
+// --- UNANCHORED MODE (new-session match — looser, optimizes burst dedup) -
+
+Deno.test("plateSimilar unanchored: substring with len-diff 1 matches", () => {
+  // Common burst case: extra trailing OCR noise. Should collapse onto
+  // the same session.
+  assertEquals(plateSimilar("ABC1234", "ABC1234Z", false), true);
+});
+
+Deno.test("plateSimilar unanchored: substring with len-diff 3 matches", () => {
+  assertEquals(plateSimilar("ABC1234", "XYABC1234", false), true);
+});
+
+Deno.test("plateSimilar unanchored: substring with len-diff > 3 does NOT match", () => {
+  // ABC1234 (7) vs WXYZABC1234 (11) = diff 4. Substring shortcut requires
+  // ≤ 3, so this falls through to levenshtein-≤-1 → fails (4 inserts).
+  assertEquals(plateSimilar("ABC1234", "WXYZABC1234", false), false);
+});
+
+Deno.test("plateSimilar unanchored: confusion pair on same length matches", () => {
+  assertEquals(plateSimilar("LFV2510", "LFV25IO", false), true);
+});
+
+Deno.test("plateSimilar unanchored: one-char Levenshtein with len-diff 1 matches", () => {
+  // F not in confusion with E currently (E↔F is). Swap with len-diff 1
+  // → falls through to levenshteinBounded(1).
+  assertEquals(plateSimilar("ABC123", "ABCD123", false), true);
+});
+
+Deno.test("plateSimilar unanchored: too-different reads do not match", () => {
+  assertEquals(plateSimilar("ABC1234", "XYZ9876", false), false);
+});
+
+// --- EDGE CASES ----------------------------------------------------------
+
+Deno.test("plateSimilar: empty strings do not match anything", () => {
+  assertEquals(plateSimilar("", "ABC123", true), false);
+  assertEquals(plateSimilar("ABC123", "", false), false);
+});
+
+// ---------------------------------------------------------------------------
+// hammingDistance (image-hash.ts) — sanity for the new dHash burst path
+// ---------------------------------------------------------------------------
+
+import { hammingDistance } from "./image-hash.ts";
+
+Deno.test("hammingDistance: identical hashes return 0", () => {
+  assertEquals(hammingDistance("00112233aabbccdd", "00112233aabbccdd"), 0);
+});
+
+Deno.test("hammingDistance: 1-bit difference returns 1", () => {
+  // 0x00 (00000000) vs 0x01 (00000001) = 1 bit differs
+  assertEquals(hammingDistance("0000000000000001", "0000000000000000"), 1);
+});
+
+Deno.test("hammingDistance: full byte difference returns 8", () => {
+  // 0x00 vs 0xff = 8 bits differ in last byte
+  assertEquals(hammingDistance("00000000000000ff", "0000000000000000"), 8);
+});
+
+Deno.test("hammingDistance: length mismatch returns max", () => {
+  assertEquals(hammingDistance("00", "0000"), 64);
+});
