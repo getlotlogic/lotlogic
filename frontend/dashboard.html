@@ -8584,6 +8584,7 @@ function TrainingPage({ user, isOwner }) {
   const [propagationToast, setPropagationToast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [retraining, setRetraining] = useState(false);
   // Bounding box annotation state. After labeling a frame as 'real_plate',
   // the operator can optionally draw the plate's bbox on the image. Coords
   // are normalized 0-1 against the original image (not the rendered size).
@@ -8937,6 +8938,28 @@ function TrainingPage({ user, isOwner }) {
           background:'transparent', color:'var(--text-secondary)', border:'1px solid var(--border)',
           borderRadius:6, padding:'4px 10px', fontSize:12, cursor:'pointer', marginLeft:'auto',
         }}>Refresh</button>
+        <button onClick={async () => {
+          const total = (stats.labels.real_plate || 0);
+          if (total < 100) {
+            addToast({ kind:'error', text:`Only ${total} real_plate labels — train more before retraining.` });
+            return;
+          }
+          if (!confirm(`Retrain plate detector on ${total} labeled frames? Runs ~10-15 min on GPU. Result auto-deploys to sidecar when done.`)) return;
+          setRetraining(true);
+          try {
+            const { data, error } = await supabase.functions.invoke('yolo-retrain', { body: {} });
+            if (error) throw error;
+            addToast({ kind:'success', text:`Training kicked off (${data?.call_id?.slice(0,8) ?? 'modal'}). Sidecar will redeploy in ~15 min.` });
+          } catch (err) {
+            addToast({ kind:'error', text:`Retrain failed: ${err.message || err}` });
+          } finally {
+            setRetraining(false);
+          }
+        }} disabled={retraining} style={{
+          background: retraining ? '#3b82f640' : '#3b82f6', color:'#fff', border:'none',
+          borderRadius:6, padding:'4px 12px', fontSize:12, fontWeight:700,
+          cursor: retraining ? 'wait' : 'pointer', opacity: retraining ? 0.6 : 1,
+        }}>{retraining ? 'Kicking off…' : '🚀 Retrain detector'}</button>
       </div>
 
       {loading ? (
