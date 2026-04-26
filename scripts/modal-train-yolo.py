@@ -180,6 +180,24 @@ def train_yolo(
     print(f"[train_yolo] dataset ready: {written_train} train, {written_val} val "
           f"({skipped_download} download skips)")
 
+    # Post-download dataset sanity. If too many R2 fetches failed the model
+    # would train on a fraction of the labeled set + ship a regressed ONNX.
+    # Floor mirrors the pre-download min_labels gate so the dataset on disk
+    # is at least as big as what we promised the operator at kickoff.
+    if (written_train + written_val) < min_labels:
+        return {
+            "ok": False,
+            "reason": (
+                f"post_download_dataset_too_small "
+                f"(have {written_train + written_val}, need >= {min_labels}; "
+                f"{skipped_download} R2 download failures)"
+            ),
+            "labeled_count": len(rows),
+            "train_count": written_train,
+            "val_count": written_val,
+            "skipped_download": skipped_download,
+        }
+
     # Write the ultralytics dataset descriptor
     dataset_yaml = work / "dataset.yaml"
     dataset_yaml.write_text(

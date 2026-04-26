@@ -53,6 +53,34 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "GET") return json(405, { ok: false, error: "method_not_allowed" });
   if (!SIMBASE_API_KEY) return json(500, { ok: false, error: "SIMBASE_API_KEY missing" });
 
+  // Admin-only. SIM-level cost + ICCID + carrier usage are competitive
+  // intelligence — we don't want any anon-JWT holder (i.e. anyone who
+  // loads the dashboard JS bundle) to be able to read them.
+  const auth = req.headers.get("authorization") || "";
+  const jwt = auth.replace(/^Bearer\s+/i, "");
+  if (!jwt) return json(401, { ok: false, error: "missing_jwt" });
+  let payload: { sub?: string; owner_id?: string };
+  try {
+    payload = JSON.parse(atob(jwt.split(".")[1]));
+  } catch {
+    return json(401, { ok: false, error: "invalid_jwt" });
+  }
+  const ownerId = payload.owner_id || payload.sub;
+  if (!ownerId) return json(401, { ok: false, error: "no_owner_id_claim" });
+  // Use service role to read lot_owners.is_admin — RLS would also work but
+  // this keeps the admin check explicit.
+  const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.45.4");
+  const sb = createClient(
+    Deno.env.get("SUPABASE_URL") ?? "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+  );
+  const { data: owner } = await sb
+    .from("lot_owners")
+    .select("is_admin")
+    .eq("id", ownerId)
+    .maybeSingle();
+  if (!owner?.is_admin) return json(403, { ok: false, error: "admin_only" });
+
   const sims: RawSim[] = [];
   let cursor: string | null = null;
   let month = "";

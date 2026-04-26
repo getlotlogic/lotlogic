@@ -142,8 +142,13 @@ class CustomYoloDetector:
         confs = confs[keep]
 
         # Undo letterbox: subtract pad, divide by scale, clamp to image.
-        boxes_lb[:, [0, 2]] -= pad_x
-        boxes_lb[:, [1, 3]] -= pad_y
+        # Use float pad values for the inverse so integer rounding in the
+        # forward pass doesn't cost a leading character on tightly-cropped
+        # plates (was ~2px error on 1920×1080 inputs at imgsz=640).
+        pad_x_float = (self.imgsz - w * scale) / 2
+        pad_y_float = (self.imgsz - h0 * scale) / 2
+        boxes_lb[:, [0, 2]] -= pad_x_float
+        boxes_lb[:, [1, 3]] -= pad_y_float
         boxes = boxes_lb / scale
         boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, w0 - 1)
         boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, h0 - 1)
