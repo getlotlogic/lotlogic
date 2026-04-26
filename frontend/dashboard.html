@@ -8581,6 +8581,7 @@ function TrainingPage({ user, isOwner }) {
   const [queue, setQueue] = useState([]);
   const [idx, setIdx] = useState(0);
   const [stats, setStats] = useState({ unlabeled: 0, labels: {} });
+  const [propagationToast, setPropagationToast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   // Bounding box annotation state. After labeling a frame as 'real_plate',
@@ -8595,33 +8596,51 @@ function TrainingPage({ user, isOwner }) {
   async function loadQueue() {
     setLoading(true);
     try {
-      let q = supabase
+      // Build a base predicate for the mode so the queue + the stats
+      // counters stay in sync (same denominator).
+      const applyModeFilter = (q) => {
+        if (mode === 'rejected') {
+          return q.eq('match_status', 'sidecar_rejected');
+        }
+        return q.in('match_status', ['unmatched', 'resident', 'visitor_pass'])
+                .not('image_url', 'is', null);
+      };
+
+      // Queue fetch: only UNLABELED rows. Filter at SQL so pagination keeps
+      // working — the previous in-JS filter caused the queue to dry up
+      // after the most recent 300 were labeled because the same 300 kept
+      // being refetched.
+      let queueQ = supabase
         .from('plate_events')
         .select('id, camera_id, property_id, plate_text, confidence, image_url, raw_data, created_at, match_status')
+        .is('raw_data->>operator_label', null)
         .order('created_at', { ascending: false })
         .limit(300);
-      if (mode === 'rejected') {
-        // Rejected frames: image_url may be null when the R2 upload failed
-        // — still show the row so operator sees the rejection happened.
-        q = q.eq('match_status', 'sidecar_rejected');
-      } else {
-        // PR-confirmed (or sidecar-confirmed) plate detections —
-        // anything not a rejection and not an inherited dedup row.
-        // Require image_url here (no point labeling without an image).
-        q = q.in('match_status', ['unmatched', 'resident', 'visitor_pass'])
-             .not('image_url', 'is', null);
-      }
-      const { data: rows, error } = await q;
+      queueQ = applyModeFilter(queueQ);
+      const { data: rows, error } = await queueQ;
       if (error) throw error;
-      const unlabeled = (rows || []).filter(r => !r.raw_data?.operator_label);
-      setQueue(unlabeled);
+      setQueue(rows || []);
       setIdx(0);
+
+      // Stats: separate count queries against the FULL table so the badge
+      // reflects total work done, not just what's on the current page.
+      // Three queries in parallel: unlabeled, real_plate labeled, junk-ish
+      // labeled. Cheap (count only).
+      const [unlabeledRes, realPlateRes, junkRes, fpRes] = await Promise.all([
+        applyModeFilter(supabase.from('plate_events').select('id', { count: 'exact', head: true })
+          .is('raw_data->>operator_label', null)),
+        applyModeFilter(supabase.from('plate_events').select('id', { count: 'exact', head: true })
+          .eq('raw_data->>operator_label', 'real_plate')),
+        applyModeFilter(supabase.from('plate_events').select('id', { count: 'exact', head: true })
+          .eq('raw_data->>operator_label', 'junk')),
+        applyModeFilter(supabase.from('plate_events').select('id', { count: 'exact', head: true })
+          .eq('raw_data->>operator_label', 'false_positive')),
+      ]);
       const labels = {};
-      for (const r of (rows || [])) {
-        const lbl = r.raw_data?.operator_label;
-        if (lbl) labels[lbl] = (labels[lbl] || 0) + 1;
-      }
-      setStats({ unlabeled: unlabeled.length, labels });
+      if (realPlateRes.count) labels.real_plate = realPlateRes.count;
+      if (junkRes.count) labels.junk = junkRes.count;
+      if (fpRes.count) labels.false_positive = fpRes.count;
+      setStats({ unlabeled: unlabeledRes.count || 0, labels });
     } catch (err) {
       console.error('TrainingPage loadQueue', err);
     } finally {
@@ -8684,6 +8703,13 @@ function TrainingPage({ user, isOwner }) {
         }
         autoLabeled = sibIds.length;
         setQueue(q => q.filter(r => !sibIds.includes(r.id)));
+      }
+      // Surface auto-propagation so operator knows one click did N things.
+      // Without this the stats counter looks like it's lying — user clicks
+      // once, suddenly 100+ items show as labeled. Toast tells them why.
+      if (autoLabeled > 0) {
+        setPropagationToast({ count: autoLabeled, verdict, ts: Date.now() });
+        setTimeout(() => setPropagationToast(null), 4000);
       }
       setStats(s => ({
         unlabeled: Math.max(0, s.unlabeled - 1 - autoLabeled),
@@ -8825,6 +8851,16 @@ function TrainingPage({ user, isOwner }) {
           border:'none', borderRadius:6, padding:'8px 10px', fontSize:12, fontWeight:700, cursor:'pointer',
         }}>Rejected frames</button>
       </div>
+
+      {propagationToast && (
+        <div style={{
+          background:'rgba(245,158,11,.18)', color:'#fbbf24', padding:'8px 12px',
+          borderRadius:8, fontSize:13, fontWeight:600, marginBottom:10,
+          border:'1px solid rgba(245,158,11,.3)'
+        }}>
+          ✨ Auto-labeled <strong>{propagationToast.count}</strong> sibling frame{propagationToast.count !== 1 ? 's' : ''} as <strong>{propagationToast.verdict.replace('_', ' ')}</strong> (same camera + reason within 2 min)
+        </div>
+      )}
 
       <div style={{display:'flex', gap:8, marginBottom:14, flexWrap:'wrap'}}>
         <span style={{background:'rgba(59,130,246,.15)', color:'#60a5fa', padding:'4px 10px', borderRadius:6, fontSize:12, fontWeight:700}}>
