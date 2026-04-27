@@ -1,5 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
+import { hammingDistance } from "./image-hash.ts";
+
+// dHash Hamming-distance threshold for "same scene" matching. ≤ 8 of 64
+// bits = essentially identical scene with minor motion (slow-moving truck,
+// trailer creak, lighting flicker). 5 is "byte-identical-after-recompress",
+// 12 is "different angle of the same area". 8 is the sweet spot for
+// collapsing burst frames of the same physical vehicle even when PR's plate
+// reads drift heavily.
+export const DHASH_BURST_THRESHOLD = 8;
 
 export type OpenSessionRow = {
   id: string;
@@ -42,11 +51,34 @@ export async function findOpenSession(
 // ALPR OCR confusion pairs — character substitutions that PR makes
 // predictably due to character shape similarity. These count as zero-cost
 // substitutions in plateSimilar so e.g. "LFV2510" and "LFV25IO" match.
+//
+// Curated from Plate Recognizer drift logs on Charlotte data 2026-04-19
+// onward + standard ALPR misread literature. Order doesn't matter; pairs
+// are bidirectional. Adding too many here loosens cross-vehicle matching,
+// so each addition needs a real-world precedent — don't add character
+// pairs that LOOK similar in a font but PR has never actually misread.
 const OCR_CONFUSIONS: Array<[string, string]> = [
-  ["O", "0"], ["I", "1"], ["I", "L"], ["1", "L"],
-  ["5", "S"], ["8", "B"], ["2", "Z"],
-  ["7", "T"], ["T", "Y"], ["7", "Y"],
-  ["6", "G"], ["D", "0"], ["D", "Q"], ["0", "Q"],
+  // Letter ↔ digit (most common in production)
+  ["O", "0"], ["D", "0"], ["Q", "0"],
+  ["I", "1"], ["L", "1"],
+  ["Z", "2"],
+  ["S", "5"],
+  ["G", "6"],
+  ["T", "7"], ["Y", "7"],
+  ["B", "8"],
+  ["G", "9"], ["q", "9"],
+  // Letter ↔ letter (shape-similar)
+  ["I", "L"],
+  ["D", "Q"],
+  ["T", "Y"],
+  ["U", "V"],
+  ["M", "N"],
+  ["M", "W"],
+  ["B", "R"],   // muddy plates
+  ["F", "P"],   // partial-occlusion or dirty plates
+  ["C", "G"],   // CHARLOTTE prod 2026-04-22 — observed multiple times
+  ["O", "Q"],
+  ["E", "F"],
 ];
 
 function areCharsConfusable(a: string, b: string): boolean {
@@ -122,6 +154,67 @@ function levenshteinBounded(a: string, b: string, max: number): number {
   return prev[n];
 }
 
+// Find an open session whose recent frames have an image dHash visually
+// similar to the incoming frame. Used to collapse bursts of the same
+// physical vehicle into one session even when PR's plate reads drift
+// across frames (e.g. "ABC123" in frame 1, "ABCl23" in frame 2,
+// "ABC1Z3" in frame 3). Plate-similarity matching alone is brittle in
+// these cases — image similarity is what proves "this is literally the
+// same truck, regardless of what OCR returned."
+//
+// Strategy:
+//   - Pull recent plate_events on this property within the time window
+//     that have a non-null image_dhash.
+//   - For each event, compute Hamming distance against the incoming
+//     dHash. If ≤ DHASH_BURST_THRESHOLD, that event's session is a
+//     match.
+//   - Return the most recently-active matching session.
+//
+// Cost: one Postgres query (~5ms) + N Hamming-distance calculations
+// (~µs each). At Charlotte scale, N is typically 10-50 events.
+export async function findOpenSessionByImageHash(
+  db: SupabaseClient,
+  propertyId: string,
+  imageDhash: string,
+  withinSeconds: number = 180,
+): Promise<OpenSessionRow | null> {
+  if (!imageDhash) return null;
+  const cutoffIso = new Date(Date.now() - withinSeconds * 1000).toISOString();
+  const { data: events, error: evErr } = await db
+    .from("plate_events")
+    .select("session_id, image_dhash")
+    .eq("property_id", propertyId)
+    .gte("created_at", cutoffIso)
+    .not("session_id", "is", null)
+    .not("image_dhash", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (evErr) throw evErr;
+  if (!events || events.length === 0) return null;
+
+  // Find the closest-matching session_id by minimum Hamming distance.
+  let bestSessionId: string | null = null;
+  let bestDist = DHASH_BURST_THRESHOLD + 1;
+  for (const ev of events) {
+    if (!ev.image_dhash || !ev.session_id) continue;
+    const dist = hammingDistance(imageDhash, ev.image_dhash);
+    if (dist <= DHASH_BURST_THRESHOLD && dist < bestDist) {
+      bestDist = dist;
+      bestSessionId = ev.session_id;
+    }
+  }
+  if (!bestSessionId) return null;
+
+  const { data: openRows, error: sErr } = await db
+    .from("plate_sessions")
+    .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+    .eq("id", bestSessionId)
+    .is("exited_at", null)
+    .limit(1);
+  if (sErr) throw sErr;
+  return ((openRows ?? [])[0] as OpenSessionRow) ?? null;
+}
+
 // Find an open session whose plate is EQUAL OR FUZZY-SIMILAR to the incoming
 // plate, scoped to the property and the last `withinSeconds` seconds of entry.
 // Fast path: exact match via findOpenSession. Slow path: pull recent open
@@ -134,9 +227,21 @@ export async function findSimilarOpenSession(
   withinSeconds: number = 120,
   usdotNumber: string | null = null,
   mcNumber: string | null = null,
+  imageDhash: string | null = null,
 ): Promise<OpenSessionRow | null> {
   const exact = await findOpenSession(db, propertyId, normalizedPlate);
   if (exact) return exact;
+
+  // Image-hash burst match. If the incoming frame is visually nearly
+  // identical to a recent frame on this property, treat it as the same
+  // physical vehicle regardless of what plate text PR returned. This is
+  // the strongest signal we have for "burst of the same car" — works
+  // even when OCR drift drops length, swaps non-confusion characters,
+  // or returns a totally different plate string.
+  if (imageDhash) {
+    const byImage = await findOpenSessionByImageHash(db, propertyId, imageDhash, withinSeconds);
+    if (byImage) return byImage;
+  }
 
   // If we have a USDOT, check for an open session with that USDOT first —
   // one physical truck can read plate in one frame and DOT in another.

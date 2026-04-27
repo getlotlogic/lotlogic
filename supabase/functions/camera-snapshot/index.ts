@@ -182,7 +182,10 @@ Deno.serve(async (req: Request) => {
       const lowConfMatchAttempt = !sidecar.bestPlate && sidecar.topReadPlate && candidateConf >= 0.50;
       if (sidecar.ok && candidatePlate) {
         const sidecarNormalized = normalizePlate(candidatePlate);
-        const sidecarSession = await findSimilarOpenSession(db, camera.property_id, sidecarNormalized, 600);
+        const sidecarSession = await findSimilarOpenSession(
+          db, camera.property_id, sidecarNormalized, 600,
+          null, null, imageHashes.dhash,
+        );
         if (sidecarSession) {
           // Inherit. Skip R2 upload — we already have the canonical image
           // from this session's entry event; subsequent inherited frames
@@ -482,7 +485,10 @@ Deno.serve(async (req: Request) => {
     // safer because plate-similarity gates the match.
     if (sidecarReadForRecheck) {
       const recheckPlate = normalizePlate(sidecarReadForRecheck);
-      const recheckSession = await findSimilarOpenSession(db, camera.property_id, recheckPlate, 600);
+      const recheckSession = await findSimilarOpenSession(
+        db, camera.property_id, recheckPlate, 600,
+        null, null, imageHashes.dhash,
+      );
       if (recheckSession) {
         const nowDate = new Date();
         const ev = await db.from("plate_events").insert({
@@ -712,7 +718,9 @@ Deno.serve(async (req: Request) => {
         // instead of spawning one session + one violation + one email per
         // misread character. Also match on USDOT/MC: frame 1 reads plate,
         // frame 2 reads DOT — both collapse onto the same session.
-        const openSession = await findSimilarOpenSession(db, camera.property_id, normalized, 120, frameUsdot, frameMc);
+        const openSession = await findSimilarOpenSession(
+          db, camera.property_id, normalized, 120, frameUsdot, frameMc, imageHashes.dhash,
+        );
         if (openSession) {
           // Noise: second entry with no exit. Append an event for visibility;
           // do not open a new session; do not modify existing session.
