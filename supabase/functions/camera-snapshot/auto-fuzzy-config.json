@@ -1,7 +1,7 @@
 {
-  "version": 1777298153,
-  "trained_at": "2026-04-27T13:55:53Z",
-  "lookback_days": 30,
+  "version": 1777299968,
+  "trained_at": "2026-04-27T14:26:08Z",
+  "lookback_days": 365,
   "stats": {
     "total_events": 1000,
     "sessions_with_drift": 21,
@@ -31,6 +31,27 @@
         "8"
       ],
       "count": 3
+    },
+    {
+      "pair": [
+        "6",
+        "8"
+      ],
+      "count": 2
+    },
+    {
+      "pair": [
+        "0",
+        "U"
+      ],
+      "count": 2
+    },
+    {
+      "pair": [
+        "4",
+        "6"
+      ],
+      "count": 2
     }
   ],
   "dhash_threshold": 15,
