@@ -107,10 +107,24 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
 const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDM3MTU3NDAsImV4cCI6MjA1OTI5MTc0MH0.J7VW5_CkJHU7UV1Iz-sNu1TtYj9Nl0K7l8cDvAuUmoY';
+// Anon key matches dashboard.html — backend-signed JWT is injected per
+// request via the custom fetch hook below (dashboard pattern: setSession
+// won't work because /auth/v1/user 403s on our backend-signed tokens).
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
 const BACKEND_URL = 'https://lotlogic-backend-production.up.railway.app';
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let _supabaseToken = null;
+function _supabaseFetch(input, init) {
+  if (_supabaseToken) {
+    const h = new Headers((init && init.headers) || (input && input.headers) || {});
+    h.set('Authorization', 'Bearer ' + _supabaseToken);
+    return fetch(input, { ...(init || {}), headers: h });
+  }
+  return fetch(input, init);
+}
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  global: { fetch: _supabaseFetch },
+});
 
 // Reuse the dashboard's stored JWT so anyone already signed in to
 // /app sees the tuner straight through.
@@ -126,7 +140,7 @@ function getStoredJwt() {
 async function applyJwt() {
   const jwt = getStoredJwt();
   if (!jwt) return null;
-  await supabase.auth.setSession({ access_token: jwt, refresh_token: jwt });
+  _supabaseToken = jwt;
   return jwt;
 }
 
