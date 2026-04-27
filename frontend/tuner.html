@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LotLogic Tuner Inspector</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #0b0d12;
+      color: #e5e7eb;
+      font: 14px/1.5 -apple-system, system-ui, "SF Pro Text", sans-serif;
+    }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .subtitle { color: #9ca3af; margin-bottom: 24px; font-size: 13px; }
+    .card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .card h2 { font-size: 16px; margin: 0 0 12px; font-weight: 700; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .stat { background: #0f1419; padding: 12px 14px; border-radius: 8px; }
+    .stat .label { color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+    .stat .value { font-size: 22px; font-weight: 700; color: #fff; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #1f2937; }
+    th { color: #9ca3af; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+    .pair { font-family: "SF Mono", monospace; font-weight: 700; font-size: 16px; color: #34d399; }
+    .pair-new { color: #fbbf24; }
+    .picked { background: rgba(52, 211, 153, .15); }
+    .session-card { border: 1px solid #1f2937; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+    .session-header { display: flex; gap: 12px; align-items: baseline; margin-bottom: 10px; flex-wrap: wrap; }
+    .session-header b { color: #fff; }
+    .session-header .meta { color: #9ca3af; font-size: 12px; }
+    .variant-row { margin-top: 10px; }
+    .variant-label {
+      display: inline-block;
+      font-family: "SF Mono", monospace;
+      background: #fef3c7;
+      color: #1c1009;
+      border: 1.5px solid #fbbf24;
+      font-weight: 800;
+      letter-spacing: .08em;
+      font-size: 13px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-bottom: 6px;
+    }
+    .frames { display: flex; gap: 6px; flex-wrap: wrap; }
+    .frame {
+      width: 200px;
+      height: 130px;
+      object-fit: cover;
+      border-radius: 6px;
+      background: #1f2937;
+      border: 1px solid #1f2937;
+    }
+    .determination {
+      margin-top: 10px;
+      padding: 8px 12px;
+      background: #0f1419;
+      border-left: 3px solid #34d399;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .determination.warn { border-left-color: #fbbf24; }
+    button {
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    button:disabled { opacity: .5; cursor: wait; }
+    .login {
+      max-width: 360px;
+      margin: 80px auto;
+      padding: 24px;
+      background: #111827;
+      border-radius: 10px;
+    }
+    input {
+      width: 100%;
+      padding: 8px 10px;
+      background: #0f1419;
+      color: #fff;
+      border: 1px solid #1f2937;
+      border-radius: 6px;
+      font: 14px -apple-system, system-ui;
+      margin-bottom: 10px;
+    }
+    .err { color: #f87171; font-size: 12px; }
+  </style>
+</head>
+<body>
+<div id="root"><div class="card">Loading…</div></div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+
+const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDM3MTU3NDAsImV4cCI6MjA1OTI5MTc0MH0.J7VW5_CkJHU7UV1Iz-sNu1TtYj9Nl0K7l8cDvAuUmoY';
+const BACKEND_URL = 'https://lotlogic-backend-production.up.railway.app';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Reuse the dashboard's stored JWT so anyone already signed in to
+// /app sees the tuner straight through.
+function getStoredJwt() {
+  try {
+    const raw = localStorage.getItem('lotlogic_session');
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    return obj?._token ?? null;
+  } catch { return null; }
+}
+
+async function applyJwt() {
+  const jwt = getStoredJwt();
+  if (!jwt) return null;
+  await supabase.auth.setSession({ access_token: jwt, refresh_token: jwt });
+  return jwt;
+}
+
+function fmtTime(iso) {
+  return new Date(iso).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function dedupePairs(pairs) {
+  const seen = new Set(), out = [];
+  for (const p of pairs) {
+    const key = [p[0], p[1]].sort().join('|');
+    if (!seen.has(key)) { seen.add(key); out.push(p); }
+  }
+  return out;
+}
+
+const BASE_PAIRS_NORMALIZED = new Set([
+  'O|0','0|D','0|Q','I|1','L|1','2|Z','S|5','6|G','T|7','7|Y','8|B','G|9','9|q',
+  'I|L','D|Q','T|Y','U|V','M|N','M|W','B|R','F|P','C|G','O|Q','E|F'
+].map(k => k.split('|').sort().join('|')));
+
+function isNewPair(pair) {
+  const k = [pair[0], pair[1]].sort().join('|');
+  return !BASE_PAIRS_NORMALIZED.has(k);
+}
+
+async function loadLatestRun() {
+  const { data, error } = await supabase
+    .from('fuzzy_match_runs')
+    .select('*')
+    .order('trained_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function loadDriftSessions(lookbackDays) {
+  // Pull events from sessions that have multiple distinct plate_text values,
+  // limited to recent activity. Each session card lists its plate variants
+  // and a few sample frames per variant.
+  const cutoff = new Date(Date.now() - lookbackDays * 86400 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('plate_events')
+    .select('id, session_id, plate_text, image_url, image_dhash, created_at, camera_id, raw_data')
+    .gte('created_at', cutoff)
+    .not('session_id', 'is', null)
+    .not('plate_text', 'is', null)
+    .neq('plate_text', '')
+    .order('created_at', { ascending: false })
+    .limit(2000);
+  if (error) throw error;
+
+  const bySession = new Map();
+  for (const ev of (data ?? [])) {
+    if (!bySession.has(ev.session_id)) bySession.set(ev.session_id, []);
+    bySession.get(ev.session_id).push(ev);
+  }
+
+  const drift = [];
+  for (const [sessionId, evs] of bySession) {
+    const variants = new Set(evs.map(e => e.plate_text));
+    if (variants.size < 2) continue;
+    drift.push({
+      sessionId,
+      variants: [...variants],
+      events: evs,
+      first: evs[evs.length - 1].created_at,
+      last: evs[0].created_at,
+    });
+  }
+  drift.sort((a, b) => new Date(b.last) - new Date(a.last));
+  return drift.slice(0, 25);
+}
+
+function determinationFor(session) {
+  // Quick determination: all plates within edit distance ≤ 2 = "same vehicle, OCR drift"
+  // Otherwise "ambiguous — review manually"
+  const v = session.variants;
+  let maxDist = 0;
+  for (let i = 0; i < v.length; i++) {
+    for (let j = i + 1; j < v.length; j++) {
+      const d = lev(v[i], v[j]);
+      if (d > maxDist) maxDist = d;
+    }
+  }
+  return {
+    text: maxDist <= 2
+      ? `Same vehicle (max edit distance ${maxDist} across ${v.length} variants)`
+      : `Ambiguous — max edit distance ${maxDist}; could be different vehicles or heavy OCR drift`,
+    warn: maxDist > 2,
+  };
+}
+
+function lev(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr.push(Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost));
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
+function render(html) { document.getElementById('root').innerHTML = html; }
+
+function renderLogin(err) {
+  render(`
+    <div class="login">
+      <h1>Tuner Inspector</h1>
+      <div class="subtitle">Admin sign-in</div>
+      ${err ? `<div class="err">${err}</div>` : ''}
+      <input id="email" type="email" placeholder="email">
+      <input id="pw" type="password" placeholder="password">
+      <button id="login-btn">Sign in</button>
+    </div>
+  `);
+  document.getElementById('login-btn').onclick = async () => {
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('pw').value;
+    try {
+      const r = await fetch(BACKEND_URL + '/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.detail ?? 'login failed');
+      const session = { _token: data.access_token, ...data };
+      localStorage.setItem('lotlogic_session', JSON.stringify(session));
+      await main();
+    } catch (e) { renderLogin(String(e.message ?? e)); }
+  };
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
+    { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]
+  ));
+}
+
+function renderRun(run, drift) {
+  const m = run;
+  const pickedThr = m.dhash_threshold;
+  const pairs = (m.ocr_confusions ?? []).map(c => ({ ...c, isNew: isNewPair(c.pair) }));
+  const newPairsCount = pairs.filter(p => p.isNew).length;
+
+  const sweepRows = (m.dhash_f1_sweep ?? []).map(s => `
+    <tr class="${s.thr === pickedThr ? 'picked' : ''}">
+      <td>${s.thr}</td><td>${s.p}</td><td>${s.r}</td><td>${s.f1}</td>
+    </tr>
+  `).join('');
+
+  const pairRows = pairs.length === 0
+    ? `<tr><td colspan="3"><i>No pairs mined above the count floor.</i></td></tr>`
+    : pairs.map(p => `
+      <tr>
+        <td><span class="pair ${p.isNew ? 'pair-new' : ''}">${p.pair[0]} ↔ ${p.pair[1]}</span></td>
+        <td>${p.count}</td>
+        <td>${p.isNew ? '<b style="color:#fbbf24">NEW</b> (auto-mined)' : 'in base list'}</td>
+      </tr>
+    `).join('');
+
+  const sessionCards = drift.map(s => {
+    const det = determinationFor(s);
+    const byVariant = new Map();
+    for (const ev of s.events) {
+      if (!byVariant.has(ev.plate_text)) byVariant.set(ev.plate_text, []);
+      byVariant.get(ev.plate_text).push(ev);
+    }
+    const variantRows = [...byVariant.entries()].map(([variant, evs]) => `
+      <div class="variant-row">
+        <div class="variant-label">${escapeHtml(variant)}</div>
+        <div class="frames">
+          ${evs.slice(0, 5).filter(e => e.image_url).map(e => `
+            <img class="frame" loading="lazy" src="${escapeHtml(e.image_url)}" alt="frame">
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+    return `
+      <div class="session-card">
+        <div class="session-header">
+          <b>${escapeHtml(s.sessionId.slice(0, 8))}</b>
+          <span class="meta">${fmtTime(s.first)} → ${fmtTime(s.last)}</span>
+          <span class="meta">${s.variants.length} variants · ${s.events.length} events</span>
+        </div>
+        ${variantRows}
+        <div class="determination ${det.warn ? 'warn' : ''}">
+          <b>Determination:</b> ${det.text}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  render(`
+    <h1>Tuner Inspector</h1>
+    <div class="subtitle">
+      Last run: <b>${fmtTime(m.trained_at)}</b>
+      · Lookback: ${m.lookback_days}d
+      · <a href="/app" style="color:#60a5fa">← back to dashboard</a>
+    </div>
+
+    <div class="card">
+      <h2>What the tuner looked at</h2>
+      <div class="stats">
+        <div class="stat"><div class="label">Total events analyzed</div><div class="value">${m.total_events ?? 0}</div></div>
+        <div class="stat"><div class="label">Sessions with plate drift</div><div class="value">${m.sessions_with_drift ?? 0}</div></div>
+        <div class="stat"><div class="label">Same-length pairs</div><div class="value">${m.same_length_pairs_analyzed ?? 0}</div></div>
+        <div class="stat"><div class="label">dHash positive samples</div><div class="value">${m.pos_distance_count ?? 0}</div></div>
+        <div class="stat"><div class="label">dHash negative samples</div><div class="value">${m.neg_distance_count ?? 0}</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>OCR confusions mined (${pairs.length} total · ${newPairsCount} new)</h2>
+      <table>
+        <thead><tr><th>Pair</th><th>Frequency</th><th>Status</th></tr></thead>
+        <tbody>${pairRows}</tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>dHash threshold sweep — picked ${pickedThr}</h2>
+      <table>
+        <thead><tr><th>Threshold (Hamming)</th><th>Precision</th><th>Recall</th><th>F1</th></tr></thead>
+        <tbody>${sweepRows}</tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Drift sessions sampled (${drift.length})</h2>
+      <p style="color:#9ca3af;font-size:12px;margin:0 0 14px">
+        Each card is a session where multiple plate_text variants showed up — the system collapsed them onto one session. The frames below show what the cameras saw; the determination is the system's verdict on whether they're the same physical vehicle.
+      </p>
+      ${sessionCards}
+    </div>
+  `);
+}
+
+async function main() {
+  const jwt = await applyJwt();
+  if (!jwt) { renderLogin(); return; }
+  try {
+    const [run, drift] = await Promise.all([loadLatestRun(), loadDriftSessions(30)]);
+    if (!run) {
+      render(`<div class="card"><h1>Tuner Inspector</h1><p>No tune runs yet — fire one via Modal first.</p></div>`);
+      return;
+    }
+    renderRun(run, drift);
+  } catch (err) {
+    if (String(err.message || err).includes('JWT')) { renderLogin('Session expired — sign in again.'); return; }
+    render(`<div class="card"><h1>Tuner Inspector</h1><p class="err">${escapeHtml(String(err.message || err))}</p></div>`);
+  }
+}
+
+main();
+</script>
+</body>
+</html>
