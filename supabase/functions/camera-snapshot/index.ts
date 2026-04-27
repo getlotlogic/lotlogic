@@ -1107,18 +1107,40 @@ async function inferDirection(
   if (sErr) { console.warn("inferDirection session fetch failed:", sErr.message); return; }
   if (!session) return;
 
-  // ─── Branch 1: cross-camera depth-pair ─────────────────────────────
+  // ─── Branch 1: cross-camera depth-pair, scoped to a single gate ─────
+  // With bidirectional cameras paired at each gate (road-side + lot-side),
+  // every transit fires both cameras within seconds. The TIME ORDER tells
+  // us direction:
+  //   prior order > current order → vehicle moved interior→boundary = EXIT
+  //   prior order < current order → vehicle moved boundary→interior = ENTRY
+  //
+  // gate_id scopes the prior-event query so a south-gate detection doesn't
+  // falsely match against a recent north-gate event (vehicle that just
+  // transited the lot). On properties without gate_id populated, falls
+  // back to property-wide pair detection (legacy behavior).
   if (currentPositionOrder != null) {
+    const { data: cur } = await db
+      .from("alpr_cameras")
+      .select("gate_id")
+      .eq("id", currentCameraId)
+      .maybeSingle();
+    const currentGateId = cur?.gate_id ?? null;
+
     const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
-    const { data: prior, error } = await db
+    let priorQ = db
       .from("plate_events")
-      .select("camera_id, created_at, alpr_cameras!inner(position_order)")
+      .select("camera_id, created_at, alpr_cameras!inner(position_order, gate_id)")
       .eq("property_id", propertyId)
       .eq("normalized_plate", normalizedPlate)
       .neq("camera_id", currentCameraId)
       .gt("created_at", cutoff)
       .order("created_at", { ascending: false })
       .limit(1);
+    // Scope to the same gate when both sides are on a known gate.
+    if (currentGateId) {
+      priorQ = priorQ.eq("alpr_cameras.gate_id", currentGateId);
+    }
+    const { data: prior, error } = await priorQ;
     if (error) console.warn("inferDirection depth-pair query failed:", error.message);
     else {
       const first = (prior ?? [])[0];
@@ -1128,7 +1150,7 @@ async function inferDirection(
           .update({ exit_hinted_at: now.toISOString() })
           .eq("id", sessionId);
         if (upd.error) console.warn("exit_hinted_at depth-pair update failed:", upd.error.message);
-        else console.log(`exit inferred (depth-pair) for session ${sessionId}: ${priorOrder} → ${currentPositionOrder}`);
+        else console.log(`exit inferred (depth-pair) for session ${sessionId} on gate ${currentGateId ?? 'any'}: ${priorOrder} → ${currentPositionOrder}`);
         return;
       }
     }
