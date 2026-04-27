@@ -1,0 +1,45 @@
+# Auto-deploy the camera-snapshot edge function whenever its source or
+# any of its imported config files change on main.
+#
+# This closes the auto-tuner loop: Modal commits a new
+# auto-fuzzy-config.json → this workflow picks it up → camera-snapshot
+# is redeployed → runtime imports the new config on cold start.
+#
+# Required secret on the GitHub repo:
+#   SUPABASE_ACCESS_TOKEN — a personal access token from
+#                           supabase.com/dashboard/account/tokens
+#                           with project access to nzdkoouoaedbbccraoti
+#
+# Manual override: workflow_dispatch input lets you redeploy without
+# pushing a commit.
+
+name: Auto-deploy camera-snapshot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/camera-snapshot/**'
+      - 'supabase/functions/pr-ingest/r2.ts'
+      - 'supabase/functions/pr-ingest/normalize.ts'
+      - 'supabase/functions/pr-ingest/types.ts'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy camera-snapshot
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy camera-snapshot \
+            --project-ref nzdkoouoaedbbccraoti \
+            --no-verify-jwt

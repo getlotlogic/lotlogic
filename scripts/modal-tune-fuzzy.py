@@ -272,6 +272,30 @@ def tune_fuzzy(
         print("[tune_fuzzy] GITHUB_PAT not set — printing config instead of committing")
         print(json.dumps(config, indent=2))
 
+    # Persist the run report to fuzzy_match_runs so the Tuner Inspector
+    # page can show what was analyzed and what was determined. The
+    # runtime edge function continues to read the JSON-on-disk via
+    # import; this table is purely for visibility + history.
+    try:
+        sb.table("fuzzy_match_runs").insert({
+            "trained_at": config["trained_at"],
+            "lookback_days": config["lookback_days"],
+            "total_events": config["stats"]["total_events"],
+            "sessions_with_drift": config["stats"]["sessions_with_drift"],
+            "same_length_pairs_analyzed": config["stats"]["same_length_pairs_analyzed"],
+            "pos_distance_count": config["stats"]["pos_distance_count"],
+            "neg_distance_count": config["stats"]["neg_distance_count"],
+            "ocr_confusions": config["ocr_confusions"],
+            "dhash_threshold": config["dhash_threshold"],
+            "dhash_f1_sweep": config["dhash_f1_sweep"],
+            "config_full": config,
+            "commit_sha": commit_sha,
+            "commit_url": commit_url,
+        }).execute()
+        print("[tune_fuzzy] persisted run to fuzzy_match_runs")
+    except Exception as e:
+        print(f"[tune_fuzzy] DB insert failed (non-fatal): {e}")
+
     return {
         "ok": True,
         "wall_time_sec": int(time.time() - started_at),
