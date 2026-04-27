@@ -82,17 +82,30 @@ def tune_fuzzy(
     # 1. Pull plate_events from the last N days that have a session_id.
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
                            time.gmtime(time.time() - days_lookback * 86400))
-    res = (
-        sb.table("plate_events")
-        .select("session_id,plate_text,image_dhash,created_at")
-        .gte("created_at", cutoff)
-        .not_.is_("session_id", "null")
-        .not_.is_("plate_text", "null")
-        .limit(50000)
-        .execute()
-    )
-    rows = res.data or []
-    print(f"[tune_fuzzy] {len(rows)} plate_events pulled")
+    # Paginate manually — supabase-py respects PostgREST's 1000-row default
+    # response cap regardless of .limit(). Use range() to walk pages.
+    rows: list[dict] = []
+    page_size = 1000
+    page = 0
+    while True:
+        page_res = (
+            sb.table("plate_events")
+            .select("session_id,plate_text,image_dhash,created_at")
+            .gte("created_at", cutoff)
+            .not_.is_("session_id", "null")
+            .not_.is_("plate_text", "null")
+            .order("created_at", desc=True)
+            .range(page * page_size, (page + 1) * page_size - 1)
+            .execute()
+        )
+        page_data = page_res.data or []
+        rows.extend(page_data)
+        if len(page_data) < page_size:
+            break
+        page += 1
+        if page > 50:  # safety: cap at 50k events
+            break
+    print(f"[tune_fuzzy] {len(rows)} plate_events pulled across {page + 1} page(s)")
 
     # Group by session_id.
     by_session: dict[str, list[dict]] = {}
