@@ -128,6 +128,61 @@ Deno.test("findActiveResident matches with normalization", async () => {
   assertEquals(r?.id, "r1");
 });
 
+Deno.test("findActiveResident matches OCR-confused plate (anchored fuzzy)", async () => {
+  // Stored ABC123, OCR reads ABCI23 (1↔I confusion). Should still match.
+  const db = {
+    from(_t: string) {
+      const builder: any = {
+        _rows: [{ id: "r1", plate_text: "ABC123", active: true, property_id: "p1" }],
+        select() { return builder; },
+        eq(c: string, v: any) { builder._rows = builder._rows.filter((r: any) => r[c] === v); return builder; },
+        limit() { return Promise.resolve({ data: builder._rows, error: null }); },
+      };
+      return builder;
+    },
+  } as any;
+  const r = await findActiveResident(db, "p1", "ABCI23");
+  assertEquals(r?.id, "r1");
+});
+
+Deno.test("findActiveResident does NOT match unrelated plate of same length", async () => {
+  // Stored ABC123, sees XYZ789. Anchored mode requires ≤1 non-confusion edit.
+  const db = {
+    from(_t: string) {
+      const builder: any = {
+        _rows: [{ id: "r1", plate_text: "ABC123", active: true, property_id: "p1" }],
+        select() { return builder; },
+        eq(c: string, v: any) { builder._rows = builder._rows.filter((r: any) => r[c] === v); return builder; },
+        limit() { return Promise.resolve({ data: builder._rows, error: null }); },
+      };
+      return builder;
+    },
+  } as any;
+  const r = await findActiveResident(db, "p1", "XYZ789");
+  assertEquals(r, null);
+});
+
+Deno.test("findActiveResident: clean read of ABC123 picks ABC123 even when ABG123 is co-registered", async () => {
+  // C↔G is in the OCR confusion list, so anchored-fuzzy alone could match
+  // either row. Two-pass exact-then-fuzzy must lock onto the exact row.
+  const db = {
+    from(_t: string) {
+      const builder: any = {
+        _rows: [
+          { id: "r-abg", plate_text: "ABG123", active: true, property_id: "p1" },
+          { id: "r-abc", plate_text: "ABC123", active: true, property_id: "p1" },
+        ],
+        select() { return builder; },
+        eq(c: string, v: any) { builder._rows = builder._rows.filter((r: any) => r[c] === v); return builder; },
+        limit() { return Promise.resolve({ data: builder._rows, error: null }); },
+      };
+      return builder;
+    },
+  } as any;
+  const r = await findActiveResident(db, "p1", "ABC123");
+  assertEquals(r?.id, "r-abc");
+});
+
 Deno.test("findActiveVisitorPass respects cancelled_at, valid_from, valid_until", async () => {
   const now = new Date("2026-04-20T12:00:00Z");
   const db = {
@@ -147,6 +202,28 @@ Deno.test("findActiveVisitorPass respects cancelled_at, valid_from, valid_until"
     },
   } as any;
   const r = await findActiveVisitorPass(db, "p1", "ABC123", now);
+  assertEquals(r?.id, "v-good");
+});
+
+Deno.test("findActiveVisitorPass matches OCR-confused plate (anchored fuzzy)", async () => {
+  // Driver registered ABC123. Camera OCR reads AB0123 (B↔0 confusion).
+  // Pre-fix: exact equality → unregistered → false tow alert.
+  // Post-fix: anchored fuzzy match → matched → no false alert.
+  const now = new Date("2026-04-28T12:00:00Z");
+  const db = {
+    from(_t: string) {
+      const builder: any = {
+        _rows: [
+          { id: "v-good", plate_text: "ABC123", valid_from: "2026-04-28T10:00:00Z", valid_until: "2026-04-29T00:00:00Z", cancelled_at: null, property_id: "p1" },
+        ],
+        select() { return builder; },
+        eq() { return builder; },
+        limit() { return Promise.resolve({ data: builder._rows, error: null }); },
+      };
+      return builder;
+    },
+  } as any;
+  const r = await findActiveVisitorPass(db, "p1", "AB0123", now);
   assertEquals(r?.id, "v-good");
 });
 

@@ -477,8 +477,14 @@ export async function findActiveResident(
     .eq("active", true)
     .limit(200);
   if (error) throw error;
+  // Two-pass: exact normalized match first so co-registered plates that
+  // collide under OCR-confusion fuzziness (e.g. ABC123 + ABG123 with C↔G)
+  // never wrong-link a clean read.
   for (const r of data ?? []) {
     if (normalizePlate(r.plate_text ?? "") === normalizedPlate) return { id: r.id };
+  }
+  for (const r of data ?? []) {
+    if (plateSimilar(normalizePlate(r.plate_text ?? ""), normalizedPlate, true)) return { id: r.id };
   }
   return null;
 }
@@ -518,11 +524,23 @@ export async function findActiveVisitorPass(
     .eq("property_id", propertyId)
     .limit(500);
   if (error) throw error;
+  const isValid = (r: any): boolean => {
+    if (r.cancelled_at) return false;
+    if (r.valid_from && new Date(r.valid_from) > now) return false;
+    if (!r.valid_until || new Date(r.valid_until) <= now) return false;
+    return true;
+  };
+  // Two-pass: exact normalized match first so co-registered plates that
+  // collide under OCR-confusion fuzziness never wrong-link a clean read.
   for (const r of data ?? []) {
-    if (r.cancelled_at) continue;
-    if (r.valid_from && new Date(r.valid_from) > now) continue;
-    if (!r.valid_until || new Date(r.valid_until) <= now) continue;
+    if (!isValid(r)) continue;
     if (normalizePlate(r.plate_text ?? "") === normalizedPlate) {
+      return { id: r.id, valid_until: r.valid_until };
+    }
+  }
+  for (const r of data ?? []) {
+    if (!isValid(r)) continue;
+    if (plateSimilar(normalizePlate(r.plate_text ?? ""), normalizedPlate, true)) {
       return { id: r.id, valid_until: r.valid_until };
     }
   }

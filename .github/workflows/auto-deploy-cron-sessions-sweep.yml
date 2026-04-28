@@ -1,0 +1,38 @@
+# Auto-deploy the cron-sessions-sweep edge function whenever its source
+# changes on main.
+#
+# Required secret on the GitHub repo:
+#   SUPABASE_ACCESS_TOKEN — a personal access token from
+#                           supabase.com/dashboard/account/tokens
+#                           with project access to nzdkoouoaedbbccraoti
+#
+# Manual override: workflow_dispatch input lets you redeploy without
+# pushing a commit.
+
+name: Auto-deploy cron-sessions-sweep
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/cron-sessions-sweep/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy cron-sessions-sweep
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy cron-sessions-sweep \
+            --project-ref nzdkoouoaedbbccraoti \
+            --no-verify-jwt
