@@ -4713,10 +4713,10 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
               </div>
               <div>
                 <div style={{fontSize:12, fontWeight:700, color:'var(--text-primary)', marginBottom:4}}>
-                  How you get paid
+                  After the tow
                 </div>
                 <div style={{fontSize:12, color:'var(--text-muted)', lineHeight:1.5}}>
-                  Confirmed tows appear in Earnings within minutes. Billing releases after the camera sees your truck.
+                  Our cameras confirm your truck on-site and close the job automatically. We handle the rest.
                 </div>
               </div>
             </div>
@@ -7559,12 +7559,16 @@ function TruckParkingLog({ propertyId }) {
   );
   const inputStyle = {padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit'};
   const labelStyle = {display:'flex',flexDirection:'column',gap:5,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase'};
-  // "expired" passes are functionally violations — the registration window
-  // closed but the vehicle may still be in the lot. Tow operators on-site
-  // need to scan plates on cars against this list, so we relabel + paint
-  // these cards loud red and surface them at the top of the grid.
+  // Traffic-light coloring for on-site plate scanning:
+  //   RED     = expired / violation (window closed, may still be in lot)
+  //   YELLOW  = expiring soon (active but < 3h to valid_until)
+  //   GREEN   = active and >3h remaining
+  // The `expiring` state is derived at render time from valid_until vs now —
+  // the DB only knows active|expired|... and the 3h window is purely visual.
+  const EXPIRING_WINDOW_MS = 3 * 60 * 60 * 1000;
   const statusColor = {
     active: '#4ade80',
+    expiring: '#facc15',
     expired: '#ef4444',
     cancelled: 'var(--text-muted)',
     revoked: 'var(--text-muted)',
@@ -7572,12 +7576,23 @@ function TruckParkingLog({ propertyId }) {
   };
   const statusDisplay = {
     active: 'Active',
+    expiring: 'Expiring soon',
     expired: 'Violation',
     cancelled: 'Cancelled',
     revoked: 'Revoked',
     towed: 'Towed',
   };
-  const statusOrder = { expired: 0, active: 1, towed: 2, cancelled: 3, revoked: 4 };
+  const statusOrder = { expired: 0, expiring: 1, active: 2, towed: 3, cancelled: 4, revoked: 5 };
+
+  function deriveStatus(r) {
+    const raw = r.status || 'active';
+    if (raw !== 'active') return raw;
+    if (!r.valid_until) return 'active';
+    const remaining = new Date(r.valid_until).getTime() - Date.now();
+    if (remaining <= 0) return 'expired';
+    if (remaining < EXPIRING_WINDOW_MS) return 'expiring';
+    return 'active';
+  }
   const fmtDateTime = (s) => s ? new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
   const placardSwatch = (color) => {
     if (!color) return null;
@@ -7585,19 +7600,18 @@ function TruckParkingLog({ propertyId }) {
     return hex ? <span aria-hidden="true" style={{display:'inline-block',width:10,height:10,borderRadius:3,background:hex,border:'1px solid rgba(0,0,0,.25)',verticalAlign:'middle',marginRight:5}} /> : null;
   };
 
-  // Status counts for the active filter window — gives the user a quick
-  // bird's-eye view above the cards rather than buried in the row count.
+  // Counts by derived status — drives the per-status pills above the grid.
   const statusCounts = rows.reduce((acc, r) => {
-    const s = r.status || 'active';
+    const s = deriveStatus(r);
     acc[s] = (acc[s] || 0) + 1;
     return acc;
   }, {});
 
-  // Sort: violations (expired) first, then active, then others. Within a
-  // status group, newest first so recent violations bubble to the top.
+  // Sort: violations → expiring → active → towed → cancelled → revoked.
+  // Within a status group, newest first so the latest activity floats up.
   const sortedRows = [...rows].sort((a, b) => {
-    const sa = a.status || 'active';
-    const sb = b.status || 'active';
+    const sa = deriveStatus(a);
+    const sb = deriveStatus(b);
     const oa = statusOrder[sa] ?? 99;
     const ob = statusOrder[sb] ?? 99;
     if (oa !== ob) return oa - ob;
@@ -7654,18 +7668,18 @@ function TruckParkingLog({ propertyId }) {
             </div>
             {Object.keys(statusCounts).length > 0 && (
               <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                {['expired','active','towed','cancelled','revoked'].filter(s => statusCounts[s]).map(s => {
+                {['expired','expiring','active','towed','cancelled','revoked'].filter(s => statusCounts[s]).map(s => {
                   const color = statusColor[s] || 'var(--text-muted)';
-                  const isViolation = s === 'expired';
+                  const isLoud = s === 'expired' || s === 'expiring';
                   return (
                     <span key={s} style={{
-                      fontSize: isViolation ? 13 : 11,
+                      fontSize: isLoud ? 13 : 11,
                       fontWeight: 800,
-                      padding: isViolation ? '5px 12px' : '4px 10px',
+                      padding: isLoud ? '5px 12px' : '4px 10px',
                       borderRadius:20,
-                      background:`${color}${isViolation ? '26' : '1a'}`,
+                      background:`${color}${isLoud ? '26' : '1a'}`,
                       color,
-                      border:`1px solid ${color}${isViolation ? '66' : '40'}`,
+                      border:`1px solid ${color}${isLoud ? '66' : '40'}`,
                       textTransform:'uppercase',
                       letterSpacing:'.04em',
                     }}>
@@ -7694,10 +7708,11 @@ function TruckParkingLog({ propertyId }) {
       ) : (
         <div style={{display:'grid',gap:10,gridTemplateColumns:'repeat(auto-fill, minmax(380px, 1fr))'}}>
           {sortedRows.map(r => {
-            const s = r.status || 'active';
+            const s = deriveStatus(r);
             const color = statusColor[s] || 'var(--text-muted)';
-            const isActive = s === 'active';
+            const isActive = (r.status || 'active') === 'active';
             const isViolation = s === 'expired';
+            const isExpiring = s === 'expiring';
             const driverLine = [r.visitor_name, r.company_name].filter(Boolean).join(' · ') || '—';
             const detailChips = [];
             if (r.parking_spot) detailChips.push({ label: 'Spot', value: r.parking_spot });
@@ -7705,26 +7720,26 @@ function TruckParkingLog({ propertyId }) {
             if (r.placard_color) detailChips.push({ label: 'Placard', value: r.placard_color, swatch: true });
             return (
               <div key={r.id} style={{
-                background: isViolation ? 'rgba(239,68,68,.06)' : 'var(--bg-card)',
-                border:`1px solid ${isViolation ? 'rgba(239,68,68,.4)' : 'var(--border)'}`,
-                borderLeft:`${isViolation ? 6 : 3}px solid ${color}`,
+                background: isViolation ? 'rgba(239,68,68,.06)' : isExpiring ? 'rgba(250,204,21,.06)' : 'var(--bg-card)',
+                border:`1px solid ${isViolation ? 'rgba(239,68,68,.4)' : isExpiring ? 'rgba(250,204,21,.4)' : 'var(--border)'}`,
+                borderLeft:`${(isViolation || isExpiring) ? 6 : 3}px solid ${color}`,
                 borderRadius:12,
-                padding: isViolation ? 18 : 14,
+                padding: (isViolation || isExpiring) ? 18 : 14,
                 display:'flex',
                 flexDirection:'column',
-                gap: isViolation ? 14 : 10,
+                gap: (isViolation || isExpiring) ? 14 : 10,
                 position:'relative',
-                boxShadow: isViolation ? '0 2px 18px rgba(239,68,68,.08)' : 'none',
+                boxShadow: isViolation ? '0 2px 18px rgba(239,68,68,.08)' : isExpiring ? '0 2px 18px rgba(250,204,21,.08)' : 'none',
               }}>
                 {/* Top row: plate + status pill */}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}}>
                   <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,minWidth:0}}>
                     <div style={{
-                      fontSize: isViolation ? 32 : 18,
+                      fontSize: (isViolation || isExpiring) ? 32 : 18,
                       fontWeight: 900,
                       fontFamily:"'Courier New',monospace",
-                      letterSpacing: isViolation ? '.08em' : '.06em',
-                      color: isViolation ? '#ef4444' : 'var(--text-primary)',
+                      letterSpacing: (isViolation || isExpiring) ? '.08em' : '.06em',
+                      color: isViolation ? '#ef4444' : isExpiring ? '#ca8a04' : 'var(--text-primary)',
                       lineHeight: 1.05,
                     }}>
                       {r.plate_text}
@@ -7737,13 +7752,13 @@ function TruckParkingLog({ propertyId }) {
                     )}
                   </div>
                   <span aria-label={`Pass status: ${statusDisplay[s] || s}`} style={{
-                    fontSize: isViolation ? 13 : 10,
+                    fontSize: (isViolation || isExpiring) ? 13 : 10,
                     fontWeight: 800,
-                    padding: isViolation ? '5px 12px' : '4px 10px',
+                    padding: (isViolation || isExpiring) ? '5px 12px' : '4px 10px',
                     borderRadius:20,
-                    background:`${color}${isViolation ? '26' : '1a'}`,
+                    background:`${color}${(isViolation || isExpiring) ? '26' : '1a'}`,
                     color,
-                    border:`1px solid ${color}${isViolation ? '66' : '40'}`,
+                    border:`1px solid ${color}${(isViolation || isExpiring) ? '66' : '40'}`,
                     textTransform:'uppercase',
                     letterSpacing:'.06em',
                     whiteSpace:'nowrap',
@@ -8386,8 +8401,9 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </>
       )}
 
-      {/* Needs Review — match_status held for human decision before enforcement */}
-      {(() => {
+      {/* Needs Review — match_status held for human decision before enforcement.
+          Owner-only: partners don't approve flagged plate events. */}
+      {isOwner && (() => {
         const reviewable = events.filter(e => ['low_confidence','review_needed','camera_suspended'].includes(e.match_status));
         if (reviewable.length === 0) return null;
         const statusLabel = {
@@ -8444,7 +8460,12 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         );
       })()}
 
-      {/* In Lot Now */}
+      {/* In Lot Now / Plate Holds / Plate Detections — owner-only.
+          Partners' single function is "who's signed in / allowed to be here" —
+          that's the parking log above. Operational signals below are noise
+          for them. */}
+      {isOwner && (
+      <>
       <div className="pd-section-head">
         <div style={{display:'flex',alignItems:'baseline',gap:8}}>
           <span className="pd-section-title">In Lot Now</span>
@@ -8635,6 +8656,8 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         });
         })()}
       </div>
+      </>
+      )}
     </div>
   );
 }
