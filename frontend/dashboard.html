@@ -393,10 +393,26 @@
     .loader { display: flex; align-items: center; justify-content: center; padding: 60px 0; gap: 10px; color: var(--text-muted); font-size: 14px; }
     .spin { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .empty-state { text-align: center; padding: 60px 20px; }
+    .empty-state {
+      text-align: center;
+      padding: 64px 20px;
+      background:
+        repeating-linear-gradient(135deg, var(--bg-card) 0 8px, transparent 8px 16px),
+        var(--bg-card);
+      border: 1px dashed var(--border);
+      border-radius: 14px;
+    }
     .empty-icon { font-size: 42px; margin-bottom: 14px; opacity: .7; }
-    .empty-title { font-size: 16px; font-weight: 700; color: var(--text-muted); margin-bottom: 6px; }
-    .empty-body { font-size: 13px; color: var(--text-faint); }
+    .empty-title {
+      font-family: 'Anton', system-ui, sans-serif;
+      font-size: 22px;
+      font-weight: 400;
+      letter-spacing: .03em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+    .empty-body { font-size: 13px; color: var(--text-faint); max-width: 320px; margin: 0 auto; line-height: 1.55; }
 
     /* ── Job cards ── */
     .job-card {
@@ -627,18 +643,48 @@
     .breakdown-action { font-size: 11px; color: var(--text-muted); text-transform: capitalize; margin-top: 2px; }
     .breakdown-plate { font-family: 'Courier New', monospace; font-size: 11px; color: var(--text-faint); font-weight: 600; margin-top: 2px; }
 
-    /* ── KPI bar ── */
-    .kpi-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+    /* ── KPI bar — designed for at-a-glance scan. Numbers in Anton at
+       large size establish the visual hierarchy; labels are small,
+       wide-tracked all caps that read like dashboard chrome on a
+       dispatch console. */
+    .kpi-bar { display: flex; gap: 10px; margin-bottom: 16px; }
     .kpi-card {
-      flex: 1; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
-      padding: 12px 10px; text-align: center;
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 10px 12px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
     }
-    .kpi-val { font-size: 22px; font-weight: 800; line-height: 1; color: var(--text-primary); }
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--border), transparent);
+    }
+    .kpi-val {
+      font-family: 'Anton', system-ui, sans-serif;
+      font-size: 36px;
+      font-weight: 400;
+      line-height: 1;
+      color: var(--text-primary);
+      letter-spacing: .01em;
+    }
     .kpi-val.blue { color: var(--accent); }
     .kpi-val.green { color: var(--green); }
     .kpi-val.red { color: var(--red); }
     .kpi-val.yellow { color: var(--yellow); }
-    .kpi-label { font-size: 9px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
+    .kpi-label {
+      font-size: 9px;
+      font-weight: 800;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: .14em;
+      margin-top: 6px;
+    }
 
     /* ── Action buttons on violation cards ── */
     .job-actions-row {
@@ -702,7 +748,7 @@
     @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(-10px); } }
     .toast.success { background: rgba(74,222,128,.15); border: 1px solid rgba(74,222,128,.3); color: #4ade80; }
     .toast.error { background: rgba(239,68,68,.15); border: 1px solid rgba(239,68,68,.3); color: #f87171; }
-    .toast.info { background: rgba(59,130,246,.15); border: 1px solid rgba(59,130,246,.3); color: #60a5fa; }
+    .toast.info { background: rgba(251,191,36,.14); border: 1px solid rgba(251,191,36,.35); color: #FBBF24; }
 
     /* ── Confirm dialog ── */
     .confirm-overlay {
