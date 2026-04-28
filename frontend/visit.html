@@ -413,19 +413,22 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <label for="driverName">Operator Name <span class="required">*</span></label>
           <input type="text" id="driverName" placeholder="John Smith" required maxlength="80">
 
+          <label for="placardColor">Color Placard <span class="required">*</span></label>
+          <input type="text" id="placardColor" placeholder="yellow / red / blue / etc." required maxlength="30">
+
           <label style="margin-top:14px;">Stay Duration <span class="required">*</span></label>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px;">
-              <input type="radio" name="stayHours" value="12"> 12 hours
+          <div style="display:flex;gap:8px;margin-top:6px;">
+            <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px 6px;font-size:14px;">
+              <input type="radio" name="stayHours" value="12"> 12 hr
             </label>
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px;">
-              <input type="radio" name="stayHours" value="24" checked> 24 hours
+            <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px 6px;font-size:14px;">
+              <input type="radio" name="stayHours" value="24"> 24 hr
             </label>
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px;">
-              <input type="radio" name="stayHours" value="36"> 36 hours
+            <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px 6px;font-size:14px;">
+              <input type="radio" name="stayHours" value="36"> 36 hr
             </label>
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px;">
-              <input type="radio" name="stayHours" value="48"> 48 hours
+            <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px 6px;font-size:14px;">
+              <input type="radio" name="stayHours" value="48"> 48 hr
             </label>
           </div>
 
@@ -553,6 +556,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const driverName  = document.getElementById('driverName').value.trim();
         const plateText   = normalizePlate(document.getElementById('plate').value);
         const phone       = normalizePhone(document.getElementById('phone').value);
+        const placardColor = document.getElementById('placardColor').value.trim();
         const stayHoursEl = document.querySelector('input[name="stayHours"]:checked');
         const stayHours   = stayHoursEl ? parseInt(stayHoursEl.value, 10) : 0;
 
@@ -560,6 +564,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         if (!driverName) throw new Error('Operator name is required.');
         if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
         if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
+        if (!placardColor) throw new Error('Color placard is required.');
         if (![12, 24, 36, 48].includes(stayHours)) throw new Error('Choose 12, 24, 36, or 48 hours.');
 
         const recaptchaToken = await getRecaptchaToken('pass_register').catch(() => null);
@@ -577,6 +582,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           host_unit: '',
           host_name: '',
           phone: phone,
+          placard_color: placardColor,
           stay_hours: stayHours,
           policy_acknowledged_at: now.toISOString(),
           submission_idempotency_key: idempotencyKey,
@@ -586,7 +592,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const validUntil = result.valid_until ? new Date(result.valid_until)
           : new Date(now.getTime() + stayHours * 60 * 60 * 1000);
         const refId = (result.reference_id || '').toString().toUpperCase();
-        showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot: null, placardColor: null, companyName});
+        showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot: null, placardColor, companyName});
       } catch (err) {
         // Cooldown rejection (409 with detail "COOLDOWN: ...") — friendly message.
         const msg = (err && err.message) || '';
