@@ -5146,7 +5146,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                     onClick={async (e) => {
                       e.stopPropagation();
                       try {
-                        await db.deleteViolation(v.id);
+                        await db.deleteViolation(v.id, !!v._isALPR);
                         addToast('Job deleted', 'success');
                         if (onAction) onAction();
                       } catch (err) {
