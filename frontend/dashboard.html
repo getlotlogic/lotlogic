@@ -6963,7 +6963,7 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
             background: isOwner ? 'rgba(59,130,246,.12)' : 'rgba(139,92,246,.12)',
             color: isOwner ? '#60a5fa' : '#a78bfa',
             border: `1px solid ${isOwner ? 'rgba(59,130,246,.2)' : 'rgba(139,92,246,.2)'}`}}>
-            {isOwner ? 'Lot Owner' : 'Enforcement Operator'}
+            {isOwner ? 'Lot Owner' : 'Tow Boss'}
           </span>
         </div>
       </div>
@@ -6974,9 +6974,9 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">Role</div>
-            <div className="settings-row-desc">{isOwner ? 'Full access to lots, cameras, earnings, and zones' : 'Access to jobs and enforcement actions'}</div>
+            <div className="settings-row-desc">{isOwner ? 'Full access to lots, cameras, earnings, and zones' : 'Dispatched to confirmed tows; cameras close the job automatically'}</div>
           </div>
-          <div className="settings-row-value" style={{color: isOwner ? '#60a5fa' : '#a78bfa'}}>{isOwner ? 'Owner' : 'Operator'}</div>
+          <div className="settings-row-value" style={{color: isOwner ? '#60a5fa' : '#a78bfa'}}>{isOwner ? 'Owner' : 'Tow Boss'}</div>
         </div>
         {user.business_name && (
           <div className="settings-row">
@@ -6992,33 +6992,9 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
         )}
       </div>
 
-      {/* Fee schedule — only for enforcement partners */}
-      {!isOwner && (
-        <div className="settings-section">
-          <div className="settings-section-title">Fee Schedule</div>
-          <div className="settings-row">
-            <div className="settings-row-info">
-              <div className="settings-row-label">Boot Fee</div>
-              <div className="settings-row-desc">Charged to vehicle owner per boot</div>
-            </div>
-            <div className="settings-row-value" style={{color:'var(--green)'}}>${user.boot_fee || 75}</div>
-          </div>
-          <div className="settings-row">
-            <div className="settings-row-info">
-              <div className="settings-row-label">Tow Fee</div>
-              <div className="settings-row-desc">Charged to vehicle owner per tow</div>
-            </div>
-            <div className="settings-row-value" style={{color:'var(--green)'}}>${user.tow_fee || 250}</div>
-          </div>
-          <div className="settings-row">
-            <div className="settings-row-info">
-              <div className="settings-row-label">LotLogic Revenue Share</div>
-              <div className="settings-row-desc">Platform cut per enforcement action</div>
-            </div>
-            <div className="settings-row-value" style={{color:'var(--accent)'}}>{Math.round((user.revenue_share || 0.30) * 100)}%</div>
-          </div>
-        </div>
-      )}
+      {/* Fee schedule is owner-only — exposes business-side fields
+          (boot_fee, tow_fee, revenue_share) that partners must NEVER see.
+          Same intent as hiding the Earnings/Billing tabs. */}
 
       {/* Tow-truck plates — enforcement partners only. Used by the tow-confirm
           edge function to match camera sightings against partner trucks. */}
