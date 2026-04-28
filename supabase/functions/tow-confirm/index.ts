@@ -94,6 +94,17 @@ serve(async (req) => {
       });
     if (insErr) return json({ status: "sighting_insert_failed", detail: insErr.message }, 500);
 
+    // Fire-and-forget owner notification on first arrival (15-min cooldown
+    // per (property, truck_plate) so burst frames from one physical entry
+    // don't spam). Owner cares because partner-truck arrival = imminent
+    // tow correlation = revenue-share clock starts.
+    notifyOwnerOfTruckArrival(supabase, {
+      propertyId: property_id,
+      partnerId: partner.id,
+      truckPlate: plate,
+      seenAt: seen_at,
+    }).catch((err) => console.warn("notify owner failed:", String(err)));
+
     return json({ status: "sighting_recorded", partner_id: partner.id, truck_plate: plate }, 200);
   }
 
@@ -201,3 +212,111 @@ serve(async (req) => {
 
   return json({ status: "no_matching_sighting_in_window" }, 200);
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Owner notification on partner-truck arrival.
+//
+// Fires after a partner_truck_sightings row is recorded for a fresh arrival.
+// 15-min cooldown per (property, truck_plate) so burst-frame sightings of one
+// physical entry don't blast the inbox. Owner cares because partner-truck
+// arrival = the revenue-share clock starts and a tow correlation is imminent.
+//
+// Email is delivered via Resend (same provider as tow-dispatch-email).
+// EMAIL_OVERRIDE_TO is honored for shakedown.
+// ───────────────────────────────────────────────────────────────────────────
+const ARRIVAL_NOTIFY_COOLDOWN_MIN = Number(
+  Deno.env.get("ARRIVAL_NOTIFY_COOLDOWN_MIN") ?? "15"
+);
+
+// deno-lint-ignore no-explicit-any
+async function notifyOwnerOfTruckArrival(
+  supabase: any,
+  args: {
+    propertyId: string;
+    partnerId: string;
+    truckPlate: string;
+    seenAt: string;
+  },
+): Promise<void> {
+  const resendKey = Deno.env.get("RESEND_API_KEY");
+  if (!resendKey) {
+    console.log("notifyOwnerOfTruckArrival skipped: RESEND_API_KEY not set");
+    return;
+  }
+
+  const { propertyId, partnerId, truckPlate, seenAt } = args;
+  const cooldownFloor = new Date(
+    new Date(seenAt).getTime() - ARRIVAL_NOTIFY_COOLDOWN_MIN * 60 * 1000,
+  ).toISOString();
+
+  const { data: prior } = await supabase
+    .from("partner_truck_sightings")
+    .select("id, seen_at")
+    .eq("property_id", propertyId)
+    .eq("truck_plate", truckPlate)
+    .gte("seen_at", cooldownFloor)
+    .lt("seen_at", seenAt)
+    .limit(1);
+  if (prior && prior.length > 0) {
+    return;
+  }
+
+  const { data: prop } = await supabase
+    .from("properties")
+    .select("name, owner_id")
+    .eq("id", propertyId)
+    .maybeSingle();
+  if (!prop?.owner_id) return;
+
+  const { data: owner } = await supabase
+    .from("lot_owners")
+    .select("email, business_name")
+    .eq("id", prop.owner_id)
+    .maybeSingle();
+  if (!owner?.email) return;
+
+  const { data: partner } = await supabase
+    .from("enforcement_partners")
+    .select("company_name")
+    .eq("id", partnerId)
+    .maybeSingle();
+
+  const partnerName = partner?.company_name || "Tow operator";
+  const propertyName = prop.name || "your property";
+  const seenLocal = new Date(seenAt).toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+
+  const fromEmail = Deno.env.get("FROM_EMAIL") || "noreply@lotlogic.com";
+  const overrideTo = Deno.env.get("EMAIL_OVERRIDE_TO");
+  const recipient = overrideTo || owner.email;
+
+  const subject = `${partnerName} arrived at ${propertyName}`;
+  const text = `${partnerName} truck ${truckPlate} entered ${propertyName} at ${seenLocal} ET.
+
+Open dashboard: https://lotlogicparking.com/app
+
+— LotView`;
+  const html = `<p><strong>${partnerName}</strong> truck <code>${truckPlate}</code> entered <strong>${propertyName}</strong> at <strong>${seenLocal} ET</strong>.</p><p><a href="https://lotlogicparking.com/app">Open LotView dashboard</a></p>`;
+
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${resendKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: fromEmail,
+      to: [recipient],
+      subject,
+      text,
+      html,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.warn(`resend ${res.status}: ${body.slice(0, 200)}`);
+  }
+}
