@@ -162,6 +162,27 @@ Deno.test("findActiveResident does NOT match unrelated plate of same length", as
   assertEquals(r, null);
 });
 
+Deno.test("findActiveResident: clean read of ABC123 picks ABC123 even when ABG123 is co-registered", async () => {
+  // C↔G is in the OCR confusion list, so anchored-fuzzy alone could match
+  // either row. Two-pass exact-then-fuzzy must lock onto the exact row.
+  const db = {
+    from(_t: string) {
+      const builder: any = {
+        _rows: [
+          { id: "r-abg", plate_text: "ABG123", active: true, property_id: "p1" },
+          { id: "r-abc", plate_text: "ABC123", active: true, property_id: "p1" },
+        ],
+        select() { return builder; },
+        eq(c: string, v: any) { builder._rows = builder._rows.filter((r: any) => r[c] === v); return builder; },
+        limit() { return Promise.resolve({ data: builder._rows, error: null }); },
+      };
+      return builder;
+    },
+  } as any;
+  const r = await findActiveResident(db, "p1", "ABC123");
+  assertEquals(r?.id, "r-abc");
+});
+
 Deno.test("findActiveVisitorPass respects cancelled_at, valid_from, valid_until", async () => {
   const now = new Date("2026-04-20T12:00:00Z");
   const db = {
