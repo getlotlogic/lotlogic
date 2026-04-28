@@ -2460,8 +2460,17 @@ const db = {
     }
     throw new Error('Supabase not available');
   },
-  async deleteViolation(violId) {
+  async deleteViolation(violId, isAlpr = false) {
     if (supabase) {
+      // ALPR violations live in alpr_violations, not violations. The legacy
+      // delete path silently no-ops for ALPR rows because the WHERE matches
+      // zero rows in the wrong table — no error, no toast feedback, looks
+      // like the button does nothing. Branch by isAlpr.
+      if (isAlpr) {
+        const { error } = await supabase.from('alpr_violations').delete().eq('id', violId);
+        if (error) throw new Error(error.message);
+        return;
+      }
       // Fetch camera_id + zone_id before deleting so we can reset occupancy
       const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
       const { error } = await supabase.from('violations').delete().eq('id', violId);
@@ -4730,7 +4739,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                   onClick={async (e) => {
                     e.stopPropagation();
                     try {
-                      await db.deleteViolation(v.id);
+                      await db.deleteViolation(v.id, !!v._isALPR);
                       addToast('Job deleted', 'success');
                       if (onAction) onAction();
                     } catch (err) {
@@ -9564,14 +9573,12 @@ function App() {
     { id: 'invoices', label: 'Billing',  badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
-    // Partner: the 'invoices' tab renders InvoicesPage in read-only
-    // Confirmation Review mode (no QuickBooks sub-tab). Label stays
-    // 'Billing' so the surface is discoverable.
+    // Partner navigation. Earnings + Billing/Invoices are owner-only
+    // surfaces — partners must NEVER see revenue_share, fee schedules,
+    // or QuickBooks state. Removed 2026-04-28 per Gabe.
     { id: 'jobs',     label: 'Jobs',     badge: pending + alprPending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'activity', label: 'Activity', badge: 0 },
-    { id: 'earnings', label: 'Earnings', badge: 0 },
-    { id: 'invoices', label: 'Billing',  badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ];
 
@@ -9710,9 +9717,9 @@ function App() {
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
           {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
-          {tab === 'earnings' && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
+          {tab === 'earnings' && isOwner && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
-          {tab === 'invoices' && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} />}
+          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
