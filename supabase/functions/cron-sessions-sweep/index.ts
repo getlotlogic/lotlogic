@@ -37,7 +37,7 @@ const COOLDOWN_HOURS = Number(Deno.env.get("COOLDOWN_HOURS") ?? "24");
 // hours or overnight, so a 2h grace still catches them cleanly.
 // Silence-gap closes the session earlier (clean, no violation) if any
 // camera sees the vehicle leaving within the window.
-const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "120");
+const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "30");
 // Presence-evidence gate. A violation only fires if the session passes
 // both checks:
 //
