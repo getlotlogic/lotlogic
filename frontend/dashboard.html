@@ -7557,9 +7557,8 @@ function TruckParkingLog({ propertyId }) {
     pendingFilters.company_name !== filters.company_name ||
     pendingFilters.status !== filters.status
   );
-  const inputStyle = {padding:'6px 8px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:12};
-  const thStyle = {textAlign:'left',padding:'6px 8px',fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',color:'var(--text-muted)',borderBottom:'1px solid var(--border)',whiteSpace:'nowrap'};
-  const tdStyle = {padding:'8px',fontSize:12,color:'var(--text-primary)',borderBottom:'1px solid var(--border-subtle)',verticalAlign:'top'};
+  const inputStyle = {padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit'};
+  const labelStyle = {display:'flex',flexDirection:'column',gap:5,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase'};
   const statusColor = {
     active: '#4ade80',
     expired: 'var(--text-muted)',
@@ -7567,23 +7566,38 @@ function TruckParkingLog({ propertyId }) {
     revoked: '#ef4444',
     towed: '#f59e0b',
   };
+  const fmtDateTime = (s) => s ? new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+  const placardSwatch = (color) => {
+    if (!color) return null;
+    const hex = ({ red: '#ef4444', orange: '#f97316', yellow: '#eab308', green: '#22c55e', blue: '#3b82f6', purple: '#a855f7', pink: '#ec4899', white: '#f8fafc', black: '#0f172a' })[String(color).toLowerCase()] || null;
+    return hex ? <span aria-hidden="true" style={{display:'inline-block',width:10,height:10,borderRadius:3,background:hex,border:'1px solid rgba(0,0,0,.25)',verticalAlign:'middle',marginRight:5}} /> : null;
+  };
+
+  // Status counts for the active filter window — gives the user a quick
+  // bird's-eye view above the cards rather than buried in the row count.
+  const statusCounts = rows.reduce((acc, r) => {
+    const s = r.status || 'active';
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, {});
 
   return (
-    <div>
-      <form onSubmit={applyFilters} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:10,marginBottom:10,display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))',gap:8,alignItems:'end'}}>
-        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>From
+    <div style={{display:'flex',flexDirection:'column',gap:14}}>
+      {/* Filters */}
+      <form onSubmit={applyFilters} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:14,display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10,alignItems:'end'}}>
+        <label style={labelStyle}>From
           <input type="date" value={pendingFilters.date_from} onChange={e => setPendingFilters({...pendingFilters, date_from: e.target.value})} style={inputStyle} />
         </label>
-        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>To
+        <label style={labelStyle}>To
           <input type="date" value={pendingFilters.date_to} onChange={e => setPendingFilters({...pendingFilters, date_to: e.target.value})} style={inputStyle} />
         </label>
-        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Plate
+        <label style={labelStyle}>Plate
           <input type="text" value={pendingFilters.plate} onChange={e => setPendingFilters({...pendingFilters, plate: e.target.value})} placeholder="ABC 1234" style={inputStyle} />
         </label>
-        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Company
+        <label style={labelStyle}>Company
           <input type="text" value={pendingFilters.company_name} onChange={e => setPendingFilters({...pendingFilters, company_name: e.target.value})} placeholder="ACME" style={inputStyle} />
         </label>
-        <label style={{display:'flex',flexDirection:'column',gap:3,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Status
+        <label style={labelStyle}>Status
           <select value={pendingFilters.status} onChange={e => setPendingFilters({...pendingFilters, status: e.target.value})} style={inputStyle}>
             <option value="">All</option>
             <option value="active">Active</option>
@@ -7592,100 +7606,155 @@ function TruckParkingLog({ propertyId }) {
             <option value="towed">Towed</option>
           </select>
         </label>
-        <div style={{display:'flex',gap:6,alignSelf:'end'}}>
-          <button type="submit" className="pd-share-btn" style={{color:'#60a5fa'}}>Apply</button>
+        <div style={{display:'flex',gap:8,alignSelf:'end',flexWrap:'wrap'}}>
+          <button type="submit" style={{background:'var(--accent)',color:'#fff',border:'none',borderRadius:8,padding:'9px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Apply</button>
           <button
             type="button"
             onClick={handleExport}
             disabled={exporting || filtersDirty}
             title={filtersDirty ? 'Apply filters before exporting' : undefined}
-            className="pd-share-btn"
-            style={{color:'#4ade80'}}
-          >{exporting ? 'Exporting…' : 'Export CSV'}</button>
+            style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:exporting||filtersDirty?'not-allowed':'pointer',opacity:exporting||filtersDirty?.55:1,fontFamily:'inherit'}}
+          >{exporting ? 'Exporting…' : '↓ Export CSV'}</button>
         </div>
       </form>
 
-      {err && <div style={{padding:12,background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',fontSize:12,marginBottom:10}}>{err}</div>}
+      {err && <div style={{padding:12,background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',fontSize:13}}>{err}</div>}
 
-      <div style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,overflowX:'auto'}}>
-        <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Registered</th>
-              <th style={thStyle}>Company</th>
-              <th style={thStyle}>Driver</th>
-              <th style={thStyle}>Plate</th>
-              <th style={thStyle}>Spot</th>
-              <th style={thStyle}>Phone</th>
-              <th style={thStyle}>Stay</th>
-              <th style={thStyle}>Placard</th>
-              <th style={thStyle}>Status</th>
-              <th style={thStyle}>Policy</th>
-              <th style={thStyle}>Expires</th>
-              <th style={thStyle}>Cancelled</th>
-              <th style={thStyle}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && rows.length === 0 ? (
-              <tr><td colSpan={13} style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>Loading…</td></tr>
-            ) : rows.length === 0 ? (
-              <tr><td colSpan={13} style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>No entries for these filters</td></tr>
-            ) : rows.map(r => {
-              const s = r.status || 'active';
-              const color = statusColor[s] || 'var(--text-muted)';
-              const isActive = s === 'active';
-              return (
-                <tr key={r.id}>
-                  <td style={tdStyle}>{r.created_at ? new Date(r.created_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}</td>
-                  <td style={tdStyle}>{r.company_name || '—'}</td>
-                  <td style={tdStyle}>{r.visitor_name || '—'}</td>
-                  <td style={{...tdStyle,fontFamily:"'Courier New',monospace",fontWeight:700,letterSpacing:'.05em'}}>
-                    {r.plate_text}
+      {/* Header summary row */}
+      {!err && (
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+          <div style={{display:'flex',gap:14,alignItems:'baseline',flexWrap:'wrap'}}>
+            <div style={{fontSize:22,fontWeight:800,color:'var(--text-primary)',letterSpacing:'-.01em'}}>
+              {total.toLocaleString()}<span style={{fontSize:13,fontWeight:600,color:'var(--text-muted)',marginLeft:6}}>{total === 1 ? 'pass' : 'passes'}</span>
+            </div>
+            {Object.keys(statusCounts).length > 0 && (
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                {['active','expired','cancelled','towed','revoked'].filter(s => statusCounts[s]).map(s => {
+                  const color = statusColor[s] || 'var(--text-muted)';
+                  return (
+                    <span key={s} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:20,background:`${color}1a`,color,border:`1px solid ${color}40`,textTransform:'uppercase',letterSpacing:'.04em'}}>
+                      {statusCounts[s]} {s}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div style={{fontSize:12,color:'var(--text-muted)'}}>
+            Page {page} of {totalPages}
+          </div>
+        </div>
+      )}
+
+      {/* Card list */}
+      {loading && rows.length === 0 ? (
+        <div style={{padding:40,textAlign:'center',color:'var(--text-muted)',fontSize:13,background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>Loading…</div>
+      ) : rows.length === 0 ? (
+        <div style={{padding:40,textAlign:'center',background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>
+          <div style={{width:48,height:48,borderRadius:12,background:'rgba(96,165,250,.1)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px',fontSize:22}}>📋</div>
+          <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>No passes for these filters</div>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>Try widening the date range or clearing the plate / company filter.</div>
+        </div>
+      ) : (
+        <div style={{display:'grid',gap:10,gridTemplateColumns:'repeat(auto-fill, minmax(380px, 1fr))'}}>
+          {rows.map(r => {
+            const s = r.status || 'active';
+            const color = statusColor[s] || 'var(--text-muted)';
+            const isActive = s === 'active';
+            const driverLine = [r.visitor_name, r.company_name].filter(Boolean).join(' · ') || '—';
+            const detailChips = [];
+            if (r.parking_spot) detailChips.push({ label: 'Spot', value: r.parking_spot });
+            if (r.stay_days) detailChips.push({ label: 'Stay', value: `${r.stay_days}d` });
+            if (r.placard_color) detailChips.push({ label: 'Placard', value: r.placard_color, swatch: true });
+            return (
+              <div key={r.id} style={{
+                background:'var(--bg-card)',
+                border:`1px solid var(--border)`,
+                borderLeft:`3px solid ${color}`,
+                borderRadius:12,
+                padding:14,
+                display:'flex',
+                flexDirection:'column',
+                gap:10,
+                position:'relative',
+              }}>
+                {/* Top row: plate + status pill */}
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}}>
+                  <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,minWidth:0}}>
+                    <div style={{fontSize:18,fontWeight:800,fontFamily:"'Courier New',monospace",letterSpacing:'.06em',color:'var(--text-primary)'}}>
+                      {r.plate_text}
+                    </div>
                     {r.usdot_number && (
-                      <span title={`USDOT ${r.usdot_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>USDOT</span>
+                      <span title={`USDOT ${r.usdot_number}`} style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#60a5fa',border:'1px solid rgba(59,130,246,.3)'}}>USDOT {r.usdot_number}</span>
                     )}
                     {r.mc_number && (
-                      <span title={`MC ${r.mc_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC#</span>
+                      <span title={`MC ${r.mc_number}`} style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#60a5fa',border:'1px solid rgba(59,130,246,.3)'}}>MC {r.mc_number}</span>
                     )}
-                  </td>
-                  <td style={tdStyle}>{r.parking_spot || '—'}</td>
-                  <td style={tdStyle}>{r.phone || '—'}</td>
-                  <td style={tdStyle}>{r.stay_days ? `${r.stay_days}d` : '—'}</td>
-                  <td style={tdStyle}>{r.placard_color || '—'}</td>
-                  <td style={tdStyle}><span aria-label={`Pass status: ${s}`} style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:20,background:`${color}18`,color,border:`1px solid ${color}40`,textTransform:'uppercase'}}>{s}</span></td>
-                  <td style={tdStyle}>{r.policy_acknowledged_at ? <span style={{color:'#4ade80',fontWeight:700}}>✓</span> : <span style={{color:'var(--text-faint)'}}>—</span>}</td>
-                  <td style={tdStyle}>{r.valid_until ? new Date(r.valid_until).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}</td>
-                  <td style={tdStyle}>
-                    {r.cancelled_at ? (
-                      <>
-                        <div>{new Date(r.cancelled_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>
-                        {r.cancelled_by && <div style={{fontSize:10,color:'var(--text-faint)'}}>by {r.cancelled_by}</div>}
-                      </>
-                    ) : '—'}
-                  </td>
-                  <td style={tdStyle}>
-                    {isActive && (
-                      <button
-                        onClick={() => setCancelModal({ id: r.id, plate_text: r.plate_text })}
-                        style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'3px 8px',fontSize:10,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}
-                      >Cancel</button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                  </div>
+                  <span aria-label={`Pass status: ${s}`} style={{fontSize:10,fontWeight:700,padding:'4px 10px',borderRadius:20,background:`${color}1a`,color,border:`1px solid ${color}40`,textTransform:'uppercase',letterSpacing:'.06em',whiteSpace:'nowrap',flexShrink:0}}>{s}</span>
+                </div>
 
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,fontSize:12,color:'var(--text-muted)'}}>
-        <div>{total.toLocaleString()} total · page {page} of {totalPages}</div>
-        <div style={{display:'flex',gap:6}}>
-          <button onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1 || loading} className="pd-share-btn">Prev</button>
-          <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages || loading} className="pd-share-btn">Next</button>
+                {/* Driver / company / phone line */}
+                <div style={{display:'flex',flexDirection:'column',gap:3}}>
+                  <div style={{fontSize:13,color:'var(--text-primary)',fontWeight:600}}>{driverLine}</div>
+                  {r.phone && <div style={{fontSize:12,color:'var(--text-muted)'}}>📞 {r.phone}</div>}
+                </div>
+
+                {/* Detail chips */}
+                {detailChips.length > 0 && (
+                  <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                    {detailChips.map((c, i) => (
+                      <span key={i} style={{fontSize:11,padding:'3px 9px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-secondary)',border:'1px solid var(--border-subtle)',display:'inline-flex',alignItems:'center'}}>
+                        {c.swatch ? placardSwatch(c.value) : null}
+                        <span style={{fontWeight:600,color:'var(--text-faint)',marginRight:5,textTransform:'uppercase',fontSize:9,letterSpacing:'.06em'}}>{c.label}</span>
+                        <span style={{textTransform:'capitalize',fontWeight:700,color:'var(--text-primary)'}}>{c.value}</span>
+                      </span>
+                    ))}
+                    {r.policy_acknowledged_at && (
+                      <span title={`Acknowledged ${fmtDateTime(r.policy_acknowledged_at)}`} style={{fontSize:11,padding:'3px 9px',borderRadius:14,background:'rgba(74,222,128,.1)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',display:'inline-flex',alignItems:'center',gap:4,fontWeight:700}}>
+                        ✓ Policy
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Time range */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr auto 1fr',alignItems:'center',gap:10,padding:'10px 12px',background:'var(--bg-inset)',borderRadius:8,fontSize:11}}>
+                  <div>
+                    <div style={{color:'var(--text-faint)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',fontSize:9,marginBottom:2}}>Registered</div>
+                    <div style={{color:'var(--text-primary)',fontWeight:600}}>{fmtDateTime(r.created_at)}</div>
+                  </div>
+                  <div style={{color:'var(--text-faint)',fontSize:14}}>→</div>
+                  <div style={{textAlign:'right'}}>
+                    <div style={{color:'var(--text-faint)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',fontSize:9,marginBottom:2}}>{r.cancelled_at ? 'Cancelled' : 'Expires'}</div>
+                    <div style={{color:'var(--text-primary)',fontWeight:600}}>{fmtDateTime(r.cancelled_at || r.valid_until)}</div>
+                    {r.cancelled_by && <div style={{color:'var(--text-faint)',fontSize:10,marginTop:1}}>by {r.cancelled_by}</div>}
+                  </div>
+                </div>
+
+                {/* Actions row */}
+                {isActive && (
+                  <div style={{display:'flex',justifyContent:'flex-end',marginTop:-2}}>
+                    <button
+                      onClick={() => setCancelModal({ id: r.id, plate_text: r.plate_text })}
+                      style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}
+                    >Cancel pass</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
-      </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div style={{display:'flex',justifyContent:'center',alignItems:'center',gap:10,fontSize:13,color:'var(--text-muted)'}}>
+          <button onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1 || loading} style={{background:'var(--bg-card)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:page<=1?'not-allowed':'pointer',opacity:page<=1?.45:1,fontFamily:'inherit'}}>← Prev</button>
+          <span style={{fontWeight:600,color:'var(--text-primary)'}}>Page {page} of {totalPages}</span>
+          <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages || loading} style={{background:'var(--bg-card)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:page>=totalPages?'not-allowed':'pointer',opacity:page>=totalPages?.45:1,fontFamily:'inherit'}}>Next →</button>
+        </div>
+      )}
 
       {cancelModal && (
         <ConfirmActionModal
@@ -7704,7 +7773,10 @@ function TruckParkingLog({ propertyId }) {
   );
 }
 
-function ALPRPropertyDetailPage({ propertyId, onBack }) {
+function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
+  // QR codes + camera registration are owner-only surfaces. Partners see
+  // the property + plates + parking log but not the operational chrome.
+  const isOwner = user?._role === 'owner';
   const { addToast } = useToast();
   const [property, setProperty] = useState(null);
   const [plates, setPlates] = useState([]);
@@ -8041,27 +8113,31 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         </form>
       )}
 
-      {/* Two QR codes — one for Temporary, one for Permanent */}
-      <div className="pd-qr-grid">
-        <div className="pd-qr-tile">
-          <div className="pd-qr-head">
-            <span className="pd-share-label" style={{color:'#3b82f6'}}>Temporary</span>
-            <span className="pd-qr-sub">up to 48 hrs</span>
+      {/* Two QR codes — one for Temporary, one for Permanent. Owner-only.
+          Partners don't share QR codes with drivers — that's the property
+          owner's onboarding flow. */}
+      {isOwner && (
+        <div className="pd-qr-grid">
+          <div className="pd-qr-tile">
+            <div className="pd-qr-head">
+              <span className="pd-share-label" style={{color:'#3b82f6'}}>Temporary</span>
+              <span className="pd-qr-sub">up to 48 hrs</span>
+            </div>
+            <div className="pd-qr-canvas-wrap"><canvas ref={tempQrRef} /></div>
+            <div className="pd-qr-url">{tempUrl}</div>
+            <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast('Temporary link copied', 'success'); }}>Copy link</button>
           </div>
-          <div className="pd-qr-canvas-wrap"><canvas ref={tempQrRef} /></div>
-          <div className="pd-qr-url">{tempUrl}</div>
-          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast('Temporary link copied', 'success'); }}>Copy link</button>
-        </div>
-        <div className="pd-qr-tile">
-          <div className="pd-qr-head">
-            <span className="pd-share-label" style={{color:'#4ade80'}}>Permanent</span>
-            <span className="pd-qr-sub">owner-approved</span>
+          <div className="pd-qr-tile">
+            <div className="pd-qr-head">
+              <span className="pd-share-label" style={{color:'#4ade80'}}>Permanent</span>
+              <span className="pd-qr-sub">owner-approved</span>
+            </div>
+            <div className="pd-qr-canvas-wrap"><canvas ref={permQrRef} /></div>
+            <div className="pd-qr-url">{permUrl}</div>
+            <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(permUrl); addToast('Permanent link copied', 'success'); }}>Copy link</button>
           </div>
-          <div className="pd-qr-canvas-wrap"><canvas ref={permQrRef} /></div>
-          <div className="pd-qr-url">{permUrl}</div>
-          <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(permUrl); addToast('Permanent link copied', 'success'); }}>Copy link</button>
         </div>
-      </div>
+      )}
 
       {/* Permanent Plates (label switches to "Permanent Plates (Employees)" on truck plazas) */}
       {(() => {
@@ -8208,46 +8284,50 @@ function ALPRPropertyDetailPage({ propertyId, onBack }) {
         );
       })()}
 
-      {/* Cameras */}
-      <div className="pd-section-head">
-        <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-          <span className="pd-section-title">ALPR Cameras</span>
-          <span className="pd-section-count">{cameras.length}</span>
-        </div>
-        <button onClick={() => { setShowAddCam(!showAddCam); setNewApiKey(null); }} className="pd-share-btn" style={{color:'#3b82f6'}}>{showAddCam ? 'Cancel' : '+ Register'}</button>
-      </div>
-
-      {newApiKey && (
-        <div style={{background:'rgba(74,222,128,.08)',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:12,marginBottom:12}}>
-          <div style={{fontSize:12,fontWeight:700,color:'#4ade80',marginBottom:4}}>Camera registered! Save this API key (shown once):</div>
-          <div style={{fontSize:13,fontFamily:'monospace',color:'var(--text-primary)',wordBreak:'break-all',background:'var(--bg-inset)',padding:8,borderRadius:6}}>{newApiKey}</div>
-        </div>
-      )}
-
-      {showAddCam && (
-        <form onSubmit={handleAddCamera} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:12,display:'flex',flexDirection:'column',gap:8}}>
-          <input value={newCam.name} onChange={e => setNewCam({...newCam, name: e.target.value})} placeholder="Camera name" required style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
-          <input value={newCam.location_description} onChange={e => setNewCam({...newCam, location_description: e.target.value})} placeholder="Location (e.g. Main entrance)" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
-          <button type="submit" disabled={saving} style={{background:'var(--accent)',color:'#fff',border:'none',borderRadius:6,padding:'8px',fontSize:13,fontWeight:700,cursor:'pointer'}}>{saving ? 'Registering...' : 'Register Camera'}</button>
-        </form>
-      )}
-
-      <div style={{display:'flex',flexDirection:'column',gap:6}}>
-        {cameras.map(c => (
-          <div key={c.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div style={{fontWeight:700,fontSize:14,color:'var(--text-primary)'}}>{c.name}</div>
-              <div style={{display:'flex',gap:6,alignItems:'center'}}>
-                <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:c.active?'rgba(74,222,128,.12)':'rgba(239,68,68,.12)',color:c.active?'#4ade80':'#ef4444'}}>{c.active ? 'Active' : 'Disabled'}</span>
-                <button onClick={async () => { if (!confirm('Remove camera "' + c.name + '"?')) return; try { await db.removeALPRCamera(c.id); const cams = await db.getALPRCameras(propertyId); setCameras(cams); } catch (err) { addToast('Failed to remove camera. ' + (err.message || ''), 'error'); } }} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700,cursor:'pointer'}}>Remove</button>
-              </div>
+      {/* Cameras — owner-only. Partners don't manage hardware. */}
+      {isOwner && (
+        <>
+          <div className="pd-section-head">
+            <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+              <span className="pd-section-title">ALPR Cameras</span>
+              <span className="pd-section-count">{cameras.length}</span>
             </div>
-            {c.location_description && <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{c.location_description}</div>}
-            {c.last_seen_at && <div style={{fontSize:11,color:'var(--text-faint)',marginTop:2}}>Last seen: {new Date(c.last_seen_at).toLocaleString()}</div>}
+            <button onClick={() => { setShowAddCam(!showAddCam); setNewApiKey(null); }} className="pd-share-btn" style={{color:'#3b82f6'}}>{showAddCam ? 'Cancel' : '+ Register'}</button>
           </div>
-        ))}
-        {cameras.length === 0 && <div className="pd-empty">No cameras registered</div>}
-      </div>
+
+          {newApiKey && (
+            <div style={{background:'rgba(74,222,128,.08)',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:12,marginBottom:12}}>
+              <div style={{fontSize:12,fontWeight:700,color:'#4ade80',marginBottom:4}}>Camera registered! Save this API key (shown once):</div>
+              <div style={{fontSize:13,fontFamily:'monospace',color:'var(--text-primary)',wordBreak:'break-all',background:'var(--bg-inset)',padding:8,borderRadius:6}}>{newApiKey}</div>
+            </div>
+          )}
+
+          {showAddCam && (
+            <form onSubmit={handleAddCamera} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:12,display:'flex',flexDirection:'column',gap:8}}>
+              <input value={newCam.name} onChange={e => setNewCam({...newCam, name: e.target.value})} placeholder="Camera name" required style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
+              <input value={newCam.location_description} onChange={e => setNewCam({...newCam, location_description: e.target.value})} placeholder="Location (e.g. Main entrance)" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
+              <button type="submit" disabled={saving} style={{background:'var(--accent)',color:'#fff',border:'none',borderRadius:6,padding:'8px',fontSize:13,fontWeight:700,cursor:'pointer'}}>{saving ? 'Registering...' : 'Register Camera'}</button>
+            </form>
+          )}
+
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {cameras.map(c => (
+              <div key={c.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <div style={{fontWeight:700,fontSize:14,color:'var(--text-primary)'}}>{c.name}</div>
+                  <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                    <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:c.active?'rgba(74,222,128,.12)':'rgba(239,68,68,.12)',color:c.active?'#4ade80':'#ef4444'}}>{c.active ? 'Active' : 'Disabled'}</span>
+                    <button onClick={async () => { if (!confirm('Remove camera "' + c.name + '"?')) return; try { await db.removeALPRCamera(c.id); const cams = await db.getALPRCameras(propertyId); setCameras(cams); } catch (err) { addToast('Failed to remove camera. ' + (err.message || ''), 'error'); } }} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700,cursor:'pointer'}}>Remove</button>
+                  </div>
+                </div>
+                {c.location_description && <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{c.location_description}</div>}
+                {c.last_seen_at && <div style={{fontSize:11,color:'var(--text-faint)',marginTop:2}}>Last seen: {new Date(c.last_seen_at).toLocaleString()}</div>}
+              </div>
+            ))}
+            {cameras.length === 0 && <div className="pd-empty">No cameras registered</div>}
+          </div>
+        </>
+      )}
 
       {/* Needs Review — match_status held for human decision before enforcement */}
       {(() => {
@@ -8536,7 +8616,7 @@ function ALPRPropertiesPage({ user }) {
     setSaving(false);
   }
 
-  if (selectedId) return <ErrorBoundary label="this property"><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} /></ErrorBoundary>;
+  if (selectedId) return <ErrorBoundary label="this property"><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} user={user} /></ErrorBoundary>;
 
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading properties...</div></div>;
 
