@@ -20,15 +20,26 @@
   {"@context":"https://schema.org","@type":"Organization","name":"LotLogic LLC","description":"AI-powered parking enforcement with free ALPR cameras and digital parking passes for apartment communities.","url":"https://lotlogic-beta.vercel.app","email":"lotlogicai@gmail.com","areaServed":{"@type":"City","name":"Charlotte","addressRegion":"NC"}}
   </script>
 
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f1117;
-      color: #e5e7eb;
+      font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+      background: #0E0F11;
+      color: #E2E2DC;
       line-height: 1.6;
       -webkit-font-smoothing: antialiased;
+      letter-spacing: -.005em;
     }
+    h1, h2, h3, .display-font {
+      font-family: 'Anton', system-ui, sans-serif;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+      font-weight: 400;
+    }
+    code, pre, .mono-font { font-family: 'DM Mono', ui-monospace, monospace; }
     .container { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
 
     /* Nav */
