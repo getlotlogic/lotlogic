@@ -478,7 +478,7 @@ export async function findActiveResident(
     .limit(200);
   if (error) throw error;
   for (const r of data ?? []) {
-    if (normalizePlate(r.plate_text ?? "") === normalizedPlate) return { id: r.id };
+    if (plateSimilar(normalizePlate(r.plate_text ?? ""), normalizedPlate, true)) return { id: r.id };
   }
   return null;
 }
@@ -522,7 +522,7 @@ export async function findActiveVisitorPass(
     if (r.cancelled_at) continue;
     if (r.valid_from && new Date(r.valid_from) > now) continue;
     if (!r.valid_until || new Date(r.valid_until) <= now) continue;
-    if (normalizePlate(r.plate_text ?? "") === normalizedPlate) {
+    if (plateSimilar(normalizePlate(r.plate_text ?? ""), normalizedPlate, true)) {
       return { id: r.id, valid_until: r.valid_until };
     }
   }
