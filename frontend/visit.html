@@ -388,8 +388,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
     }
 
     function showTruckPlazaForm() {
-      const policyText = property.policy_text || DEFAULT_TRUCK_PLAZA_POLICY;
-      const policyPhone = property.policy_phone ? `<p style="margin-top:8px;color:#9ca3af;font-size:12px;">Towing contact: <strong>${escapeHtml(property.policy_phone)}</strong></p>` : '';
       app.innerHTML = `
         <div class="logo">
           <div class="shield">LL</div>
@@ -416,25 +414,17 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <label for="placardColor">Color Placard <span class="required">*</span></label>
           <input type="text" id="placardColor" placeholder="yellow / red / blue / etc." required maxlength="30">
 
-          <label style="margin-top:14px;">Stay Duration <span class="required">*</span></label>
-          <div style="display:flex;gap:8px;margin-top:6px;">
-            <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px 6px;font-size:14px;">
-              <input type="radio" name="stayHours" value="12"> 12 hr
-            </label>
-            <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px 6px;font-size:14px;">
-              <input type="radio" name="stayHours" value="24"> 24 hr
-            </label>
-            <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px 6px;font-size:14px;">
-              <input type="radio" name="stayHours" value="36"> 36 hr
-            </label>
-            <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #2b2f3a;border-radius:8px;padding:12px 6px;font-size:14px;">
-              <input type="radio" name="stayHours" value="48"> 48 hr
-            </label>
-          </div>
+          <label for="stayHours">Stay Duration <span class="required">*</span></label>
+          <select id="stayHours" required>
+            <option value="" disabled selected>Select duration</option>
+            <option value="12">12 hours</option>
+            <option value="24">24 hours</option>
+            <option value="36">36 hours</option>
+            <option value="48">48 hours</option>
+          </select>
 
           <div style="margin-top:18px;background:rgba(255,255,255,0.03);border:1px solid #2b2f3a;border-radius:8px;padding:14px;font-size:13px;color:#cbd5e1;line-height:1.5;">
             By submitting, you agree to the property's truck parking policies. Maximum stay 48 hours. After your pass expires, you must remain off the property for 24 hours before re-registering. Unregistered vehicles are subject to tow at owner's expense.
-            ${policyPhone}
           </div>
 
           <button type="submit" class="submit-btn" id="submitBtn" style="margin-top:18px;">Register Truck</button>
@@ -557,8 +547,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const plateText   = normalizePlate(document.getElementById('plate').value);
         const phone       = normalizePhone(document.getElementById('phone').value);
         const placardColor = document.getElementById('placardColor').value.trim();
-        const stayHoursEl = document.querySelector('input[name="stayHours"]:checked');
-        const stayHours   = stayHoursEl ? parseInt(stayHoursEl.value, 10) : 0;
+        const stayHours = parseInt(document.getElementById('stayHours').value, 10) || 0;
 
         if (!companyName) throw new Error('Company name is required.');
         if (!driverName) throw new Error('Operator name is required.');
