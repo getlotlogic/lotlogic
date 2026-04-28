@@ -2795,6 +2795,24 @@ const db = {
     }
     return [];
   },
+  // Most recent camera capture for a plate at a property — used by
+  // ActivePassTracker's violations side to show "what does this car look
+  // like?" on click. Falls back to normalized_plate match so expired
+  // passes still resolve.
+  async getLatestPlateEventForPlate(propertyId, plateText) {
+    if (!supabase || !propertyId || !plateText) return null;
+    const norm = (plateText || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const { data, error } = await supabase
+      .from('plate_events')
+      .select('id, plate_text, normalized_plate, image_url, created_at, camera_id, alpr_cameras:camera_id(name, location_description)')
+      .eq('property_id', propertyId)
+      .eq('normalized_plate', norm)
+      .not('image_url', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return null;
+    return data[0];
+  },
   async getRecentPlateEvents(propertyId, limit = 50) {
     if (supabase) {
       const { data, error } = await supabase
@@ -7673,6 +7691,342 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // Paginated, filterable temporary-pass log for truck_plaza properties.
 // Data comes from the backend /visitor_passes/parking-log endpoint — the same
 // shape as the CSV export so the two never drift.
+// ActivePassTracker — the on-site plate-matching surface.
+// Two columns:
+//   LEFT: Active passes (currently allowed). Yellow expiring (<3h) sorted
+//         to the top, green active below. Sorted by valid_until asc so the
+//         most-urgent are at the top of the column.
+//   RIGHT: Current violations (expired). Click → reveal the camera image
+//          of the actual vehicle so the operator can match what they see
+//          on the lot to what's flagged.
+//
+// Design intent (psychological / scannability):
+//   • Plate text dominates each card at 48-56px, Courier-Mono, all caps.
+//     Plate IS the visual the operator scans against — it MUST be the
+//     anchor (F-pattern top-left).
+//   • Color coding: green = OK, yellow = expiring soon, red = violation.
+//     Traffic-light convention; instant emotional read.
+//   • Whitespace is deliberate — breathing room signals "important content,
+//     pay attention" rather than "checklist to power through."
+//   • Card structure repeats (Gestalt similarity) so the operator's eye
+//     learns the layout once and scans the whole column without rereading.
+//   • Countdown chip in the active column creates time-awareness without
+//     panic; expiry timestamp underneath gives the absolute reference.
+//   • Violations are a separate column so they're never mixed with allowed
+//     plates — separation reduces accidental misclassification.
+function ActivePassTracker({ propertyId }) {
+  const [passes, setPasses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState(null);
+  const [imageCache, setImageCache] = useState({}); // pass.id -> {url, loading, error}
+  const nowTick = useNowTick();
+
+  const load = useCallback(async () => {
+    if (!propertyId) return;
+    setLoading(true);
+    try {
+      // Fetch active + expired in one round trip; split client-side.
+      const all = await db.getVisitorPasses(propertyId, { limit: 200 });
+      const filtered = (all || []).filter(p => p.status === 'active' || p.status === 'expired');
+      setPasses(filtered);
+    } catch (e) {
+      // swallow; component shows empty state
+    }
+    setLoading(false);
+  }, [propertyId]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!supabase || !propertyId) return;
+    const ch = supabase.channel('active-pass-tracker-' + propertyId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'visitor_passes', filter: 'property_id=eq.' + propertyId }, () => load())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [propertyId, load]);
+
+  const EXPIRING_WINDOW_MS = 3 * 60 * 60 * 1000;
+  function deriveStatus(p) {
+    if (p.status === 'expired') return 'violation';
+    if (!p.valid_until) return 'active';
+    const remaining = new Date(p.valid_until).getTime() - nowTick;
+    if (remaining <= 0) return 'violation';
+    if (remaining < EXPIRING_WINDOW_MS) return 'expiring';
+    return 'active';
+  }
+
+  // Active column: expiring on top, active below; within each, soonest-to-expire first.
+  const activeColumn = passes
+    .filter(p => p.status === 'active' && new Date(p.valid_until).getTime() > nowTick)
+    .sort((a, b) => new Date(a.valid_until).getTime() - new Date(b.valid_until).getTime());
+
+  // Violations column: most-recent expiry first (these are the cars likely
+  // still in the lot).
+  const violationColumn = passes
+    .filter(p => p.status === 'expired' || (p.status === 'active' && new Date(p.valid_until).getTime() <= nowTick))
+    .sort((a, b) => new Date(b.valid_until).getTime() - new Date(a.valid_until).getTime());
+
+  function fmtRemaining(targetMs, fromMs) {
+    const ms = Math.max(0, targetMs - fromMs);
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    if (h <= 0 && m <= 0) return 'Ending now';
+    if (h <= 0) return `${m}m left`;
+    return `${h}h ${m}m left`;
+  }
+
+  function fmtElapsed(fromMs, nowMs) {
+    const ms = Math.max(0, nowMs - fromMs);
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    if (h <= 0 && m <= 0) return 'just now';
+    if (h <= 0) return `${m}m ago`;
+    if (h < 24) return `${h}h ${m}m ago`;
+    const days = Math.floor(h / 24);
+    return `${days}d ago`;
+  }
+
+  function fmtAbsolute(s) {
+    if (!s) return '—';
+    return new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function placardSwatch(color) {
+    if (!color) return null;
+    const hex = ({ red: '#ef4444', orange: '#f97316', yellow: '#eab308', green: '#22c55e', blue: '#3b82f6', purple: '#a855f7', pink: '#ec4899', white: '#f8fafc', black: '#0f172a' })[String(color).toLowerCase()] || null;
+    return hex ? <span aria-hidden="true" style={{display:'inline-block',width:14,height:14,borderRadius:4,background:hex,border:'1.5px solid rgba(0,0,0,.3)',verticalAlign:'middle',marginRight:6,boxShadow:'0 1px 3px rgba(0,0,0,.2)'}} /> : null;
+  }
+
+  async function toggleExpand(pass) {
+    if (expandedId === pass.id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(pass.id);
+    if (!imageCache[pass.id]) {
+      setImageCache(c => ({ ...c, [pass.id]: { loading: true } }));
+      try {
+        const ev = await db.getLatestPlateEventForPlate(propertyId, pass.plate_text);
+        if (ev?.image_url) {
+          setImageCache(c => ({ ...c, [pass.id]: { url: ev.image_url, capturedAt: ev.created_at, cameraName: ev.alpr_cameras?.name } }));
+        } else {
+          setImageCache(c => ({ ...c, [pass.id]: { error: 'No camera capture found for this plate.' } }));
+        }
+      } catch (e) {
+        setImageCache(c => ({ ...c, [pass.id]: { error: e.message || 'Failed to load image.' } }));
+      }
+    }
+  }
+
+  function PassCard({ p, kind }) {
+    const isViolation = kind === 'violation';
+    const status = deriveStatus(p);
+    const expiring = status === 'expiring';
+    const driverLine = [p.visitor_name, p.company_name].filter(Boolean).join(' · ') || '—';
+    const accent = isViolation ? '#ef4444' : expiring ? '#f59e0b' : '#22c55e';
+    const accentSoft = isViolation ? 'rgba(239,68,68,.08)' : expiring ? 'rgba(245,158,11,.08)' : 'rgba(34,197,94,.06)';
+    const accentBorder = isViolation ? 'rgba(239,68,68,.45)' : expiring ? 'rgba(245,158,11,.45)' : 'rgba(34,197,94,.35)';
+    const plateColor = isViolation ? '#ef4444' : expiring ? '#b45309' : '#15803d';
+    const isExpanded = expandedId === p.id;
+    const imgEntry = imageCache[p.id];
+
+    return (
+      <div
+        onClick={isViolation ? () => toggleExpand(p) : undefined}
+        style={{
+          background: accentSoft,
+          border: `1px solid ${accentBorder}`,
+          borderLeft: `8px solid ${accent}`,
+          borderRadius: 14,
+          padding: 22,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+          cursor: isViolation ? 'pointer' : 'default',
+          boxShadow: '0 2px 16px rgba(0,0,0,.08)',
+          transition: 'transform .12s ease, box-shadow .12s ease',
+        }}
+        onMouseEnter={isViolation ? (e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 24px rgba(239,68,68,.18)'; } : undefined}
+        onMouseLeave={isViolation ? (e) => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 2px 16px rgba(0,0,0,.08)'; } : undefined}
+      >
+        {/* Plate hero */}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,flexWrap:'wrap'}}>
+          <div style={{display:'flex',alignItems:'baseline',flexWrap:'wrap',gap:10,minWidth:0}}>
+            <div style={{
+              fontSize: 'clamp(36px, 6vw, 56px)',
+              fontWeight: 900,
+              fontFamily: "'Courier New', ui-monospace, monospace",
+              letterSpacing: '.08em',
+              color: plateColor,
+              lineHeight: 1,
+              wordBreak: 'break-all',
+            }}>
+              {p.plate_text}
+            </div>
+            {p.usdot_number && (
+              <span style={{fontSize:11,fontWeight:800,letterSpacing:'.07em',padding:'3px 9px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#1d4ed8',border:'1px solid rgba(59,130,246,.3)'}}>USDOT {p.usdot_number}</span>
+            )}
+            {p.mc_number && (
+              <span style={{fontSize:11,fontWeight:800,letterSpacing:'.07em',padding:'3px 9px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#1d4ed8',border:'1px solid rgba(59,130,246,.3)'}}>MC {p.mc_number}</span>
+            )}
+          </div>
+          <span style={{
+            fontSize: 12,
+            fontWeight: 800,
+            padding: '6px 14px',
+            borderRadius: 22,
+            background: accent,
+            color: '#fff',
+            textTransform: 'uppercase',
+            letterSpacing: '.08em',
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
+            boxShadow: `0 2px 8px ${accent}55`,
+          }}>
+            {isViolation ? 'Violation' : expiring ? 'Expiring' : 'Active'}
+          </span>
+        </div>
+
+        {/* Driver / company */}
+        <div style={{display:'flex',flexDirection:'column',gap:4}}>
+          <div style={{fontSize:17,fontWeight:700,color:'var(--text-primary)',lineHeight:1.25}}>{driverLine}</div>
+          {p.phone && <div style={{fontSize:14,color:'var(--text-secondary)'}}>📞 {p.phone}</div>}
+        </div>
+
+        {/* Detail chips */}
+        <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+          {p.parking_spot && (
+            <span style={{fontSize:13,padding:'5px 11px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700,letterSpacing:'.02em'}}>
+              <span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:5}}>Spot</span>
+              {p.parking_spot}
+            </span>
+          )}
+          {p.stay_days && (
+            <span style={{fontSize:13,padding:'5px 11px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}>
+              <span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:5}}>Stay</span>
+              {p.stay_days}d
+            </span>
+          )}
+          {p.placard_color && (
+            <span style={{fontSize:13,padding:'5px 11px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',display:'inline-flex',alignItems:'center',fontWeight:700}}>
+              {placardSwatch(p.placard_color)}
+              <span style={{textTransform:'capitalize'}}>{p.placard_color} placard</span>
+            </span>
+          )}
+        </div>
+
+        {/* Bottom row: time info */}
+        <div style={{paddingTop:10,borderTop:`1px dashed ${accentBorder}`}}>
+          {isViolation ? (
+            <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+              <div>
+                <div style={{fontSize:10,fontWeight:800,color:'var(--text-faint)',letterSpacing:'.07em',textTransform:'uppercase',marginBottom:3}}>Expired</div>
+                <div style={{fontSize:14,fontWeight:700,color:'#ef4444'}}>{fmtElapsed(new Date(p.valid_until).getTime(), nowTick)}</div>
+                <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>{fmtAbsolute(p.valid_until)}</div>
+              </div>
+              <div style={{fontSize:11,fontWeight:700,color:'#ef4444',letterSpacing:'.04em',textTransform:'uppercase'}}>
+                {isExpanded ? 'Hide image' : 'Tap to see vehicle →'}
+              </div>
+            </div>
+          ) : (
+            <div style={{display:'flex',alignItems:'baseline',gap:14,flexWrap:'wrap'}}>
+              <div style={{fontSize: expiring ? 22 : 18,fontWeight:800,color:expiring ? '#b45309' : '#15803d',letterSpacing:'-.01em'}}>
+                ⏱ {fmtRemaining(new Date(p.valid_until).getTime(), nowTick)}
+              </div>
+              <div style={{fontSize:11,color:'var(--text-muted)'}}>
+                Expires {fmtAbsolute(p.valid_until)}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Violation expanded image */}
+        {isViolation && isExpanded && (
+          <div style={{
+            background:'#0a0a0a',
+            border:'1px solid rgba(239,68,68,.4)',
+            borderRadius:10,
+            padding:10,
+            display:'flex',
+            flexDirection:'column',
+            gap:8,
+          }}>
+            {imgEntry?.loading && (
+              <div style={{padding:30,textAlign:'center',color:'#94a3b8',fontSize:13}}>Loading camera capture…</div>
+            )}
+            {imgEntry?.error && (
+              <div style={{padding:14,textAlign:'center',color:'#fca5a5',fontSize:13}}>{imgEntry.error}</div>
+            )}
+            {imgEntry?.url && (
+              <>
+                <img
+                  src={imgEntry.url}
+                  alt={`Camera capture for ${p.plate_text}`}
+                  style={{width:'100%',height:'auto',display:'block',borderRadius:6,maxHeight:'70vh',objectFit:'contain',background:'#000'}}
+                />
+                <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'#94a3b8'}}>
+                  <span>{imgEntry.cameraName || 'Camera'}</span>
+                  <span>{fmtAbsolute(imgEntry.capturedAt)}</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (loading) {
+    return <div style={{padding:30,textAlign:'center',color:'var(--text-muted)',fontSize:13}}>Loading active pass tracker…</div>;
+  }
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:18,marginBottom:22}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',flexWrap:'wrap',gap:8}}>
+        <div>
+          <div style={{fontSize:24,fontWeight:900,color:'var(--text-primary)',letterSpacing:'-.01em'}}>Active Pass Tracker</div>
+          <div style={{fontSize:13,color:'var(--text-muted)',marginTop:3}}>Real-time view of who is allowed in the lot right now and which plates are out of compliance.</div>
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(340px, 1fr))',gap:16,alignItems:'start'}}>
+        {/* LEFT: Active passes */}
+        <div style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+            <div style={{fontSize:14,fontWeight:800,color:'#15803d',letterSpacing:'.04em',textTransform:'uppercase'}}>
+              Active Now
+            </div>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{activeColumn.length}</div>
+          </div>
+          {activeColumn.length === 0 ? (
+            <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
+              No active passes
+            </div>
+          ) : (
+            activeColumn.map(p => <PassCard key={p.id} p={p} kind="active" />)
+          )}
+        </div>
+
+        {/* RIGHT: Violations */}
+        <div style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+            <div style={{fontSize:14,fontWeight:800,color:'#dc2626',letterSpacing:'.04em',textTransform:'uppercase'}}>
+              Current Violations
+            </div>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{violationColumn.length}</div>
+          </div>
+          {violationColumn.length === 0 ? (
+            <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
+              No active violations
+            </div>
+          ) : (
+            violationColumn.map(p => <PassCard key={p.id} p={p} kind="violation" />)
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TruckParkingLog({ propertyId }) {
   const { addToast } = useToast();
   const [rows, setRows] = useState([]);
@@ -8497,6 +8851,13 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           })}
           {plates.length === 0 && <div className="pd-empty">No permanent plates yet</div>}
         </div>
+      )}
+
+      {/* Active Pass Tracker — primary on-site plate-matching surface for
+          truck plazas. Above the historical log so it's the first thing the
+          eye sees on entry. */}
+      {isTruckPlaza && (
+        <ErrorBoundary label="active pass tracker"><ActivePassTracker propertyId={propertyId} /></ErrorBoundary>
       )}
 
       {/* Temporary Passes / Truck Parking Log — variant depends on property_type */}
