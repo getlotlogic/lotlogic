@@ -7559,13 +7559,25 @@ function TruckParkingLog({ propertyId }) {
   );
   const inputStyle = {padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit'};
   const labelStyle = {display:'flex',flexDirection:'column',gap:5,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase'};
+  // "expired" passes are functionally violations — the registration window
+  // closed but the vehicle may still be in the lot. Tow operators on-site
+  // need to scan plates on cars against this list, so we relabel + paint
+  // these cards loud red and surface them at the top of the grid.
   const statusColor = {
     active: '#4ade80',
-    expired: 'var(--text-muted)',
-    cancelled: '#ef4444',
-    revoked: '#ef4444',
+    expired: '#ef4444',
+    cancelled: 'var(--text-muted)',
+    revoked: 'var(--text-muted)',
     towed: '#f59e0b',
   };
+  const statusDisplay = {
+    active: 'Active',
+    expired: 'Violation',
+    cancelled: 'Cancelled',
+    revoked: 'Revoked',
+    towed: 'Towed',
+  };
+  const statusOrder = { expired: 0, active: 1, towed: 2, cancelled: 3, revoked: 4 };
   const fmtDateTime = (s) => s ? new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
   const placardSwatch = (color) => {
     if (!color) return null;
@@ -7580,6 +7592,19 @@ function TruckParkingLog({ propertyId }) {
     acc[s] = (acc[s] || 0) + 1;
     return acc;
   }, {});
+
+  // Sort: violations (expired) first, then active, then others. Within a
+  // status group, newest first so recent violations bubble to the top.
+  const sortedRows = [...rows].sort((a, b) => {
+    const sa = a.status || 'active';
+    const sb = b.status || 'active';
+    const oa = statusOrder[sa] ?? 99;
+    const ob = statusOrder[sb] ?? 99;
+    if (oa !== ob) return oa - ob;
+    const ta = new Date(a.created_at || 0).getTime();
+    const tb = new Date(b.created_at || 0).getTime();
+    return tb - ta;
+  });
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
@@ -7600,8 +7625,8 @@ function TruckParkingLog({ propertyId }) {
         <label style={labelStyle}>Status
           <select value={pendingFilters.status} onChange={e => setPendingFilters({...pendingFilters, status: e.target.value})} style={inputStyle}>
             <option value="">All</option>
+            <option value="expired">Violations</option>
             <option value="active">Active</option>
-            <option value="expired">Expired</option>
             <option value="cancelled">Cancelled</option>
             <option value="towed">Towed</option>
           </select>
@@ -7629,11 +7654,22 @@ function TruckParkingLog({ propertyId }) {
             </div>
             {Object.keys(statusCounts).length > 0 && (
               <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                {['active','expired','cancelled','towed','revoked'].filter(s => statusCounts[s]).map(s => {
+                {['expired','active','towed','cancelled','revoked'].filter(s => statusCounts[s]).map(s => {
                   const color = statusColor[s] || 'var(--text-muted)';
+                  const isViolation = s === 'expired';
                   return (
-                    <span key={s} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:20,background:`${color}1a`,color,border:`1px solid ${color}40`,textTransform:'uppercase',letterSpacing:'.04em'}}>
-                      {statusCounts[s]} {s}
+                    <span key={s} style={{
+                      fontSize: isViolation ? 13 : 11,
+                      fontWeight: 800,
+                      padding: isViolation ? '5px 12px' : '4px 10px',
+                      borderRadius:20,
+                      background:`${color}${isViolation ? '26' : '1a'}`,
+                      color,
+                      border:`1px solid ${color}${isViolation ? '66' : '40'}`,
+                      textTransform:'uppercase',
+                      letterSpacing:'.04em',
+                    }}>
+                      {statusCounts[s]} {statusDisplay[s] || s}{statusCounts[s] !== 1 && s === 'expired' ? 's' : ''}
                     </span>
                   );
                 })}
@@ -7657,10 +7693,11 @@ function TruckParkingLog({ propertyId }) {
         </div>
       ) : (
         <div style={{display:'grid',gap:10,gridTemplateColumns:'repeat(auto-fill, minmax(380px, 1fr))'}}>
-          {rows.map(r => {
+          {sortedRows.map(r => {
             const s = r.status || 'active';
             const color = statusColor[s] || 'var(--text-muted)';
             const isActive = s === 'active';
+            const isViolation = s === 'expired';
             const driverLine = [r.visitor_name, r.company_name].filter(Boolean).join(' · ') || '—';
             const detailChips = [];
             if (r.parking_spot) detailChips.push({ label: 'Spot', value: r.parking_spot });
@@ -7668,20 +7705,28 @@ function TruckParkingLog({ propertyId }) {
             if (r.placard_color) detailChips.push({ label: 'Placard', value: r.placard_color, swatch: true });
             return (
               <div key={r.id} style={{
-                background:'var(--bg-card)',
-                border:`1px solid var(--border)`,
-                borderLeft:`3px solid ${color}`,
+                background: isViolation ? 'rgba(239,68,68,.06)' : 'var(--bg-card)',
+                border:`1px solid ${isViolation ? 'rgba(239,68,68,.4)' : 'var(--border)'}`,
+                borderLeft:`${isViolation ? 6 : 3}px solid ${color}`,
                 borderRadius:12,
-                padding:14,
+                padding: isViolation ? 18 : 14,
                 display:'flex',
                 flexDirection:'column',
-                gap:10,
+                gap: isViolation ? 14 : 10,
                 position:'relative',
+                boxShadow: isViolation ? '0 2px 18px rgba(239,68,68,.08)' : 'none',
               }}>
                 {/* Top row: plate + status pill */}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}}>
                   <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,minWidth:0}}>
-                    <div style={{fontSize:18,fontWeight:800,fontFamily:"'Courier New',monospace",letterSpacing:'.06em',color:'var(--text-primary)'}}>
+                    <div style={{
+                      fontSize: isViolation ? 32 : 18,
+                      fontWeight: 900,
+                      fontFamily:"'Courier New',monospace",
+                      letterSpacing: isViolation ? '.08em' : '.06em',
+                      color: isViolation ? '#ef4444' : 'var(--text-primary)',
+                      lineHeight: 1.05,
+                    }}>
                       {r.plate_text}
                     </div>
                     {r.usdot_number && (
@@ -7691,7 +7736,19 @@ function TruckParkingLog({ propertyId }) {
                       <span title={`MC ${r.mc_number}`} style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#60a5fa',border:'1px solid rgba(59,130,246,.3)'}}>MC {r.mc_number}</span>
                     )}
                   </div>
-                  <span aria-label={`Pass status: ${s}`} style={{fontSize:10,fontWeight:700,padding:'4px 10px',borderRadius:20,background:`${color}1a`,color,border:`1px solid ${color}40`,textTransform:'uppercase',letterSpacing:'.06em',whiteSpace:'nowrap',flexShrink:0}}>{s}</span>
+                  <span aria-label={`Pass status: ${statusDisplay[s] || s}`} style={{
+                    fontSize: isViolation ? 13 : 10,
+                    fontWeight: 800,
+                    padding: isViolation ? '5px 12px' : '4px 10px',
+                    borderRadius:20,
+                    background:`${color}${isViolation ? '26' : '1a'}`,
+                    color,
+                    border:`1px solid ${color}${isViolation ? '66' : '40'}`,
+                    textTransform:'uppercase',
+                    letterSpacing:'.06em',
+                    whiteSpace:'nowrap',
+                    flexShrink:0,
+                  }}>{statusDisplay[s] || s}</span>
                 </div>
 
                 {/* Driver / company / phone line */}
