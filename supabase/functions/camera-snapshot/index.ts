@@ -135,7 +135,7 @@ Deno.serve(async (req: Request) => {
 
     const cameraQ = await db
       .from("alpr_cameras")
-      .select("id,property_id,api_key,active,orientation,usdot_active_until,position_order")
+      .select("id,property_id,api_key,active,orientation,usdot_active_until,position_order,gate_id")
       .eq("api_key", cameraApiKey)
       .eq("active", true)
       .limit(1);
@@ -673,6 +673,56 @@ Deno.serve(async (req: Request) => {
       if (upRes.ok) imageUrl = upRes.url;
       else imageError = upRes.error;
 
+      // ─── Direction inference from position_order + read-pair sequence ──
+      // Each gate has TWO cameras with opposite-facing lenses. They both
+      // catch every transit (front and back plates), so each physical pass
+      // produces two reads at the same gate within seconds. Direction comes
+      // from which camera fires FIRST in the pair, scoped to position_order:
+      //
+      //   position_order = 1  → road-side camera (boundary)
+      //   position_order = 2  → lot-side camera (interior)
+      //
+      //   First-of-pair at position 1  → vehicle hit boundary first → ARRIVING
+      //   First-of-pair at position 2  → vehicle hit interior first → LEAVING
+      //
+      // The SECOND read of a pair is a confirmation, not a new event — it
+      // gets logged with event_type='paired_read' and skips session state
+      // mutation. This eliminates the phantom-session problem the old
+      // orientation-flag model created (entry+exit firing seconds apart on
+      // a single physical pass).
+      //
+      // Legacy fallback: if position_order is null (camera not configured
+      // for the gate-pair model), fall back to the camera.orientation flag.
+      let isPairedRead = false;
+      let direction: "entry" | "exit";
+      if (camera.position_order != null) {
+        const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
+        const { data: priorAtGate } = await db
+          .from("plate_events")
+          .select("camera_id, alpr_cameras!inner(gate_id, position_order)")
+          .eq("property_id", camera.property_id)
+          .eq("normalized_plate", normalized)
+          .neq("camera_id", camera.id)
+          .gt("created_at", cutoff)
+          .order("created_at", { ascending: false })
+          .limit(1);
+        const priorRow = (priorAtGate ?? [])[0];
+        const priorGateId = priorRow?.alpr_cameras?.gate_id ?? null;
+        const cameraGateId = (camera as { gate_id?: string | null }).gate_id ?? null;
+        if (priorRow && cameraGateId && priorGateId === cameraGateId) {
+          // Same plate, same gate, within DIRECTION_WINDOW → second of a pair.
+          isPairedRead = true;
+          direction = "entry"; // Placeholder; not used for session decisions on paired reads.
+        } else {
+          // First-of-pair (or single read). Direction from position_order:
+          //   1 = road-side first → arriving
+          //   2 = lot-side first  → leaving
+          direction = camera.position_order === 1 ? "entry" : "exit";
+        }
+      } else {
+        direction = camera.orientation === "exit" ? "exit" : "entry";
+      }
+
       const baseEventRow = (sessionId: string | null, matchStatus: string) => ({
         camera_id: camera.id,
         property_id: camera.property_id,
@@ -682,7 +732,7 @@ Deno.serve(async (req: Request) => {
         image_url: imageUrl,
         image_sha256: imageHashes.sha256,
         image_dhash: imageHashes.dhash,
-        event_type: camera.orientation === "exit" ? "exit" : "entry",
+        event_type: isPairedRead ? "paired_read" : direction,
         // USDOT/MC from ParkPow on the same frame — attached regardless of
         // whether PR also returned a plate. Null when ParkPow found nothing
         // or synthesized this plate itself (in which case plate_text already
@@ -711,7 +761,22 @@ Deno.serve(async (req: Request) => {
         session_id: sessionId,
       });
 
-      if (camera.orientation === "entry") {
+      // Paired-read second-of-pair: log the event tied to the existing open
+      // session if any, but skip session state mutation. The first-of-pair
+      // already opened or closed the session. Without this guard, each
+      // physical transit would fire entry+exit seconds apart and break
+      // session state.
+      if (isPairedRead) {
+        const openSession = await findOpenSession(db, camera.property_id, normalized);
+        const ev = await db.from("plate_events")
+          .insert(baseEventRow(openSession?.id ?? null, "unmatched"))
+          .select("id").single();
+        if (ev.error) throw ev.error;
+        eventCount++;
+        continue;
+      }
+
+      if (direction === "entry") {
         // --- ENTRY ---
         // Use fuzzy match so OCR drift across frames (HD4183 vs VHD4183 vs
         // HZ4183 — all the same physical truck) collapses onto one session
@@ -821,7 +886,7 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
-      if (camera.orientation === "exit") {
+      if (direction === "exit") {
         // --- EXIT ---
         const openSession = await findOpenSession(db, camera.property_id, normalized);
         if (!openSession) {
@@ -876,8 +941,9 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
-      // Defensive: shouldn't happen because CHECK constraint allows only two values.
-      console.warn(`unexpected camera.orientation=${camera.orientation}; skipping`);
+      // Defensive: direction is always 'entry' or 'exit' from the inference
+      // above; this branch is unreachable.
+      console.warn(`unexpected direction=${direction}; skipping`);
     }
 
     return json(200, {
@@ -886,7 +952,9 @@ Deno.serve(async (req: Request) => {
       violations: violationCount,  // always 0 in the new model; violations fire from cron
       dedup_suppressed: dedupCount,
       source: extracted.source,
-      orientation: camera.orientation,
+      orientation: camera.orientation, // legacy — kept for log/dashboard parity
+      position_order: camera.position_order,
+      gate_id: (camera as { gate_id?: string | null }).gate_id ?? null,
     });
   } catch (err) {
     console.error("camera-snapshot unhandled error:", err instanceof Error ? err.stack ?? err.message : err);
