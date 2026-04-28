@@ -8302,8 +8302,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </div>
       )}
 
-      {/* Permanent Plates (label switches to "Permanent Plates (Employees)" on truck plazas) */}
-      {(() => {
+      {/* Permanent Plates (Employees) — owner-only. Partners only need to
+          see the truck parking log; the employee allowlist is internal
+          property management. */}
+      {isOwner && (() => {
         const pendingCount = plates.filter(p => p.status === 'pending').length;
         const label = isTruckPlaza ? 'Permanent Plates (Employees)' : 'Permanent Plates';
         return (
@@ -8318,7 +8320,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         );
       })()}
 
-      {showAddPlate && (
+      {isOwner && showAddPlate && (
         <form onSubmit={handleAddPlate} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:12,display:'flex',flexDirection:'column',gap:8}}>
           <input value={newPlate.plate_text} onChange={e => setNewPlate({...newPlate, plate_text: e.target.value})} placeholder="Plate (e.g. ABC1234)" required style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14,textTransform:'uppercase'}} />
           <input value={newPlate.holder_name} onChange={e => setNewPlate({...newPlate, holder_name: e.target.value})} placeholder={isTruckPlaza ? 'Employee name' : 'Holder name'} style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
@@ -8343,38 +8345,40 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </form>
       )}
 
-      <div style={{display:'flex',flexDirection:'column',gap:6}}>
-        {plates.map(p => {
-          const mySightings = events.filter(e => e.resident_plate_id === p.id);
-          return (
-            <div key={p.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',flexDirection:'column',gap:8}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
-                <div style={{minWidth:0,flex:1}}>
-                  <span style={{fontWeight:800,fontSize:15,color:'var(--text-primary)',letterSpacing:'.03em',fontFamily:"'Courier New',monospace"}}>{p.plate_text}</span>
-                  {p.status === 'pending' && <span style={{fontSize:10,fontWeight:700,color:'#fbbf24',background:'rgba(251,191,36,.12)',padding:'2px 6px',borderRadius:4,marginLeft:6,border:'1px solid rgba(251,191,36,.25)'}}>PENDING</span>}
-                  {p.usdot_number && (
-                    <span title={`USDOT ${p.usdot_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>USDOT</span>
-                  )}
-                  {p.mc_number && (
-                    <span title={`MC ${p.mc_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC#</span>
-                  )}
-                  <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>{p.holder_name || ''}{p.vehicle_type ? ` · ${p.vehicle_type}` : ''}{p.phone ? ` · ${p.phone}` : ''}</span>
-                  {p.usdot_number && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>USDOT {p.usdot_number}</div>}
-                  {p.mc_number && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>MC {p.mc_number}</div>}
+      {isOwner && (
+        <div style={{display:'flex',flexDirection:'column',gap:6}}>
+          {plates.map(p => {
+            const mySightings = events.filter(e => e.resident_plate_id === p.id);
+            return (
+              <div key={p.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',flexDirection:'column',gap:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+                  <div style={{minWidth:0,flex:1}}>
+                    <span style={{fontWeight:800,fontSize:15,color:'var(--text-primary)',letterSpacing:'.03em',fontFamily:"'Courier New',monospace"}}>{p.plate_text}</span>
+                    {p.status === 'pending' && <span style={{fontSize:10,fontWeight:700,color:'#fbbf24',background:'rgba(251,191,36,.12)',padding:'2px 6px',borderRadius:4,marginLeft:6,border:'1px solid rgba(251,191,36,.25)'}}>PENDING</span>}
+                    {p.usdot_number && (
+                      <span title={`USDOT ${p.usdot_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>USDOT</span>
+                    )}
+                    {p.mc_number && (
+                      <span title={`MC ${p.mc_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC#</span>
+                    )}
+                    <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>{p.holder_name || ''}{p.vehicle_type ? ` · ${p.vehicle_type}` : ''}{p.phone ? ` · ${p.phone}` : ''}</span>
+                    {p.usdot_number && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>USDOT {p.usdot_number}</div>}
+                    {p.mc_number && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>MC {p.mc_number}</div>}
+                  </div>
+                  <div style={{display:'flex',gap:6,flexShrink:0}}>
+                    {p.status === 'pending' && (
+                      <button onClick={() => handleApprovePlate(p.id)} style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Approve</button>
+                    )}
+                    <button onClick={() => handleRemovePlate(p.id)} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>Remove</button>
+                  </div>
                 </div>
-                <div style={{display:'flex',gap:6,flexShrink:0}}>
-                  {p.status === 'pending' && (
-                    <button onClick={() => handleApprovePlate(p.id)} style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Approve</button>
-                  )}
-                  <button onClick={() => handleRemovePlate(p.id)} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>Remove</button>
-                </div>
+                <SightingStrip sightings={mySightings} cameras={cameras} nowTick={nowTick} />
               </div>
-              <SightingStrip sightings={mySightings} cameras={cameras} nowTick={nowTick} />
-            </div>
-          );
-        })}
-        {plates.length === 0 && <div className="pd-empty">No permanent plates yet</div>}
-      </div>
+            );
+          })}
+          {plates.length === 0 && <div className="pd-empty">No permanent plates yet</div>}
+        </div>
+      )}
 
       {/* Temporary Passes / Truck Parking Log — variant depends on property_type */}
       {isTruckPlaza ? (
