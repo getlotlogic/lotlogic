@@ -2401,6 +2401,29 @@ const db = {
     }
     return [];
   },
+  // Fetch unique enforcement partners linked to an owner — across BOTH the
+  // legacy `lots.partner_id` field AND the new `properties.tow_company_id`
+  // field. Charlotte-style ALPR-only properties have no `lots` row, so the
+  // lots-only path misses them.
+  async getPartnersForOwner(ownerId) {
+    if (!supabase || !ownerId) return [];
+    const [lotsRes, propsRes] = await Promise.all([
+      supabase.from('lots').select('partner_id').eq('owner_id', ownerId).eq('active', true),
+      supabase.from('properties').select('tow_company_id').eq('owner_id', ownerId),
+    ]);
+    const ids = new Set([
+      ...((lotsRes.data || []).map(l => l.partner_id).filter(Boolean)),
+      ...((propsRes.data || []).map(p => p.tow_company_id).filter(Boolean)),
+    ]);
+    if (ids.size === 0) return [];
+    const { data, error } = await supabase
+      .from('enforcement_partners')
+      .select('*')
+      .in('id', [...ids])
+      .eq('active', true);
+    if (!error && data) return data;
+    return [];
+  },
   // ── Permits ────────────────────────────────────────────────
   async getPermits(lotId) {
     if (supabase) {
@@ -9246,9 +9269,11 @@ function App() {
       if (loadIdRef.current !== myId) return; // Stale call, discard
       setLots(lotsData);
 
-      // Fetch enforcement partners for owner's lots
+      // Fetch enforcement partners across both lots.partner_id and
+      // properties.tow_company_id so ALPR-only properties (no lots row)
+      // still surface their tow operator in the partner switcher.
       if (o._role === 'owner') {
-        db.getPartnersForLots(lotsData).then(p => setPartners(p)).catch(() => {});
+        db.getPartnersForOwner(o.id).then(p => setPartners(p)).catch(() => {});
       }
 
       const [states, violsArrays] = await Promise.all([
@@ -9514,12 +9539,10 @@ function App() {
     haptic('light');
   }
 
-  // Owner-side partners list — only the ones assigned to one of this owner's lots.
-  const ownPartners = (() => {
-    if (!isOwner) return [];
-    const assignedPartnerIds = new Set(lots.map(l => l.partner_id).filter(Boolean));
-    return partners.filter(p => assignedPartnerIds.has(p.id));
-  })();
+  // Owner-side partners list — `partners` is already scoped to this owner
+  // by getPartnersForOwner (covers both lots.partner_id and
+  // properties.tow_company_id assignments). Just gate on role.
+  const ownPartners = isOwner ? partners : [];
 
   // Role-based navigation:
   // Owner:    Overview + Jobs + Lots + Earnings + Invoices + Account
