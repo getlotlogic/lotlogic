@@ -6822,7 +6822,7 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
               borderRadius:8, padding:'6px 12px', fontSize:12, fontWeight:700, cursor:'pointer',
               whiteSpace:'nowrap',
             }}>
-              View as Operator
+              View as Partner
             </button>
           </div>
 
@@ -9195,7 +9195,8 @@ function App() {
   const [violations, setViolations] = useState([]);
   const [alprViolations, setAlprViolations] = useState([]);
   const [partners, setPartners] = useState([]);
-  const [viewAs, setViewAs] = useState(null); // null = owner view, partner object = operator impersonation
+  const [viewAs, setViewAs] = useState(null); // null = owner view, partner object = partner-portal impersonation
+  const [partnerSwitcherOpen, setPartnerSwitcherOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -9221,7 +9222,7 @@ function App() {
   const isOwner = owner?._role === 'owner' && !viewAs;
   const isOperator = owner?._role === 'partner' || !!viewAs;
 
-  // When viewing as operator, filter lots/violations to that partner's lots
+  // When viewing as a partner, filter lots/violations to that partner's lots
   const effectiveUser = viewAs ? { ...viewAs, _role: 'partner' } : owner;
   const viewAsLotIds = viewAs ? lots.filter(l => l.partner_id === viewAs.id).map(l => l.id) : null;
   const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
@@ -9499,17 +9500,26 @@ function App() {
   const pending = effectiveViolations.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status)).length;
   const alprPending = alprViolations.filter(v => v.status === 'pending').length;
 
-  // Handle "View as Operator" from Overview page
+  // Handle "View as Partner" — entry point from Overview cards or header switcher
   function handleViewAs(partner) {
     setViewAs(partner);
+    setPartnerSwitcherOpen(false);
     setTab('jobs');
     haptic('medium');
   }
   function exitViewAs() {
     setViewAs(null);
+    setPartnerSwitcherOpen(false);
     setTab('overview');
     haptic('light');
   }
+
+  // Owner-side partners list — only the ones assigned to one of this owner's lots.
+  const ownPartners = (() => {
+    if (!isOwner) return [];
+    const assignedPartnerIds = new Set(lots.map(l => l.partner_id).filter(Boolean));
+    return partners.filter(p => assignedPartnerIds.has(p.id));
+  })();
 
   // Role-based navigation:
   // Owner:    Overview + Jobs + Lots + Earnings + Invoices + Account
@@ -9572,12 +9582,76 @@ function App() {
               <span>{online ? (supabase ? 'Live' : 'Online') : 'Offline'}</span>
             </div>
           )}
+          {isOwner && ownPartners.length > 0 && (
+            <div style={{position:'relative'}}>
+              <button
+                onClick={() => setPartnerSwitcherOpen(o => !o)}
+                aria-haspopup="menu"
+                aria-expanded={partnerSwitcherOpen}
+                title="Open one of your partners' portals"
+                style={{
+                  background:'rgba(167,139,250,.12)', color:'#a78bfa',
+                  border:'1px solid rgba(167,139,250,.3)', borderRadius:8,
+                  padding:'6px 10px', fontSize:12, fontWeight:700,
+                  cursor:'pointer', whiteSpace:'nowrap',
+                  display:'inline-flex', alignItems:'center', gap:6,
+                }}
+              >
+                View as Partner
+                <span style={{fontSize:10, opacity:.7}}>▾</span>
+              </button>
+              {partnerSwitcherOpen && (
+                <>
+                  <div
+                    onClick={() => setPartnerSwitcherOpen(false)}
+                    style={{position:'fixed', inset:0, zIndex:90}}
+                    aria-hidden="true"
+                  />
+                  <div
+                    role="menu"
+                    style={{
+                      position:'absolute', top:'calc(100% + 6px)', right:0, zIndex:91,
+                      background:'var(--bg-card)', border:'1px solid var(--border)',
+                      borderRadius:10, minWidth:240, maxWidth:320,
+                      boxShadow:'0 10px 30px rgba(0,0,0,.35)', padding:6,
+                    }}
+                  >
+                    <div style={{
+                      fontSize:10, fontWeight:700, color:'var(--text-faint)',
+                      textTransform:'uppercase', letterSpacing:'.05em',
+                      padding:'8px 10px 4px',
+                    }}>
+                      Open partner portal
+                    </div>
+                    {ownPartners.map(p => (
+                      <button
+                        key={p.id}
+                        role="menuitem"
+                        onClick={() => handleViewAs(p)}
+                        style={{
+                          display:'block', width:'100%', textAlign:'left',
+                          background:'transparent', color:'var(--text-primary)',
+                          border:'none', borderRadius:6, padding:'8px 10px',
+                          fontSize:13, fontWeight:600, cursor:'pointer',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,.06)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <div>{p.company_name || p.contact_name}</div>
+                        {p.email && <div style={{fontSize:11, color:'var(--text-faint)', marginTop:2}}>{p.email}</div>}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <div className="header-name" title={owner.business_name || owner.contact_name}>{owner.business_name || owner.contact_name}</div>
         </div>
       </header>
 
       <main id="main-content" className="page-content" role="main">
-        {/* "Viewing as operator" banner */}
+        {/* "Viewing as Partner" banner */}
         {viewAs && (
           <div style={{
             background:'linear-gradient(90deg, rgba(167,139,250,.15), rgba(59,130,246,.1))',
@@ -9585,7 +9659,7 @@ function App() {
             padding:'10px 14px', display:'flex', alignItems:'center', justifyContent:'space-between',
           }}>
             <div>
-              <div style={{fontSize:12, fontWeight:700, color:'#a78bfa', textTransform:'uppercase', letterSpacing:'.05em'}}>Viewing as Operator</div>
+              <div style={{fontSize:12, fontWeight:700, color:'#a78bfa', textTransform:'uppercase', letterSpacing:'.05em'}}>Viewing as Partner</div>
               <div style={{fontSize:14, fontWeight:800, color:'var(--text-primary)', marginTop:2}}>{viewAs.company_name || viewAs.contact_name}</div>
             </div>
             <button onClick={exitViewAs} style={{
