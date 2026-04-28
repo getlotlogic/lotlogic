@@ -7892,9 +7892,9 @@ function ActivePassTracker({ propertyId }) {
         boxShadow: '0 2px 14px rgba(0,0,0,.06)',
       }}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10,flexWrap:'wrap'}}>
-          <div style={{display:'flex',alignItems:'baseline',flexWrap:'wrap',gap:8,minWidth:0}}>
+          <div style={{display:'flex',alignItems:'baseline',flexWrap:'wrap',gap:10,minWidth:0}}>
             <div style={{
-              fontSize: 'clamp(30px, 5.5vw, 52px)',
+              fontSize: 'clamp(38px, 7vw, 64px)',
               fontWeight: 900,
               fontFamily: "'Courier New', ui-monospace, monospace",
               letterSpacing: '.08em',
@@ -8064,43 +8064,29 @@ function ActivePassTracker({ propertyId }) {
         </div>
       </div>
 
-      {/* Forced two-column layout — side by side on every viewport.
-          Operator wants the active list and the violations list to live
-          next to each other, never stacked. Cards inside flex to fit. */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,alignItems:'start'}}>
-        {/* LEFT: Active passes */}
-        <div style={{display:'flex',flexDirection:'column',gap:12,minWidth:0}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
-            <div style={{fontSize:14,fontWeight:800,color:'#15803d',letterSpacing:'.04em',textTransform:'uppercase'}}>
-              Active Now
-            </div>
-            <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{activeColumn.length}</div>
+      {/* Active-only single-column layout for now. The Violations column
+          is intentionally hidden until the underlying data is clean —
+          the alpr_violations + visitor_passes fetches still run so the
+          column can be re-enabled with one render-side change.
+          Future violation types when we turn it back on:
+            • Overstay          (visitor_passes that ran past valid_until)
+            • No Registration   (alpr_violations open rows — no pass at all)
+            • 24h Cooldown      (insert blocked by enforce_truck_plaza_cooldown
+                                 — driver tried to re-register too soon) */}
+      <div style={{display:'flex',flexDirection:'column',gap:12,minWidth:0}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+          <div style={{fontSize:14,fontWeight:800,color:'#15803d',letterSpacing:'.04em',textTransform:'uppercase'}}>
+            Active Now
           </div>
-          {activeColumn.length === 0 ? (
-            <div style={{padding:24,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
-              No active passes
-            </div>
-          ) : (
-            activeColumn.map(p => <ActivePassCard key={p.id} p={p} />)
-          )}
+          <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{activeColumn.length}</div>
         </div>
-
-        {/* RIGHT: Violations — collapsed by default, click to expand */}
-        <div style={{display:'flex',flexDirection:'column',gap:12,minWidth:0}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
-            <div style={{fontSize:14,fontWeight:800,color:'#dc2626',letterSpacing:'.04em',textTransform:'uppercase'}}>
-              Current Violations
-            </div>
-            <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{violationColumn.length}</div>
+        {activeColumn.length === 0 ? (
+          <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
+            No active passes
           </div>
-          {violationColumn.length === 0 ? (
-            <div style={{padding:24,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
-              No active violations
-            </div>
-          ) : (
-            violationColumn.map(item => <ViolationCard key={item.key} item={item} />)
-          )}
-        </div>
+        ) : (
+          activeColumn.map(p => <ActivePassCard key={p.id} p={p} />)
+        )}
       </div>
     </div>
   );
