@@ -6925,6 +6925,119 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
 }
 
 // ── Account / Settings page ────────────────────────────────────
+function PartnerFeeEditor({ user }) {
+  // Partner-side edit of their own tow_fee + boot_fee. Mirrors the
+  // TowTruckPlatesEditor pattern — direct Supabase update on the partner's
+  // own row. RLS allows self-row writes; the backend's PATCH /partners/{id}
+  // would also work but the dashboard already does direct-Supabase elsewhere.
+  const [towFee, setTowFee] = React.useState(user?.tow_fee ?? 100);
+  const [bootFee, setBootFee] = React.useState(user?.boot_fee ?? 0);
+  const [saving, setSaving] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [saved, setSaved] = React.useState(false);
+
+  // Re-sync when the user prop changes (parent refetched).
+  React.useEffect(() => {
+    setTowFee(user?.tow_fee ?? 100);
+    setBootFee(user?.boot_fee ?? 0);
+  }, [user?.id, user?.tow_fee, user?.boot_fee]);
+
+  const dirty = towFee !== (user?.tow_fee ?? 100) || bootFee !== (user?.boot_fee ?? 0);
+
+  async function save() {
+    setSaving(true); setErr(''); setSaved(false);
+    try {
+      if (!supabase || !user?.id) throw new Error('Not authenticated');
+      const tow = Number(towFee);
+      const boot = Number(bootFee);
+      if (!Number.isFinite(tow) || tow < 0) throw new Error('Tow fee must be a non-negative number');
+      if (!Number.isFinite(boot) || boot < 0) throw new Error('Boot fee must be a non-negative number');
+      const { error } = await supabase
+        .from('enforcement_partners')
+        .update({ tow_fee: Math.round(tow), boot_fee: Math.round(boot) })
+        .eq('id', user.id);
+      if (error) throw new Error(error.message);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+    } catch (e) {
+      setErr(e.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputStyle = {
+    padding: '10px 12px', background: 'var(--bg-inset)', border: '1px solid var(--border)',
+    borderRadius: 8, color: 'var(--text-primary)', fontSize: 16, fontWeight: 700,
+    width: 110, fontFamily: 'inherit', textAlign: 'right',
+  };
+
+  return (
+    <div className="settings-section">
+      <div className="settings-section-title">Your fees</div>
+      <div className="settings-row">
+        <div className="settings-row-info">
+          <div className="settings-row-label">Tow Fee</div>
+          <div className="settings-row-desc">What you bill per tow</div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:6,color:'var(--text-faint)',fontSize:15}}>
+          $
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="1"
+            value={towFee}
+            onChange={(e) => setTowFee(e.target.value)}
+            disabled={saving}
+            aria-label="Tow fee in dollars"
+            style={inputStyle}
+          />
+        </div>
+      </div>
+      <div className="settings-row">
+        <div className="settings-row-info">
+          <div className="settings-row-label">Boot Fee</div>
+          <div className="settings-row-desc">What you bill per boot. Set to 0 if you don't boot.</div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:6,color:'var(--text-faint)',fontSize:15}}>
+          $
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="1"
+            value={bootFee}
+            onChange={(e) => setBootFee(e.target.value)}
+            disabled={saving}
+            aria-label="Boot fee in dollars"
+            style={inputStyle}
+          />
+        </div>
+      </div>
+      {(dirty || err || saved) && (
+        <div style={{display:'flex',justifyContent:'flex-end',alignItems:'center',gap:10,marginTop:10}}>
+          {err && <span style={{color:'#ef4444',fontSize:12,fontWeight:600}}>{err}</span>}
+          {saved && <span style={{color:'#4ade80',fontSize:12,fontWeight:700}}>✓ Saved</span>}
+          {dirty && (
+            <button
+              onClick={save}
+              disabled={saving}
+              style={{
+                background: saving ? 'rgba(74,222,128,.2)' : '#4ade80',
+                color: saving ? '#4ade80' : '#0b3d20',
+                border: 'none', borderRadius: 8, padding: '9px 16px',
+                fontSize: 13, fontWeight: 700, cursor: saving ? 'progress' : 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >{saving ? 'Saving…' : 'Save'}</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) {
   const isOwner = user._role === 'owner';
   const [notifyPrefs, setNotifyPrefs] = useState(() => NotifyManager.getPrefs());
@@ -6992,9 +7105,11 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
         )}
       </div>
 
-      {/* Fee schedule is owner-only — exposes business-side fields
-          (boot_fee, tow_fee, revenue_share) that partners must NEVER see.
-          Same intent as hiding the Earnings/Billing tabs. */}
+      {/* Partner self-service fee schedule — editable Tow Fee + Boot Fee
+          (their own rates, what they bill the vehicle owner per action).
+          revenue_share stays hidden — that's LotLogic's platform cut and
+          part of the partner agreement, not a self-service field. */}
+      {!isOwner && <PartnerFeeEditor user={user} />}
 
       {/* Tow-truck plates — enforcement partners only. Used by the tow-confirm
           edge function to match camera sightings against partner trucks. */}
