@@ -54,9 +54,11 @@ const OPENALPR_TIMEOUT_MS = Number(Deno.env.get("OPENALPR_TIMEOUT_MS") ?? "4000"
 // infer direction of travel. Entries → no action. Exits → set session's
 // exit_hinted_at so cron closes it on a short buffer instead of the
 // default 2h buffer.
-// 20 sec (raised from 10 on 2026-04-29 after timing-distribution audit:
-// only 68% of paired firings landed inside 10s; 20s captures 80%).
-const DIRECTION_WINDOW_SECONDS = Number(Deno.env.get("DIRECTION_WINDOW_SECONDS") ?? "20");
+// 10 sec — Gabe's call. Tight enough that a second vehicle's motion
+// event won't accidentally pair with the first vehicle's plate read.
+// Adjacent gate cameras fire within seconds of one another for the same
+// physical traversal; longer windows just admit noise.
+const DIRECTION_WINDOW_SECONDS = Number(Deno.env.get("DIRECTION_WINDOW_SECONDS") ?? "10");
 // Silence-gap exit signal. Detection on an open session after this
 // much idle time is treated as the vehicle passing through the throat
 // again — i.e. exiting. Entrance cameras only fire at throats, so a
@@ -157,14 +159,6 @@ Deno.serve(async (req: Request) => {
     // Compute image hashes (sha256 + dhash). Stored on plate_events for
     // forensics / future use only — no live dedup logic depends on them.
     const imageHashes = await computeImageHashes(extracted.bytes);
-
-    // Reverse depth-pair: every road-side camera firing — even motion-only
-    // (no OCR, no plate match) — flags exit on any session whose last
-    // session-bearing event was on the paired interior camera within
-    // DIRECTION_WINDOW_SECONDS. Catches the back-of-flatbed-no-OCR case
-    // that the forward depth-pair branch in inferDirection misses.
-    // No-op for interior cameras and properties without gate_id wiring.
-    await maybeFlagReverseExit(db, camera, new Date());
 
     // Hoisted sidecar read — available outside the sidecar block so the
     // pre-PR delay+recheck below can use it. Set when sidecar finds any
@@ -1374,63 +1368,6 @@ async function inferDirection(
     const gapSec = Math.round((now.getTime() - new Date(session.last_detected_at).getTime()) / 1000);
     console.log(`exit inferred (silence-gap) for session ${sessionId}: gap=${gapSec}s`);
   }
-}
-
-// Reverse depth-pair: motion-only fire on the road-side camera as exit
-// signal. The lot-side (position_order=2) camera reads the rear plate
-// of an exiting truck and updates an open session's last_detected_at.
-// Seconds later the road-side (position_order=1) camera fires motion
-// but rarely OCRs the rear of a flatbed (back of vehicle, glare, dirt).
-// The forward depth-pair branch in inferDirection requires a fresh
-// plate read on the current camera, so motion-only road-side firings
-// never connect back to the lot-side session — and the truck looks
-// "stuck" inside the property until the silence-gap branch fires
-// minutes later.
-//
-// This helper runs on EVERY camera firing on a road-side camera and
-// hints exit on any session whose most recent session-bearing event
-// was on the paired interior camera within DIRECTION_WINDOW_SECONDS.
-// gate_id scopes to one gate so south-side traffic doesn't trigger on
-// north-side firings.
-async function maybeFlagReverseExit(
-  // deno-lint-ignore no-explicit-any
-  db: any,
-  camera: { id: string; property_id: string; position_order: number | null; gate_id?: string | null },
-  now: Date,
-): Promise<void> {
-  if (camera.position_order !== 1) return;
-  const gateId = camera.gate_id ?? null;
-  if (!gateId) return;
-
-  const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
-  const { data: pairedRows, error } = await db
-    .from("plate_events")
-    .select("session_id, alpr_cameras!inner(gate_id, position_order)")
-    .eq("property_id", camera.property_id)
-    .eq("alpr_cameras.gate_id", gateId)
-    .eq("alpr_cameras.position_order", 2)
-    .not("session_id", "is", null)
-    .gt("created_at", cutoff)
-    .order("created_at", { ascending: false })
-    .limit(1);
-  if (error) { console.warn("reverse-pair query failed:", error.message); return; }
-  const sessionId = (pairedRows ?? [])[0]?.session_id;
-  if (!sessionId) return;
-
-  const { data: sess } = await db
-    .from("plate_sessions")
-    .select("state, exit_hinted_at")
-    .eq("id", sessionId)
-    .maybeSingle();
-  if (!sess) return;
-  if (sess.exit_hinted_at) return;
-  if (!["grace", "registered", "resident"].includes(sess.state)) return;
-
-  const upd = await db.from("plate_sessions")
-    .update({ exit_hinted_at: now.toISOString() })
-    .eq("id", sessionId);
-  if (upd.error) console.warn("reverse-pair exit_hinted_at update failed:", upd.error.message);
-  else console.log(`exit inferred (reverse-pair, motion-only) session=${sessionId} gate=${gateId}`);
 }
 
 function isPlausiblePlate(r: PrResult): boolean {
