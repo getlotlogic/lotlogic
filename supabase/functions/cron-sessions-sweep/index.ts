@@ -374,18 +374,32 @@ async function closeExpired(): Promise<number> {
 
   let closed = 0;
   for (const s of sessions) {
-    if (!s.violation_id) continue;
-    const { data: v, error: vErr } = await db
-      .from("alpr_violations")
-      .select("status, tow_confirmed_at")
-      .eq("id", s.violation_id)
-      .single();
-    if (vErr) throw vErr;
-    if (!v) continue;
-
-    const resolved = v.tow_confirmed_at !== null ||
-      (v.status && ["resolved", "dismissed", "no_tow"].includes(v.status));
-    if (!resolved) continue;
+    let towConfirmed = false;
+    if (s.violation_id) {
+      const { data: v, error: vErr } = await db
+        .from("alpr_violations")
+        .select("status, tow_confirmed_at")
+        .eq("id", s.violation_id)
+        .single();
+      if (vErr) throw vErr;
+      if (!v) {
+        // Violation row referenced by this session has been deleted from
+        // the dashboard. Fall through to close the session as orphan
+        // (treat same as no violation_id).
+      } else {
+        const resolved = v.tow_confirmed_at !== null ||
+          (v.status && ["resolved", "dismissed", "no_tow"].includes(v.status));
+        if (!resolved) continue;
+        towConfirmed = v.tow_confirmed_at !== null;
+      }
+    }
+    // If we get here the session is either:
+    //   (a) violation resolved (action_taken set or tow confirmed), or
+    //   (b) violation_id IS NULL (operator deleted the violation from
+    //       the dashboard, ON DELETE SET NULL nulled the back-ref), or
+    //   (c) violation row vanished mid-flight.
+    // All three should close the session — leaving expired+exited_at=null
+    // forever just clutters the state machine.
 
     // Same null-fallback as closeRegistered. last_detected_at can be null
     // on older sessions (pre-migration-018 inserts) — if we pass null into
@@ -394,7 +408,7 @@ async function closeExpired(): Promise<number> {
     const exitedAt = s.last_detected_at ?? new Date().toISOString();
     const sUpd = await db.from("plate_sessions")
       .update({
-        state: v.tow_confirmed_at ? "closed_post_violation" : "closed_clean",
+        state: towConfirmed ? "closed_post_violation" : "closed_clean",
         exited_at: exitedAt,
         updated_at: new Date().toISOString(),
       })
