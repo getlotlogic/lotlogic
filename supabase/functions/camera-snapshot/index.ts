@@ -399,6 +399,7 @@ Deno.serve(async (req: Request) => {
             // silent failure for hours; never again.
             if (diag.error) console.error(`diagnostic insert failed: ${diag.error.message}`);
           }
+          await maybePairedMotionExitHint(db, camera, new Date());
           return json(200, {
             ok: true,
             events: 0,
@@ -647,6 +648,7 @@ Deno.serve(async (req: Request) => {
         });
         if (diag.error) console.error(`pr-no-plate diagnostic insert failed: ${diag.error.message}`);
       }
+      await maybePairedMotionExitHint(db, camera, new Date());
       return json(200, {
         ok: true,
         events: 0,
@@ -1401,6 +1403,62 @@ async function inferDirection(
     const gapSec = Math.round((now.getTime() - new Date(session.last_detected_at).getTime()) / 1000);
     console.log(`exit inferred (silence-gap) for session ${sessionId}: gap=${gapSec}s`);
   }
+}
+
+// Forward-pair exit hint: fires from motion-only camera events (no OCR'd
+// plate of their own). When this camera fires AND the paired camera at
+// the same gate had a recent OCR'd plate read with an open session,
+// that's a paired transit that the OCR'd-loop direction inference
+// missed (because the OCR fired before the paired motion). Set
+// exit_hinted_at so cron closes the session cleanly.
+//
+// Bounded by the 6-min PARKING_BUFFER to avoid closing a session
+// that's still in its entry-pair window. gate_id-scoped. Idempotent.
+async function maybePairedMotionExitHint(
+  // deno-lint-ignore no-explicit-any
+  db: any,
+  camera: { id: string; property_id: string; gate_id?: string | null },
+  now: Date,
+): Promise<void> {
+  if (!camera.gate_id) return;
+
+  const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
+  const { data: priorReads, error } = await db
+    .from("plate_events")
+    .select("session_id, alpr_cameras!inner(gate_id)")
+    .eq("property_id", camera.property_id)
+    .neq("camera_id", camera.id)
+    .eq("alpr_cameras.gate_id", camera.gate_id)
+    .neq("plate_text", "")
+    .not("session_id", "is", null)
+    .gt("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) { console.warn("paired-motion exit hint query failed:", error.message); return; }
+
+  const sessionId = (priorReads ?? [])[0]?.session_id;
+  if (!sessionId) return;
+
+  const { data: sess } = await db
+    .from("plate_sessions")
+    .select("state, entered_at, exit_hinted_at")
+    .eq("id", sessionId)
+    .maybeSingle();
+  if (!sess) return;
+  if (!["grace", "registered", "resident"].includes(sess.state)) return;
+  if (sess.exit_hinted_at) return;
+  if (!sess.entered_at) return;
+
+  const ageMs = now.getTime() - new Date(sess.entered_at).getTime();
+  const PARKING_BUFFER_MS = 6 * 60 * 1000;
+  if (ageMs < PARKING_BUFFER_MS) return;
+
+  const upd = await db.from("plate_sessions")
+    .update({ exit_hinted_at: now.toISOString() })
+    .eq("id", sessionId)
+    .is("exit_hinted_at", null);
+  if (upd.error) console.warn("paired-motion exit hint update failed:", upd.error.message);
+  else console.log(`exit inferred (paired-motion) session=${sessionId} gate=${camera.gate_id}`);
 }
 
 function isPlausiblePlate(r: PrResult): boolean {
