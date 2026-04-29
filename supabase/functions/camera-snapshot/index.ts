@@ -140,7 +140,7 @@ Deno.serve(async (req: Request) => {
 
     const cameraQ = await db
       .from("alpr_cameras")
-      .select("id,property_id,api_key,active,orientation,usdot_active_until,position_order,gate_id")
+      .select("id,property_id,api_key,active,orientation,usdot_active_until,position_order,gate_id,entry_order,exit_order")
       .eq("api_key", cameraApiKey)
       .eq("active", true)
       .limit(1);
@@ -224,7 +224,7 @@ Deno.serve(async (req: Request) => {
           });
           if (ev.error) throw ev.error;
 
-          await inferDirection(db, sidecarSession.id, camera.property_id, sidecarSession.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
+          await inferDirection(db, sidecarSession.id, camera.property_id, sidecarSession.normalized_plate, camera.id, nowDate);
           await db.from("plate_sessions")
             .update({ last_detected_at: nowDate.toISOString() })
             .eq("id", sidecarSession.id);
@@ -518,7 +518,7 @@ Deno.serve(async (req: Request) => {
           session_id: recheckSession.id,
         });
         if (ev.error) throw ev.error;
-        await inferDirection(db, recheckSession.id, camera.property_id, recheckSession.normalized_plate, camera.id, camera.position_order ?? null, nowDate);
+        await inferDirection(db, recheckSession.id, camera.property_id, recheckSession.normalized_plate, camera.id, nowDate);
         await db.from("plate_sessions")
           .update({ last_detected_at: nowDate.toISOString() })
           .eq("id", recheckSession.id);
@@ -695,21 +695,18 @@ Deno.serve(async (req: Request) => {
       // orientation-flag model created (entry+exit firing seconds apart on
       // a single physical pass).
       //
-      // Legacy fallback: if position_order is null (camera not configured
-      // for the gate-pair model), fall back to the camera.orientation flag.
+      // Legacy fallback: if entry_order/exit_order are null (camera not
+      // configured for the gate-pair model), fall back to camera.orientation.
       let isPairedRead = false;
       let direction: "entry" | "exit";
       const cameraGateId = (camera as { gate_id?: string | null }).gate_id ?? null;
-      if (camera.position_order != null) {
+      const cameraEntryOrder = (camera as { entry_order?: number | null }).entry_order ?? null;
+      const cameraExitOrder  = (camera as { exit_order?:  number | null }).exit_order  ?? null;
+      if (cameraEntryOrder != null || cameraExitOrder != null) {
         const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
-        // Pull ANY recent event on the OTHER camera at the same gate within
-        // the window — including empty-scene rejections. We can't rely on
-        // both cameras reading the plate (OCR drift, partial occlusion);
-        // motion firing at both cameras in the right temporal order is
-        // enough to infer entry vs exit.
         let priorQ = db
           .from("plate_events")
-          .select("camera_id, alpr_cameras!inner(gate_id, position_order)")
+          .select("camera_id, alpr_cameras!inner(gate_id, entry_order, exit_order)")
           .eq("property_id", camera.property_id)
           .neq("camera_id", camera.id)
           .gt("created_at", cutoff)
@@ -722,21 +719,27 @@ Deno.serve(async (req: Request) => {
         const priorRow = (priorAtGate ?? [])[0];
         if (priorRow) {
           isPairedRead = true;
-          // Determine direction from position_order ordering of the prior
-          // read vs this read. priorOrder > current = lot-side fired
-          // first = vehicle moving outward = EXIT. Otherwise entry.
-          const priorOrder = (priorRow as { alpr_cameras?: { position_order?: number | null } })
-            .alpr_cameras?.position_order ?? null;
-          if (priorOrder != null && priorOrder > camera.position_order) {
+          // Direction comes from comparing per-direction firing order. The
+          // prior fired before us; if its entry_order is lower than ours,
+          // we're the second-of-pair on an entry. Same logic for exit_order.
+          const priorEntryOrder = (priorRow as { alpr_cameras?: { entry_order?: number | null } })
+            .alpr_cameras?.entry_order ?? null;
+          const priorExitOrder  = (priorRow as { alpr_cameras?: { exit_order?:  number | null } })
+            .alpr_cameras?.exit_order  ?? null;
+          if (priorEntryOrder != null && cameraEntryOrder != null && priorEntryOrder < cameraEntryOrder) {
+            direction = "entry";
+          } else if (priorExitOrder != null && cameraExitOrder != null && priorExitOrder < cameraExitOrder) {
             direction = "exit";
           } else {
-            direction = "entry";
+            direction = cameraEntryOrder === 1 ? "entry" : "exit";
           }
         } else {
-          // First-of-pair (or single read). Direction from position_order:
-          //   1 = road-side first → arriving
-          //   2 = lot-side first  → leaving
-          direction = camera.position_order === 1 ? "entry" : "exit";
+          // First-of-pair (or single read). Direction from this camera's
+          // own first-position: entry_order=1 → fires first on entries,
+          // exit_order=1 → fires first on exits.
+          if (cameraEntryOrder === 1) direction = "entry";
+          else if (cameraExitOrder === 1) direction = "exit";
+          else direction = "entry";
         }
       } else {
         direction = camera.orientation === "exit" ? "exit" : "entry";
@@ -848,7 +851,7 @@ Deno.serve(async (req: Request) => {
           // Direction inference MUST run before the last_detected_at bump so
           // the silence-gap branch inside inferDirection sees the prior
           // timestamp.
-          await inferDirection(db, openSession.id, camera.property_id, normalized, camera.id, camera.position_order ?? null, now);
+          await inferDirection(db, openSession.id, camera.property_id, normalized, camera.id, now);
           // Bump session activity so the cron's silence-gap exit logic
           // sees recent presence.
           await db.from("plate_sessions")
@@ -912,7 +915,7 @@ Deno.serve(async (req: Request) => {
         }
 
         // Direction inference across cameras.
-        await inferDirection(db, sess.id, camera.property_id, normalized, camera.id, camera.position_order ?? null, now);
+        await inferDirection(db, sess.id, camera.property_id, normalized, camera.id, now);
 
         // Note: held plates open state='grace'. The cron will issue a tow at
         // t+15m because the backend blocks registration during the hold.
@@ -1013,6 +1016,8 @@ Deno.serve(async (req: Request) => {
       source: extracted.source,
       orientation: camera.orientation, // legacy — kept for log/dashboard parity
       position_order: camera.position_order,
+      entry_order: (camera as { entry_order?: number | null }).entry_order ?? null,
+      exit_order:  (camera as { exit_order?:  number | null }).exit_order  ?? null,
       gate_id: (camera as { gate_id?: string | null }).gate_id ?? null,
     });
   } catch (err) {
@@ -1239,7 +1244,6 @@ async function inferDirection(
   propertyId: string,
   normalizedPlate: string,
   currentCameraId: string,
-  currentPositionOrder: number | null,
   now: Date,
 ): Promise<void> {
   const { data: session, error: sErr } = await db
@@ -1251,54 +1255,41 @@ async function inferDirection(
   if (!session) return;
 
   // ─── Branch 1: cross-camera depth-pair, scoped to a single gate ─────
-  // With bidirectional cameras paired at each gate (road-side + lot-side),
-  // every transit fires both cameras within seconds. The TIME ORDER tells
-  // us direction:
-  //   prior order > current order → vehicle moved interior→boundary = EXIT
-  //   prior order < current order → vehicle moved boundary→interior = ENTRY
-  //
-  // gate_id scopes the prior-event query so a south-gate detection doesn't
-  // falsely match against a recent north-gate event (vehicle that just
-  // transited the lot). On properties without gate_id populated, falls
-  // back to property-wide pair detection (legacy behavior).
-  if (currentPositionOrder != null) {
-    const { data: cur } = await db
-      .from("alpr_cameras")
-      .select("gate_id")
-      .eq("id", currentCameraId)
-      .maybeSingle();
-    const currentGateId = cur?.gate_id ?? null;
+  // Direction comes from comparing per-direction firing order. If the
+  // paired camera fired before this one and its exit_order is lower, the
+  // pair is an exit (paired camera fires first on exits, this one second).
+  // gate_id scopes the prior-event query.
+  const { data: cur } = await db
+    .from("alpr_cameras")
+    .select("gate_id, entry_order, exit_order")
+    .eq("id", currentCameraId)
+    .maybeSingle();
+  const currentGateId = cur?.gate_id ?? null;
+  const currentEntryOrder: number | null = cur?.entry_order ?? null;
+  const currentExitOrder:  number | null = cur?.exit_order  ?? null;
 
+  if (currentEntryOrder != null || currentExitOrder != null) {
     const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
-    // Direction inference uses TIMING, not plate match: if motion fired
-    // on the paired camera at the same gate within the window AND in the
-    // right position order, that's the depth-pair signal. Plate identity
-    // comes from THIS camera's read; the paired camera doesn't need to
-    // have read it (OCR drift / occlusion / empty-scene rejection are
-    // all fine — the motion event itself is the signal).
     let priorQ = db
       .from("plate_events")
-      .select("camera_id, created_at, alpr_cameras!inner(position_order, gate_id)")
+      .select("camera_id, created_at, alpr_cameras!inner(entry_order, exit_order, gate_id)")
       .eq("property_id", propertyId)
       .neq("camera_id", currentCameraId)
       .gt("created_at", cutoff)
       .order("created_at", { ascending: false })
       .limit(1);
-    // Scope to the same gate when both sides are on a known gate.
-    if (currentGateId) {
-      priorQ = priorQ.eq("alpr_cameras.gate_id", currentGateId);
-    }
+    if (currentGateId) priorQ = priorQ.eq("alpr_cameras.gate_id", currentGateId);
     const { data: prior, error } = await priorQ;
     if (error) console.warn("inferDirection depth-pair query failed:", error.message);
     else {
       const first = (prior ?? [])[0];
-      const priorOrder = first?.alpr_cameras?.position_order;
-      if (priorOrder != null && priorOrder > currentPositionOrder) {
+      const priorExit  = first?.alpr_cameras?.exit_order;
+      if (priorExit != null && currentExitOrder != null && priorExit < currentExitOrder) {
         const upd = await db.from("plate_sessions")
           .update({ exit_hinted_at: now.toISOString() })
           .eq("id", sessionId);
         if (upd.error) console.warn("exit_hinted_at depth-pair update failed:", upd.error.message);
-        else console.log(`exit inferred (depth-pair) for session ${sessionId} on gate ${currentGateId ?? 'any'}: ${priorOrder} → ${currentPositionOrder}`);
+        else console.log(`exit inferred (depth-pair) for session ${sessionId} on gate ${currentGateId ?? 'any'}: prior_exit_order=${priorExit} cur_exit_order=${currentExitOrder}`);
         return;
       }
     }
@@ -1338,22 +1329,14 @@ async function inferDirection(
     return;
   }
 
-  // Exit signal requires a STREET-FACING (position_order=1) camera.
-  // Interior cameras (position_order=2) see transit movement — a vehicle
-  // that entered south, fueled at Shell, and is now crossing the interior
-  // on its way to truck parking should NOT be treated as exiting. Only
-  // detections at the property boundary cameras count as exit signals.
-  //
-  // Real-world flow this guards against:
-  //   t=0   Camera 6 entry (session opens)
-  //   t=20  truck at Shell fuel pumps (invisible)
-  //   t=20  Camera 5 fires (truck heading east into parking)
-  //     → WITHOUT this guard: silence-gap sees 20-min gap, closes
-  //       session clean, truck then parks illegally with no session.
-  //     → WITH this guard: Camera 5 is order=2, silence-gap skipped,
-  //       session remains open through grace → violation fires at 30m.
-  if (currentPositionOrder !== 1) {
-    console.log(`silence-gap skipped (non-exit camera) session=${sessionId} current_order=${currentPositionOrder}`);
+  // Exit signal requires a boundary camera — one whose FOV looks toward
+  // the street, not into the lot. These are the cameras that fire FIRST
+  // on entries (entry_order=1): their lens is angled toward the street,
+  // so they don't see internal lot motion. Interior cameras
+  // (entry_order=2) face into the lot and would falsely trigger on
+  // transit between fuel pumps and parking.
+  if (currentEntryOrder !== 1) {
+    console.log(`silence-gap skipped (non-boundary camera) session=${sessionId} entry_order=${currentEntryOrder}`);
     return;
   }
 
