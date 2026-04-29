@@ -937,6 +937,8 @@
       display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;
     }
     @media (max-width: 520px) { .pd-qr-grid { grid-template-columns: 1fr; } }
+    /* Hide desktop-only keyboard-shortcut hints on phones */
+    @media (max-width: 600px), (pointer: coarse) { .kbd-hint { display: none; } }
     .pd-qr-tile {
       background: var(--bg-card); border: 1px solid var(--border);
       border-radius: 12px; padding: 14px; display: flex; flex-direction: column;
@@ -9860,15 +9862,27 @@ function TrainingPage({ user, isOwner }) {
     }
   }
 
+  // Pointer-coordinate extractor — works for mouse, pen, and touch. Some
+  // browsers don't fire pointerevents on react-controlled inputs, so we
+  // fall back to clientX/Y on the synthetic event itself.
+  function _pointerXY(e, rect) {
+    const t = e.touches?.[0] || e.changedTouches?.[0] || e;
+    const cx = t.clientX ?? 0;
+    const cy = t.clientY ?? 0;
+    return { x: cx - rect.left, y: cy - rect.top };
+  }
   function onCanvasMouseDown(e) {
     const rect = e.currentTarget.getBoundingClientRect();
-    setBboxStart({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-    setBboxEnd({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const p = _pointerXY(e, rect);
+    setBboxStart(p);
+    setBboxEnd(p);
   }
   function onCanvasMouseMove(e) {
     if (!bboxStart) return;
+    // Block scroll while drawing the box on touch.
+    if (e.cancelable && (e.touches || e.type === 'touchmove')) e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();
-    setBboxEnd({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setBboxEnd(_pointerXY(e, rect));
   }
   function onCanvasMouseUp() {
     if (!bboxStart || !bboxEnd) return;
@@ -10045,30 +10059,33 @@ function TrainingPage({ user, isOwner }) {
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:14}}>
             <button onClick={() => label(verdictA.id)} disabled={submitting}
               style={{
-                background: verdictA.color, color:'#fff', border:'none', borderRadius:10,
-                padding:'14px 12px', fontSize:14, fontWeight:800, cursor:submitting?'wait':'pointer',
+                background: verdictA.color, color:'#fff', border:'none', borderRadius:12,
+                padding:'18px 12px', fontSize:15, fontWeight:800, cursor:submitting?'wait':'pointer',
+                minHeight:60, lineHeight:1.2,
               }}>
-              {verdictA.label} <span style={{opacity:.6, fontSize:11, fontWeight:600}}>(1)</span>
+              {verdictA.label}
             </button>
             <button onClick={() => label(verdictB.id)} disabled={submitting}
               style={{
-                background: verdictB.color, color:'#fff', border:'none', borderRadius:10,
-                padding:'14px 12px', fontSize:14, fontWeight:800, cursor:submitting?'wait':'pointer',
+                background: verdictB.color, color:'#fff', border:'none', borderRadius:12,
+                padding:'18px 12px', fontSize:15, fontWeight:800, cursor:submitting?'wait':'pointer',
+                minHeight:60, lineHeight:1.2,
               }}>
-              {verdictB.label} <span style={{opacity:.6, fontSize:11, fontWeight:600}}>(2)</span>
+              {verdictB.label}
             </button>
           </div>
           <button onClick={skipFrame} disabled={submitting}
             style={{
-              width:'100%', marginTop:8,
+              width:'100%', marginTop:10,
               background:'rgba(100,116,139,.15)', color:'var(--text-secondary)',
-              border:'1px solid rgba(100,116,139,.3)', borderRadius:10,
-              padding:'10px 12px', fontSize:13, fontWeight:600, cursor:submitting?'wait':'pointer',
+              border:'1px solid rgba(100,116,139,.3)', borderRadius:12,
+              padding:'14px 12px', fontSize:14, fontWeight:700, cursor:submitting?'wait':'pointer',
+              minHeight:48,
             }}>
-            Skip — don't show me this one again <span style={{opacity:.6, fontSize:11}}>(S)</span>
+            Skip — don't show me this one again
           </button>
-          <div style={{marginTop:8, textAlign:'center', fontSize:11, color:'var(--text-secondary)'}}>
-            {idx + 1} of {queue.length} • Press 1 / 2 to label, S to skip
+          <div style={{marginTop:10, textAlign:'center', fontSize:11, color:'var(--text-secondary)'}}>
+            {idx + 1} of {queue.length} <span className="kbd-hint" style={{opacity:.7}}>· Desktop: 1 / 2 to label, S to skip</span>
           </div>
         </div>
       )}
@@ -10083,13 +10100,17 @@ function TrainingPage({ user, isOwner }) {
             <div style={{marginBottom:10}}>
               <h3 style={{margin:0, fontSize:16, fontWeight:800}}>Draw a box around the plate</h3>
               <p style={{margin:'4px 0 0', fontSize:12, color:'var(--text-secondary)'}}>
-                Click and drag to mark the plate region. Used to fine-tune the detector on Charlotte frames. Skip if no plate visible or you don't have time.
+                Drag your finger across the plate to mark its region. Used to fine-tune the detector on Charlotte frames. Skip if no plate visible or you don't have time.
               </p>
             </div>
-            <div style={{position:'relative', userSelect:'none', cursor:'crosshair'}}
+            <div style={{position:'relative', userSelect:'none', WebkitUserSelect:'none', WebkitTouchCallout:'none', cursor:'crosshair', touchAction:'none'}}
               onMouseDown={onCanvasMouseDown}
               onMouseMove={onCanvasMouseMove}
               onMouseUp={onCanvasMouseUp}
+              onTouchStart={onCanvasMouseDown}
+              onTouchMove={onCanvasMouseMove}
+              onTouchEnd={onCanvasMouseUp}
+              onTouchCancel={() => { if (bboxStart && bboxEnd) onCanvasMouseUp(); }}
               onMouseLeave={() => {
                 // If the cursor leaves the canvas mid-drag, COMMIT the
                 // box (treat it like mouseup at the last position) rather
@@ -10115,12 +10136,26 @@ function TrainingPage({ user, isOwner }) {
                 }} />
               )}
             </div>
-            <div style={{display:'flex', gap:10, marginTop:12, justifyContent:'flex-end'}}>
+            <div style={{display:'flex', gap:10, marginTop:12, flexWrap:'wrap'}}>
               <button onClick={skipBbox} style={{
-                background:'transparent', color:'var(--text-secondary)',
-                border:'1px solid var(--border)', borderRadius:8,
-                padding:'8px 16px', fontSize:13, fontWeight:700, cursor:'pointer',
+                flex:'1 1 120px', background:'transparent', color:'var(--text-secondary)',
+                border:'1px solid var(--border)', borderRadius:10,
+                padding:'12px 16px', fontSize:14, fontWeight:700, cursor:'pointer', minHeight:48,
               }}>Skip</button>
+              {bboxStart && bboxEnd && (
+                <button onClick={() => { setBboxStart(null); setBboxEnd(null); }} style={{
+                  flex:'1 1 120px', background:'rgba(100,116,139,.15)', color:'var(--text-secondary)',
+                  border:'1px solid rgba(100,116,139,.3)', borderRadius:10,
+                  padding:'12px 16px', fontSize:14, fontWeight:700, cursor:'pointer', minHeight:48,
+                }}>Redraw</button>
+              )}
+              <button onClick={onCanvasMouseUp} disabled={!bboxStart || !bboxEnd} style={{
+                flex:'1 1 160px', background: bboxStart && bboxEnd ? '#FBBF24' : 'rgba(251,191,36,.25)',
+                color: bboxStart && bboxEnd ? '#1A1206' : '#FBBF24',
+                border:'none', borderRadius:10,
+                padding:'12px 16px', fontSize:14, fontWeight:800, cursor: bboxStart && bboxEnd ? 'pointer' : 'not-allowed',
+                letterSpacing:'.04em', minHeight:48,
+              }}>Save box</button>
             </div>
           </div>
         </div>
