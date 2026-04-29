@@ -9360,6 +9360,13 @@ function TrainingPage({ user, isOwner }) {
   const [mode, setMode] = useState('detected'); // start with what we have data for
   const [queue, setQueue] = useState([]);
   const [idx, setIdx] = useState(0);
+  // Refs let loadQueue read the operator's current position without
+  // having to be re-bound on every render — needed to preserve their
+  // place across Realtime / 15s polling refreshes.
+  const queueRef = useRef([]);
+  const idxRef = useRef(0);
+  React.useEffect(() => { queueRef.current = queue; }, [queue]);
+  React.useEffect(() => { idxRef.current = idx; }, [idx]);
   const [stats, setStats] = useState({ unlabeled: 0, labels: {} });
   const [propagationToast, setPropagationToast] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -9490,8 +9497,14 @@ function TrainingPage({ user, isOwner }) {
               },
             };
           });
+        const prevId = queueRef.current?.[idxRef.current]?.id;
         setQueue(items);
-        setIdx(0);
+        if (prevId) {
+          const newIdx = items.findIndex((r) => r.id === prevId);
+          setIdx(newIdx >= 0 ? newIdx : 0);
+        } else {
+          setIdx(0);
+        }
         setStats({ unlabeled: items.length, labels: {} });
         return;
       }
@@ -9519,8 +9532,20 @@ function TrainingPage({ user, isOwner }) {
       queueQ = applyModeFilter(queueQ);
       const { data: rows, error } = await queueQ;
       if (error) throw error;
-      setQueue(rows || []);
-      setIdx(0);
+      // Preserve the operator's current item across refresh. If the row
+      // they were looking at is still in the new queue, move them to its
+      // new index instead of yanking back to the top — the previous
+      // setIdx(0) was the source of the "screen jumps around" complaint
+      // when Realtime / 15s polling fired mid-review.
+      const prevId = queueRef.current?.[idxRef.current]?.id;
+      const next = rows || [];
+      setQueue(next);
+      if (prevId) {
+        const newIdx = next.findIndex((r) => r.id === prevId);
+        setIdx(newIdx >= 0 ? newIdx : 0);
+      } else {
+        setIdx(0);
+      }
 
       // Stats: separate count queries against the FULL table so the badge
       // reflects total work done, not just what's on the current page.
@@ -9961,16 +9986,20 @@ function TrainingPage({ user, isOwner }) {
           background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12,
           padding:14, maxWidth:680, margin:'0 auto',
         }}>
-          {cur.image_url ? (
-            <img src={cur.image_url} alt="Frame"
-              style={{width:'100%', borderRadius:8, display:'block', background:'#000'}}
-              onError={(e) => { e.target.style.opacity = 0.3; }}
-            />
-          ) : (
-            <div style={{padding:30, textAlign:'center', color:'var(--text-secondary)', background:'#111', borderRadius:8}}>
-              No image stored
-            </div>
-          )}
+          {/* Fixed 16:9 container keeps the layout from jumping each
+              time a new frame loads with different native dimensions. */}
+          <div style={{position:'relative', width:'100%', aspectRatio:'16 / 9', background:'#000', borderRadius:8, overflow:'hidden'}}>
+            {cur.image_url ? (
+              <img src={cur.image_url} alt="Frame"
+                style={{position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'contain', display:'block'}}
+                onError={(e) => { e.target.style.opacity = 0.3; }}
+              />
+            ) : (
+              <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-secondary)'}}>
+                No image stored
+              </div>
+            )}
+          </div>
 
           <div style={{marginTop:10, fontSize:12, color:'var(--text-secondary)', display:'grid', gridTemplateColumns:'auto 1fr', gap:'4px 12px'}}>
             {isFuzzy && cur._fuzzy && (
