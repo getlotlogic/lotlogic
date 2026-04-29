@@ -695,9 +695,17 @@ Deno.serve(async (req: Request) => {
       // for the gate-pair model), fall back to the camera.orientation flag.
       let isPairedRead = false;
       let direction: "entry" | "exit";
+      const cameraGateId = (camera as { gate_id?: string | null }).gate_id ?? null;
       if (camera.position_order != null) {
         const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
-        const { data: priorAtGate } = await db
+        // Push gate_id into the SQL predicate so we never get a cross-gate
+        // prior leaking through application-side checks. When the camera has
+        // no gate_id (legacy / mixed config), fall back to property-wide
+        // pairing (matches inferDirection's legacy behavior). Use the fuzzy
+        // OCR-confusion match in `findSimilarOpenSession` philosophy: pair
+        // by normalized_plate exact match here, but the second-of-pair
+        // session lookup below uses fuzzy.
+        let priorQ = db
           .from("plate_events")
           .select("camera_id, alpr_cameras!inner(gate_id, position_order)")
           .eq("property_id", camera.property_id)
@@ -706,11 +714,14 @@ Deno.serve(async (req: Request) => {
           .gt("created_at", cutoff)
           .order("created_at", { ascending: false })
           .limit(1);
+        if (cameraGateId) {
+          priorQ = priorQ.eq("alpr_cameras.gate_id", cameraGateId);
+        }
+        const { data: priorAtGate } = await priorQ;
         const priorRow = (priorAtGate ?? [])[0];
-        const priorGateId = priorRow?.alpr_cameras?.gate_id ?? null;
-        const cameraGateId = (camera as { gate_id?: string | null }).gate_id ?? null;
-        if (priorRow && cameraGateId && priorGateId === cameraGateId) {
-          // Same plate, same gate, within DIRECTION_WINDOW → second of a pair.
+        if (priorRow) {
+          // Same plate, same gate (or property-wide fallback when null), within
+          // DIRECTION_WINDOW → second of a pair.
           isPairedRead = true;
           direction = "entry"; // Placeholder; not used for session decisions on paired reads.
         } else {
@@ -766,14 +777,44 @@ Deno.serve(async (req: Request) => {
       // already opened or closed the session. Without this guard, each
       // physical transit would fire entry+exit seconds apart and break
       // session state.
+      //
+      // Use findSimilarOpenSession (not findOpenSession) so OCR drift
+      // between the two cameras at one gate (HD4183 vs VHD4183 vs HZ4183)
+      // doesn't orphan the second-of-pair event with session_id=null.
       if (isPairedRead) {
-        const openSession = await findOpenSession(db, camera.property_id, normalized);
+        const openSession = await findSimilarOpenSession(
+          db, camera.property_id, normalized, 120, frameUsdot, frameMc, imageHashes.dhash,
+        );
         const ev = await db.from("plate_events")
           .insert(baseEventRow(openSession?.id ?? null, "unmatched"))
           .select("id").single();
         if (ev.error) throw ev.error;
         eventCount++;
         continue;
+      }
+
+      // Defensive direction-flip: if we computed direction=exit (position-2
+      // first-of-pair) but no fuzzy-matching open session exists, flip to
+      // entry. Two scenarios produce this state:
+      //   1. Day-1 stray — a vehicle was on the lot before cameras went
+      //      live, and we're now seeing them leave for the first time.
+      //   2. Race condition — both gate cameras processed the same transit
+      //      concurrently and the position-2 read's paired-read query ran
+      //      before position-1's plate_events insert landed. The system
+      //      mis-classified position-2 as first-of-pair when it should have
+      //      been the second.
+      // Either way: the truck is HERE. Better to defensively open a session
+      // than to log a stray and miss enforcement. After Charlotte's first
+      // night with cameras live, scenario (1) becomes the dominant cause —
+      // revisit then if false-positive dispatches start showing up.
+      if (direction === "exit") {
+        const peekSession = await findSimilarOpenSession(
+          db, camera.property_id, normalized, 120, frameUsdot, frameMc, imageHashes.dhash,
+        );
+        if (!peekSession) {
+          console.log(`stray exit → defensive entry: plate=${normalized} property=${camera.property_id}`);
+          direction = "entry";
+        }
       }
 
       if (direction === "entry") {
@@ -888,14 +929,22 @@ Deno.serve(async (req: Request) => {
 
       if (direction === "exit") {
         // --- EXIT ---
-        const openSession = await findOpenSession(db, camera.property_id, normalized);
+        // Use fuzzy match so OCR drift between paired cameras (HD4183 vs
+        // VHD4183) doesn't strand the exit event with no session. The
+        // defensive direction-flip above also calls findSimilarOpenSession
+        // — if THAT returned a session, we're here for a real exit. If it
+        // returned nothing, direction was flipped to entry already.
+        const openSession = await findSimilarOpenSession(
+          db, camera.property_id, normalized, 120, frameUsdot, frameMc, imageHashes.dhash,
+        );
         if (!openSession) {
-          // Stray exit. Log an event with no session; alert via raw_data.
+          // Should be unreachable: defensive direction-flip would have
+          // caught no-session case above. Belt-and-suspenders log.
           const ev = await db.from("plate_events")
             .insert(baseEventRow(null, "unmatched"))
             .select().single();
           if (ev.error) throw ev.error;
-          console.warn(`stray exit: no open session for plate=${normalized} property=${camera.property_id}`);
+          console.warn(`stray exit (post-flip): no open session for plate=${normalized} property=${camera.property_id}`);
           continue;
         }
 
