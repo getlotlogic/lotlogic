@@ -2075,16 +2075,10 @@ const db = {
     const params = email ? `?email=${encodeURIComponent(email.trim().toLowerCase())}` : '';
     return apiFetch(`/owners${params}`);
   },
-  async getPartners(email) {
-    if (supabase) {
-      let q = supabase.from('enforcement_partners').select('*');
-      if (email) q = q.eq('email', email.trim().toLowerCase());
-      const { data, error } = await q;
-      if (!error && data) return data;
-    }
-    const params = email ? `?email=${encodeURIComponent(email.trim().toLowerCase())}` : '';
-    return apiFetch(`/partners${params}`);
-  },
+  // db.getPartners removed 2026-04-29 — was a SELECT * on
+  // enforcement_partners with no callers, leak surface for revenue_share
+  // / boot_fee / tow_fee / notes / quickbooks_customer_id if anyone added
+  // a caller. Safe self-fetch lives on the backend at GET /partners/me.
   async getLots(filter = {}) {
     if (supabase) {
       let q = supabase.from('lots').select('*').eq('active', true);
