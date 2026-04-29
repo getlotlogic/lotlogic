@@ -30,6 +30,12 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
+  const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
+  const provided = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!internalToken || provided !== internalToken) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL") ?? "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
@@ -54,6 +60,20 @@ serve(async (req) => {
   if (!plate_event_id || !property_id || !plate_text || !event_type || !seen_at) {
     return json({ error: "missing fields" }, 400);
   }
+
+  const { data: sourceEvent, error: sourceErr } = await supabase
+    .from("plate_events")
+    .select("id, property_id, plate_text, event_type")
+    .eq("id", plate_event_id)
+    .maybeSingle();
+  if (sourceErr) return json({ error: "source_event_query_failed", detail: sourceErr.message }, 500);
+  if (!sourceEvent || sourceEvent.property_id !== property_id) {
+    return json({ error: "source_event_mismatch" }, 400);
+  }
+  if (normalizePlate(sourceEvent.plate_text ?? "") !== normalizePlate(plate_text)) {
+    return json({ error: "source_event_plate_mismatch" }, 400);
+  }
+
   if (confidence < MIN_CONFIDENCE) {
     return json({ status: "skipped_low_confidence", confidence }, 200);
   }

@@ -100,6 +100,7 @@ const PR_LOCK_SECONDS = Number(Deno.env.get("PR_LOCK_SECONDS") ?? "180");
 const PRE_PR_DELAY_MS = Number(Deno.env.get("PRE_PR_DELAY_MS") ?? "1500");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const INTERNAL_TOKEN = Deno.env.get("INTERNAL_TOKEN") ?? "";
 const R2_ACCOUNT_ID = Deno.env.get("R2_ACCOUNT_ID")!;
 const R2_BUCKET_NAME = Deno.env.get("R2_BUCKET_NAME") ?? "parking-snapshots";
 const R2_ACCESS_KEY_ID = Deno.env.get("R2_ACCESS_KEY_ID")!;
@@ -1020,7 +1021,11 @@ async function callPlateRecognizer(
   if (!usingSdk && !PR_TOKEN) return { ok: false, status: 0, bodyText: "PLATE_RECOGNIZER_TOKEN missing (and PR_SDK_URL unset)" };
 
   const fd = new FormData();
-  fd.append("upload", new Blob([imageBytes], { type: "image/jpeg" }), "snap.jpg");
+  const imagePart = imageBytes.buffer.slice(
+    imageBytes.byteOffset,
+    imageBytes.byteOffset + imageBytes.byteLength,
+  ) as ArrayBuffer;
+  fd.append("upload", new Blob([imagePart], { type: "image/jpeg" }), "snap.jpg");
   fd.append("camera_id", cameraId);
 
   // Cloud API requires Authorization: Token <api_token>. The self-hosted SDK
@@ -1146,12 +1151,16 @@ function dispatchTowConfirm(body: {
   confidence: number;
   seen_at: string;
 }): void {
+  if (!INTERNAL_TOKEN) {
+    console.warn("tow-confirm dispatch skipped: INTERNAL_TOKEN not configured");
+    return;
+  }
   const url = `${SUPABASE_URL}/functions/v1/tow-confirm`;
   const task = fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      Authorization: `Bearer ${INTERNAL_TOKEN}`,
     },
     body: JSON.stringify(body),
   })

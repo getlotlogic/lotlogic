@@ -1,8 +1,22 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+}
+
 serve(async (req) => {
   try {
+    if (req.method !== "POST") return json(405, { error: "Method not allowed" });
+
+    const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
+    const provided = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    if (!internalToken || provided !== internalToken) {
+      return json(401, { error: "unauthorized" });
+    }
+
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
@@ -24,10 +38,7 @@ serve(async (req) => {
 
       if (batchErr) {
         console.error("Error expiring passes:", batchErr.message);
-        return new Response(
-          JSON.stringify({ error: "Failed to expire passes", detail: batchErr.message, expired_so_far: totalExpired }),
-          { status: 500, headers: { "Content-Type": "application/json" } }
-        );
+        return json(500, { error: "Failed to expire passes", detail: batchErr.message, expired_so_far: totalExpired });
       }
 
       totalExpired += batch?.length ?? 0;
@@ -35,17 +46,11 @@ serve(async (req) => {
       if (!batch || batch.length < batchSize) break;
     }
 
-    return new Response(
-      JSON.stringify({
-        expired_count: totalExpired,
-        checked_at: now,
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    return json(200, {
+      expired_count: totalExpired,
+      checked_at: now,
+    });
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: "Internal server error", detail: String(err) }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return json(500, { error: "Internal server error", detail: String(err) });
   }
 });

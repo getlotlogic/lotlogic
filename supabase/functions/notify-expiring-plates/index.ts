@@ -14,6 +14,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+}
+
 interface ResidentPlate {
   id: string;
   plate_text: string;
@@ -48,6 +52,15 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
   return true;
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function buildEmailHtml(resident: ResidentPlate, propertyName: string): string {
   const expDate = new Date(resident.plate_expiration).toLocaleDateString("en-US", {
     weekday: "long",
@@ -56,7 +69,10 @@ function buildEmailHtml(resident: ResidentPlate, propertyName: string): string {
     day: "numeric",
   });
 
-  const unitLabel = resident.unit_number ? `Unit ${resident.unit_number}` : "your unit";
+  const holderName = escapeHtml(resident.holder_name || "there");
+  const plateText = escapeHtml(resident.plate_text);
+  const safePropertyName = escapeHtml(propertyName);
+  const unitLabel = resident.unit_number ? `Unit ${escapeHtml(resident.unit_number)}` : "your unit";
 
   return `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 500px; margin: 0 auto; padding: 32px 24px; background: #f9fafb; border-radius: 12px;">
@@ -66,11 +82,11 @@ function buildEmailHtml(resident: ResidentPlate, propertyName: string): string {
       </div>
       <h2 style="font-size: 18px; color: #1a1a2e; text-align: center;">Vehicle Registration Expiring Soon</h2>
       <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-        Hi ${resident.holder_name || "there"},
+        Hi ${holderName},
       </p>
       <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-        Your vehicle registration for plate <strong style="color: #1a1a2e; font-family: monospace; letter-spacing: 0.05em;">${resident.plate_text}</strong>
-        at <strong>${propertyName}</strong> (${unitLabel}) is expiring on:
+        Your vehicle registration for plate <strong style="color: #1a1a2e; font-family: monospace; letter-spacing: 0.05em;">${plateText}</strong>
+        at <strong>${safePropertyName}</strong> (${unitLabel}) is expiring on:
       </p>
       <div style="text-align: center; margin: 20px 0;">
         <div style="display: inline-block; background: rgba(251,191,36,0.15); border: 1px solid rgba(251,191,36,0.3); color: #92400e; padding: 12px 24px; border-radius: 10px; font-size: 16px; font-weight: 700;">
@@ -89,8 +105,16 @@ function buildEmailHtml(resident: ResidentPlate, propertyName: string): string {
   `;
 }
 
-serve(async (_req: Request) => {
+serve(async (req: Request) => {
   try {
+    if (req.method !== "POST") return json(405, { error: "Method not allowed" });
+
+    const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
+    const provided = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    if (!internalToken || provided !== internalToken) {
+      return json(401, { error: "unauthorized" });
+    }
+
     const now = new Date();
     const in72h = new Date(now.getTime() + 72 * 60 * 60 * 1000);
     const todayStr = now.toISOString().split("T")[0];
@@ -108,17 +132,11 @@ serve(async (_req: Request) => {
 
     if (fetchErr) {
       console.error("Fetch error:", fetchErr);
-      return new Response(
-        JSON.stringify({ error: fetchErr.message }),
-        { status: 500, headers: JSON_HEADERS }
-      );
+      return json(500, { error: fetchErr.message });
     }
 
     if (!expiring || expiring.length === 0) {
-      return new Response(
-        JSON.stringify({ message: "No expiring plates to notify", count: 0 }),
-        { headers: JSON_HEADERS }
-      );
+      return json(200, { message: "No expiring plates to notify", count: 0 });
     }
 
     // Load property names for the email body
@@ -159,20 +177,14 @@ serve(async (_req: Request) => {
       }
     }
 
-    return new Response(
-      JSON.stringify({
-        message: `Notified ${sentCount} resident(s)`,
-        count: sentCount,
-        skipped: skippedCount,
-        dry_run: !RESEND_API_KEY,
-      }),
-      { headers: JSON_HEADERS }
-    );
+    return json(200, {
+      message: `Notified ${sentCount} resident(s)`,
+      count: sentCount,
+      skipped: skippedCount,
+      dry_run: !RESEND_API_KEY,
+    });
   } catch (err) {
     console.error("Unexpected error:", err);
-    return new Response(
-      JSON.stringify({ error: String(err) }),
-      { status: 500, headers: JSON_HEADERS }
-    );
+    return json(500, { error: String(err) });
   }
 });
