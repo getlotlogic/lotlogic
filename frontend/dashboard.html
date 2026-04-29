@@ -9589,6 +9589,45 @@ function TrainingPage({ user, isOwner }) {
   const [bboxStart, setBboxStart] = useState(null); // {x,y} in pixel space
   const [bboxEnd, setBboxEnd] = useState(null);
   const imgRef = React.useRef(null);
+  const canvasRef = React.useRef(null);
+
+  // Lock the page underneath while the bbox modal is open so iOS Safari
+  // doesn't scroll / pull-to-refresh / pinch-zoom while the user is
+  // dragging out a box. Restored on close.
+  React.useEffect(() => {
+    if (!bboxModal) return;
+    const prevHTML = document.documentElement.style.cssText;
+    const prevBody = document.body.style.cssText;
+    document.documentElement.style.overflow = 'hidden';
+    document.documentElement.style.touchAction = 'none';
+    document.body.style.overflow = 'hidden';
+    document.body.style.touchAction = 'none';
+    document.body.style.overscrollBehavior = 'none';
+    return () => {
+      document.documentElement.style.cssText = prevHTML;
+      document.body.style.cssText = prevBody;
+    };
+  }, [bboxModal]);
+
+  // React 17+ touch events are passive — preventDefault() inside an
+  // onTouchMove handler is silently ignored, so the page scrolls under
+  // the user's finger while they're trying to draw a box. Attach a
+  // native non-passive listener via the canvas ref so we can actually
+  // block the gesture.
+  React.useEffect(() => {
+    if (!bboxModal) return;
+    const el = canvasRef.current;
+    if (!el) return;
+    const block = (e) => { if (e.cancelable) e.preventDefault(); };
+    el.addEventListener('touchstart', block, { passive: false });
+    el.addEventListener('touchmove', block, { passive: false });
+    el.addEventListener('touchend', block, { passive: false });
+    return () => {
+      el.removeEventListener('touchstart', block);
+      el.removeEventListener('touchmove', block);
+      el.removeEventListener('touchend', block);
+    };
+  }, [bboxModal]);
 
   async function loadQueue() {
     setLoading(true);
@@ -10103,7 +10142,7 @@ function TrainingPage({ user, isOwner }) {
                 Drag your finger across the plate to mark its region. Used to fine-tune the detector on Charlotte frames. Skip if no plate visible or you don't have time.
               </p>
             </div>
-            <div style={{position:'relative', userSelect:'none', WebkitUserSelect:'none', WebkitTouchCallout:'none', cursor:'crosshair', touchAction:'none'}}
+            <div ref={canvasRef} style={{position:'relative', userSelect:'none', WebkitUserSelect:'none', WebkitTouchCallout:'none', cursor:'crosshair', touchAction:'none', overscrollBehavior:'none'}}
               onMouseDown={onCanvasMouseDown}
               onMouseMove={onCanvasMouseMove}
               onMouseUp={onCanvasMouseUp}
@@ -10121,7 +10160,7 @@ function TrainingPage({ user, isOwner }) {
               }}
             >
               <img ref={imgRef} src={bboxModal.event.image_url} alt="frame"
-                style={{width:'100%', display:'block', borderRadius:6, pointerEvents:'none'}}
+                style={{width:'100%', display:'block', borderRadius:6, pointerEvents:'none', WebkitUserDrag:'none', userSelect:'none', WebkitTouchCallout:'none', touchAction:'none'}}
                 draggable={false}
               />
               {bboxStart && bboxEnd && (
