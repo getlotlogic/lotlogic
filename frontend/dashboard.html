@@ -9639,10 +9639,12 @@ function TrainingPage({ user, isOwner }) {
       const isAggressive = aggressiveVerdicts.has(verdict);
       const curReason = cur.raw_data?._sidecar_reason;
       const curCreated = new Date(cur.created_at).getTime();
-      // Hard cap on propagation count. Lowered from 30 to 5 on
-      // 2026-04-29 alongside the time-window tightening.
-      const PROPAGATION_CAP = 5;
-      const PROPAGATION_WINDOW_MS = 30_000;
+      // Hard cap on propagation count. 30 → 5 → 1 (2026-04-29) — Gabe's
+      // queue kept getting scorched by bulk labels. With cap=1 and a
+      // 10-sec window, propagation only catches a true back-to-back twin
+      // frame; everything else stays in the queue for review.
+      const PROPAGATION_CAP = 1;
+      const PROPAGATION_WINDOW_MS = 10_000;
       const siblings = queue.filter((r, i) => {
         if (i === idx) return false;
         if (r.raw_data?.operator_label) return false;
