@@ -990,6 +990,28 @@ Deno.serve(async (req: Request) => {
           continue;
         }
 
+        // Parking maneuver buffer: a truck that just entered may back up
+        // into a spot, repositioning past the gate cameras within the
+        // first few minutes. Without this guard, that re-detection looks
+        // like an exit and closes the session — leaving the truck in the
+        // lot but invisible to enforcement, and noisy on the partner
+        // portal (sessions opening + closing in rapid succession).
+        // For the first PARKING_BUFFER_MINUTES after entry, exit reads
+        // are recorded but don't close the session.
+        const PARKING_BUFFER_MINUTES = 30;
+        const sessionAgeMs = openSession.entered_at
+          ? now.getTime() - new Date(openSession.entered_at).getTime()
+          : 0;
+        if (sessionAgeMs < PARKING_BUFFER_MINUTES * 60 * 1000) {
+          const ev = await db.from("plate_events")
+            .insert(baseEventRow(openSession.id, "unmatched"))
+            .select("id").single();
+          if (ev.error) throw ev.error;
+          eventCount++;
+          console.log(`exit suppressed (parking buffer): session=${openSession.id} age=${Math.round(sessionAgeMs/60000)}min plate=${normalized}`);
+          continue;
+        }
+
         // Record the exit event first, then close the session.
         const ev = await db.from("plate_events")
           .insert(baseEventRow(openSession.id, "unmatched"))
