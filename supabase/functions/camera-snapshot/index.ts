@@ -706,8 +706,7 @@ Deno.serve(async (req: Request) => {
         // the window — including empty-scene rejections. We can't rely on
         // both cameras reading the plate (OCR drift, partial occlusion);
         // motion firing at both cameras in the right temporal order is
-        // enough to infer entry vs exit. The plate is identified by THIS
-        // camera's read; the paired camera's role is direction confirmation.
+        // enough to infer entry vs exit.
         let priorQ = db
           .from("plate_events")
           .select("camera_id, alpr_cameras!inner(gate_id, position_order)")
@@ -722,10 +721,17 @@ Deno.serve(async (req: Request) => {
         const { data: priorAtGate } = await priorQ;
         const priorRow = (priorAtGate ?? [])[0];
         if (priorRow) {
-          // Same/similar plate, same gate (or property-wide fallback when
-          // null), within DIRECTION_WINDOW → second of a pair.
           isPairedRead = true;
-          direction = "entry"; // Placeholder; not used for session decisions on paired reads.
+          // Determine direction from position_order ordering of the prior
+          // read vs this read. priorOrder > current = lot-side fired
+          // first = vehicle moving outward = EXIT. Otherwise entry.
+          const priorOrder = (priorRow as { alpr_cameras?: { position_order?: number | null } })
+            .alpr_cameras?.position_order ?? null;
+          if (priorOrder != null && priorOrder > camera.position_order) {
+            direction = "exit";
+          } else {
+            direction = "entry";
+          }
         } else {
           // First-of-pair (or single read). Direction from position_order:
           //   1 = road-side first → arriving
@@ -783,7 +789,10 @@ Deno.serve(async (req: Request) => {
       // Use findSimilarOpenSession (not findOpenSession) so OCR drift
       // between the two cameras at one gate (HD4183 vs VHD4183 vs HZ4183)
       // doesn't orphan the second-of-pair event with session_id=null.
-      if (isPairedRead) {
+      // Entry pair (road-side fired first, this is lot-side second-of-pair):
+      // the FIRST-of-pair already created the session. Just append the event
+      // and continue — no session work.
+      if (isPairedRead && direction === "entry") {
         const openSession = await findSimilarOpenSession(
           db, camera.property_id, normalized, 120, frameUsdot, frameMc, imageHashes.dhash,
         );
@@ -795,27 +804,27 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
-      // Defensive direction-flip: if we computed direction=exit (position-2
-      // first-of-pair) but no fuzzy-matching open session exists, flip to
-      // entry. Two scenarios produce this state:
-      //   1. Day-1 stray — a vehicle was on the lot before cameras went
-      //      live, and we're now seeing them leave for the first time.
-      //   2. Race condition — both gate cameras processed the same transit
-      //      concurrently and the position-2 read's paired-read query ran
-      //      before position-1's plate_events insert landed. The system
-      //      mis-classified position-2 as first-of-pair when it should have
-      //      been the second.
-      // Either way: the truck is HERE. Better to defensively open a session
-      // than to log a stray and miss enforcement. After Charlotte's first
-      // night with cameras live, scenario (1) becomes the dominant cause —
-      // revisit then if false-positive dispatches start showing up.
+      // Exit-pattern fall-through: if we got here with direction="exit" and
+      // no open session for this plate, the truck is leaving and we never
+      // saw them enter (cameras dark before, partial reads, etc.). Per
+      // 2026-04-29 user direction: do NOT open a phantom grace session for
+      // exits. Just log the event so the parking log shows the read, and
+      // skip violation logic entirely. This was the BD87979 bug — the
+      // "defensive direction flip" used to convert no-session exits into
+      // entries, opening a 30-min grace clock on a truck already pulling
+      // out of the lot.
       if (direction === "exit") {
         const peekSession = await findSimilarOpenSession(
           db, camera.property_id, normalized, 120, frameUsdot, frameMc, imageHashes.dhash,
         );
         if (!peekSession) {
-          console.log(`stray exit → defensive entry: plate=${normalized} property=${camera.property_id}`);
-          direction = "entry";
+          const ev = await db.from("plate_events")
+            .insert(baseEventRow(null, "unmatched"))
+            .select("id").single();
+          if (ev.error) throw ev.error;
+          eventCount++;
+          console.log(`stray exit (no session, no flip): plate=${normalized} property=${camera.property_id}`);
+          continue;
         }
       }
 
