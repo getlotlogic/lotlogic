@@ -9632,6 +9632,70 @@ function TrainingPage({ user, isOwner }) {
   async function loadQueue() {
     setLoading(true);
     try {
+      // Fuzzy mode is a totally different shape: instead of plate_events,
+      // we list plate_sessions where the camera-read plate differs from
+      // the pass plate the matcher chose. The operator confirms (✓ same
+      // truck) or rejects (✗ wrong vehicle) — labels go on the entry
+      // plate_event so they ride along with the existing labeling pipeline.
+      if (mode === 'fuzzy') {
+        const { data: sessRows, error: sessErr } = await supabase
+          .from('plate_sessions')
+          .select(`
+            id, normalized_plate, plate_text, state, entered_at, entry_plate_event_id, exited_at,
+            visitor_passes!plate_sessions_visitor_pass_id_fkey(id, plate_text, company_name)
+          `)
+          // No explicit property_id filter — RLS on plate_sessions scopes
+          // to the owner's properties, same pattern as the other modes.
+          .not('visitor_pass_id', 'is', null)
+          .not('entry_plate_event_id', 'is', null)
+          .order('entered_at', { ascending: false })
+          .limit(200);
+        if (sessErr) throw sessErr;
+        // Filter to true fuzzy matches (read_plate ≠ pass_plate) and pull
+        // the entry plate_event rows so the queue items have an image to
+        // render and a target row to save labels onto.
+        const fuzzy = (sessRows || []).filter((s) =>
+          s.visitor_passes && s.normalized_plate &&
+          String(s.normalized_plate).toUpperCase() !==
+          String(s.visitor_passes.plate_text || '').toUpperCase()
+        );
+        const eventIds = fuzzy.map((s) => s.entry_plate_event_id);
+        let events = [];
+        if (eventIds.length > 0) {
+          const { data: evRows, error: evErr } = await supabase
+            .from('plate_events')
+            .select('id, camera_id, property_id, plate_text, normalized_plate, confidence, image_url, raw_data, created_at, image_dhash')
+            .in('id', eventIds);
+          if (evErr) throw evErr;
+          events = evRows || [];
+        }
+        const evById = new Map(events.map((e) => [e.id, e]));
+        const items = fuzzy
+          .filter((s) => evById.has(s.entry_plate_event_id))
+          .filter((s) => {
+            const ev = evById.get(s.entry_plate_event_id);
+            return !ev?.raw_data?.operator_fuzzy_label;
+          })
+          .map((s) => {
+            const ev = evById.get(s.entry_plate_event_id);
+            return {
+              ...ev,
+              _fuzzy: {
+                session_id: s.id,
+                read_as: s.normalized_plate,
+                pass_plate: s.visitor_passes.plate_text,
+                pass_company: s.visitor_passes.company_name,
+                state: s.state,
+                entered_at: s.entered_at,
+              },
+            };
+          });
+        setQueue(items);
+        setIdx(0);
+        setStats({ unlabeled: items.length, labels: {} });
+        return;
+      }
+
       // Build a base predicate for the mode so the queue + the stats
       // counters stay in sync (same denominator).
       const applyModeFilter = (q) => {
@@ -9733,12 +9797,29 @@ function TrainingPage({ user, isOwner }) {
     try {
       const cur = queue[idx];
       const labeledAt = new Date().toISOString();
-      const newRaw = { ...(cur.raw_data || {}), operator_label: verdict, operator_labeled_at: labeledAt };
+      // Fuzzy mode writes a separate field so it doesn't collide with the
+      // detected/rejected labeling pipeline. Skips bbox-prompt + sibling
+      // propagation — fuzzy verdicts are vehicle-specific.
+      const isFuzzyVerdict = verdict === 'fuzzy_correct' || verdict === 'fuzzy_wrong';
+      const newRaw = isFuzzyVerdict
+        ? { ...(cur.raw_data || {}), operator_fuzzy_label: verdict, operator_fuzzy_labeled_at: labeledAt }
+        : { ...(cur.raw_data || {}), operator_label: verdict, operator_labeled_at: labeledAt };
       const { error } = await supabase
         .from('plate_events')
         .update({ raw_data: newRaw })
         .eq('id', cur.id);
       if (error) throw error;
+      if (isFuzzyVerdict) {
+        // Drop this row from the fuzzy queue and advance.
+        setQueue((q) => q.filter((r) => r.id !== cur.id));
+        setStats((s) => ({
+          unlabeled: Math.max(0, s.unlabeled - 1),
+          labels: { ...s.labels, [verdict]: (s.labels[verdict] || 0) + 1 },
+        }));
+        lastLabelWriteRef.current = Date.now();
+        setSubmitting(false);
+        return;
+      }
       // Auto-propagate the label to sibling frames so the operator doesn't
       // see the same scene 30 times in a row. Two propagation modes by
       // verdict (different aggression):
@@ -9951,6 +10032,8 @@ function TrainingPage({ user, isOwner }) {
       if (!queue[idx]) return;
       const verdicts = mode === 'rejected'
         ? ['real_plate', 'junk']
+        : mode === 'fuzzy'
+        ? ['fuzzy_correct', 'fuzzy_wrong']
         : ['real_plate', 'false_positive'];
       if (e.key === '1') label(verdicts[0]);
       else if (e.key === '2') label(verdicts[1]);
@@ -9966,8 +10049,13 @@ function TrainingPage({ user, isOwner }) {
 
   const cur = queue[idx];
   const isRejected = mode === 'rejected';
-  const verdictA = { id: 'real_plate', label: isRejected ? '✗ Real plate missed' : '✓ Real plate', color: isRejected ? '#dc2626' : '#16a34a' };
-  const verdictB = { id: isRejected ? 'junk' : 'false_positive', label: isRejected ? '✓ Correctly rejected' : '✗ Not a real plate', color: isRejected ? '#16a34a' : '#dc2626' };
+  const isFuzzy = mode === 'fuzzy';
+  const verdictA = isFuzzy
+    ? { id: 'fuzzy_correct', label: '✓ Same vehicle', color: '#16a34a' }
+    : { id: 'real_plate', label: isRejected ? '✗ Real plate missed' : '✓ Real plate', color: isRejected ? '#dc2626' : '#16a34a' };
+  const verdictB = isFuzzy
+    ? { id: 'fuzzy_wrong', label: '✗ Different vehicle', color: '#dc2626' }
+    : { id: isRejected ? 'junk' : 'false_positive', label: isRejected ? '✓ Correctly rejected' : '✗ Not a real plate', color: isRejected ? '#16a34a' : '#dc2626' };
 
   return (
     <div className="page-section" style={{padding:'12px 14px'}}>
@@ -9976,22 +10064,32 @@ function TrainingPage({ user, isOwner }) {
         <p style={{margin:'4px 0 0', fontSize:13, color:'var(--text-secondary)'}}>
           {isRejected
             ? 'Frames the sidecar threw away. Real plate = gate too aggressive. Junk = working.'
+            : isFuzzy
+            ? 'Sessions where the camera read drifted from a registered pass plate. Confirm the matcher caught the same truck, or reject it as a wrong match.'
             : 'Frames where a plate was detected. Confirm real or flag false positive (trailer #, decal, sign).'}
         </p>
       </div>
 
       {/* Mode toggle */}
-      <div style={{display:'flex', gap:6, marginBottom:12, background:'var(--surface)', padding:4, borderRadius:8, border:'1px solid var(--border)', maxWidth:340}}>
+      <div style={{display:'flex', gap:6, marginBottom:12, background:'var(--surface)', padding:4, borderRadius:8, border:'1px solid var(--border)', maxWidth:480, flexWrap:'wrap'}}>
         <button onClick={() => setMode('detected')} style={{
-          flex:1, background: mode === 'detected' ? 'var(--accent)' : 'transparent',
-          color: mode === 'detected' ? '#fff' : 'var(--text-secondary)',
-          border:'none', borderRadius:6, padding:'8px 10px', fontSize:12, fontWeight:700, cursor:'pointer',
+          flex:'1 1 110px', background: mode === 'detected' ? 'var(--accent)' : 'transparent',
+          color: mode === 'detected' ? '#1A1206' : 'var(--text-secondary)',
+          border:'none', borderRadius:6, padding:'10px 10px', fontSize:12, fontWeight:700, cursor:'pointer',
+          minHeight:40,
         }}>Detected plates</button>
         <button onClick={() => setMode('rejected')} style={{
-          flex:1, background: mode === 'rejected' ? 'var(--accent)' : 'transparent',
-          color: mode === 'rejected' ? '#fff' : 'var(--text-secondary)',
-          border:'none', borderRadius:6, padding:'8px 10px', fontSize:12, fontWeight:700, cursor:'pointer',
+          flex:'1 1 110px', background: mode === 'rejected' ? 'var(--accent)' : 'transparent',
+          color: mode === 'rejected' ? '#1A1206' : 'var(--text-secondary)',
+          border:'none', borderRadius:6, padding:'10px 10px', fontSize:12, fontWeight:700, cursor:'pointer',
+          minHeight:40,
         }}>Rejected frames</button>
+        <button onClick={() => setMode('fuzzy')} style={{
+          flex:'1 1 110px', background: mode === 'fuzzy' ? 'var(--accent)' : 'transparent',
+          color: mode === 'fuzzy' ? '#1A1206' : 'var(--text-secondary)',
+          border:'none', borderRadius:6, padding:'10px 10px', fontSize:12, fontWeight:700, cursor:'pointer',
+          minHeight:40,
+        }}>Fuzzy matches</button>
       </div>
 
       {propagationToast && (
@@ -10075,7 +10173,21 @@ function TrainingPage({ user, isOwner }) {
           )}
 
           <div style={{marginTop:10, fontSize:12, color:'var(--text-secondary)', display:'grid', gridTemplateColumns:'auto 1fr', gap:'4px 12px'}}>
-            {!isRejected && (
+            {isFuzzy && cur._fuzzy && (
+              <>
+                <span>Camera read</span>
+                <span style={{color:'#FBBF24', fontFamily:'monospace', fontWeight:700, fontSize:14}}>{cur._fuzzy.read_as}</span>
+                <span>Pass plate</span>
+                <span style={{color:'var(--text-primary)', fontFamily:'monospace', fontWeight:700, fontSize:14}}>{cur._fuzzy.pass_plate}</span>
+                <span>Company</span>
+                <span style={{color:'var(--text-primary)'}}>{cur._fuzzy.pass_company || '—'}</span>
+                <span>Confidence</span>
+                <span style={{color:'var(--text-primary)'}}>{((cur.confidence ?? 0) * 100).toFixed(1)}%</span>
+                <span>Session</span>
+                <span style={{color:'var(--text-primary)'}}>{cur._fuzzy.state}</span>
+              </>
+            )}
+            {!isRejected && !isFuzzy && (
               <>
                 <span>Plate read</span>
                 <span style={{color:'var(--text-primary)', fontFamily:'monospace', fontWeight:700}}>{cur.plate_text || '—'}</span>
