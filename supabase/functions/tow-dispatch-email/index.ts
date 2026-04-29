@@ -14,8 +14,8 @@ function json(body: unknown, status: number) {
   });
 }
 
-function formatLocal(ts: string | null | undefined, tz = "America/New_York"): string {
-  if (!ts) return "?";
+function formatLocal(ts: string | number | Date | null | undefined, tz = "America/New_York"): string {
+  if (ts == null) return "?";
   try {
     return new Date(ts).toLocaleString("en-US", {
       timeZone: tz,
@@ -25,7 +25,7 @@ function formatLocal(ts: string | null | undefined, tz = "America/New_York"): st
       minute: "2-digit",
     });
   } catch {
-    return ts;
+    return String(ts);
   }
 }
 
@@ -47,7 +47,7 @@ function escapeHtml(s: string | null | undefined): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
 
@@ -182,12 +182,15 @@ serve(async (req) => {
       ? humanDuration(new Date(lastPass.valid_until).getTime() - new Date(lastPass.valid_from).getTime())
       : (lastPass.stay_days ? `${lastPass.stay_days}d` : "?");
     const hostBits = [lastPass.host_unit, lastPass.host_name].filter(Boolean).join(" ");
-    return `${duration} ${formatLocal(lastPass.valid_from)} \u2192 ${formatLocal(lastPass.valid_until)}` +
+    return `${duration} ${formatLocal(lastPass.valid_from)} → ${formatLocal(lastPass.valid_until)}` +
       (hostBits ? ` (host: ${hostBits})` : "") +
-      ` \u2014 ${String(lastPass.status).toUpperCase()}`;
+      ` — ${String(lastPass.status).toUpperCase()}`;
   })();
 
-  // Build action links (only if JWT_SECRET configured).
+  // Build action links. Tapping a button opens the browser for ~½ sec to the
+  // backend's /violations/action GET endpoint, which atomically mutates the
+  // violation (single-click thanks to PR getlotlogic/lotlogic-backend#46) and
+  // shows the LotView confirm page. No mail composer, no extra Send step.
   let towLink = "";
   let noTowLink = "";
   if (jwtSecret) {
@@ -201,52 +204,179 @@ serve(async (req) => {
     }
   }
 
-  const subject = `[TOW] ${property.name || "Property"} \u2014 Plate ${violation.plate_text}`;
+  const propertyName = property.name || "Property";
+
+  // Subject is the inbox headline. Lead with siren + plate so the line
+  // scans in a phone notification: "DISPATCH · ABC1234 · Charlotte Travel Plaza".
+  const subject = `🚨 DISPATCH · ${violation.plate_text} · ${propertyName}`;
+
+  // Preheader: hidden span that mail clients surface in the inbox preview
+  // line under the subject. This is the second-most read text in the email
+  // and we control it entirely.
+  const preheader = `Active overstay · ${firstSeenAgo} on property · tap to dispatch or stand down`;
 
   const textBody = [
-    `[TOW] ${property.name || "Property"}`,
-    `Plate: ${violation.plate_text}`,
-    property.address ? `Address: ${property.address}` : null,
-    `First seen: ${formatLocal(firstSeen)} (${firstSeenAgo} ago)`,
-    triggerEvent?.confidence != null ? `Confidence: ${Math.round(triggerEvent.confidence * 100)}%` : null,
-    `Pass: ${passLine}`,
-    lastPass?.visitor_name ? `Driver: ${lastPass.visitor_name}` : null,
-    triggerEvent?.image_url ? `Photo: ${triggerEvent.image_url}` : null,
+    `LOTVIEW DISPATCH`,
+    `${propertyName}${property.address ? ` — ${property.address}` : ""}`,
+    ``,
+    `PLATE        ${violation.plate_text}`,
+    `STATUS       ACTIVE OVERSTAY (${firstSeenAgo})`,
+    `FIRST SEEN   ${formatLocal(firstSeen)}`,
+    triggerEvent?.confidence != null ? `READ CONF.   ${Math.round(triggerEvent.confidence * 100)}%` : null,
+    `PASS         ${passLine}`,
+    lastPass?.visitor_name ? `DRIVER       ${lastPass.visitor_name}` : null,
+    triggerEvent?.image_url ? `PHOTO        ${triggerEvent.image_url}` : null,
     "",
-    towLink ? `✅ Mark as towed:    ${towLink}` : null,
-    noTowLink ? `❌ No tow needed:     ${noTowLink}` : null,
+    "── ONE-TAP ACTIONS ───────────────────",
+    towLink ? `  > TOW CONFIRMED   ${towLink}` : null,
+    noTowLink ? `  > STAND DOWN      ${noTowLink}` : null,
     "",
-    `Open LotView dashboard: https://lotlogicparking.com/app`,
+    `Open LotView dashboard → https://lotlogicparking.com/app`,
+    `Links valid 48h · single-use · routed to dispatch ledger`,
   ].filter(Boolean).join("\n");
 
   const photoBlock = triggerEvent?.image_url
-    ? `<p><img src=\"${escapeHtml(triggerEvent.image_url)}\" alt=\"Plate snapshot\" style=\"max-width:100%; border:1px solid #ccc; border-radius:6px;\" /></p>`
+    ? `
+<tr><td style="padding:0 24px 18px;">
+  <div style="background:#0F0A03; border:1px solid #2A2014; border-radius:8px; overflow:hidden;">
+    <div style="padding:8px 12px; font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#FBBF24; border-bottom:1px solid #2A2014;">
+      &#9654; Trigger frame &middot; ${escapeHtml(formatLocal(triggerEvent?.created_at))}
+    </div>
+    <img src="${escapeHtml(triggerEvent.image_url)}" alt="Plate snapshot" style="display:block; width:100%; height:auto;" />
+  </div>
+</td></tr>`
     : "";
 
   const buttonsBlock = (towLink && noTowLink) ? `
-<div style=\"text-align:center; margin:20px 0; padding:14px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px;\">
-  <a href=\"${escapeHtml(towLink)}\" style=\"display:inline-block; background:#b91c1c; color:#fff; padding:12px 22px; text-decoration:none; border-radius:6px; font-weight:600; margin:6px;\">✅ Mark as towed</a>
-  <a href=\"${escapeHtml(noTowLink)}\" style=\"display:inline-block; background:#6b7280; color:#fff; padding:12px 22px; text-decoration:none; border-radius:6px; font-weight:600; margin:6px;\">❌ No tow needed</a>
-  <p style=\"color:#6b7280; font-size:12px; margin:8px 0 0;\">Each link asks you to confirm before recording the result. Valid for 48 hours.</p>
-</div>` : "";
+<tr><td style="padding:0 24px 6px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;">
+    <tr>
+      <td style="padding:0 6px 10px 0; width:50%;">
+        <a href="${escapeHtml(towLink)}" style="display:block; background:#B91C1C; color:#FFF7E6; padding:18px 12px; text-align:center; text-decoration:none; border-radius:8px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-weight:400; font-size:18px; letter-spacing:.18em; text-transform:uppercase; border:2px solid #7F1313; box-shadow:inset 0 -3px 0 rgba(0,0,0,.25);">
+          &#9654; Tow Confirmed
+        </a>
+      </td>
+      <td style="padding:0 0 10px 6px; width:50%;">
+        <a href="${escapeHtml(noTowLink)}" style="display:block; background:#1A1206; color:#FBBF24; padding:18px 12px; text-align:center; text-decoration:none; border-radius:8px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-weight:400; font-size:18px; letter-spacing:.18em; text-transform:uppercase; border:2px solid #FBBF24;">
+          &#9654; Stand Down
+        </a>
+      </td>
+    </tr>
+  </table>
+  <p style="margin:4px 0 0; font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:#6F5A2C; text-align:center;">
+    Single tap &middot; Single use &middot; Expires 48h
+  </p>
+</td></tr>` : "";
+
+  const confidencePct = triggerEvent?.confidence != null
+    ? Math.round((triggerEvent.confidence as number) * 100)
+    : null;
+
+  const metaRow = (label: string, value: string, mono = false) => `
+<tr>
+  <td style="padding:10px 0; width:36%; vertical-align:top; font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#8A6F3D; border-bottom:1px dashed #2A2014;">
+    ${escapeHtml(label)}
+  </td>
+  <td style="padding:10px 0; vertical-align:top; font-family:${mono ? "'DM Mono',Menlo,Consolas,monospace" : "'Manrope','Helvetica Neue',Arial,sans-serif"}; font-size:14px; color:#F5F1EA; border-bottom:1px dashed #2A2014;">
+    ${value}
+  </td>
+</tr>`;
 
   const html = `<!doctype html>
-<html><body style=\"font-family:-apple-system, Segoe UI, Roboto, sans-serif; color:#111; max-width:560px; margin:0 auto; padding:16px;\">
-<h2 style=\"margin:0 0 12px; color:#b91c1c;\">[TOW] ${escapeHtml(property.name || "Property")}</h2>
-<table style=\"border-collapse:collapse; width:100%; font-size:15px;\">
-<tr><td style=\"padding:6px 0; width:110px; color:#555;\">Plate</td><td style=\"padding:6px 0; font-weight:600; font-size:20px;\">${escapeHtml(violation.plate_text)}</td></tr>
-${property.address ? `<tr><td style=\"padding:6px 0; color:#555;\">Address</td><td style=\"padding:6px 0;\">${escapeHtml(property.address)}</td></tr>` : ""}
-<tr><td style=\"padding:6px 0; color:#555;\">First seen</td><td style=\"padding:6px 0;\">${escapeHtml(formatLocal(firstSeen))} <span style=\"color:#888;\">(${escapeHtml(firstSeenAgo)} ago)</span></td></tr>
-${triggerEvent?.confidence != null ? `<tr><td style=\"padding:6px 0; color:#555;\">Confidence</td><td style=\"padding:6px 0;\">${Math.round((triggerEvent.confidence as number) * 100)}%</td></tr>` : ""}
-<tr><td style=\"padding:6px 0; color:#555; vertical-align:top;\">Pass</td><td style=\"padding:6px 0;\">${escapeHtml(passLine)}</td></tr>
-${lastPass?.visitor_name ? `<tr><td style=\"padding:6px 0; color:#555;\">Driver</td><td style=\"padding:6px 0;\">${escapeHtml(lastPass.visitor_name)}</td></tr>` : ""}
-</table>
-${photoBlock}
-${buttonsBlock}
-<div style=\"text-align:center; margin:20px 0 6px;\">
-  <a href=\"https://lotlogicparking.com/app\" style=\"display:inline-block; background:#FBBF24; color:#1A1206; padding:12px 22px; text-decoration:none; border-radius:8px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; font-size:13px;\">Open LotView dashboard</a>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>${escapeHtml(subject)}</title>
+</head>
+<body style="margin:0; padding:0; background:#0B0905; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; color:#F5F1EA;">
+<div style="display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; overflow:hidden; mso-hide:all;">
+  ${escapeHtml(preheader)}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
 </div>
-<p style=\"color:#6b7280; font-size:12px; margin-top:14px; border-top:1px solid #eee; padding-top:12px; text-align:center;\">Sent by <strong style=\"color:#111;\">LotView</strong> &middot; lotlogicparking.com</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0B0905;">
+  <tr><td align="center" style="padding:24px 12px;">
+
+    <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px; width:100%; background:#1A1206; border-radius:12px; overflow:hidden; border:1px solid #2A2014;">
+
+      <tr><td style="height:6px; background:repeating-linear-gradient(45deg, #FBBF24 0 12px, #1A1206 12px 24px);">&nbsp;</td></tr>
+
+      <tr><td style="padding:18px 24px 8px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-size:26px; letter-spacing:.14em; color:#FBBF24; text-transform:uppercase;">
+              LotView
+            </td>
+            <td align="right" style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:#8A6F3D;">
+              Dispatch &middot; ${escapeHtml(formatLocal(now))}
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+
+      <tr><td style="padding:6px 24px 14px;">
+        <div style="display:inline-block; background:#B91C1C; color:#FFF7E6; padding:6px 12px; border-radius:4px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-size:14px; letter-spacing:.22em; text-transform:uppercase;">
+          &#9654; Tow Authorization Requested
+        </div>
+        <div style="margin-top:10px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-size:22px; letter-spacing:.04em; color:#F5F1EA; text-transform:uppercase; line-height:1.15;">
+          ${escapeHtml(propertyName)}
+        </div>
+        ${property.address ? `<div style="margin-top:4px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#A0916F;">${escapeHtml(property.address)}</div>` : ""}
+      </td></tr>
+
+      <tr><td style="padding:0 24px 18px;">
+        <div style="background:#0F0A03; border:2px solid #FBBF24; border-radius:10px; padding:20px; text-align:center;">
+          <div style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.28em; text-transform:uppercase; color:#FBBF24; margin-bottom:8px;">
+            License Plate &middot; Active Overstay
+          </div>
+          <div style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:42px; letter-spacing:.18em; color:#FFFFFF; font-weight:700;">
+            ${escapeHtml(violation.plate_text)}
+          </div>
+          <div style="margin-top:10px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#E0D4B8;">
+            On property <strong style="color:#FBBF24;">${escapeHtml(firstSeenAgo)}</strong> &middot; since ${escapeHtml(formatLocal(firstSeen))}
+          </div>
+        </div>
+      </td></tr>
+
+      <tr><td style="padding:0 24px 14px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+          ${confidencePct != null ? metaRow("Read Confidence", `${confidencePct}%`, true) : ""}
+          ${metaRow("Pass on File", escapeHtml(passLine))}
+          ${lastPass?.visitor_name ? metaRow("Driver", escapeHtml(lastPass.visitor_name)) : ""}
+        </table>
+      </td></tr>
+
+      ${photoBlock}
+
+      ${buttonsBlock}
+
+      <tr><td style="padding:14px 24px 20px;">
+        <a href="https://lotlogicparking.com/app" style="display:block; background:#FBBF24; color:#1A1206; padding:14px 16px; text-align:center; text-decoration:none; border-radius:8px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-size:15px; letter-spacing:.2em; text-transform:uppercase; border:1px solid #C4940F;">
+          &#9654; Open LotView Dashboard
+        </a>
+      </td></tr>
+
+      <tr><td style="padding:14px 24px 18px; border-top:1px solid #2A2014;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#6F5A2C;">
+              LotView &middot; Highway Dispatch
+            </td>
+            <td align="right" style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#6F5A2C;">
+              lotlogicparking.com
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+
+      <tr><td style="height:4px; background:#FBBF24;">&nbsp;</td></tr>
+
+    </table>
+
+  </td></tr>
+</table>
 </body></html>`;
 
   // EMAIL_OVERRIDE_TO short-circuits the configured partner email during
@@ -255,7 +385,17 @@ ${buttonsBlock}
   const overrideTo = Deno.env.get("EMAIL_OVERRIDE_TO");
   const recipient = overrideTo && overrideTo.includes("@") ? overrideTo : partner.email;
 
-  const sendResult = await sendViaResend(resendKey, fromEmail, recipient, subject, textBody, html);
+  // CC the LotView owner so Gabe (or whoever's running the platform) sees
+  // every dispatch alongside Frank. Configurable via OWNER_CC_EMAIL; falls
+  // back to gabriel@lotlogicparking.com (lotlogicparking.com → Cloudflare
+  // routes to standardvendingcompany@gmail.com per project_recaptcha memory).
+  // Skip the CC if it would equal the primary recipient (Resend would 422).
+  const ownerCc = Deno.env.get("OWNER_CC_EMAIL") || "gabriel@lotlogicparking.com";
+  const ccList = ownerCc && ownerCc.includes("@") && ownerCc.toLowerCase() !== recipient.toLowerCase()
+    ? [ownerCc]
+    : [];
+
+  const sendResult = await sendViaResend(resendKey, fromEmail, recipient, ccList, subject, textBody, html);
 
   if (!sendResult.ok) {
     return json({
@@ -299,17 +439,22 @@ async function sendViaResend(
   apiKey: string,
   fromEmail: string,
   to: string,
+  cc: string[],
   subject: string,
   textBody: string,
   htmlBody: string,
 ): Promise<SendResult> {
+  const payload: Record<string, unknown> = {
+    from: fromEmail, to: [to], subject, html: htmlBody, text: textBody,
+  };
+  if (cc.length > 0) payload.cc = cc;
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ from: fromEmail, to: [to], subject, html: htmlBody, text: textBody }),
+    body: JSON.stringify(payload),
   });
   const text = await res.text().catch(() => "");
   let body: unknown;
