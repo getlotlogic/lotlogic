@@ -734,11 +734,17 @@ Deno.serve(async (req: Request) => {
             direction = cameraEntryOrder === 1 ? "entry" : "exit";
           }
         } else {
-          // First-of-pair (or single read). Direction from this camera's
-          // own first-position: entry_order=1 → fires first on entries,
-          // exit_order=1 → fires first on exits.
-          if (cameraEntryOrder === 1) direction = "entry";
-          else if (cameraExitOrder === 1) direction = "exit";
+          // Single plate-OCR read with no paired motion in the window.
+          // Default to the direction this camera has order=2 in: order=2
+          // means "fires second" which means "sees the back of the
+          // truck", and the back is the side that produces a successful
+          // OCR (rear plates are universal; front plates are not).
+          // Tradeoff: a front-plate vehicle whose paired camera fails to
+          // fire motion gets classified as the wrong direction. Cost is
+          // a missed registration, not a false violation, so the bias
+          // is correct.
+          if (cameraEntryOrder === 2) direction = "entry";
+          else if (cameraExitOrder === 2) direction = "exit";
           else direction = "entry";
         }
       } else {
