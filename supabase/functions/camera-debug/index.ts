@@ -5,13 +5,14 @@
 // camera-snapshot is known to work for that model.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { AwsClient } from "aws4fetch";
+import { AwsClient } from "https://esm.sh/aws4fetch@1.0.20";
 
 const R2_ACCOUNT_ID = Deno.env.get("R2_ACCOUNT_ID")!;
 const R2_BUCKET_NAME = Deno.env.get("R2_BUCKET_NAME") ?? "parking-snapshots";
 const R2_ACCESS_KEY_ID = Deno.env.get("R2_ACCESS_KEY_ID")!;
 const R2_SECRET_ACCESS_KEY = Deno.env.get("R2_SECRET_ACCESS_KEY")!;
 const R2_PUBLIC_BASE_URL = Deno.env.get("R2_PUBLIC_BASE_URL")!;
+const DEBUG_TOKEN = Deno.env.get("CAMERA_DEBUG_TOKEN") ?? Deno.env.get("INTERNAL_TOKEN") ?? "";
 
 const aws = new AwsClient({
   accessKeyId: R2_ACCESS_KEY_ID,
@@ -22,6 +23,11 @@ const aws = new AwsClient({
 const r2Endpoint = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET_NAME}`;
 
 Deno.serve(async (req: Request) => {
+  const provided = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!DEBUG_TOKEN || provided !== DEBUG_TOKEN) {
+    return jsonResp(401, { ok: false, error: "unauthorized" });
+  }
+
   // Probe: any non-POST returns a simple 200 so Milesight's URL-validation check
   // (if any) can't be what blocks us.
   if (req.method !== "POST") {
@@ -37,7 +43,9 @@ Deno.serve(async (req: Request) => {
 
   // Collect all headers (case-insensitive dump)
   const headersObj: Record<string, string> = {};
-  for (const [k, v] of req.headers.entries()) headersObj[k] = v;
+  for (const [k, v] of req.headers.entries()) {
+    headersObj[k] = ["authorization", "cookie", "x-api-key"].includes(k.toLowerCase()) ? "[redacted]" : v;
+  }
 
   const summary: Record<string, unknown> = {
     request_id: reqId,

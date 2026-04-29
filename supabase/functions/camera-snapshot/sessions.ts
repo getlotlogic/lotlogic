@@ -102,7 +102,7 @@ const OCR_CONFUSIONS: Array<[string, string]> = (() => {
   };
   for (const [a, b] of OCR_CONFUSIONS_BASE) add(a, b);
   // Auto-mined pairs; ignored if the JSON is the stub (length 0).
-  const auto = (autoFuzzyConfig as { ocr_confusions?: Array<{ pair: [string, string] }> }).ocr_confusions ?? [];
+  const auto = (autoFuzzyConfig as { ocr_confusions?: Array<{ pair: string[] }> }).ocr_confusions ?? [];
   for (const entry of auto) {
     if (entry.pair && entry.pair.length === 2) add(entry.pair[0], entry.pair[1]);
   }

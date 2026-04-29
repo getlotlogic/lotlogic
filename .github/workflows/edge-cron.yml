@@ -14,12 +14,14 @@ jobs:
       - name: Expire visitor passes past valid_until
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Per-function INTERNAL_TOKEN gate added 2026-04-29; the
+          # service-role key is no longer accepted as the bearer here.
+          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
         run: |
           set -euo pipefail
           curl -fsSL -X POST \
             "${SUPABASE_URL}/functions/v1/check-violations" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${INTERNAL_TOKEN}" \
             -H "Content-Type: application/json" \
             --data '{}' \
             --max-time 60
@@ -30,12 +32,12 @@ jobs:
       - name: Email residents with plates expiring in 72h
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
         run: |
           set -euo pipefail
           curl -fsSL -X POST \
             "${SUPABASE_URL}/functions/v1/notify-expiring-plates" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${INTERNAL_TOKEN}" \
             -H "Content-Type: application/json" \
             --data '{}' \
             --max-time 120
