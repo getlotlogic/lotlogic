@@ -4,7 +4,7 @@ import { makeR2Uploader } from "../pr-ingest/r2.ts";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { extractFromRequest } from "./extract.ts";
 import { parsePath } from "./path.ts";
-import { findSimilarOpenSession, findRecentSessionByCamera, findRecentPrCallForCamera, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome, plateSimilar } from "./sessions.ts";
+import { findSimilarOpenSession, findRecentSessionByCamera, findRecentPrCallForCamera, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
 import { isPlateHeld } from "./holds.ts";
 import { extractUsdot } from "./usdot-ocr.ts";
 import { computeImageHashes } from "./image-hash.ts";
@@ -54,7 +54,11 @@ const OPENALPR_TIMEOUT_MS = Number(Deno.env.get("OPENALPR_TIMEOUT_MS") ?? "4000"
 // infer direction of travel. Entries → no action. Exits → set session's
 // exit_hinted_at so cron closes it on a short buffer instead of the
 // default 2h buffer.
-const DIRECTION_WINDOW_SECONDS = Number(Deno.env.get("DIRECTION_WINDOW_SECONDS") ?? "90");
+// 10 sec — Gabe's call. Tight enough that a second vehicle's motion
+// event won't accidentally pair with the first vehicle's plate read.
+// Adjacent gate cameras fire within seconds of one another for the same
+// physical traversal; longer windows just admit noise.
+const DIRECTION_WINDOW_SECONDS = Number(Deno.env.get("DIRECTION_WINDOW_SECONDS") ?? "10");
 // Silence-gap exit signal. Detection on an open session after this
 // much idle time is treated as the vehicle passing through the throat
 // again — i.e. exiting. Entrance cameras only fire at throats, so a
@@ -698,32 +702,25 @@ Deno.serve(async (req: Request) => {
       const cameraGateId = (camera as { gate_id?: string | null }).gate_id ?? null;
       if (camera.position_order != null) {
         const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
-        // Pull recent reads on the OTHER camera at the same gate within the
-        // window. We don't filter on normalized_plate at the SQL layer
-        // because OCR drift between cameras (e.g. road-side reads "VRL1304",
-        // lot-side reads "VRL1301") would silently fail an exact match —
-        // exactly what was killing depth-pair confirmations at Charlotte.
-        // Instead, pull the recent rows and JS-filter via plateSimilar.
+        // Pull ANY recent event on the OTHER camera at the same gate within
+        // the window — including empty-scene rejections. We can't rely on
+        // both cameras reading the plate (OCR drift, partial occlusion);
+        // motion firing at both cameras in the right temporal order is
+        // enough to infer entry vs exit. The plate is identified by THIS
+        // camera's read; the paired camera's role is direction confirmation.
         let priorQ = db
           .from("plate_events")
-          .select("camera_id, normalized_plate, alpr_cameras!inner(gate_id, position_order)")
+          .select("camera_id, alpr_cameras!inner(gate_id, position_order)")
           .eq("property_id", camera.property_id)
           .neq("camera_id", camera.id)
           .gt("created_at", cutoff)
-          .not("normalized_plate", "is", null)
-          .neq("normalized_plate", "")
           .order("created_at", { ascending: false })
-          .limit(10);
+          .limit(1);
         if (cameraGateId) {
           priorQ = priorQ.eq("alpr_cameras.gate_id", cameraGateId);
         }
         const { data: priorAtGate } = await priorQ;
-        const priorRow = (priorAtGate ?? []).find((row) => {
-          const priorPlate = String(row?.normalized_plate ?? "");
-          if (!priorPlate) return false;
-          if (priorPlate === normalized) return true;
-          return plateSimilar(priorPlate, normalized, true);
-        });
+        const priorRow = (priorAtGate ?? [])[0];
         if (priorRow) {
           // Same/similar plate, same gate (or property-wide fallback when
           // null), within DIRECTION_WINDOW → second of a pair.
@@ -1264,16 +1261,20 @@ async function inferDirection(
     const currentGateId = cur?.gate_id ?? null;
 
     const cutoff = new Date(now.getTime() - DIRECTION_WINDOW_SECONDS * 1000).toISOString();
+    // Direction inference uses TIMING, not plate match: if motion fired
+    // on the paired camera at the same gate within the window AND in the
+    // right position order, that's the depth-pair signal. Plate identity
+    // comes from THIS camera's read; the paired camera doesn't need to
+    // have read it (OCR drift / occlusion / empty-scene rejection are
+    // all fine — the motion event itself is the signal).
     let priorQ = db
       .from("plate_events")
-      .select("camera_id, created_at, normalized_plate, alpr_cameras!inner(position_order, gate_id)")
+      .select("camera_id, created_at, alpr_cameras!inner(position_order, gate_id)")
       .eq("property_id", propertyId)
       .neq("camera_id", currentCameraId)
       .gt("created_at", cutoff)
-      .not("normalized_plate", "is", null)
-      .neq("normalized_plate", "")
       .order("created_at", { ascending: false })
-      .limit(10);
+      .limit(1);
     // Scope to the same gate when both sides are on a known gate.
     if (currentGateId) {
       priorQ = priorQ.eq("alpr_cameras.gate_id", currentGateId);
@@ -1281,14 +1282,7 @@ async function inferDirection(
     const { data: prior, error } = await priorQ;
     if (error) console.warn("inferDirection depth-pair query failed:", error.message);
     else {
-      // Fuzzy-match against recent reads on the paired camera. OCR drift
-      // (VRL1304 ↔ VRL1301) would otherwise silently miss the pair.
-      const first = (prior ?? []).find((row) => {
-        const priorPlate = String(row?.normalized_plate ?? "");
-        if (!priorPlate) return false;
-        if (priorPlate === normalizedPlate) return true;
-        return plateSimilar(priorPlate, normalizedPlate, true);
-      });
+      const first = (prior ?? [])[0];
       const priorOrder = first?.alpr_cameras?.position_order;
       if (priorOrder != null && priorOrder > currentPositionOrder) {
         const upd = await db.from("plate_sessions")
