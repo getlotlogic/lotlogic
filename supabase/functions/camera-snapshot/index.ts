@@ -998,7 +998,7 @@ Deno.serve(async (req: Request) => {
         // portal (sessions opening + closing in rapid succession).
         // For the first PARKING_BUFFER_MINUTES after entry, exit reads
         // are recorded but don't close the session.
-        const PARKING_BUFFER_MINUTES = 30;
+        const PARKING_BUFFER_MINUTES = 6;
         const sessionAgeMs = openSession.entered_at
           ? now.getTime() - new Date(openSession.entered_at).getTime()
           : 0;
