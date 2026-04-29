@@ -443,12 +443,10 @@
           throw new Error('Please enter a valid license plate number.');
         }
 
-        // reCAPTCHA may fail to load on hosts not in the site-key allowlist
-        // (e.g. lotlogicparking.com if only lotlogic-beta.vercel.app is whitelisted).
-        // Fall back to an empty token — the backend skips verification when
-        // no token is sent and inserts the row as `pending` for owner review.
-        // Re-tighten once the domain is added in https://www.google.com/recaptcha/admin.
         const recaptchaToken = await getRecaptchaToken('plate_register').catch(() => null);
+        if (!recaptchaToken) {
+          throw new Error('Please retry — automated-access check failed.');
+        }
 
         try {
           await backendRegister('/resident_plates/register', {
@@ -458,7 +456,7 @@
             holder_role: property.property_type === 'truck_plaza' ? 'employee' : 'resident',
             vehicle_type: vehicleType || 'car',
             phone: phone,
-            recaptcha_token: recaptchaToken || '',
+            recaptcha_token: recaptchaToken,
             usdot_number: usdot,
             mc_number: mc,
           });
