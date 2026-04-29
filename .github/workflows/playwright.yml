@@ -28,8 +28,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: tests/package-lock.json
+          # No `cache: 'npm'` — tests/package-lock.json is gitignored
+          # (per root CLAUDE.md), so setup-node was failing with
+          # "Some specified paths were not resolved, unable to cache
+          # dependencies" on every run. The `npm ci || npm install`
+          # below tolerates a missing lockfile, so we just skip caching.
 
       - name: Install deps
         run: npm ci || npm install
