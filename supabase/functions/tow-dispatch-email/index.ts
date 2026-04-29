@@ -216,7 +216,7 @@ serve(async (req) => {
     towLink ? `✅ Mark as towed:    ${towLink}` : null,
     noTowLink ? `❌ No tow needed:     ${noTowLink}` : null,
     "",
-    "You can also reply DONE via SMS, or log in to the LotLogic dashboard.",
+    `Open LotView dashboard: https://lotlogicparking.com/app`,
   ].filter(Boolean).join("\n");
 
   const photoBlock = triggerEvent?.image_url
@@ -243,7 +243,10 @@ ${lastPass?.visitor_name ? `<tr><td style=\"padding:6px 0; color:#555;\">Driver<
 </table>
 ${photoBlock}
 ${buttonsBlock}
-<p style=\"color:#555; font-size:13px; margin-top:18px; border-top:1px solid #eee; padding-top:12px;\">You can also reply <strong>DONE</strong> via SMS, or log in to the LotLogic dashboard.</p>
+<div style=\"text-align:center; margin:20px 0 6px;\">
+  <a href=\"https://lotlogicparking.com/app\" style=\"display:inline-block; background:#FBBF24; color:#1A1206; padding:12px 22px; text-decoration:none; border-radius:8px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; font-size:13px;\">Open LotView dashboard</a>
+</div>
+<p style=\"color:#6b7280; font-size:12px; margin-top:14px; border-top:1px solid #eee; padding-top:12px; text-align:center;\">Sent by <strong style=\"color:#111;\">LotView</strong> &middot; lotlogicparking.com</p>
 </body></html>`;
 
   // EMAIL_OVERRIDE_TO short-circuits the configured partner email during
