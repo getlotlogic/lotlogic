@@ -3125,7 +3125,7 @@ const db = {
         activePasses: passes.count || 0,
         towJobsMonth: (jobs.data || []).length,
         commissionMonth: commission,
-        properties: props.length,
+        properties: propIds.length,
       };
     }
     return { activeViolations: 0, activePasses: 0, towJobsMonth: 0, commissionMonth: 0, properties: 0 };
@@ -7890,7 +7890,9 @@ function ActivePassTracker({ propertyId }) {
   const EXPIRING_WINDOW_MS = 3 * 60 * 60 * 1000;
   function deriveStatus(p) {
     if (p.status === 'expired') return 'violation';
-    if (!p.valid_until) return 'active';
+    // No valid_until on an active pass = malformed/missing data. Treat as
+    // expiring (yellow) so it surfaces for review rather than disappearing.
+    if (!p.valid_until) return 'expiring';
     const remaining = new Date(p.valid_until).getTime() - nowTick;
     if (remaining <= 0) return 'violation';
     if (remaining < EXPIRING_WINDOW_MS) return 'expiring';
@@ -7899,8 +7901,18 @@ function ActivePassTracker({ propertyId }) {
 
   // Active column: expiring on top, active below; within each, soonest-to-expire first.
   const activeColumn = passes
-    .filter(p => p.status === 'active' && new Date(p.valid_until).getTime() > nowTick)
-    .sort((a, b) => new Date(a.valid_until).getTime() - new Date(b.valid_until).getTime());
+    .filter(p => {
+      if (p.status !== 'active') return false;
+      // No valid_until → still surface in UI (treated as expiring above)
+      if (!p.valid_until) return true;
+      return new Date(p.valid_until).getTime() > nowTick;
+    })
+    .sort((a, b) => {
+      // Null valid_until sorts to top (most-urgent-to-review).
+      const ta = a.valid_until ? new Date(a.valid_until).getTime() : 0;
+      const tb = b.valid_until ? new Date(b.valid_until).getTime() : 0;
+      return ta - tb;
+    });
 
   // Violation column: TWO sources unified.
   //   1. Overstay  = visitor_passes that expired (had a pass, ran past it)
