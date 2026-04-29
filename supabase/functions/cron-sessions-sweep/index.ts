@@ -229,13 +229,15 @@ async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: numb
 }
 
 // NEW — registered session + pass expired > OVERSTAY_GRACE_MINUTES ago =
-// overstay violation. Fires regardless of detection silence; the whole point
-// is to catch silent parked overstayers. Retrospective left_before_tow
-// flagging handles the edge case of a truck that silently left on time.
+// overstay violation. Skips sessions where an exit camera has already seen
+// the truck heading out (exit_hinted_at). At Charlotte the cameras only
+// cover entrances/exits — there's no interior coverage that could confuse
+// a "still on lot" signal — so an exit hint is a hard "they left, no
+// violation". closeRegistered will close the session clean on its next pass.
 async function overstayExpiry(): Promise<number> {
   const { data: sessions, error } = await db
     .from("plate_sessions")
-    .select("id, property_id, plate_text, entry_plate_event_id, visitor_pass_id")
+    .select("id, property_id, plate_text, entry_plate_event_id, visitor_pass_id, exit_hinted_at")
     .eq("state", "registered")
     .is("exited_at", null);
   if (error) throw error;
@@ -245,6 +247,12 @@ async function overstayExpiry(): Promise<number> {
   const graceCutoffMs = Date.now() - OVERSTAY_GRACE_MINUTES * 60 * 1000;
   for (const s of sessions) {
     if (!s.visitor_pass_id) continue;
+    if (s.exit_hinted_at) {
+      // Exit camera saw them leaving — no violation. closeRegistered fast
+      // path will close the session at +EXIT_HINT_BUFFER_MINUTES.
+      console.log(`overstay_skip session=${s.id} reason=exit_hinted_at exit_hinted_at=${s.exit_hinted_at}`);
+      continue;
+    }
     const { data: pass, error: pErr } = await db
       .from("visitor_passes")
       .select("valid_until")
