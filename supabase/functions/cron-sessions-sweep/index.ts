@@ -38,25 +38,12 @@ const COOLDOWN_HOURS = Number(Deno.env.get("COOLDOWN_HOURS") ?? "24");
 // Silence-gap closes the session earlier (clean, no violation) if any
 // camera sees the vehicle leaving within the window.
 const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "30");
-// Presence-evidence gate. A violation only fires if the session passes
-// both checks:
-//
-//   1. Minimum dwell: events must span at least MIN_DWELL_SECONDS of
-//      real time. Under this, it's a cross-property transit (enter one
-//      gate, exit another in seconds) even if multiple cameras fired.
-//      The AJ82908 false positive on 2026-04-24 taught us this the
-//      hard way — drive-through hit 2 cameras in 57 seconds and
-//      previously passed the gate.
-//
-//   2. Either multiple cameras (≥2) OR long dwell
-//      (≥ PRESENCE_EVIDENCE_MINUTES). Single-camera short bursts are
-//      inconclusive.
-//
-// Otherwise auto-close clean with no violation, no partner email.
-// This is the "absolutely sure they are in the wrong" guardrail — we'd
-// rather miss borderline cases than dispatch a wrong tow.
-const PRESENCE_EVIDENCE_MINUTES = Number(Deno.env.get("PRESENCE_EVIDENCE_MINUTES") ?? "5");
-const MIN_DWELL_SECONDS = Number(Deno.env.get("MIN_DWELL_SECONDS") ?? "120");
+
+// PRESENCE_EVIDENCE_MINUTES + MIN_DWELL_SECONDS removed 2026-04-29 in
+// PR #161 — gate-only properties (Charlotte) can never satisfy the
+// 2-cameras-or-5-min-span rule because cameras don't see parked trucks.
+// graceExpiry now relies on exit_hinted_at as the only "they left"
+// signal; the rest is "any read + 30 min grace = violation".
 
 const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -129,14 +116,12 @@ async function registrationTransition(): Promise<number> {
   return promoted;
 }
 
-// Grace expiry. Three close paths:
+// Grace expiry. Two close paths (per PR #161 — gate-only Charlotte):
 //   - Silence-gap fired during grace window (vehicle detected leaving on
 //     any camera after idle threshold) → close clean, no violation.
-//   - Grace window expired but no strong presence evidence (single
-//     camera, short burst) → close clean, no violation. "Not sure they
-//     were actually there" = don't enforce.
-//   - Grace window expired AND strong presence evidence (≥2 cameras or
-//     events spanning ≥ PRESENCE_EVIDENCE_MINUTES) → fire violation.
+//   - Grace window expired AND no exit hint AND ≥1 read on session →
+//     fire violation. Sessions with zero linked reads close clean as
+//     orphans.
 async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: number; closed_no_evidence: number }> {
   const cutoff = new Date(Date.now() - GRACE_EXPIRY_MINUTES * 60 * 1000).toISOString();
   const { data: sessions, error } = await db
@@ -352,8 +337,8 @@ async function closeResident(): Promise<number> {
 
   let closed = 0;
   for (const s of sessions) {
-    if (!s.exit_hinted_at) continue;
-    const hintMs = new Date(s.exit_hinted_at).getTime();
+    // SQL filter above already guarantees exit_hinted_at IS NOT NULL.
+    const hintMs = new Date(s.exit_hinted_at!).getTime();
     if (nowMs - hintMs <= EXIT_HINT_BUFFER_MINUTES * 60 * 1000) continue;
 
     const exitedAt = s.exit_hinted_at;

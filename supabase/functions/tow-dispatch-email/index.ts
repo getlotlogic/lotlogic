@@ -1,16 +1,12 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-api-key, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
-
+// Internal-only function — gated by INTERNAL_TOKEN, never called from a
+// browser, so no CORS preflight needed.
 function json(body: unknown, status: number) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -84,7 +80,6 @@ async function signActionToken(violationId: string, action: "tow" | "no_tow", se
 }
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   // Internal-only function. Until 2026-04-26 this was unauthenticated, which
@@ -104,7 +99,11 @@ serve(async (req) => {
   // cron will re-attempt on the next sweep — the violation row is not
   // marked dispatched until a 200 comes back.
   const resendKey = Deno.env.get("RESEND_API_KEY");
-  const fromEmail = Deno.env.get("FROM_EMAIL") || "noreply@lotlogic.com";
+  // Default to the actual SendGrid-authenticated sender. The previous
+  // generic "noreply@lotlogic.com" fallback was unauthenticated — if
+  // FROM_EMAIL ever got unset every dispatch would land in spam folders
+  // (DKIM fails for the lotlogic.com domain).
+  const fromEmail = Deno.env.get("FROM_EMAIL") || "dispatch@lotlogicparking.com";
   const jwtSecret = Deno.env.get("JWT_SECRET") || "";
   const backendUrl = Deno.env.get("BACKEND_URL") || "https://lotlogic-backend-production.up.railway.app";
   if (!resendKey) {

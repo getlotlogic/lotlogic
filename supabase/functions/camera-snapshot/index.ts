@@ -653,7 +653,6 @@ Deno.serve(async (req: Request) => {
     }
 
     let eventCount = 0;
-    let violationCount = 0;  // Always 0 in the new model; cron creates violations now.
     let dedupCount = 0;
     const now = new Date();
 
@@ -998,7 +997,6 @@ Deno.serve(async (req: Request) => {
     return json(200, {
       ok: true,
       events: eventCount,
-      violations: violationCount,  // always 0 in the new model; violations fire from cron
       dedup_suppressed: dedupCount,
       source: extracted.source,
       orientation: camera.orientation, // legacy — kept for log/dashboard parity
