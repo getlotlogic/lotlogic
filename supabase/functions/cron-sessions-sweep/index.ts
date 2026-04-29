@@ -180,12 +180,19 @@ async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: numb
     // session for. Count distinct cameras and measure event time span.
     const { data: evRows, error: evErr } = await db
       .from("plate_events")
-      .select("camera_id, created_at")
+      .select("camera_id, created_at, event_type")
       .eq("session_id", s.id)
       .order("created_at", { ascending: true });
     if (evErr) throw evErr;
 
-    const events = evRows ?? [];
+    // Exclude paired_read events from the presence-evidence count. A
+    // paired read is the SECOND camera at the SAME gate firing on a
+    // single physical transit — counting it as a distinct-camera signal
+    // would double-count one drive-through and incorrectly satisfy the
+    // 2-cameras evidence rule, firing violations on quick drive-throughs
+    // that barely cleared MIN_DWELL_SECONDS. Only entry/exit events
+    // count as presence proof.
+    const events = (evRows ?? []).filter((e) => e.event_type !== "paired_read");
     const distinctCameras = new Set(events.map((e) => e.camera_id)).size;
     const timeSpanMs = events.length >= 2
       ? new Date(events[events.length - 1].created_at).getTime() - new Date(events[0].created_at).getTime()
