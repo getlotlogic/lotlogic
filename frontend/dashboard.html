@@ -588,7 +588,7 @@
       padding: 24px 20px;
       margin-bottom: 16px;
       text-align: center;
-      box-shadow: 0 4px 24px rgba(59,130,246,.08);
+      box-shadow: 0 4px 24px rgba(251,191,36,.10);
     }
     .earnings-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--text-faint); margin-bottom: 10px; }
     .earnings-amount { font-size: 48px; font-weight: 800; color: var(--text-primary); letter-spacing: -2px; line-height: 1; }
@@ -608,7 +608,7 @@
       font-family: inherit;
       transition: all .15s;
     }
-    .period-btn.active { border-color: rgba(59,130,246,.4); color: #3b82f6; background: rgba(59,130,246,.08); }
+    .period-btn.active { border-color: rgba(251,191,36,.5); color: var(--accent); background: rgba(251,191,36,.10); }
     .earnings-breakdown {
       background: var(--bg-card);
       border: 1px solid var(--border);
@@ -1272,7 +1272,7 @@
       outline: none; font-family: inherit; transition: border-color .2s, box-shadow .2s;
       position: relative;
     }
-    .search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
+    .search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(251,191,36,.18); }
     .search-input::placeholder { color: var(--text-dim); }
     .search-wrap { position: relative; flex: 1; }
     .search-icon {
@@ -1284,7 +1284,7 @@
       cursor: pointer; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-faint);
       font-family: inherit; transition: all .15s; white-space: nowrap;
     }
-    .filter-chip.active { border-color: rgba(59,130,246,.4); color: var(--accent); background: rgba(59,130,246,.08); }
+    .filter-chip.active { border-color: rgba(251,191,36,.5); color: var(--accent); background: rgba(251,191,36,.10); }
     .filter-chip:active { transform: scale(.96); }
 
     /* ── Inline bar chart ── */
@@ -1439,8 +1439,8 @@
     .theme-light .header-name { color: #6b7280; }
     .theme-light .bottom-nav { background: rgba(255,255,255,.97); border-top-color: #e5e7eb; }
     .theme-light .nav-item { color: #9ca3af; }
-    .theme-light .nav-item.active { color: #2563eb; }
-    .theme-light .nav-item.active::before { background: #2563eb; }
+    .theme-light .nav-item.active { color: #B8860B; }
+    .theme-light .nav-item.active::before { background: #FBBF24; }
     .theme-light .nav-badge { border-color: #fff; }
 
     /* Cards */
@@ -1607,14 +1607,14 @@
     .theme-light .data-source-badge { background: rgba(74,222,128,.06); color: #16a34a; border-color: rgba(74,222,128,.15); }
 
     /* Login on light theme */
-    .theme-light .login-page { background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(37,99,235,.06) 0%, transparent 70%), #f8f9fb; }
+    .theme-light .login-page { background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(251,191,36,.10) 0%, transparent 70%), #f8f9fb; }
     .theme-light .login-wordmark { color: #1a1a2e; }
-    .theme-light .login-shield { box-shadow: 0 4px 16px rgba(37,99,235,.2); }
+    .theme-light .login-shield { box-shadow: 0 4px 16px rgba(251,191,36,.28); }
     .theme-light .field-input { background: #fff; border-color: #e5e7eb; color: #1a1a2e; }
     .theme-light .field-input::placeholder { color: #c0c4cc; }
-    .theme-light .field-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+    .theme-light .field-input:focus { border-color: #FBBF24; box-shadow: 0 0 0 3px rgba(251,191,36,.18); }
     .theme-light .field-label { color: #6b7280; }
-    .theme-light .login-btn { background: linear-gradient(135deg, #2563eb, #1d4ed8); box-shadow: 0 4px 20px rgba(37,99,235,.2); }
+    .theme-light .login-btn { background: linear-gradient(135deg, #FBBF24, #C4940F); color: #1A1206; box-shadow: 0 4px 20px rgba(251,191,36,.28); }
     .theme-light .login-error { background: rgba(220,38,38,.06); border-color: rgba(220,38,38,.2); color: #dc2626; }
 
     /* KPI values on light theme — use darker, more readable colors */
@@ -4742,7 +4742,14 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
             </div>
           </div>
           <button
-            onClick={() => onNavigate && onNavigate('account')}
+            onClick={() => {
+              if (onNavigate) onNavigate('account');
+              // Wait for the Account tab to mount, then scroll to the plates editor.
+              setTimeout(() => {
+                const el = document.getElementById('tow-truck-plates');
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }, 80);
+            }}
             style={{
               fontSize:12, padding:'6px 12px', borderRadius:6, cursor:'pointer', fontWeight:700,
               border:'1px solid rgba(251,191,36,.5)', background:'rgba(251,191,36,.12)',
@@ -5389,7 +5396,7 @@ function EarningsPage({ violations, lots, isOwner, user, onNavigate }) {
                 <div className="bar-chart-track">
                   <div className="bar-chart-fill" style={{
                     width: `${Math.max((d.value / maxDailyRev) * 100, d.value > 0 ? 8 : 0)}%`,
-                    background: d.value > 0 ? 'linear-gradient(90deg, #3b82f6, #2563eb)' : 'transparent',
+                    background: d.value > 0 ? 'linear-gradient(90deg, #FBBF24, #C4940F)' : 'transparent',
                   }}>
                     {d.value > 0 && fmtMoney(d.value)}
                   </div>
@@ -6451,10 +6458,15 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
         fontSize: 13, color: 'var(--text-primary)', display: 'flex', gap: 10, alignItems: 'flex-start',
       }
     },
-      React.createElement('span', { 'aria-hidden': true, style: { fontSize: 14, color: '#60a5fa', lineHeight: 1.2 } }, '\u2139' /* ℹ */),
+      React.createElement('span', { 'aria-hidden': true, style: { fontSize: 14, color: '#FBBF24', lineHeight: 1.2 } }, '\u2139' /* ℹ */),
       React.createElement('div', null,
         React.createElement('strong', { style: { fontWeight: 700 } }, 'Read-only.'),
-        ' Your owner handles billing overrides. Reach out if you want to contest a row.',
+        ' Your owner handles billing overrides. To contest a row, ',
+        React.createElement('a', {
+          href: 'mailto:gabriel@lotlogicparking.com?subject=Billing%20review%20question',
+          style: { color: '#FBBF24', textDecoration: 'underline', fontWeight: 600 },
+        }, 'email LotView support'),
+        '.',
       ),
     ),
 
@@ -6694,7 +6706,7 @@ function TowTruckPlatesEditor({ user }) {
     persist(next, 'removed');
   }
 
-  return React.createElement('div', { className: 'settings-section' },
+  return React.createElement('div', { className: 'settings-section', id: 'tow-truck-plates' },
     React.createElement('div', {
       className: 'settings-section-title',
       style: { display: 'flex', alignItems: 'center', gap: 6 },
@@ -7292,11 +7304,11 @@ function PartnerFeeEditor({ user }) {
               onClick={save}
               disabled={saving}
               style={{
-                background: saving ? 'rgba(74,222,128,.2)' : '#4ade80',
-                color: saving ? '#4ade80' : '#0b3d20',
+                background: saving ? 'rgba(251,191,36,.25)' : '#FBBF24',
+                color: saving ? '#FBBF24' : '#1A1206',
                 border: 'none', borderRadius: 8, padding: '9px 16px',
                 fontSize: 13, fontWeight: 700, cursor: saving ? 'progress' : 'pointer',
-                fontFamily: 'inherit',
+                fontFamily: 'inherit', letterSpacing: '.04em',
               }}
             >{saving ? 'Saving…' : 'Save'}</button>
           )}
@@ -8229,9 +8241,15 @@ function TruckParkingLog({ propertyId }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [filters, setFilters] = useState(() => {
+    // Default to last 7 days so a partner logging in mid-shift sees recent
+    // history, not just today (which is empty for the first hours each day).
     const today = new Date();
-    const iso = today.toISOString().slice(0, 10);
-    return { date_from: iso, date_to: iso, plate: '', company_name: '', status: '' };
+    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return {
+      date_from: weekAgo.toISOString().slice(0, 10),
+      date_to: today.toISOString().slice(0, 10),
+      plate: '', company_name: '', status: '',
+    };
   });
   const [pendingFilters, setPendingFilters] = useState(filters);
   const [cancelModal, setCancelModal] = useState(null); // { id, plate_text } | null
@@ -10246,6 +10264,25 @@ function App() {
     try { localStorage.setItem('lotlogic_session', JSON.stringify(session)); } catch {}
     applySupabaseAuth(session._token);
     loadData(session);
+
+    // Partners: enrich the in-memory user with their fee + plate fields so the
+    // PartnerFeeEditor and the "add tow-truck plates" nudge render against
+    // real data instead of placeholders. Backend's GET /partners/me strips
+    // these fields by design (PartnerSelfResponse), so go straight to
+    // Supabase — column-level RLS allows the partner to SELECT their own row.
+    if (session._role === 'partner' && supabase && session.id) {
+      supabase
+        .from('enforcement_partners')
+        .select('tow_fee, boot_fee, tow_truck_plates')
+        .eq('id', session.id)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (error || !data) return;
+          const merged = { ...session, ...data, _ts: Date.now() };
+          setOwner(merged);
+          try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
+        });
+    }
   }
 
   function logout() {
