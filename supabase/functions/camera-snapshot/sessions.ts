@@ -117,6 +117,26 @@ function areCharsConfusable(a: string, b: string): boolean {
   return false;
 }
 
+// Partial-read match against an allowlisted plate.
+//   Returns true when the SHORTER of (read, allowlist) is a substring of the
+//   LONGER one AND the shorter is at least `minRatio` of the longer's length
+//   (default 50%). Used as a last-resort fallback when the strict matcher
+//   misses a partial read of a registered plate (e.g. truck partially
+//   obscures plate, camera caught only a 5-char fragment of a 7-char plate).
+//
+// The session that registers via this path will have read_plate ≠ pass_plate
+// and surfaces in the Training tab's Fuzzy Matches mode for operator review.
+export function plateMatchesPartial(read: string, registered: string, minRatio = 0.5): boolean {
+  if (!read || !registered) return false;
+  const r = String(read).toUpperCase();
+  const p = String(registered).toUpperCase();
+  if (r === p) return true;
+  const [shorter, longer] = r.length <= p.length ? [r, p] : [p, r];
+  if (shorter.length < 2) return false; // ≤1-char "matches" are noise
+  if (shorter.length / longer.length < minRatio) return false;
+  return longer.includes(shorter);
+}
+
 // Two plates match if:
 //  - Equal
 //  - One is a substring of the other with length diff ≤ 3 (partial reads)
@@ -486,6 +506,11 @@ export async function findActiveResident(
   for (const r of data ?? []) {
     if (plateSimilar(normalizePlate(r.plate_text ?? ""), normalizedPlate, true)) return { id: r.id };
   }
+  // Last-resort: partial read against a longer registered plate (≥50%
+  // length, substring). Logs as a fuzzy match for operator review.
+  for (const r of data ?? []) {
+    if (plateMatchesPartial(normalizedPlate, normalizePlate(r.plate_text ?? ""))) return { id: r.id };
+  }
   return null;
 }
 
@@ -541,6 +566,14 @@ export async function findActiveVisitorPass(
   for (const r of data ?? []) {
     if (!isValid(r)) continue;
     if (plateSimilar(normalizePlate(r.plate_text ?? ""), normalizedPlate, true)) {
+      return { id: r.id, valid_until: r.valid_until };
+    }
+  }
+  // Last-resort: partial read against a longer registered plate (≥50%
+  // length, substring). Logs as a fuzzy match for operator review.
+  for (const r of data ?? []) {
+    if (!isValid(r)) continue;
+    if (plateMatchesPartial(normalizedPlate, normalizePlate(r.plate_text ?? ""))) {
       return { id: r.id, valid_until: r.valid_until };
     }
   }
