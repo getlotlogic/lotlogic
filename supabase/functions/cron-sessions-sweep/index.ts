@@ -53,6 +53,7 @@ Deno.serve(async (_req: Request) => {
     const promoted = await registrationTransition();
     const grace = await graceExpiry();
     const overstayExpired = await overstayExpiry();
+    const dispatch = await dispatchPendingViolations();
     const closedRegistered = await closeRegistered();
     const closedResident = await closeResident();
     const closedExpired = await closeExpired();
@@ -64,6 +65,8 @@ Deno.serve(async (_req: Request) => {
       grace_closed_no_evidence: grace.closed_no_evidence,
       grace_closed_exit_hint: grace.closed_exit_hint,
       overstay_expired: overstayExpired,
+      dispatched: dispatch.dispatched,
+      auto_no_tow_left_before_tow: dispatch.left_before_tow,
       closed_registered: closedRegistered,
       closed_resident: closedResident,
       closed_expired: closedExpired,
@@ -417,6 +420,84 @@ async function closeExpired(): Promise<number> {
   return closed;
 }
 
+// Post-violation hold: time we wait between creating a violation row and
+// dispatching the partner email. If exit_hinted_at gets set on the session
+// during this window (the truck pulled out shortly after the 30-min grace
+// expired), we cancel the dispatch and mark the violation as
+// left_before_tow_at — Frank never gets paged for a truck that already
+// left. This is the practical fix for "still getting violations on cars
+// that are leaving" reported on 2026-04-29.
+const DISPATCH_HOLD_MINUTES = Number(Deno.env.get("DISPATCH_HOLD_MINUTES") ?? "5");
+
+async function dispatchPendingViolations(): Promise<{ dispatched: number; left_before_tow: number }> {
+  const cutoff = new Date(Date.now() - DISPATCH_HOLD_MINUTES * 60 * 1000).toISOString();
+  const { data: pending, error } = await db
+    .from("alpr_violations")
+    .select("id, session_id, created_at")
+    .is("sms_sent_at", null)
+    .lt("created_at", cutoff)
+    .limit(50);
+  if (error) throw error;
+  if (!pending || pending.length === 0) return { dispatched: 0, left_before_tow: 0 };
+
+  let dispatched = 0;
+  let leftBeforeTow = 0;
+  const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
+
+  for (const v of pending) {
+    if (!v.session_id) continue;
+    const { data: sess, error: sErr } = await db
+      .from("plate_sessions")
+      .select("exit_hinted_at")
+      .eq("id", v.session_id)
+      .maybeSingle();
+    if (sErr) { console.warn("dispatchPending session fetch failed:", sErr.message); continue; }
+
+    if (sess?.exit_hinted_at) {
+      // Truck was seen heading out during the post-violation hold —
+      // they left before Frank would have rolled. Suppress the dispatch
+      // and stamp the audit flag.
+      const upd = await db
+        .from("alpr_violations")
+        .update({
+          left_before_tow_at: new Date().toISOString(),
+          sms_sent_at: new Date().toISOString(), // mark as "handled" so we don't retry
+          status: "dismissed",
+          action_taken: "no_tow",
+          action_channel: "auto_left_before_tow",
+          action_at: new Date().toISOString(),
+          resolved_at: new Date().toISOString(),
+        })
+        .eq("id", v.id)
+        .is("sms_sent_at", null);
+      if (upd.error) console.warn(`auto-no-tow update failed for ${v.id}: ${upd.error.message}`);
+      else {
+        console.log(`auto_no_tow violation=${v.id} session=${v.session_id} exit_hinted_at=${sess.exit_hinted_at}`);
+        leftBeforeTow++;
+      }
+      continue;
+    }
+
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/tow-dispatch-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${internalToken}` },
+        body: JSON.stringify({ violation_id: v.id }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        console.warn(`tow-dispatch-email ${res.status} for ${v.id}: ${body.slice(0, 200)}`);
+      } else {
+        dispatched++;
+      }
+    } catch (err) {
+      console.warn(`tow-dispatch-email fetch failed for ${v.id}: ${String(err)}`);
+    }
+  }
+
+  return { dispatched, left_before_tow: leftBeforeTow };
+}
+
 async function createViolationAndDispatch(
   propertyId: string,
   plateText: string,
@@ -464,26 +545,11 @@ async function createViolationAndDispatch(
     .eq("id", sessionId);
   if (sUpd.error) throw sUpd.error;
 
-  try {
-    // tow-dispatch-email now requires INTERNAL_TOKEN bearer (added 2026-04-26
-    // — previously unauthenticated, exposed an internet-callable email-blast
-    // endpoint).
-    const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/tow-dispatch-email`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${internalToken}`,
-      },
-      body: JSON.stringify({ violation_id: violationId }),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      console.warn(`tow-dispatch-email ${res.status} for ${violationId}: ${body.slice(0, 200)}`);
-    }
-  } catch (err) {
-    console.warn(`tow-dispatch-email fetch failed for ${violationId}: ${String(err)}`);
-  }
+  // Do NOT dispatch the email here — dispatchPendingViolations runs every
+  // minute and will dispatch this violation after DISPATCH_HOLD_MINUTES,
+  // giving the depth-pair / silence-gap a chance to set exit_hinted_at if
+  // the truck is in the middle of pulling out. If that happens, the
+  // dispatch is auto-cancelled with left_before_tow_at instead.
 }
 
 function json(status: number, body: unknown): Response {
