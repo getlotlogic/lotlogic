@@ -867,6 +867,28 @@ Deno.serve(async (req: Request) => {
           continue;
         }
 
+        // Bulletproof session-opening guard: a single OCR'd plate read with
+        // no paired motion in the window is fundamentally ambiguous about
+        // direction. The same plate text could be the front of an entering
+        // car (front plate visible to the road-facing camera) or the back
+        // of an exiting truck (back plate visible to the same camera, just
+        // shooting the opposite side of the gate). Without a paired event
+        // from the partnered camera at this gate to anchor direction, we
+        // refuse to open a new session — the cost of a false-positive
+        // session (false violation, false tow dispatch) is unacceptable.
+        // Log the event for forensics and move on; if this WAS a real
+        // entry, a later OCR'd read or the partnered camera firing motion
+        // will create the session via the paired-read path.
+        if (!isPairedRead) {
+          const ev = await db.from("plate_events")
+            .insert(baseEventRow(null, "unmatched"))
+            .select("id").single();
+          if (ev.error) throw ev.error;
+          eventCount++;
+          console.log(`single-read no-pair: logged stray ${normalized} at ${camera.id} — no session opened`);
+          continue;
+        }
+
         // Allowlist match: try the plate first, then the USDOT/MC number if
         // we have one. Either hit upgrades the session to resident/registered.
         let resident = await findActiveResident(db, camera.property_id, normalized);
