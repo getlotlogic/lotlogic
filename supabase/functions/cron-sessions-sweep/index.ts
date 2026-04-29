@@ -174,50 +174,34 @@ async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: numb
 
     if (s.entered_at >= cutoff) continue; // grace not yet expired
 
-    // Branch 2/3 — check presence evidence before violating. A violation
-    // is only fair if we have proof the vehicle was actually AT the
-    // property, not just a single drive-by read we mistakenly opened a
-    // session for. Count distinct cameras and measure event time span.
+    // Charlotte (and any gate-only property) has zero interior coverage,
+    // so a truck that enters once and parks silently is invisible to the
+    // cameras for the rest of the stay. The old "≥2 distinct cameras OR
+    // ≥5 min event span" check would never fire on those silent over-
+    // stayers, which is exactly the case enforcement is for.
+    //
+    // New rule: grace expired (30 min) + no exit hint (branch 1 above)
+    // + at least one read tied to this session → fire violation. The
+    // remaining drive-by edge case (single read at one gate, never
+    // re-detected, never picked up by an exit camera) is rare in
+    // practice and the operator's Mark No-Tow override on the billing
+    // review queue is the safety valve.
     const { data: evRows, error: evErr } = await db
       .from("plate_events")
-      .select("camera_id, created_at, event_type")
+      .select("id")
       .eq("session_id", s.id)
-      .order("created_at", { ascending: true });
+      .limit(1);
     if (evErr) throw evErr;
 
-    // Exclude paired_read events from the presence-evidence count. A
-    // paired read is the SECOND camera at the SAME gate firing on a
-    // single physical transit — counting it as a distinct-camera signal
-    // would double-count one drive-through and incorrectly satisfy the
-    // 2-cameras evidence rule, firing violations on quick drive-throughs
-    // that barely cleared MIN_DWELL_SECONDS. Only entry/exit events
-    // count as presence proof.
-    const events = (evRows ?? []).filter((e) => e.event_type !== "paired_read");
-    const distinctCameras = new Set(events.map((e) => e.camera_id)).size;
-    const timeSpanMs = events.length >= 2
-      ? new Date(events[events.length - 1].created_at).getTime() - new Date(events[0].created_at).getTime()
-      : 0;
-
-    // Hard floor: total event span must exceed MIN_DWELL_SECONDS (default
-    // 120s = 2 min). Drive-through vehicles cross both gates in under a
-    // minute and would otherwise pass the "2+ cameras" check. A real
-    // parker takes longer even just to arrive and position.
-    const dwelledLongEnough = timeSpanMs >= MIN_DWELL_SECONDS * 1000;
-
-    const hasStrongEvidence = dwelledLongEnough && (
-      distinctCameras >= 2 ||
-      timeSpanMs >= PRESENCE_EVIDENCE_MINUTES * 60 * 1000
-    );
-
-    if (!hasStrongEvidence) {
-      // Inconclusive — only saw them briefly, may have been a drive-by.
-      // Close clean, no violation, no partner email.
+    if (!evRows || evRows.length === 0) {
+      // Orphan session with no supporting reads — close clean rather
+      // than violate without any underlying evidence.
       const upd = await db.from("plate_sessions")
         .update({ state: "closed_clean", exited_at: nowIso, updated_at: nowIso })
         .eq("id", s.id)
         .eq("state", "grace");
       if (upd.error) throw upd.error;
-      console.log(`grace_closed_no_evidence session=${s.id} cameras=${distinctCameras} span_min=${Math.round(timeSpanMs/60000)}`);
+      console.log(`grace_closed_no_evidence session=${s.id} reason=no_events`);
       closedNoEvidence++;
       continue;
     }
