@@ -2819,7 +2819,10 @@ const db = {
   },
   async approveResidentPlate(id) {
     if (supabase) {
-      const { error } = await supabase.from('resident_plates').update({ status: 'approved' }).eq('id', id);
+      // Approval flips BOTH status and active. The cameras filter on
+      // active=true (see findActiveResident in camera-snapshot/sessions.ts);
+      // setting only status='approved' would leave the plate unrecognized.
+      const { error } = await supabase.from('resident_plates').update({ status: 'approved', active: true }).eq('id', id);
       if (error) throw new Error(error.message);
       return { success: true };
     }
@@ -8730,7 +8733,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   async function handleApprovePlate(id) {
     try {
       await db.approveResidentPlate(id);
-      setPlates(prev => prev.map(p => p.id === id ? { ...p, status: 'approved' } : p));
+      setPlates(prev => prev.map(p => p.id === id ? { ...p, status: 'approved', active: true } : p));
       addToast('Plate approved', 'success');
     } catch (err) {
       addToast('Failed to approve. ' + (err.message || ''), 'error');
