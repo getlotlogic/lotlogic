@@ -10029,7 +10029,7 @@ function TrainingPage({ user, isOwner }) {
         }}>{retraining ? 'Kicking off…' : '🚀 Retrain detector'}</button>}
       </div>
 
-      {loading ? (
+      {loading && queue.length === 0 ? (
         <div style={{padding:20, color:'var(--text-secondary)'}}>Loading…</div>
       ) : !cur ? (
         <div style={{padding:30, textAlign:'center', color:'var(--text-secondary)'}}>
