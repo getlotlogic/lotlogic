@@ -17,6 +17,7 @@ Spec: docs/superpowers/specs/2026-04-25-yolo-plate-detector-design.md
 """
 
 import base64
+import json
 import os
 import re
 import time
@@ -46,6 +47,34 @@ DETECTOR_IMGSZ = int(os.environ.get("DETECTOR_IMGSZ", "640"))
 OCR_MODEL = os.environ.get("OCR_MODEL", "cct-s-v2-global-model")
 DETECTOR_MIN_CONF = float(os.environ.get("DETECTOR_MIN_CONF", "0.15"))
 ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.50"))
+
+# Per-camera threshold overrides. JSON map of camera_id -> float in [0, 1].
+# When the request includes a camera_id present in the map, that camera's
+# YOLO detector + combined-confidence floors are dropped to the override
+# value. Used for far-mounted gate cameras whose plates appear small in
+# the frame (low pixels => lower YOLO conf + lower OCR conf), so the
+# default 0.15 / 0.50 floors throw out otherwise valid reads. Cameras
+# not in the map use the global defaults.
+def _parse_override_map(env_name: str) -> dict:
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        out: dict = {}
+        for k, v in parsed.items():
+            try:
+                f = float(v)
+                if 0.0 <= f <= 1.0:
+                    out[str(k)] = f
+            except (TypeError, ValueError):
+                continue
+        return out
+    except Exception:
+        return {}
+
+DETECTOR_MIN_CONF_OVERRIDES = _parse_override_map("DETECTOR_MIN_CONF_OVERRIDES")
+ALPR_MIN_CONFIDENCE_OVERRIDES = _parse_override_map("ALPR_MIN_CONFIDENCE_OVERRIDES")
 MAX_IMAGE_WIDTH = int(os.environ.get("ALPR_MAX_IMAGE_WIDTH", "1280"))
 ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").lower() == "true"
 
@@ -85,6 +114,7 @@ def on_startup() -> None:
 class RecognizeRequest(BaseModel):
     image_base64: str = Field(..., description="Base64-encoded JPEG (data: URI prefix optional).")
     auth_token: Optional[str] = Field(None, description="Shared secret; must match SIDECAR_AUTH_TOKEN.")
+    camera_id: Optional[str] = Field(None, description="Optional camera UUID; used to look up per-camera threshold overrides.")
 
 
 class PlateCandidate(BaseModel):
@@ -133,13 +163,20 @@ def _decode_image(image_base64: str) -> np.ndarray:
     return img
 
 
-def _run_pipeline(img: np.ndarray) -> RecognizeResponse:
+def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> RecognizeResponse:
     started = time.monotonic()
+
+    # Per-camera floor overrides. None unless camera_id is in the map.
+    detector_floor = DETECTOR_MIN_CONF_OVERRIDES.get(camera_id or "", DETECTOR_MIN_CONF)
+    alpr_floor = ALPR_MIN_CONFIDENCE_OVERRIDES.get(camera_id or "", ALPR_MIN_CONFIDENCE)
 
     # Stage 1: plate detection. Returns a list of detection objects with
     # bounding box + confidence. End-to-end NMS is baked into the model,
     # so duplicates are already suppressed.
-    det_results = detector.predict(img)
+    if isinstance(detector, CustomYoloDetector):
+        det_results = detector.predict(img, conf_thresh=detector_floor)
+    else:
+        det_results = detector.predict(img)
     raw_detection_count = len(det_results)
 
     if raw_detection_count == 0:
@@ -151,8 +188,8 @@ def _run_pipeline(img: np.ndarray) -> RecognizeResponse:
             reason="empty_scene",
         )
 
-    # Stage 2: OCR each crop. Skip crops below DETECTOR_MIN_CONF or with
-    # OCR exceptions; we only emit confident plates.
+    # Stage 2: OCR each crop. Skip crops below the per-camera detector
+    # floor or with OCR exceptions; we only emit confident plates.
     plates: List[PlateCandidate] = []
     h, w = img.shape[:2]
     for det in det_results:
@@ -160,7 +197,7 @@ def _run_pipeline(img: np.ndarray) -> RecognizeResponse:
         # .confidence on the result objects. Bounding box has x1/y1/x2/y2.
         bbox = getattr(det, "bounding_box", det)
         conf = float(getattr(det, "confidence", 0.0))
-        if conf < DETECTOR_MIN_CONF:
+        if conf < detector_floor:
             continue
         x1 = max(0, int(bbox.x1) - 8)
         y1 = max(0, int(bbox.y1) - 8)
@@ -191,7 +228,7 @@ def _run_pipeline(img: np.ndarray) -> RecognizeResponse:
         if not cleaned:
             continue
         combined_conf = conf * ocr_conf
-        if combined_conf < ALPR_MIN_CONFIDENCE:
+        if combined_conf < alpr_floor:
             continue
         plates.append(PlateCandidate(plate=cleaned, confidence=round(combined_conf, 4)))
 
@@ -249,7 +286,7 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
         raise HTTPException(status_code=400, detail=str(err))
 
     try:
-        return _run_pipeline(img)
+        return _run_pipeline(img, camera_id=req.camera_id)
     except Exception as pipeline_err:
         if ENABLE_EASYOCR_FALLBACK and easyocr_reader is not None:
             return _easyocr_fallback(img, pipeline_err)

@@ -20,6 +20,27 @@ const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
 // secrets without redeploying.
 const PR_SDK_URL = Deno.env.get("PR_SDK_URL") ?? "";
 const PR_MIN_SCORE = Number(Deno.env.get("PR_MIN_SCORE") ?? "0.8");
+// Per-camera PR_MIN_SCORE override. JSON map { "<camera_id>": <floor> }.
+// When a camera_id is in the map, its plate reads bypass BOTH the
+// length-scaled confidence ladder AND the vehicle-detection gate, and
+// only require r.score >= floor. Used for cameras whose framing makes
+// plates appear small (low pixels = lower PR confidence + lower vehicle
+// score) — e.g. far-mounted gate cams. A/D stay on the strict path.
+const PR_MIN_SCORE_OVERRIDES: Record<string, number> = (() => {
+  try {
+    const raw = Deno.env.get("PR_MIN_SCORE_OVERRIDES");
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n >= 0 && n <= 1) out[k] = n;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+})();
 // Reject PR reads shorter than this many alphanumeric chars. Two- or three-
 // character "HH" / "AB" reads are partial captures, not plates, and produce
 // bogus violations. 4 is the floor for every US plate format we care about.
@@ -172,7 +193,7 @@ Deno.serve(async (req: Request) => {
     // through to PR (new vehicle, opens a session). If it returns no
     // plate, skip PR entirely (sidecar is trusted).
     if (OPENALPR_SIDECAR_URL) {
-      const sidecar = await callOpenAlprSidecar(extracted.bytes);
+      const sidecar = await callOpenAlprSidecar(extracted.bytes, camera.id);
       // Cross-camera burst killer: try to match the sidecar's read against
       // an OPEN session on this property even if the read is below the
       // 0.80 confidence gate that normally protects against false positives.
@@ -550,7 +571,7 @@ Deno.serve(async (req: Request) => {
     // and (3) length-scaled confidence thresholds. Rejects trailer IDs,
     // police unit numbers, URLs, decals, and industrial labels that PR
     // OCRs as plate-shaped text.
-    let surviving = results.filter((r: PrResult) => isPlausiblePlate(r));
+    let surviving = results.filter((r: PrResult) => isPlausiblePlate(r, camera.id));
 
     // Burst mode: if a recent frame had no usable plate, usdot_active_until
     // is set N seconds in the future. USDOT OCR only fires when THIS frame
@@ -1123,6 +1144,7 @@ async function callPlateRecognizer(
 // returns ok: false and the caller falls through to the paid PR API.
 async function callOpenAlprSidecar(
   imageBytes: Uint8Array,
+  cameraId?: string,
 ): Promise<{
   ok: boolean;
   bestPlate: string | null;       // gated by OPENALPR_MIN_CONFIDENCE
@@ -1158,6 +1180,7 @@ async function callOpenAlprSidecar(
       body: JSON.stringify({
         image_base64: b64,
         auth_token: OPENALPR_SIDECAR_TOKEN || undefined,
+        camera_id: cameraId || undefined,
       }),
       signal: controller.signal,
     });
@@ -1487,37 +1510,33 @@ async function maybePairedMotionExitHint(
   else console.log(`exit inferred (paired-motion) session=${sessionId} gate=${camera.gate_id}`);
 }
 
-function isPlausiblePlate(r: PrResult): boolean {
+function isPlausiblePlate(r: PrResult, cameraId: string): boolean {
   const normalized = normalizePlate(r.plate ?? "");
 
   // ─── Layer 2: plate SHAPE ──────────────────────────────────────────
-  // Length 5-8 covers all US plate formats
+  // Length 5-8 covers all US plate formats. Always applied — even
+  // overridden cameras must pass shape gates (a 3-char "AB7" is junk
+  // regardless of how confident PR is).
   if (normalized.length < PR_MIN_PLATE_LEN || normalized.length > 8) return false;
-  // Must have at least one letter AND one digit — rejects "8266" (trailer
-  // ID) and "1199" (police unit number) which are pure-digit reads.
-  // (Removed 2026-04-25: the previous "no 6+ consecutive digits" rule
-  // rejected real plates like Texas R823272 — 1 letter + 6 digits is a
-  // valid US format. The letter+digit + length rules above already
-  // exclude pure-digit trailer IDs and short unit numbers.)
   if (!/[A-Z]/.test(normalized) || !/\d/.test(normalized)) return false;
 
+  // ─── Per-camera override fast path ─────────────────────────────────
+  // Cameras in PR_MIN_SCORE_OVERRIDES have a single floor and bypass
+  // the length-scaled ladder + vehicle gate below. Used for far-mounted
+  // gate cams where small plates produce low PR + low vehicle scores.
+  const override = PR_MIN_SCORE_OVERRIDES[cameraId];
+  if (typeof override === "number") {
+    return r.score >= override;
+  }
+
   // ─── Layer 1: VEHICLE must have been detected ──────────────────────
-  // PR returns a vehicle object on each result when a car/truck was
-  // detected around the plate. Missing or low-confidence vehicle means
-  // the plate is probably background text (decal, sign, trailer label).
-  //
   // EXCEPTION: when PR is confident in the plate text (>= 0.80), we
-  // trust PR's plate signal and bypass the vehicle gate. This covers
-  // night-IR shots where the truck body is dark/invisible but the plate
-  // is sharp — PR's vehicle detector returns a low score even though the
-  // plate read is clearly real. Layer 2 (letter+digit + length 5-8) and
-  // Layer 3 (length-scaled confidence) still gate against trailer DOTs,
-  // pure-digit reads, and short decal text.
+  // trust PR's plate signal and bypass the vehicle gate. Covers night-IR
+  // shots where the truck body is dark but the plate is sharp.
   const vehicleScore = typeof r.vehicle?.score === "number" ? r.vehicle.score : 0;
   if (r.score < 0.80 && vehicleScore < REQUIRE_VEHICLE_SCORE) return false;
 
   // ─── Layer 3: CONFIDENCE scales with length ────────────────────────
-  // Shorter reads are riskier — require higher confidence to pass.
   const minConf = normalized.length === 5 ? 0.95
                 : normalized.length === 6 ? 0.85
                 : 0.80;

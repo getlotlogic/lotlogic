@@ -18,7 +18,7 @@ Output shape matches open-image-models DetectionResult (.bounding_box.x1/y1/x2/y
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -106,10 +106,15 @@ class CustomYoloDetector:
             order = order[1:][iou < iou_thresh]
         return keep
 
-    def predict(self, img: np.ndarray) -> List[_Detection]:
+    def predict(self, img: np.ndarray, conf_thresh: Optional[float] = None) -> List[_Detection]:
         if img is None or img.size == 0:
             return []
         h0, w0 = img.shape[:2]
+
+        # Per-call override lets the caller drop the floor for specific
+        # cameras (e.g. far-mounted gate cams whose plates show up at low
+        # confidence) without changing the instance default.
+        effective_thresh = self.conf_thresh if conf_thresh is None else conf_thresh
 
         padded, scale, pad_x, pad_y = self._letterbox(img)
         # BGR -> RGB, HWC -> CHW, normalize to [0, 1], add batch dim.
@@ -127,7 +132,7 @@ class CustomYoloDetector:
             return []
 
         confs = preds[:, 4]
-        mask = confs >= self.conf_thresh
+        mask = confs >= effective_thresh
         preds = preds[mask]
         confs = confs[mask]
         if preds.shape[0] == 0:
