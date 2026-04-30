@@ -1306,11 +1306,22 @@ async function inferDirection(
 ): Promise<void> {
   const { data: session, error: sErr } = await db
     .from("plate_sessions")
-    .select("state, last_detected_at, normalized_plate, usdot_number, mc_number")
+    .select("state, last_detected_at, normalized_plate, usdot_number, mc_number, entered_at")
     .eq("id", sessionId)
     .maybeSingle();
   if (sErr) { console.warn("inferDirection session fetch failed:", sErr.message); return; }
   if (!session) return;
+
+  // 6-min parking maneuver buffer — applies to BOTH the depth-pair and
+  // silence-gap branches below. A truck that just opened a session may
+  // back up to position into a spot, retriggering motion at the gate
+  // cameras and falsely tripping the depth-pair exit pattern. Skip
+  // exit_hinted_at for sessions younger than this floor.
+  const PARKING_BUFFER_MS = 6 * 60 * 1000;
+  const sessionAgeMs = session.entered_at
+    ? now.getTime() - new Date(session.entered_at).getTime()
+    : Infinity;
+  const insideParkingBuffer = sessionAgeMs < PARKING_BUFFER_MS;
 
   // ─── Branch 1: cross-camera depth-pair, scoped to a single gate ─────
   // Direction comes from comparing per-direction firing order. If the
@@ -1343,6 +1354,10 @@ async function inferDirection(
       const first = (prior ?? [])[0];
       const priorExit  = first?.alpr_cameras?.exit_order;
       if (priorExit != null && currentExitOrder != null && priorExit < currentExitOrder) {
+        if (insideParkingBuffer) {
+          console.log(`exit hint suppressed (parking buffer) session=${sessionId} age=${Math.round(sessionAgeMs/1000)}s`);
+          return;
+        }
         const upd = await db.from("plate_sessions")
           .update({ exit_hinted_at: now.toISOString() })
           .eq("id", sessionId);
@@ -1400,6 +1415,11 @@ async function inferDirection(
 
   const idleCutoffMs = now.getTime() - SESSION_IDLE_MINUTES * 60 * 1000;
   if (new Date(session.last_detected_at).getTime() >= idleCutoffMs) return;
+
+  if (insideParkingBuffer) {
+    console.log(`silence-gap skipped (parking buffer) session=${sessionId} age=${Math.round(sessionAgeMs/1000)}s`);
+    return;
+  }
 
   const upd = await db.from("plate_sessions")
     .update({ exit_hinted_at: now.toISOString() })
