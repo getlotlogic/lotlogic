@@ -45,6 +45,7 @@ from __future__ import annotations
 import io
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import modal
@@ -97,8 +98,19 @@ def train_yolo(
     from supabase import create_client
     from ultralytics import YOLO
 
+    # Self-call-id so we can update the matching training_runs audit row
+    # at the end. The edge function inserts the row stamped with this id;
+    # picking the row by modal_call_id beats the previous ORDER BY started_at
+    # DESC LIMIT 1 hack, which would close the wrong row if two clicks
+    # happened in the same hour.
+    self_call_id = None
+    try:
+        self_call_id = modal.current_function_call_id()
+    except Exception:
+        pass
+
     started_at = time.time()
-    print(f"[train_yolo] start  epochs={epochs}  imgsz={imgsz}")
+    print(f"[train_yolo] start  epochs={epochs}  imgsz={imgsz}  call_id={self_call_id}")
 
     # Pull labeled rows. PostgREST caps responses at db_max_rows (default
     # 1000) regardless of .limit(N) — once the labeled set crossed 1000
@@ -381,20 +393,23 @@ def train_yolo(
     }
 
     # Close the audit row (releases the concurrency lock for the next run).
-    # Best-effort: failure here doesn't roll back the GitHub commit; the
-    # row will simply stay open for an hour, after which the gate auto-clears.
-    try:
-        sb.table("training_runs").update({
-            "status": "completed",
-            "finished_at": "now()",
-            "labels_at_kickoff": len(rows),
-            "metrics": metrics,
-            "commit_sha": commit_sha,
-        }).is_("finished_at", "null").order(
-            "started_at", desc=True
-        ).limit(1).execute()
-    except Exception as e:
-        print(f"[train_yolo] audit close failed (non-fatal): {e}")
+    # Match by modal_call_id so concurrent runs don't close each other's rows.
+    # Best-effort: failure here doesn't roll back the GitHub commit; the row
+    # stays open for an hour, after which the lock window expires.
+    if self_call_id:
+        try:
+            sb.table("training_runs").update({
+                "status": "completed",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "labels_at_kickoff": len(rows),
+                "metrics": metrics,
+                "commit_sha": commit_sha,
+            }).eq("modal_call_id", self_call_id).execute()
+            print(f"[train_yolo] audit row closed for call_id={self_call_id}")
+        except Exception as e:
+            print(f"[train_yolo] audit close failed (non-fatal): {e}")
+    else:
+        print("[train_yolo] no call_id available — skipping audit close (manual run?)")
 
     shutil.rmtree(work, ignore_errors=True)
     return payload
