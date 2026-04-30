@@ -100,21 +100,36 @@ def train_yolo(
     started_at = time.time()
     print(f"[train_yolo] start  epochs={epochs}  imgsz={imgsz}")
 
-    # Pull labeled rows
+    # Pull labeled rows. PostgREST caps responses at db_max_rows (default
+    # 1000) regardless of .limit(N) — once the labeled set crossed 1000
+    # rows we silently dropped the most recent ~250 from training and
+    # validation mAP regressed because the val split shifted but the
+    # train set didn't actually grow. Paginate via .range() instead.
     sb = create_client(
         os.environ["SUPABASE_URL"],
         os.environ["SUPABASE_SERVICE_ROLE_KEY"],
     )
-    res = (
-        sb.table("plate_events")
-        .select("id,plate_text,confidence,image_url,raw_data,created_at,camera_id")
-        .not_.is_("image_url", "null")
-        .not_.is_("raw_data->>operator_bbox", "null")
-        .limit(20000)
-        .execute()
-    )
+    PAGE_SIZE = 1000
+    raw_rows = []
+    offset = 0
+    while True:
+        page = (
+            sb.table("plate_events")
+            .select("id,plate_text,confidence,image_url,raw_data,created_at,camera_id")
+            .not_.is_("image_url", "null")
+            .not_.is_("raw_data->>operator_bbox", "null")
+            .order("created_at")
+            .range(offset, offset + PAGE_SIZE - 1)
+            .execute()
+        )
+        chunk = page.data or []
+        raw_rows.extend(chunk)
+        if len(chunk) < PAGE_SIZE:
+            break
+        offset += PAGE_SIZE
+    print(f"[train_yolo] pulled {len(raw_rows)} bboxed rows from supabase")
     rows = []
-    for row in res.data or []:
+    for row in raw_rows:
         rd = row.get("raw_data") or {}
         if rd.get("operator_label") != "real_plate":
             continue
