@@ -9414,6 +9414,7 @@ function ALPRPropertiesPage({ user }) {
 // Labels are written to raw_data.operator_label and feed the
 // training-curator agent which auto-tunes the sidecar gate.
 function TrainingPage({ user, isOwner }) {
+  const { addToast } = useToast();
   const [mode, setMode] = useState('detected'); // start with what we have data for
   const [queue, setQueue] = useState([]);
   const [idx, setIdx] = useState(0);
@@ -10002,7 +10003,7 @@ function TrainingPage({ user, isOwner }) {
           // Floor matches min_labels in scripts/modal-train-yolo.py — at <200
           // val mAP is too noisy to trust + the model overfits hard.
           if (total < 200) {
-            addToast({ kind:'error', text:`Only ${total} real_plate labels — need 200+ before retraining (current floor in modal-train-yolo.py).` });
+            addToast(`Only ${total} real_plate labels — need 200+ before retraining (current floor in modal-train-yolo.py).`, 'error');
             return;
           }
           if (!confirm(`Retrain plate detector on ${total} labeled frames? Runs ~10-15 min on GPU. Auto-deploys to sidecar IF mAP50 >= 0.60.`)) return;
@@ -10012,12 +10013,12 @@ function TrainingPage({ user, isOwner }) {
             if (error) throw error;
             // 409 = another run is in flight (concurrency guard in yolo-retrain).
             if (data?.error === 'training_already_in_flight') {
-              addToast({ kind:'error', text:`Already training — wait ~15 min before retrying.` });
+              addToast(`Already training — wait ~15 min before retrying.`, 'error');
               return;
             }
-            addToast({ kind:'success', text:`Training kicked off (${data?.call_id?.slice(0,8) ?? 'modal'}). Sidecar will redeploy in ~15 min if mAP holds.` });
+            addToast(`Training kicked off (${data?.call_id?.slice(0,8) ?? 'modal'}). Sidecar will redeploy in ~15 min if mAP holds.`, 'success');
           } catch (err) {
-            addToast({ kind:'error', text:`Retrain failed: ${err.message || err}` });
+            addToast(`Retrain failed: ${err.message || err}`, 'error');
           } finally {
             setRetraining(false);
           }
