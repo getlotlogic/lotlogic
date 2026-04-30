@@ -91,6 +91,7 @@ def train_yolo(
     import random
     import shutil
     import tempfile
+    from collections import defaultdict
 
     import boto3
     import requests
@@ -158,12 +159,33 @@ def train_yolo(
             "labeled_count": len(rows),
         }
 
-    # Shuffle + split. Seed pinned so re-runs split the same way (val curve
-    # comparable across retrains).
+    # Group-by-plate split. Same trucks visit the lot many times — DC11628
+    # alone appears in 5+ frames. A row-level random shuffle drops the same
+    # plate's frames in both train and val, so val mAP rewards memorization
+    # rather than generalization. Group by normalized plate text first, then
+    # shuffle/split by group so val plates are *unseen* during training.
+    # Empty plate_text rows (typically sidecar_rejected) get a unique key by
+    # event id so they don't collapse into one giant group.
+    groups: dict[str, list] = defaultdict(list)
+    for row, bbox in rows:
+        plate_raw = (row.get("plate_text") or "").upper().strip()
+        plate_key = "".join(c for c in plate_raw if c.isalnum())
+        if not plate_key:
+            plate_key = f"__nokey_{row['id']}"
+        groups[plate_key].append((row, bbox))
+
     random.seed(42)
-    random.shuffle(rows)
-    split_idx = int(len(rows) * train_split)
-    train_rows, val_rows = rows[:split_idx], rows[split_idx:]
+    group_keys = sorted(groups.keys())  # deterministic before shuffle
+    random.shuffle(group_keys)
+    group_split = int(len(group_keys) * train_split)
+    train_keys, val_keys = group_keys[:group_split], group_keys[group_split:]
+    train_rows = [r for k in train_keys for r in groups[k]]
+    val_rows = [r for k in val_keys for r in groups[k]]
+    print(
+        f"[train_yolo] grouped by plate: {len(group_keys)} unique plate-groups → "
+        f"{len(train_keys)} train / {len(val_keys)} val groups, "
+        f"yielding {len(train_rows)} train rows / {len(val_rows)} val rows"
+    )
 
     work = Path(tempfile.mkdtemp(prefix="yolo-"))
     train_img = work / "images" / "train"
