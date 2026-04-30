@@ -3012,12 +3012,12 @@ const db = {
   },
   async getALPRViolations(propertyId, status) {
     if (supabase) {
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, alpr_cameras:camera_id(id, name))');
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, alpr_cameras:camera_id(id, name, gate_id))');
       if (propertyId) q = q.eq('property_id', propertyId);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
       const { data, error } = await q;
-      if (!error && data) return data;
+      if (!error && data) return await this._enrichWithPairedSnapshot(data);
     }
     return [];
   },
@@ -3031,13 +3031,54 @@ const db = {
     if (supabase) {
       const propIds = await this._getPropertyIds(userId, role);
       if (propIds.length === 0) return [];
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, alpr_cameras:camera_id(id, name)), properties(name, address)').in('property_id', propIds);
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, alpr_cameras:camera_id(id, name, gate_id)), properties(name, address)').in('property_id', propIds);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
       const { data, error } = await q;
-      if (!error && data) return data;
+      if (!error && data) return await this._enrichWithPairedSnapshot(data);
     }
     return [];
+  },
+
+  // For each violation, attach the paired camera's snapshot — the second
+  // camera at the same gate that fired motion (with or without OCR)
+  // around the same time as the entry plate event. Lets the operator
+  // visually verify that BOTH cameras at the gate saw the vehicle, not
+  // just one. A single-camera read is structurally ambiguous (front or
+  // back of a truck?) — the paired snapshot disambiguates.
+  async _enrichWithPairedSnapshot(violations) {
+    if (!supabase || !violations.length) return violations;
+    // Pull all candidate paired events in one batch. Window: ±60s around
+    // each violation's entry time, scoped to the partner camera at the
+    // same gate.
+    const PAIR_WINDOW_SEC = 60;
+    const fetchOne = async (v) => {
+      const ev = v.plate_events;
+      if (!ev || !ev.created_at) return null;
+      const gateId = ev.alpr_cameras?.gate_id;
+      const camId = ev.camera_id;
+      if (!gateId || !camId) return null;
+      const t = new Date(ev.created_at).getTime();
+      const lo = new Date(t - PAIR_WINDOW_SEC * 1000).toISOString();
+      const hi = new Date(t + PAIR_WINDOW_SEC * 1000).toISOString();
+      const { data } = await supabase
+        .from('plate_events')
+        .select('image_url, created_at, alpr_cameras!inner(gate_id, name)')
+        .eq('alpr_cameras.gate_id', gateId)
+        .neq('camera_id', camId)
+        .not('image_url', 'is', null)
+        .gte('created_at', lo)
+        .lte('created_at', hi)
+        .order('created_at', { ascending: true })
+        .limit(1);
+      return (data || [])[0] || null;
+    };
+    const paired = await Promise.all(violations.map(fetchOne));
+    violations.forEach((v, i) => {
+      v._paired_snapshot_url = paired[i]?.image_url || null;
+      v._paired_camera_name = paired[i]?.alpr_cameras?.name || null;
+    });
+    return violations;
   },
   async updateALPRViolation(id, updates) {
     if (supabase) {
@@ -4182,6 +4223,8 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     lot_id: null,
     _lot_name: av.properties?.name || 'Unknown Property',
     _snapshot_url: av.plate_events?.image_url || null,
+    _paired_snapshot_url: av._paired_snapshot_url || null,
+    _paired_camera_name: av._paired_camera_name || null,
     _detections: null,
     plate_text: av.plate_text,
     vehicle_color: null, vehicle_type: null, vehicle_make: null, vehicle_model: null,
@@ -4723,6 +4766,17 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
               )}
               {/* Snapshot photo with single bounding box on violating vehicle */}
               <ViolationSnapshot src={v._snapshot_url} detections={v._detections} matchedDetection={matchViolationDetection(v._detections, v.zone_id, camZonesMap[v.camera_id])} maxHeight={220} borderRadius={0} onClick={v._snapshot_url ? () => setSelectedViol(v) : undefined} />
+              {/* Paired-camera snapshot — the second camera at the same gate that
+                  fired around the same time. Helps operator visually verify a real
+                  paired transit before dispatching. */}
+              {v._paired_snapshot_url && (
+                <div style={{borderTop:'1px solid rgba(255,255,255,.06)'}}>
+                  <div style={{fontSize:10, color:'var(--text-muted)', padding:'6px 12px', letterSpacing:'.06em', textTransform:'uppercase', fontWeight:700}}>
+                    Paired camera{v._paired_camera_name ? ` — ${v._paired_camera_name}` : ''}
+                  </div>
+                  <ViolationSnapshot src={v._paired_snapshot_url} maxHeight={160} borderRadius={0} />
+                </div>
+              )}
               {/* Live vehicle presence indicator */}
               {(() => {
                 const isDeparted = v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id);
