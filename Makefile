@@ -64,6 +64,11 @@ migrate-leadgen: ## Migrate local SQLite leads.db to Supabase
 build-agent: ## Build the agent Docker image
 	docker build -t lotlogic-agent -f agent/Dockerfile .
 
+# ── ML Training (Modal) ────────────────────────────────
+
+modal-deploy: ## Deploy the YOLO training app to Modal (run after changes to scripts/modal-train-yolo.py)
+	modal deploy scripts/modal-train-yolo.py
+
 # ── Status ─────────────────────────────────────────────
 
 status: ## Show git status and branch info
