@@ -54,6 +54,12 @@ ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.50"))
 # cascade. We sort detections by confidence descending and OCR only
 # the top N. Plates that don't make the cut are usually noise anyway.
 MAX_OCR_PER_FRAME = int(os.environ.get("MAX_OCR_PER_FRAME", "8"))
+# Aspect ratio gate (width/height) for plate-shaped detections. US plates
+# are nominally 2:1; allow 0.45–5.0 to keep heavily-rotated grille plates
+# (which can read square at extreme angles) and reject grille-slat noise
+# / mudflap silhouettes that consistently come back square at low conf.
+PLATE_ASPECT_MIN = float(os.environ.get("PLATE_ASPECT_MIN", "0.40"))
+PLATE_ASPECT_MAX = float(os.environ.get("PLATE_ASPECT_MAX", "5.0"))
 
 # Per-camera threshold overrides. JSON map of camera_id -> float in [0, 1].
 # When the request includes a camera_id present in the map, that camera's
@@ -219,6 +225,142 @@ def _decode_image(image_base64: str, camera_id: Optional[str] = None) -> np.ndar
     return img
 
 
+# Number of OCR variants generated per kept bbox. Used to budget the
+# top-N detection cap so total OCR calls per frame remain bounded by
+# MAX_OCR_PER_FRAME (preserves the timeout protection from #195).
+OCR_VARIANTS_PER_BBOX = 3
+
+
+def _sobel_y_offset(crop: np.ndarray, target_h: int) -> int:
+    """Find the y-offset of the band with the highest vertical-Sobel
+    edge density. Plate characters create many character-edge
+    transitions per row, so this often locates the plate text band.
+
+    Caveat: also fires on chrome trim, badge edges, and grille slats —
+    that's why we keep this as ONE variant alongside center-trim, and
+    let multi-variant agreement / fast-plate-ocr's own confidence
+    pick the winner.
+    """
+    h = crop.shape[0]
+    if target_h >= h:
+        return 0
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    sobel_x = np.abs(cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3))
+    row_density = sobel_x.sum(axis=1)
+    kernel = np.ones(target_h, dtype=np.float64)
+    band_score = np.convolve(row_density, kernel, mode="valid")
+    y_off = int(np.argmax(band_score))
+    return max(0, min(h - target_h, y_off))
+
+
+def _ocr_variants(img: np.ndarray, bbox) -> List[np.ndarray]:
+    """Return up to OCR_VARIANTS_PER_BBOX crop variants for one bbox.
+
+    The detector frequently emits boxes that contain the plate plus a
+    chunk of bumper/grille around it (operator labels were drawn
+    loose). fast-plate-ocr is trained on tight ~2:1 crops, so a
+    square 146x130 box containing a plate plus surrounding bumper
+    fails OCR even when the plate is plainly visible.
+
+    Variants (each cheap to construct; OCR is the cost driver):
+      [0] loose         — current behavior; preserves working cameras
+      [1] tight-center  — 2:1, center-trim of the height
+      [2] tight-sobel   — 2:1, y-offset by max edge-density band
+
+    Both trim heuristics have failure modes:
+      • center-trim clips plates that aren't vertically centered
+      • Sobel-trim locks onto chrome/badges with high edge density
+    Generating both lets fast-plate-ocr pick whichever cleanly OCRs;
+    multi-variant agreement is the strongest signal we have without
+    a retrain.
+    """
+    h, w = img.shape[:2]
+    x1 = max(0, int(bbox.x1) - 8)
+    y1 = max(0, int(bbox.y1) - 8)
+    x2 = min(w, int(bbox.x2) + 8)
+    y2 = min(h, int(bbox.y2) + 8)
+    loose = img[y1:y2, x1:x2]
+    if loose.size == 0:
+        return []
+
+    bh, bw = loose.shape[:2]
+    aspect = bw / max(bh, 1)
+    variants: List[np.ndarray] = [loose]
+
+    if aspect < 1.8 and bw > 0:
+        target_h = max(1, min(bh, int(bw / 2.0)))
+        if target_h < bh:
+            y_center = max(0, (bh - target_h) // 2)
+            tight_c = loose[y_center:y_center + target_h, :]
+            if tight_c.size:
+                variants.append(tight_c)
+            y_sobel = _sobel_y_offset(loose, target_h)
+            if y_sobel != y_center:
+                tight_s = loose[y_sobel:y_sobel + target_h, :]
+                if tight_s.size:
+                    variants.append(tight_s)
+    elif aspect > 2.5 and bh > 0:
+        target_w = max(1, min(bw, int(bh * 2.0)))
+        if target_w < bw:
+            x_center = max(0, (bw - target_w) // 2)
+            tight_c = loose[:, x_center:x_center + target_w]
+            if tight_c.size:
+                variants.append(tight_c)
+
+    return variants
+
+
+def _ocr_best(crops: List[np.ndarray]):
+    """Run fast-plate-ocr on each crop variant; pick the best read.
+
+    Selection order:
+      1. If two or more variants decode to the SAME normalized plate
+         string, return that string with the highest conf among
+         agreeing variants. Multi-variant agreement is a far stronger
+         signal than any single variant's char_probs (which are
+         resolution-biased — a tight crop systematically scores higher
+         than a loose crop on the same plate).
+      2. Otherwise, return the single highest-conf decode.
+
+    Returns (text, conf) or (None, 0.0) if no variant decoded.
+    """
+    results: List[tuple] = []
+    for crop in crops:
+        try:
+            ocr_result = ocr_reader.run(crop, return_confidence=True)
+        except Exception:
+            continue
+        if not ocr_result:
+            continue
+        pred = ocr_result[0]
+        text = getattr(pred, "plate", None) or getattr(pred, "text", "") or ""
+        if not text:
+            continue
+        if hasattr(pred, "char_probs") and pred.char_probs is not None:
+            conf = float(pred.char_probs.mean())
+        elif hasattr(pred, "confidence"):
+            conf = float(pred.confidence)
+        else:
+            conf = 1.0
+        results.append((text, conf))
+    if not results:
+        return None, 0.0
+    # Group by normalized text so "ABC-123" and "ABC123" count as agreeing.
+    groups: dict = {}
+    for text, conf in results:
+        key = re.sub(r"[^A-Z0-9]", "", text.upper())
+        groups.setdefault(key, []).append((text, conf))
+    # If any group has >1 variant agreeing, that's the winner — pick the
+    # member with the highest conf as the canonical text.
+    for members in groups.values():
+        if len(members) > 1:
+            members.sort(key=lambda x: x[1], reverse=True)
+            return members[0]
+    # No agreement — single best.
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results[0]
+
+
 def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> RecognizeResponse:
     started = time.monotonic()
 
@@ -246,46 +388,37 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
 
     # Stage 2: OCR each crop. Skip crops below the per-camera detector
     # floor or with OCR exceptions; we only emit confident plates.
-    # Sort detections by confidence descending and cap at MAX_OCR_PER_FRAME
-    # so a flood of low-conf bboxes (common with low detector_floor) can't
-    # blow past the edge function's HTTP timeout.
+    # Sort by confidence descending and cap so total OCR calls stay
+    # bounded by MAX_OCR_PER_FRAME — each kept bbox triggers up to
+    # OCR_VARIANTS_PER_BBOX OCR calls, so the bbox cap is divided by
+    # the variant count to preserve the timeout protection from #195.
+    det_cap = max(1, MAX_OCR_PER_FRAME // OCR_VARIANTS_PER_BBOX)
     sorted_dets = sorted(
         det_results,
         key=lambda d: float(getattr(d, "confidence", 0.0)),
         reverse=True,
-    )[:MAX_OCR_PER_FRAME]
+    )[:det_cap]
     plates: List[PlateCandidate] = []
-    h, w = img.shape[:2]
+    aspect_gated = 0
     for det in sorted_dets:
-        # open-image-models exposes detections via .bounding_box and
-        # .confidence on the result objects. Bounding box has x1/y1/x2/y2.
         bbox = getattr(det, "bounding_box", det)
         conf = float(getattr(det, "confidence", 0.0))
         if conf < detector_floor:
             continue
-        x1 = max(0, int(bbox.x1) - 8)
-        y1 = max(0, int(bbox.y1) - 8)
-        x2 = min(w, int(bbox.x2) + 8)
-        y2 = min(h, int(bbox.y2) + 8)
-        crop = img[y1:y2, x1:x2]
-        if crop.size == 0:
+        # Aspect-ratio gate: skip detections that are nowhere near plate-
+        # shaped (super-tall, super-wide). Square-ish boxes 1.0–1.5 are
+        # kept because grille-mounted commercial plates can appear nearly
+        # square at extreme angles; the OCR variants below handle them.
+        bw = max(1, int(bbox.x2) - int(bbox.x1))
+        bh = max(1, int(bbox.y2) - int(bbox.y1))
+        aspect = bw / bh
+        if aspect < PLATE_ASPECT_MIN or aspect > PLATE_ASPECT_MAX:
+            aspect_gated += 1
             continue
-        try:
-            ocr_result = ocr_reader.run(crop, return_confidence=True)
-            # fast-plate-ocr returns a list of PlatePrediction objects.
-            if not ocr_result:
-                continue
-            pred = ocr_result[0]
-            # API name shifted between v1.0 and v1.1 — try both.
-            plate_text = getattr(pred, "plate", None) or getattr(pred, "text", "") or ""
-            if hasattr(pred, "char_probs") and pred.char_probs is not None:
-                ocr_conf = float(pred.char_probs.mean())
-            elif hasattr(pred, "confidence"):
-                ocr_conf = float(pred.confidence)
-            else:
-                ocr_conf = 1.0
-        except Exception:
+        crops = _ocr_variants(img, bbox)
+        if not crops:
             continue
+        plate_text, ocr_conf = _ocr_best(crops)
         if not plate_text:
             continue
         cleaned = re.sub(r"[^A-Z0-9]", "", plate_text.upper())
@@ -297,7 +430,12 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
         plates.append(PlateCandidate(plate=cleaned, confidence=round(combined_conf, 4)))
 
     plates.sort(key=lambda p: p.confidence, reverse=True)
-    reason = None if plates else "no_plate_shaped_text"
+    if plates:
+        reason = None
+    elif aspect_gated == raw_detection_count and raw_detection_count > 0:
+        reason = f"all_dets_aspect_gated:{aspect_gated}"
+    else:
+        reason = "no_plate_shaped_text"
     return RecognizeResponse(
         ok=True,
         plates=plates,
