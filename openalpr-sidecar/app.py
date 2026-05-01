@@ -47,6 +47,13 @@ DETECTOR_IMGSZ = int(os.environ.get("DETECTOR_IMGSZ", "640"))
 OCR_MODEL = os.environ.get("OCR_MODEL", "cct-s-v2-global-model")
 DETECTOR_MIN_CONF = float(os.environ.get("DETECTOR_MIN_CONF", "0.15"))
 ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.50"))
+# Hard cap on OCR calls per frame. With low DETECTOR_MIN_CONF overrides
+# the YOLO model can return 50+ candidate bboxes, each costing ~50-100ms
+# of OCR. Total processing time scales linearly and can blow past the
+# edge function's 4-12s timeout, leading to a camera retry-and-back-off
+# cascade. We sort detections by confidence descending and OCR only
+# the top N. Plates that don't make the cut are usually noise anyway.
+MAX_OCR_PER_FRAME = int(os.environ.get("MAX_OCR_PER_FRAME", "8"))
 
 # Per-camera threshold overrides. JSON map of camera_id -> float in [0, 1].
 # When the request includes a camera_id present in the map, that camera's
@@ -112,6 +119,7 @@ print(
     f"[startup] ROTATE_BEFORE_PROCESS={ROTATE_BEFORE_PROCESS or 'none'}",
     flush=True,
 )
+print(f"[startup] MAX_OCR_PER_FRAME={MAX_OCR_PER_FRAME}", flush=True)
 MAX_IMAGE_WIDTH = int(os.environ.get("ALPR_MAX_IMAGE_WIDTH", "1280"))
 ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").lower() == "true"
 
@@ -238,9 +246,17 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
 
     # Stage 2: OCR each crop. Skip crops below the per-camera detector
     # floor or with OCR exceptions; we only emit confident plates.
+    # Sort detections by confidence descending and cap at MAX_OCR_PER_FRAME
+    # so a flood of low-conf bboxes (common with low detector_floor) can't
+    # blow past the edge function's HTTP timeout.
+    sorted_dets = sorted(
+        det_results,
+        key=lambda d: float(getattr(d, "confidence", 0.0)),
+        reverse=True,
+    )[:MAX_OCR_PER_FRAME]
     plates: List[PlateCandidate] = []
     h, w = img.shape[:2]
-    for det in det_results:
+    for det in sorted_dets:
         # open-image-models exposes detections via .bounding_box and
         # .confidence on the result objects. Bounding box has x1/y1/x2/y2.
         bbox = getattr(det, "bounding_box", det)
