@@ -54,6 +54,12 @@ ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.50"))
 # cascade. We sort detections by confidence descending and OCR only
 # the top N. Plates that don't make the cut are usually noise anyway.
 MAX_OCR_PER_FRAME = int(os.environ.get("MAX_OCR_PER_FRAME", "8"))
+# Aspect ratio gate (width/height) for plate-shaped detections. US plates
+# are nominally 2:1; allow 0.45–5.0 to keep heavily-rotated grille plates
+# (which can read square at extreme angles) and reject grille-slat noise
+# / mudflap silhouettes that consistently come back square at low conf.
+PLATE_ASPECT_MIN = float(os.environ.get("PLATE_ASPECT_MIN", "0.45"))
+PLATE_ASPECT_MAX = float(os.environ.get("PLATE_ASPECT_MAX", "5.0"))
 
 # Per-camera threshold overrides. JSON map of camera_id -> float in [0, 1].
 # When the request includes a camera_id present in the map, that camera's
@@ -219,6 +225,87 @@ def _decode_image(image_base64: str, camera_id: Optional[str] = None) -> np.ndar
     return img
 
 
+def _ocr_variants(img: np.ndarray, bbox) -> List[np.ndarray]:
+    """Return up to three crop variants for one YOLO bbox.
+
+    The detector frequently emits boxes that contain the plate plus a
+    chunk of bumper/grille around it (operator labels were drawn loose).
+    fast-plate-ocr's training distribution is *tight* crops at ~2:1
+    aspect, so a square 146x130 box centered on a plate fails to OCR
+    even when the plate is plainly visible. We OCR all three and keep
+    the highest-confidence successful read.
+
+    Variants:
+      [0] loose        — current behavior, bbox + 8px pad
+      [1] tight        — center-crop horizontally to enforce 2:1 aspect
+      [2] tight_padded — variant [1] with 10% replicate border
+    """
+    h, w = img.shape[:2]
+    x1 = max(0, int(bbox.x1) - 8)
+    y1 = max(0, int(bbox.y1) - 8)
+    x2 = min(w, int(bbox.x2) + 8)
+    y2 = min(h, int(bbox.y2) + 8)
+    loose = img[y1:y2, x1:x2]
+    if loose.size == 0:
+        return []
+
+    bh, bw = loose.shape[:2]
+    aspect = bw / max(bh, 1)
+    if aspect < 1.8 and bw > 0:
+        # Bbox is too tall for a US plate — keep full width, trim
+        # top/bottom to enforce 2:1. Plates are usually horizontally
+        # centered inside the (loose) operator-labeled box.
+        target_h = max(1, min(bh, int(bw / 2.0)))
+        y_off = max(0, (bh - target_h) // 2)
+        tight = loose[y_off:y_off + target_h, :]
+    elif aspect > 2.5 and bh > 0:
+        # Bbox is too wide — trim left/right to enforce 2:1.
+        target_w = max(1, min(bw, int(bh * 2.0)))
+        x_off = max(0, (bw - target_w) // 2)
+        tight = loose[:, x_off:x_off + target_w]
+    else:
+        tight = loose
+
+    if tight.size == 0:
+        return [loose]
+
+    pad_h = max(1, int(tight.shape[0] * 0.10))
+    pad_w = max(1, int(tight.shape[1] * 0.10))
+    tight_padded = cv2.copyMakeBorder(
+        tight, pad_h, pad_h, pad_w, pad_w, cv2.BORDER_REPLICATE
+    )
+    return [loose, tight, tight_padded]
+
+
+def _ocr_best(crops: List[np.ndarray]):
+    """Run fast-plate-ocr on each crop variant, return the variant with
+    the highest mean character probability. Returns (text, conf) or
+    (None, 0.0) if no variant produced a usable read."""
+    best_text: Optional[str] = None
+    best_conf = 0.0
+    for crop in crops:
+        try:
+            ocr_result = ocr_reader.run(crop, return_confidence=True)
+        except Exception:
+            continue
+        if not ocr_result:
+            continue
+        pred = ocr_result[0]
+        text = getattr(pred, "plate", None) or getattr(pred, "text", "") or ""
+        if not text:
+            continue
+        if hasattr(pred, "char_probs") and pred.char_probs is not None:
+            conf = float(pred.char_probs.mean())
+        elif hasattr(pred, "confidence"):
+            conf = float(pred.confidence)
+        else:
+            conf = 1.0
+        if conf > best_conf:
+            best_conf = conf
+            best_text = text
+    return best_text, best_conf
+
+
 def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> RecognizeResponse:
     started = time.monotonic()
 
@@ -255,37 +342,24 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
         reverse=True,
     )[:MAX_OCR_PER_FRAME]
     plates: List[PlateCandidate] = []
-    h, w = img.shape[:2]
     for det in sorted_dets:
-        # open-image-models exposes detections via .bounding_box and
-        # .confidence on the result objects. Bounding box has x1/y1/x2/y2.
         bbox = getattr(det, "bounding_box", det)
         conf = float(getattr(det, "confidence", 0.0))
         if conf < detector_floor:
             continue
-        x1 = max(0, int(bbox.x1) - 8)
-        y1 = max(0, int(bbox.y1) - 8)
-        x2 = min(w, int(bbox.x2) + 8)
-        y2 = min(h, int(bbox.y2) + 8)
-        crop = img[y1:y2, x1:x2]
-        if crop.size == 0:
+        # Aspect-ratio gate: skip detections that are nowhere near plate-
+        # shaped (super-tall, super-wide). Square-ish boxes 1.0–1.5 are
+        # kept because grille-mounted commercial plates can appear nearly
+        # square at extreme angles; the OCR variants below handle them.
+        bw = max(1, int(bbox.x2) - int(bbox.x1))
+        bh = max(1, int(bbox.y2) - int(bbox.y1))
+        aspect = bw / bh
+        if aspect < PLATE_ASPECT_MIN or aspect > PLATE_ASPECT_MAX:
             continue
-        try:
-            ocr_result = ocr_reader.run(crop, return_confidence=True)
-            # fast-plate-ocr returns a list of PlatePrediction objects.
-            if not ocr_result:
-                continue
-            pred = ocr_result[0]
-            # API name shifted between v1.0 and v1.1 — try both.
-            plate_text = getattr(pred, "plate", None) or getattr(pred, "text", "") or ""
-            if hasattr(pred, "char_probs") and pred.char_probs is not None:
-                ocr_conf = float(pred.char_probs.mean())
-            elif hasattr(pred, "confidence"):
-                ocr_conf = float(pred.confidence)
-            else:
-                ocr_conf = 1.0
-        except Exception:
+        crops = _ocr_variants(img, bbox)
+        if not crops:
             continue
+        plate_text, ocr_conf = _ocr_best(crops)
         if not plate_text:
             continue
         cleaned = re.sub(r"[^A-Z0-9]", "", plate_text.upper())
