@@ -75,6 +75,16 @@ def _parse_override_map(env_name: str) -> dict:
 
 DETECTOR_MIN_CONF_OVERRIDES = _parse_override_map("DETECTOR_MIN_CONF_OVERRIDES")
 ALPR_MIN_CONFIDENCE_OVERRIDES = _parse_override_map("ALPR_MIN_CONFIDENCE_OVERRIDES")
+print(
+    f"[startup] DETECTOR_MIN_CONF={DETECTOR_MIN_CONF} "
+    f"overrides={DETECTOR_MIN_CONF_OVERRIDES or 'none'}",
+    flush=True,
+)
+print(
+    f"[startup] ALPR_MIN_CONFIDENCE={ALPR_MIN_CONFIDENCE} "
+    f"overrides={ALPR_MIN_CONFIDENCE_OVERRIDES or 'none'}",
+    flush=True,
+)
 
 # Per-camera image rotation. JSON map of camera_id -> rotation direction:
 #   "cw"   → 90° clockwise
@@ -98,6 +108,10 @@ def _parse_rotation_map(env_name: str) -> dict:
         return {}
 
 ROTATE_BEFORE_PROCESS = _parse_rotation_map("ROTATE_BEFORE_PROCESS")
+print(
+    f"[startup] ROTATE_BEFORE_PROCESS={ROTATE_BEFORE_PROCESS or 'none'}",
+    flush=True,
+)
 MAX_IMAGE_WIDTH = int(os.environ.get("ALPR_MAX_IMAGE_WIDTH", "1280"))
 ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").lower() == "true"
 
