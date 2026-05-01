@@ -75,6 +75,29 @@ def _parse_override_map(env_name: str) -> dict:
 
 DETECTOR_MIN_CONF_OVERRIDES = _parse_override_map("DETECTOR_MIN_CONF_OVERRIDES")
 ALPR_MIN_CONFIDENCE_OVERRIDES = _parse_override_map("ALPR_MIN_CONFIDENCE_OVERRIDES")
+
+# Per-camera image rotation. JSON map of camera_id -> rotation direction:
+#   "cw"   → 90° clockwise
+#   "ccw"  → 90° counter-clockwise
+#   "180"  → 180°
+# Used when a camera is physically mounted rotated 90° (timestamp on the
+# LEFT edge of the frame instead of the top). YOLO and fast-plate-ocr
+# are trained on upright images, so a sideways scene tanks both detection
+# and OCR confidence. Rotating server-side BEFORE detection puts the
+# scene back upright for the models. Cameras not in the map are not
+# rotated.
+def _parse_rotation_map(env_name: str) -> dict:
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        valid = {"cw", "ccw", "180"}
+        return {str(k): str(v).lower() for k, v in parsed.items() if str(v).lower() in valid}
+    except Exception:
+        return {}
+
+ROTATE_BEFORE_PROCESS = _parse_rotation_map("ROTATE_BEFORE_PROCESS")
 MAX_IMAGE_WIDTH = int(os.environ.get("ALPR_MAX_IMAGE_WIDTH", "1280"))
 ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").lower() == "true"
 
@@ -144,7 +167,7 @@ def health() -> dict:
     }
 
 
-def _decode_image(image_base64: str) -> np.ndarray:
+def _decode_image(image_base64: str, camera_id: Optional[str] = None) -> np.ndarray:
     raw = image_base64
     if raw.startswith("data:"):
         raw = raw.split(",", 1)[1] if "," in raw else raw
@@ -155,6 +178,17 @@ def _decode_image(image_base64: str) -> np.ndarray:
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError("cannot decode JPEG")
+    # Apply per-camera rotation BEFORE downscaling so the scene is upright
+    # for the detector and OCR. Cameras physically mounted 90° rotated
+    # (timestamp on left edge) need this to be readable by upright-trained
+    # models.
+    rot = ROTATE_BEFORE_PROCESS.get(camera_id or "")
+    if rot == "cw":
+        img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+    elif rot == "ccw":
+        img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    elif rot == "180":
+        img = cv2.rotate(img, cv2.ROTATE_180)
     if MAX_IMAGE_WIDTH > 0 and img.shape[1] > MAX_IMAGE_WIDTH:
         scale = MAX_IMAGE_WIDTH / img.shape[1]
         new_w = MAX_IMAGE_WIDTH
@@ -281,7 +315,7 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
         raise HTTPException(status_code=503, detail="models not loaded yet")
 
     try:
-        img = _decode_image(req.image_base64)
+        img = _decode_image(req.image_base64, camera_id=req.camera_id)
     except Exception as err:
         raise HTTPException(status_code=400, detail=str(err))
 
