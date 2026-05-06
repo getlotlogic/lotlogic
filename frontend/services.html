@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LotLogic — Services</title>
+  <meta name="description" content="LotLogic puts cameras where you need them. Pick the deployment that fits the lot. Free pilot in Charlotte, NC.">
+  <link rel="canonical" href="https://lotlogic-beta.vercel.app/services.html">
+
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="LotLogic — Services">
+  <meta property="og:description" content="Pick where you need eyes. We do the rest.">
+  <meta property="og:url" content="https://lotlogic-beta.vercel.app/services.html">
+  <meta property="og:site_name" content="LotLogic">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="LotLogic — Services">
+  <meta name="twitter:description" content="Three ways to put eyes on the lot. Pick one.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500,50;9..144,700,50;9..144,800,80;9..144,900,80&family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --paper: #F2EAD8;
+      --paper-2: #EADFC7;
+      --paper-3: #DFD2B5;
+      --ink: #1F1B14;
+      --ink-2: #3D3528;
+      --ink-3: #6F6450;
+      --amber: #D97706;
+      --amber-soft: #FBBF24;
+      --terra: #C97A4A;
+      --terra-deep: #9A5530;
+      --status-ok: #4A7A48;
+      --status-no: #B14535;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Manrope', system-ui, sans-serif;
+      background: var(--paper);
+      color: var(--ink);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: -.005em;
+      background-image:
+        radial-gradient(circle at 12% 18%, rgba(31,27,20,0.025) 0 1.2px, transparent 1.5px),
+        radial-gradient(circle at 78% 62%, rgba(31,27,20,0.02) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 42% 88%, rgba(31,27,20,0.018) 0 0.8px, transparent 1.2px);
+      background-size: 240px 240px, 320px 320px, 200px 200px;
+    }
+    .mono { font-family: 'DM Mono', ui-monospace, monospace; }
+    a { color: inherit; text-decoration: none; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 28px; }
+
+    /* Nav */
+    nav { padding: 22px 0; border-bottom: 1.5px solid var(--ink); }
+    nav .inner { display: flex; align-items: center; justify-content: space-between; }
+    nav .logo { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+    nav .logo .stamp { transform: rotate(-6deg); }
+    nav .logo .wm {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 28px;
+      letter-spacing: -.02em;
+      line-height: 1;
+    }
+    nav .logo .wm em { font-style: italic; color: var(--amber); }
+    nav .links { display: flex; gap: 22px; align-items: center; }
+    nav .links a {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: .04em;
+      color: var(--ink-3);
+      text-transform: lowercase;
+    }
+    nav .links a:hover, nav .links a.active { color: var(--ink); }
+    nav .links a.cta {
+      font-family: 'Manrope', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: none;
+      padding: 10px 18px;
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      background: var(--ink);
+      color: var(--paper);
+    }
+    @media (max-width: 720px) { nav .links a:not(.cta) { display: none; } }
+
+    /* Hero + selector */
+    .hero { padding: 96px 0 56px; border-bottom: 1.5px solid var(--ink); }
+    .pilot-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      border: 1.5px solid var(--ink);
+      background: var(--paper);
+      color: var(--ink);
+      margin-bottom: 28px;
+    }
+    .pilot-pill .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--status-ok); display: inline-block; }
+    .hero h1 {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 900, "SOFT" 80;
+      font-size: clamp(48px, 8vw, 96px);
+      line-height: 1;
+      letter-spacing: -.03em;
+      margin-bottom: 24px;
+      max-width: 980px;
+    }
+    .hero h1 em { font-style: italic; color: var(--amber); }
+    .hero .sub {
+      font-size: 19px;
+      line-height: 1.55;
+      max-width: 640px;
+      color: var(--ink-2);
+      margin-bottom: 40px;
+    }
+    .hero .sub em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 600, "SOFT" 50;
+    }
+
+    /* Selector */
+    .selector-wrap {
+      display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+      padding: 24px;
+      border: 1.5px solid var(--ink);
+      background: var(--paper);
+      max-width: 720px;
+    }
+    .selector-label {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 80;
+      font-style: italic;
+      font-size: 19px;
+      color: var(--ink);
+    }
+    .selector-label .arrow { color: var(--amber); }
+    .selector-control {
+      flex: 1; min-width: 240px;
+      position: relative;
+    }
+    .selector-control select {
+      width: 100%;
+      padding: 14px 44px 14px 18px;
+      background: var(--amber-soft);
+      border: 1.5px solid var(--ink);
+      color: var(--ink);
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 80;
+      font-size: 18px;
+      letter-spacing: -.01em;
+      cursor: pointer;
+      appearance: none;
+      outline: none;
+    }
+    .selector-control select:hover { background: #FCC846; }
+    .selector-control select:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; background: #FCC846; }
+    .selector-control::after {
+      content: "▾";
+      position: absolute;
+      right: 18px;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+      font-size: 18px;
+      color: var(--ink);
+    }
+
+    /* Service detail panel */
+    .svc-detail { padding: 96px 0; border-bottom: 1.5px solid var(--ink); display: none; }
+    .svc-detail.active { display: block; }
+
+    .svc-head { max-width: 760px; margin-bottom: 56px; }
+    .svc-head .nbr {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 14px;
+    }
+    .svc-head .nbr .num { color: var(--amber); margin-right: 8px; }
+    .svc-head h2 {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 900, "SOFT" 80;
+      font-size: clamp(40px, 6.5vw, 72px);
+      line-height: 1;
+      letter-spacing: -.03em;
+      margin-bottom: 18px;
+    }
+    .svc-head h2 em { font-style: italic; color: var(--amber); }
+    .svc-head p {
+      font-size: 19px;
+      color: var(--ink-2);
+      line-height: 1.55;
+    }
+    .svc-head p em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 600, "SOFT" 50;
+    }
+
+    /* Stamp in svc head */
+    .svc-stamp { display: inline-block; transform: rotate(-3deg); margin-bottom: 22px; }
+
+    /* Block grid */
+    .blocks { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+    @media (max-width: 880px) { .blocks { grid-template-columns: 1fr; } }
+    .block {
+      border: 1.5px solid var(--ink);
+      background: var(--paper);
+      padding: 32px 28px;
+    }
+    .block .lbl {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 14px;
+    }
+    .block h3 {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 26px;
+      line-height: 1.05;
+      letter-spacing: -.02em;
+      margin-bottom: 14px;
+    }
+    .block h3 em { font-style: italic; color: var(--amber); }
+    .block p {
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--ink-2);
+      margin-bottom: 12px;
+    }
+    .block p:last-child { margin-bottom: 0; }
+    .block p em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 600, "SOFT" 50;
+    }
+    .block ul { list-style: none; padding: 0; margin-top: 6px; }
+    .block ul li {
+      padding: 8px 0;
+      font-size: 15px;
+      color: var(--ink-2);
+      border-bottom: 1px dashed var(--ink-3);
+      display: flex; gap: 10px; align-items: flex-start;
+    }
+    .block ul li:last-child { border-bottom: none; }
+    .block ul li::before {
+      content: "✓";
+      color: var(--terra-deep);
+      font-weight: 700;
+      flex-shrink: 0;
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+    }
+    .block ul li em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 500, "SOFT" 50;
+    }
+    .block.prevents { background: var(--paper-2); }
+    .block.simplifies { background: var(--paper-2); }
+    .block.solves { background: var(--paper-3); border-color: var(--terra-deep); }
+    .block.solves .lbl { color: var(--terra-deep); }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: 'Manrope', sans-serif;
+      font-weight: 700;
+      font-size: 15px;
+      padding: 14px 24px;
+      border-radius: 999px;
+      cursor: pointer;
+      border: 1.5px solid var(--ink);
+      background: var(--paper);
+      color: var(--ink);
+      transition: transform .15s, background .12s;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn.primary { background: var(--ink); color: var(--paper); }
+    .btn.primary:hover { background: var(--terra-deep); border-color: var(--terra-deep); }
+    .btn.lg { padding: 16px 30px; font-size: 17px; }
+
+    /* Final CTA */
+    .final-cta { text-align: center; padding: 96px 0; border-bottom: 1.5px solid var(--ink); }
+    .final-cta h2 {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 900, "SOFT" 80;
+      font-size: clamp(32px, 5.5vw, 56px);
+      line-height: 1;
+      letter-spacing: -.025em;
+      margin-bottom: 18px;
+    }
+    .final-cta h2 em { font-style: italic; color: var(--amber); }
+    .final-cta p {
+      font-size: 18px; color: var(--ink-2);
+      max-width: 560px; margin: 0 auto 32px;
+    }
+    .final-cta p em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 600, "SOFT" 50;
+    }
+    .final-cta .who {
+      margin-top: 22px;
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+    }
+    .final-cta .who a { color: var(--amber); border-bottom: 1px solid var(--amber); }
+
+    /* Footer */
+    footer {
+      padding: 56px 0 80px;
+      text-align: center;
+      color: var(--ink-3);
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    footer a { color: var(--ink-3); margin: 0 12px; transition: color .12s; }
+    footer a:hover { color: var(--ink); }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav>
+    <div class="container inner">
+      <a href="/" class="logo">
+        <span class="stamp" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="6" width="18" height="12" rx="2"/>
+            <path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/>
+          </svg>
+        </span>
+        <div class="wm">LotL<em>o</em>gic</div>
+      </a>
+      <div class="links">
+        <a href="/">home</a>
+        <a href="/services.html" class="active">services</a>
+        <a href="/blog/">blog</a>
+        <a href="mailto:lotlogicai@gmail.com?subject=LotLogic%20demo%20request" class="cta">Book a Demo</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero + dropdown -->
+  <section class="hero">
+    <div class="container">
+      <div class="pilot-pill"><span class="dot"></span>NOW PILOTING IN CHARLOTTE, NC</div>
+      <h1>Pick where you need <em>eyes.</em></h1>
+      <p class="sub">
+        Same database, same evidence packs, same automatic dispatch. <em>Three ways to put cameras where the problem actually is</em> — pick the one that fits.
+      </p>
+
+      <div class="selector-wrap">
+        <div class="selector-label">Pick a deployment <span class="arrow">→</span></div>
+        <div class="selector-control">
+          <select id="serviceSelect" aria-label="Choose a deployment">
+            <option value="truck">On the truck</option>
+            <option value="gate">Tripwire — at the gate</option>
+            <option value="lot">EagleEye — across the lot</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Service: ON THE TRUCK -->
+  <section class="svc-detail active" data-service="truck">
+    <div class="container">
+      <div class="svc-head">
+        <span class="svc-stamp" aria-hidden="true">
+          <svg width="80" height="80" viewBox="0 0 72 72" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 50c0-3 3-5 6-5h22c3 0 5-2 5-5V22c0-3 2-5 5-5h6"/>
+            <circle cx="22" cy="56" r="6"/>
+            <circle cx="46" cy="56" r="6"/>
+            <rect x="38" y="20" width="14" height="6" rx="1"/>
+          </svg>
+        </span>
+        <div class="nbr"><span class="num">01</span>ON THE TRUCK</div>
+        <h2>Eyes that ride <em>with you.</em></h2>
+        <p>The truck does what the truck already does — drive. <em>The cameras do the rest.</em> Every plate that passes gets read and checked against who belongs. Anything that doesn't match lands on your phone.</p>
+      </div>
+
+      <div class="blocks">
+        <div class="block prevents">
+          <div class="lbl">/ what this prevents</div>
+          <h3>Towing the <em>wrong car</em>. Driving for nothing. Disputes that cost you the day.</h3>
+          <ul>
+            <li>Empty patrol miles</li>
+            <li>Calls from owners insisting they belonged there</li>
+            <li>Disputes you can't win without proof</li>
+            <li>Unverified dispatches that cost more than they earn</li>
+          </ul>
+        </div>
+        <div class="block">
+          <div class="lbl">/ how we do it</div>
+          <p>We mount cameras on your trucks. As you patrol partner properties, the system already knows <em>who's registered</em> — anything that doesn't match lands on your phone, with the photo attached.</p>
+          <p>No software to install. No dashboard to learn. No change to how you dispatch. <em>The camera does the work.</em></p>
+        </div>
+        <div class="block simplifies">
+          <div class="lbl">/ why your job gets easier</div>
+          <p>You stop guessing. <em>You stop arguing.</em> You stop driving empty miles. Every dispatch is verified — photo, plate, and location — <em>before you put the truck in gear.</em></p>
+        </div>
+        <div class="block solves">
+          <div class="lbl">/ what problem this solves</div>
+          <h3>The reputation problem.</h3>
+          <p>The towing industry has one. <em>"They took the wrong car"</em> — that story doesn't happen here. The receipts are on the truck before the truck moves.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Service: AT THE GATE -->
+  <section class="svc-detail" data-service="gate">
+    <div class="container">
+      <div class="svc-head">
+        <span class="svc-stamp" aria-hidden="true">
+          <svg width="80" height="80" viewBox="0 0 72 72" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="10" y="22" width="52" height="34" rx="4"/>
+            <circle cx="36" cy="39" r="9"/>
+            <circle cx="36" cy="39" r="3" fill="#1F1B14"/>
+            <path d="M22 22l4-8h20l4 8"/>
+          </svg>
+        </span>
+        <div class="nbr"><span class="num">02</span>TRIPWIRE</div>
+        <h2>Tripwire — eyes at <em>every entrance.</em></h2>
+        <p>If your lot has a way in and a way out, Tripwire watches both. <em>Every plate that crosses the line gets read.</em> Permanent plates are recognized. Temporary passes register in thirty seconds. Anything else trips the wire — and gets handled. <em>Automatically, with the photo attached.</em></p>
+      </div>
+
+      <div class="blocks">
+        <div class="block prevents">
+          <div class="lbl">/ what this prevents</div>
+          <h3>Strangers in the lot. Endless phone calls. <em>Hours of staff time</em> lost to parking every week.</h3>
+          <ul>
+            <li>The "someone's in my spot again" call</li>
+            <li>Sticker chaos and hangtag printing</li>
+            <li>Staff walking the lot taking phone photos</li>
+            <li>Phantom drivers who never leave</li>
+          </ul>
+        </div>
+        <div class="block">
+          <div class="lbl">/ how we do it</div>
+          <p>We install solar-powered cameras at the entrances. <em>No wiring, no permits we can't pull, no monthly fees.</em> Permanent and Temporary plates both register via QR — same flow, different lifespan.</p>
+          <p>Tripwire handles the rest. <em>A quiet 15-minute grace window for anyone unregistered. After that — dispatched.</em></p>
+        </div>
+        <div class="block simplifies">
+          <div class="lbl">/ why your job gets easier</div>
+          <p>Zero stickers. Zero hangtags. Zero phone calls. <em>Zero new software</em> for your team to learn. The system runs without anyone touching it. <em>Approve us once — we keep running.</em></p>
+        </div>
+        <div class="block solves">
+          <div class="lbl">/ what problem this solves</div>
+          <h3>The "parking is the worst part of my job" problem.</h3>
+          <p>Property managers shouldn't be parking enforcers. <em>You have a thousand other things going on.</em> We take the parking off your plate. Completely.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Service: ACROSS THE LOT -->
+  <section class="svc-detail" data-service="lot">
+    <div class="container">
+      <div class="svc-head">
+        <span class="svc-stamp" aria-hidden="true">
+          <svg width="80" height="80" viewBox="0 0 72 72" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="36" cy="36" r="22"/>
+            <circle cx="36" cy="36" r="8"/>
+            <path d="M14 14l8 8M58 14l-8 8M14 58l8-8M58 58l-8-8"/>
+          </svg>
+        </span>
+        <div class="nbr"><span class="num">03</span>EAGLEEYE</div>
+        <h2>EagleEye — <em>watches like a hawk.</em></h2>
+        <p>For lots that don't have a single way in — open lots, multi-entrance properties, big-box centers, mixed-use blocks. <em>EagleEye watches the whole lot at once</em>, the way a hawk watches a field. Every car coming. Every car staying. <em>Every car that doesn't belong.</em></p>
+      </div>
+
+      <div class="blocks">
+        <div class="block prevents">
+          <div class="lbl">/ what this prevents</div>
+          <h3>Cars slipping in past a single gate. <em>Coverage gaps</em> on properties without a chokepoint. Vehicles moving spots to avoid notice.</h3>
+          <ul>
+            <li>Open-lot properties that gate cameras can't cover</li>
+            <li>Cars rotating through three spots in a day to dodge the timer</li>
+            <li>Coverage holes in corner zones</li>
+          </ul>
+        </div>
+        <div class="block">
+          <div class="lbl">/ how we do it</div>
+          <p>EagleEye is a set of cameras placed around the lot to see <em>everything together</em>, not piece by piece. The system reads plates as cars come in, settle into spots, and sit too long.</p>
+          <p>The full how-it-works is proprietary. <em>What you see is the result:</em> same evidence pack, same automatic dispatch, same simple operation as Tripwire.</p>
+        </div>
+        <div class="block simplifies">
+          <div class="lbl">/ why your job gets easier</div>
+          <p>Your lot doesn't need a single chokepoint. <em>You don't need to install a permit-bonded gate.</em> If you have a lot, EagleEye covers it. Same simple operation as Tripwire — <em>runs without your team touching it.</em></p>
+        </div>
+        <div class="block solves">
+          <div class="lbl">/ what problem this solves</div>
+          <h3>The "our lot is too open" problem.</h3>
+          <p>Surface lots. Strip centers. Mixed-use buildings with three driveways. <em>Most enforcement systems quietly stop working on these.</em> Ours doesn't.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- The math (for tow operators, addressed without segmenting) -->
+  <section>
+    <div class="container">
+      <div class="svc-head" style="max-width: 760px;">
+        <div class="nbr"><span style="color: var(--amber); margin-right: 8px;">+</span>THE MATH</div>
+        <h2 style="font-size: clamp(36px, 6vw, 64px); line-height: 1; letter-spacing: -.025em;">Imagine never <em>missing a tow.</em></h2>
+        <p>Most operators we talk to are catching a fraction of what's actually happening at the lots they cover. <em>Patrols miss the 2am cars.</em> They miss the drive-throughs that overstayed. They miss the ones that rotate spots between lunches. With cameras at the entrance — and on your trucks — you see every plate that came in, every plate that stayed too long, every plate that doesn't belong.</p>
+      </div>
+      <div class="blocks">
+        <div class="block prevents">
+          <div class="lbl">/ what you'll see</div>
+          <h3>More closes <em>from the same lots.</em></h3>
+          <p>Same trucks. Same drivers. Same coverage area. <em>Just every violation accounted for</em> — instead of the ones a patrol happened to catch.</p>
+        </div>
+        <div class="block solves">
+          <div class="lbl">/ the cut</div>
+          <h3>Negotiated <em>per partner.</em></h3>
+          <p>Our share is set per partnership — fair on both sides. <em>Even after our cut, you're closing more jobs per truck-hour than ever.</em></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Final CTA -->
+  <section class="final-cta">
+    <div class="container">
+      <h2>Tell us about <em>the lot.</em></h2>
+      <p>One call. <em>15 minutes</em> for us to look at the lot and pick the right setup. Free pilot in Charlotte — no commitment, no contract, no cost.</p>
+      <a href="mailto:lotlogicai@gmail.com?subject=LotLogic%20demo%20request" class="btn primary lg">Book the 15-min thing →</a>
+      <div class="who">
+        Gabriel Bowen-Slott · CEO · LotLogic LLC<br>
+        <a href="mailto:lotlogicai@gmail.com">lotlogicai@gmail.com</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <a href="/">home</a>
+      <a href="/services.html">services</a>
+      <a href="/blog/">blog</a>
+      <a href="/privacy.html">privacy</a>
+      <a href="/terms.html">terms</a>
+      <br><br>
+      © 2026 LotLogic LLC · Parking enforcement · Charlotte NC
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      const sel = document.getElementById('serviceSelect');
+      const panels = document.querySelectorAll('.svc-detail');
+      function show(value) {
+        panels.forEach(p => p.classList.toggle('active', p.dataset.service === value));
+      }
+      // Restore from URL hash if present (#truck, #gate, #lot)
+      const hash = (location.hash || '').replace('#', '');
+      if (['truck','gate','lot'].includes(hash)) {
+        sel.value = hash;
+        show(hash);
+      }
+      sel.addEventListener('change', () => {
+        show(sel.value);
+        history.replaceState(null, '', '#' + sel.value);
+      });
+      window.addEventListener('hashchange', () => {
+        const h = (location.hash || '').replace('#', '');
+        if (['truck','gate','lot'].includes(h)) {
+          sel.value = h;
+          show(h);
+        }
+      });
+    })();
+  </script>
+
+</body>
+</html>

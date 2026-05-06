@@ -13,15 +13,27 @@
   <script src="https://www.google.com/recaptcha/api.js?render=6LdaAb4sAAAAACd5g-pYqnQBWHdvMmGCufwtEQnE" async defer></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500,50;9..144,700,50;9..144,800,80;9..144,900,80&family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --paper: #F2EAD8;
+      --paper-2: #EADFC7;
+      --paper-3: #DFD2B5;
+      --ink: #1F1B14;
+      --ink-2: #3D3528;
+      --ink-3: #6F6450;
+      --amber: #D97706;
+      --amber-soft: #FBBF24;
+      --terra: #C97A4A;
+      --terra-deep: #9A5530;
+      --status-ok: #4A7A48;
+      --status-no: #B14535;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: 'Manrope', system-ui, -apple-system, sans-serif;
-      background:
-        radial-gradient(ellipse 70% 55% at 50% -10%, rgba(251,191,36,.15) 0%, transparent 65%),
-        #0E0F11;
-      color: #E2E2DC;
+      background: var(--paper);
+      color: var(--ink);
       min-height: 100vh;
       display: flex;
       align-items: center;
@@ -29,109 +41,124 @@
       padding: 20px;
       -webkit-font-smoothing: antialiased;
       letter-spacing: -.005em;
+      background-image:
+        radial-gradient(circle at 12% 18%, rgba(31,27,20,0.025) 0 1.2px, transparent 1.5px),
+        radial-gradient(circle at 78% 62%, rgba(31,27,20,0.02) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 42% 88%, rgba(31,27,20,0.018) 0 0.8px, transparent 1.2px);
+      background-size: 240px 240px, 320px 320px, 200px 200px;
     }
     .card {
-      background: #181A1E;
-      border: 1px solid #2A2C31;
-      border-radius: 16px;
-      padding: 32px 24px;
+      background: var(--paper);
+      border: 1.5px solid var(--ink);
+      padding: 32px 28px;
       max-width: 440px;
       width: 100%;
-      box-shadow: 0 20px 60px rgba(0,0,0,.45);
     }
-    .logo {
-      text-align: center;
-      margin-bottom: 24px;
-    }
-    .logo .shield {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 52px;
-      height: 52px;
-      background: linear-gradient(135deg, #FBBF24, #D97706);
-      border-radius: 12px;
-      font-family: 'Anton', sans-serif;
-      font-weight: 400;
-      font-size: 18px;
-      color: #1A1206;
-      margin-bottom: 10px;
-      box-shadow: 0 6px 18px rgba(251,191,36,.35), inset 0 1px 0 rgba(255,255,255,.4);
-    }
+    .logo { text-align: center; margin-bottom: 24px; }
+    .logo .shield { display: inline-flex; align-items: center; justify-content: center; transform: rotate(-6deg); margin-bottom: 12px; }
+    .logo .shield svg { display: block; }
     .logo h1 {
-      font-family: 'Anton', system-ui, sans-serif;
-      font-size: 32px;
-      font-weight: 400;
-      color: #F5F5F0;
-      letter-spacing: .03em;
-      text-transform: uppercase;
+      font-family: 'Fraunces', Georgia, serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 36px;
+      letter-spacing: -.02em;
       line-height: 1;
+      color: var(--ink);
+      text-transform: none;
     }
-    .logo h1 span { color: #FBBF24; }
+    .logo h1 span { color: var(--amber); font-style: italic; }
+    .logo h1 .o-spot {
+      display: inline-block;
+      width: 0.5em; height: 0.5em;
+      border: 3px solid currentColor;
+      border-radius: 999px;
+      margin: 0 0.04em;
+      position: relative;
+      top: -0.06em;
+    }
     .property-name {
       text-align: center;
-      font-size: 16px;
-      color: #9ca3af;
-      margin-bottom: 24px;
+      font-size: 14px;
+      color: var(--ink-3);
+      margin-bottom: 28px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
     }
     .property-name strong {
       display: block;
-      font-size: 18px;
-      color: #e5e7eb;
-      margin-top: 4px;
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 80;
+      font-style: italic;
+      font-size: 22px;
+      color: var(--ink);
+      margin-top: 6px;
+      letter-spacing: -.01em;
     }
     label {
       display: block;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
-      color: #9ca3af;
+      color: var(--ink-3);
       margin-bottom: 6px;
       margin-top: 16px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
     }
-    label .required { color: #ef4444; margin-left: 2px; }
+    label .required { color: var(--status-no); margin-left: 2px; }
     input {
       width: 100%;
       padding: 12px 14px;
-      background: #0f1117;
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 10px;
-      color: #e5e7eb;
+      background: var(--paper-2);
+      border: 1.5px solid var(--ink);
+      border-radius: 0;
+      color: var(--ink);
       font-size: 16px;
       font-family: inherit;
       outline: none;
-      transition: border-color 0.2s;
+      transition: background 0.15s;
     }
-    input:focus { border-color: #3b82f6; }
-    input::placeholder { color: #4b5563; }
-    .plate-input { text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; font-size: 20px; text-align: center; }
+    input:focus { background: var(--paper-3); }
+    input::placeholder { color: var(--ink-3); }
+    .plate-input {
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      font-size: 22px;
+      text-align: center;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      background: var(--amber-soft);
+    }
+    .plate-input:focus { background: var(--amber-soft); }
     .submit-btn {
       width: 100%;
       padding: 14px;
-      background: linear-gradient(135deg, #3b82f6, #2563eb);
-      color: #fff;
-      border: none;
-      border-radius: 10px;
+      background: var(--ink);
+      color: var(--paper);
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
       font-size: 16px;
       font-weight: 700;
       cursor: pointer;
       margin-top: 24px;
       font-family: inherit;
-      transition: opacity 0.2s;
+      transition: background 0.15s;
     }
     .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .submit-btn:hover:not(:disabled) { opacity: 0.9; }
+    .submit-btn:hover:not(:disabled) { background: var(--terra-deep); border-color: var(--terra-deep); }
     .hint {
       text-align: center;
       font-size: 12px;
-      color: #6b7280;
-      margin-top: 12px;
+      color: var(--ink-3);
+      margin-top: 14px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
     }
     .error {
-      background: rgba(239,68,68,0.1);
-      border: 1px solid rgba(239,68,68,0.3);
-      color: #f87171;
-      padding: 10px 14px;
-      border-radius: 8px;
+      background: rgba(177,69,53,0.12);
+      border: 1.5px solid var(--status-no);
+      color: var(--status-no);
+      padding: 12px 14px;
       font-size: 13px;
       margin-top: 16px;
       text-align: center;
@@ -140,57 +167,86 @@
     .success-icon {
       width: 64px;
       height: 64px;
-      background: rgba(74,222,128,0.1);
+      border: 2px solid var(--status-ok);
       border-radius: 50%;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      margin-bottom: 16px;
+      margin-bottom: 18px;
     }
-    .success-icon svg { width: 32px; height: 32px; stroke: #4ade80; fill: none; stroke-width: 2.5; }
-    .success-card h2 { font-size: 20px; color: #f9fafb; margin-bottom: 8px; }
-    .success-card p { font-size: 14px; color: #9ca3af; line-height: 1.5; }
+    .success-icon svg { width: 32px; height: 32px; stroke: var(--status-ok); fill: none; stroke-width: 2.5; }
+    .success-card h2 {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 28px;
+      letter-spacing: -.015em;
+      color: var(--ink);
+      margin-bottom: 10px;
+      line-height: 1.05;
+    }
+    .success-card h2 em { font-style: italic; color: var(--amber); }
+    .success-card p { font-size: 15px; color: var(--ink-2); line-height: 1.55; }
+    .success-card p em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 600, "SOFT" 50;
+    }
     .success-plate {
       display: inline-block;
-      background: rgba(59,130,246,0.1);
-      border: 1px solid rgba(59,130,246,0.3);
-      color: #3b82f6;
-      padding: 8px 20px;
-      border-radius: 8px;
+      background: var(--amber-soft);
+      border: 1.5px solid var(--ink);
+      color: var(--ink);
+      padding: 10px 22px;
+      font-family: 'DM Mono', ui-monospace, monospace;
       font-size: 22px;
-      font-weight: 800;
-      letter-spacing: 0.05em;
-      margin: 16px 0;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      margin: 18px 0;
     }
     .success-detail {
-      font-size: 13px;
-      color: #6b7280;
+      font-size: 12px;
+      color: var(--ink-3);
       margin-top: 8px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
     }
     .pending-badge {
       display: inline-block;
-      background: rgba(251,191,36,0.1);
-      border: 1px solid rgba(251,191,36,0.3);
-      color: #fbbf24;
-      padding: 6px 16px;
-      border-radius: 8px;
-      font-size: 13px;
+      background: var(--paper-2);
+      border: 1.5px solid var(--amber);
+      color: var(--amber);
+      padding: 8px 16px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 12px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
       font-weight: 600;
-      margin-top: 12px;
+      margin-top: 14px;
     }
     .loading-state {
       text-align: center;
       padding: 40px 0;
-      color: #6b7280;
+      color: var(--ink-3);
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 500, "SOFT" 50;
+      font-size: 16px;
     }
     .not-found { text-align: center; padding: 20px 0; }
-    .not-found h2 { font-size: 18px; color: #f87171; margin-bottom: 8px; }
-    .not-found p { font-size: 14px; color: #6b7280; }
+    .not-found h2 {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 22px;
+      color: var(--status-no);
+      margin-bottom: 10px;
+      letter-spacing: -.01em;
+    }
+    .not-found p { font-size: 14px; color: var(--ink-2); line-height: 1.5; }
   </style>
 </head>
 <body>
   <div class="card" id="app">
-    <div class="loading-state">Loading...</div>
+    <div class="loading-state">Loading the form…</div>
   </div>
 
   <script>
@@ -320,17 +376,17 @@
     function showConnectionError(err) {
       const detail = err && (err.name === 'AbortError' ? 'Request timed out.' : (err.message || 'Network error.'));
       app.innerHTML = `
-        <div class="logo"><div class="shield">LL</div><h1>Lot<span>Logic</span></h1></div>
+        <div class="logo"><div class="shield"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/></svg></div><h1>LotL<span>o</span>gic</h1></div>
         <div class="not-found">
-          <h2>Can't reach server</h2>
+          <h2>Can't reach our server.</h2>
           <p>${escapeHtml(detail)}</p>
-          <p>Check your connection, then try again.</p>
-          <button id="retryBtn" class="submit-btn" style="margin-top:18px">Try again</button>
+          <p>Check your connection — then give it another go.</p>
+          <button id="retryBtn" class="submit-btn" style="margin-top:18px">Try again →</button>
         </div>
       `;
       const btn = document.getElementById('retryBtn');
       if (btn) btn.addEventListener('click', () => {
-        app.innerHTML = '<div class="loading-state">Loading...</div>';
+        app.innerHTML = '<div class="loading-state">Loading the form…</div>';
         init();
       });
     }
@@ -338,8 +394,8 @@
     function showNotFound(title, message) {
       app.innerHTML = `
         <div class="logo">
-          <div class="shield">LL</div>
-          <h1>Lot<span>Logic</span></h1>
+          <div class="shield"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/></svg></div>
+          <h1>LotL<span>o</span>gic</h1>
         </div>
         <div class="not-found">
           <h2>${escapeHtml(title)}</h2>
@@ -370,11 +426,11 @@
 
       app.innerHTML = `
         <div class="logo">
-          <div class="shield">LL</div>
-          <h1>Lot<span>Logic</span></h1>
+          <div class="shield"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/></svg></div>
+          <h1>LotL<span>o</span>gic</h1>
         </div>
         <div class="property-name">
-          ${escapeHtml(headline)} at
+          ${escapeHtml(headline.toLowerCase())} at
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="regForm">
@@ -399,7 +455,7 @@
           </select>
 
           <button type="submit" class="submit-btn" id="submitBtn">${escapeHtml(submitLabel)}</button>
-          <div class="hint">Pending owner approval</div>
+          <div class="hint">PENDING OWNER APPROVAL</div>
           <div id="errorMsg"></div>
         </form>
       `;
@@ -416,7 +472,7 @@
       const errorDiv = document.getElementById('errorMsg');
       errorDiv.innerHTML = '';
       btn.disabled = true;
-      btn.textContent = 'Registering...';
+      btn.textContent = 'Registering…';
 
       try {
         const holderName = document.getElementById('holderName').value.trim();
@@ -488,11 +544,11 @@
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
           </div>
-          <h2>Request Submitted</h2>
-          <p>Your permanent pass request for <strong>${escapeHtml(property.name)}</strong> has been submitted.</p>
+          <h2>Request <em>submitted.</em></h2>
+          <p>Your permanent pass for <em>${escapeHtml(property.name)}</em> is queued. The owner gets a ping next.</p>
           <div class="success-plate">${escapeHtml(plate)}</div>
-          <div class="pending-badge">Pending Owner Approval</div>
-          <div class="success-detail">You'll be notified once your pass is approved.</div>
+          <div class="pending-badge">Pending owner approval</div>
+          <div class="success-detail">YOU'LL HEAR BACK ONCE IT'S APPROVED.</div>
         </div>
       `;
     }
