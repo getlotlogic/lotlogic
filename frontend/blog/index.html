@@ -3,137 +3,226 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LotLogic Blog — Parking Enforcement Insights</title>
-  <meta name="description" content="Expert insights on parking enforcement, ALPR technology, digital parking passes, and property management solutions from LotLogic.">
+  <title>LotLogic Blog — Notes on parking, properties, and towing</title>
+  <meta name="description" content="Practical writing on parking enforcement, automated dispatch, digital passes, and property management — from the LotLogic team in Charlotte, NC.">
   <link rel="canonical" href="https://lotlogic-beta.vercel.app/blog/">
 
   <meta property="og:type" content="website">
   <meta property="og:title" content="LotLogic Blog">
-  <meta property="og:description" content="Expert insights on parking enforcement, ALPR technology, and property management.">
+  <meta property="og:description" content="Notes on parking, properties, and towing.">
   <meta property="og:url" content="https://lotlogic-beta.vercel.app/blog/">
 
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500,50;9..144,700,50;9..144,800,80;9..144,900,80&family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
   <style>
+    :root {
+      --paper: #F2EAD8;
+      --paper-2: #EADFC7;
+      --paper-3: #DFD2B5;
+      --ink: #1F1B14;
+      --ink-2: #3D3528;
+      --ink-3: #6F6450;
+      --amber: #D97706;
+      --amber-soft: #FBBF24;
+      --terra-deep: #9A5530;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f1117;
-      color: #e5e7eb;
+      font-family: 'Manrope', system-ui, sans-serif;
+      background: var(--paper);
+      color: var(--ink);
       line-height: 1.6;
       -webkit-font-smoothing: antialiased;
+      letter-spacing: -.005em;
+      background-image:
+        radial-gradient(circle at 12% 18%, rgba(31,27,20,0.025) 0 1.2px, transparent 1.5px),
+        radial-gradient(circle at 78% 62%, rgba(31,27,20,0.02) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 42% 88%, rgba(31,27,20,0.018) 0 0.8px, transparent 1.2px);
+      background-size: 240px 240px, 320px 320px, 200px 200px;
     }
-    .container { max-width: 900px; margin: 0 auto; padding: 0 24px; }
-    header {
-      padding: 60px 0 40px;
-      text-align: center;
-      border-bottom: 1px solid rgba(255,255,255,0.06);
+    a { color: inherit; text-decoration: none; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 28px; }
+
+    /* Nav */
+    nav { padding: 22px 0; border-bottom: 1.5px solid var(--ink); }
+    nav .inner { display: flex; align-items: center; justify-content: space-between; }
+    nav .logo { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+    nav .logo .stamp { transform: rotate(-6deg); }
+    nav .logo .wm {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 28px;
+      letter-spacing: -.02em;
+      line-height: 1;
     }
-    header .logo {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 20px;
+    nav .logo .wm em { font-style: italic; color: var(--amber); }
+    nav .links { display: flex; gap: 22px; align-items: center; }
+    nav .links a {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: .04em;
+      color: var(--ink-3);
+      text-transform: lowercase;
     }
-    header .shield {
-      width: 36px; height: 36px;
-      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
-      border-radius: 8px;
-      display: flex; align-items: center; justify-content: center;
-      font-weight: 900; font-size: 14px; color: #fff;
+    nav .links a:hover, nav .links a.active { color: var(--ink); }
+    nav .links a.cta {
+      font-family: 'Manrope', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: none;
+      padding: 10px 18px;
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      background: var(--ink);
+      color: var(--paper);
     }
-    header .wordmark { font-size: 18px; font-weight: 800; color: #f9fafb; }
-    header .wordmark span { color: #3b82f6; }
+    @media (max-width: 720px) { nav .links a:not(.cta) { display: none; } }
+
+    /* Header */
+    header.page-head {
+      padding: 96px 0 64px;
+      border-bottom: 1.5px solid var(--ink);
+    }
+    .nbr {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 14px;
+    }
     header h1 {
-      font-size: clamp(28px, 5vw, 40px);
-      font-weight: 800;
-      color: #f9fafb;
-      margin-bottom: 12px;
-      letter-spacing: -0.02em;
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 900, "SOFT" 80;
+      font-size: clamp(48px, 8vw, 88px);
+      line-height: 1;
+      letter-spacing: -.03em;
+      margin-bottom: 16px;
+      color: var(--ink);
     }
-    header p { color: #9ca3af; font-size: 17px; }
-    .posts { padding: 40px 0 80px; display: grid; gap: 16px; }
+    header h1 em { font-style: italic; color: var(--amber); }
+    header .lede {
+      font-size: 19px;
+      color: var(--ink-2);
+      max-width: 640px;
+      line-height: 1.55;
+    }
+    header .lede em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 600, "SOFT" 50;
+    }
+
+    /* Posts */
+    .posts { padding: 64px 0 96px; display: grid; gap: 16px; max-width: 860px; margin: 0 auto; }
     .post-card {
       display: block;
-      background: #1a1d27;
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 14px;
-      padding: 28px;
-      text-decoration: none;
-      transition: border-color 0.15s;
+      background: var(--paper);
+      border: 1.5px solid var(--ink);
+      padding: 28px 32px;
+      transition: background .12s, transform .12s;
     }
-    .post-card:hover { border-color: rgba(59,130,246,0.4); }
-    .post-card .badge {
-      display: inline-block;
-      background: rgba(59,130,246,0.1);
-      color: #3b82f6;
-      padding: 3px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 600;
-      margin-bottom: 12px;
-    }
+    .post-card:hover { background: var(--paper-2); transform: translateY(-1px); }
     .post-card h3 {
-      font-size: 20px;
-      font-weight: 700;
-      color: #f9fafb;
-      margin-bottom: 8px;
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 24px;
+      line-height: 1.15;
+      letter-spacing: -.02em;
+      margin-bottom: 10px;
+      color: var(--ink);
     }
-    .post-card p { font-size: 15px; color: #9ca3af; }
-    .empty { text-align: center; padding: 80px 0; color: #6b7280; }
+    .post-card p {
+      font-size: 15px;
+      color: var(--ink-2);
+      line-height: 1.55;
+    }
+
+    /* Footer */
     footer {
-      padding: 32px 0;
+      padding: 56px 0 80px;
       text-align: center;
-      color: #4b5563;
-      font-size: 13px;
-      border-top: 1px solid rgba(255,255,255,0.06);
+      color: var(--ink-3);
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      border-top: 1.5px solid var(--ink);
     }
+    footer a { color: var(--ink-3); margin: 0 12px; transition: color .12s; }
+    footer a:hover { color: var(--ink); }
   </style>
 </head>
 <body>
 
-  <header>
-    <div class="container">
-      <div class="logo">
-        <div class="shield">LL</div>
-        <div class="wordmark">Lot<span>Logic</span></div>
+  <!-- Nav -->
+  <nav>
+    <div class="container inner">
+      <a href="/" class="logo">
+        <span class="stamp" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="6" width="18" height="12" rx="2"/>
+            <path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/>
+          </svg>
+        </span>
+        <div class="wm">LotL<em>o</em>gic</div>
+      </a>
+      <div class="links">
+        <a href="/">home</a>
+        <a href="/services.html">services</a>
+        <a href="/blog/" class="active">blog</a>
+        <a href="mailto:lotlogicai@gmail.com?subject=LotLogic%20demo%20request" class="cta">Book a Demo</a>
       </div>
-      <h1>Parking Enforcement Insights</h1>
-      <p>Expert guides on ALPR technology, digital parking passes, and automated enforcement for property managers and tow companies.</p>
+    </div>
+  </nav>
+
+  <!-- Page head -->
+  <header class="page-head">
+    <div class="container">
+      <div class="nbr">/ blog</div>
+      <h1>Notes on parking, properties, <em>and towing.</em></h1>
+      <p class="lede">Practical writing for the people who work the lots — <em>property managers, tow operators, and anyone who's tired of patrolling.</em></p>
     </div>
   </header>
 
+  <!-- Posts -->
   <section class="posts">
     <div class="container">
-      
-    <a href="/blog/how-charlotte-apartment-communities-are-automating-parking-enforcement-in-2026.html" class="post-card">
-      <span class="badge">Property Managers</span>
-      <h3>How Charlotte Apartment Communities Are Automating Parking Enforcement in 2026</h3>
-      <p>Charlotte's apartment boom has created a parking enforcement crisis. See how ALPR cameras and digital passes are replacing stickers and hangtags in 2026.</p>
-    </a>
-    <a href="/blog/free-parking-enforcement-for-charlotte-apartment-complexes-heres-how-it-works.html" class="post-card">
-      <span class="badge">Property Managers</span>
-      <h3>Free Parking Enforcement for Charlotte Apartment Complexes — Here's How It Works</h3>
-      <p>Charlotte property managers can get ALPR cameras, software, and automated tow dispatch at zero cost. Here's the revenue-share model explained honestly.</p>
-    </a>
-    <a href="/blog/5-parking-problems-every-charlotte-property-manager-deals-with-and-how-to-fix-them.html" class="post-card">
-      <span class="badge">Property Managers</span>
-      <h3>5 Parking Problems Every Charlotte Property Manager Deals With (And How to Fix Them)</h3>
-      <p>Unauthorized vehicles, sticker chaos, wasted staff time — Charlotte property managers face the same parking headaches. Here are practical fixes for each one.</p>
-    </a>
-    <a href="/blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.html" class="post-card">
-      <span class="badge">Tow Companies</span>
-      <h3>How Charlotte Tow Companies Are Getting More Jobs Without More Patrol Runs</h3>
-      <p>Charlotte tow companies are cutting empty patrol runs with ALPR-verified violation alerts.</p>
-    </a>
-    <a href="/blog/how-to-land-apartment-complex-towing-contracts-in-charlotte-without-cold-calling.html" class="post-card">
-      <span class="badge">Tow Companies</span>
-      <h3>How to Land Apartment Complex Towing Contracts in Charlotte (Without Cold Calling)</h3>
-      <p>Getting apartment towing contracts in Charlotte is hard. Here's how technology partnerships open doors.</p>
-    </a>
+      <a href="/blog/how-charlotte-apartment-communities-are-automating-parking-enforcement-in-2026.html" class="post-card">
+        <h3>How Charlotte Apartment Communities Are Automating Parking Enforcement in 2026</h3>
+        <p>Charlotte's apartment boom has created a parking enforcement crisis. Cameras and digital passes are replacing stickers and hangtags.</p>
+      </a>
+      <a href="/blog/free-parking-enforcement-for-charlotte-apartment-complexes-heres-how-it-works.html" class="post-card">
+        <h3>Free Parking Enforcement for Charlotte Apartment Complexes — Here's How It Works</h3>
+        <p>Charlotte property managers can get cameras, software, and automated dispatch at zero cost. The revenue-share model, explained honestly.</p>
+      </a>
+      <a href="/blog/5-parking-problems-every-charlotte-property-manager-deals-with-and-how-to-fix-them.html" class="post-card">
+        <h3>5 Parking Problems Every Charlotte Property Manager Deals With (And How to Fix Them)</h3>
+        <p>Unauthorized vehicles, sticker chaos, wasted staff time — and practical fixes for each one.</p>
+      </a>
+      <a href="/blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.html" class="post-card">
+        <h3>How Charlotte Tow Companies Are Getting More Jobs Without More Patrol Runs</h3>
+        <p>Charlotte tow operators are cutting empty patrol runs with verified violation alerts.</p>
+      </a>
+      <a href="/blog/how-to-land-apartment-complex-towing-contracts-in-charlotte-without-cold-calling.html" class="post-card">
+        <h3>How to Land Apartment Complex Towing Contracts in Charlotte (Without Cold Calling)</h3>
+        <p>Getting apartment towing contracts in Charlotte is hard. Here's how technology partnerships open doors.</p>
+      </a>
     </div>
   </section>
 
   <footer>
-    &copy; 2026 LotLogic LLC &middot; AI-powered parking enforcement
+    <div class="container">
+      <a href="/">home</a>
+      <a href="/services.html">services</a>
+      <a href="/privacy.html">privacy</a>
+      <a href="/terms.html">terms</a>
+      <br><br>
+      © 2026 LotLogic LLC · Parking enforcement · Charlotte NC
+    </div>
   </footer>
 
 </body>

@@ -24,120 +24,223 @@
   <!-- Schema.org -->
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"5 Parking Problems Every Charlotte Property Manager Deals With (And How to Fix Them)","description":"Unauthorized vehicles, sticker chaos, wasted staff time — Charlotte property managers face the same parking headaches. Here are practical fixes for each one.","author":{"@type":"Person","name":"Gabriel Bowen-Slott"},"publisher":{"@type":"Organization","name":"LotLogic LLC"},"mainEntityOfPage":"https://lotlogic-beta.vercel.app/blog/5-parking-problems-every-charlotte-property-manager-deals-with-and-how-to-fix-them.html"}</script>
 
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500,50;9..144,700,50;9..144,800,80;9..144,900,80&family=Manrope:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
   <style>
+    :root {
+      --paper: #F2EAD8;
+      --paper-2: #EADFC7;
+      --paper-3: #DFD2B5;
+      --ink: #1F1B14;
+      --ink-2: #3D3528;
+      --ink-3: #6F6450;
+      --amber: #D97706;
+      --amber-soft: #FBBF24;
+      --terra-deep: #9A5530;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f1117;
-      color: #d1d5db;
-      line-height: 1.8;
+      font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+      background: var(--paper);
+      color: var(--ink-2);
+      line-height: 1.75;
       -webkit-font-smoothing: antialiased;
+      letter-spacing: -.005em;
+      background-image:
+        radial-gradient(circle at 12% 18%, rgba(31,27,20,0.025) 0 1.2px, transparent 1.5px),
+        radial-gradient(circle at 78% 62%, rgba(31,27,20,0.02) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 42% 88%, rgba(31,27,20,0.018) 0 0.8px, transparent 1.2px);
+      background-size: 240px 240px, 320px 320px, 200px 200px;
     }
-    .nav {
-      padding: 20px 24px;
-      border-bottom: 1px solid rgba(255,255,255,0.06);
+    a { color: inherit; text-decoration: none; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 28px; }
+
+    nav.site { padding: 22px 0; border-bottom: 1.5px solid var(--ink); }
+    nav.site .inner { display: flex; align-items: center; justify-content: space-between; }
+    nav.site .logo { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+    nav.site .logo .stamp { transform: rotate(-6deg); }
+    nav.site .logo .wm {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 28px;
+      letter-spacing: -.02em;
+      line-height: 1;
     }
-    .nav a {
-      color: #3b82f6;
-      text-decoration: none;
-      font-weight: 600;
+    nav.site .logo .wm em { font-style: italic; color: var(--amber); }
+    nav.site .links { display: flex; gap: 22px; align-items: center; }
+    nav.site .links a {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      letter-spacing: .04em;
+      color: var(--ink-3);
+      text-transform: lowercase;
+    }
+    nav.site .links a:hover, nav.site .links a.active { color: var(--ink); }
+    nav.site .links a.cta {
+      font-family: 'Manrope', sans-serif;
       font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: none;
+      padding: 10px 18px;
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      background: var(--ink);
+      color: var(--paper);
     }
-    .nav a:hover { text-decoration: underline; }
+    @media (max-width: 720px) { nav.site .links a:not(.cta) { display: none; } }
+
     article {
-      max-width: 720px;
+      max-width: 740px;
       margin: 0 auto;
-      padding: 48px 24px 80px;
+      padding: 64px 28px 80px;
     }
     article h1 {
-      font-size: clamp(28px, 5vw, 40px);
-      font-weight: 800;
-      color: #f9fafb;
-      line-height: 1.2;
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 900, "SOFT" 80;
+      font-size: clamp(36px, 6vw, 56px);
+      color: var(--ink);
+      line-height: 1.05;
       margin-bottom: 16px;
-      letter-spacing: -0.02em;
+      letter-spacing: -.025em;
     }
     article .meta {
-      color: #6b7280;
-      font-size: 14px;
+      font-family: 'DM Mono', monospace;
+      color: var(--ink-3);
+      font-size: 11px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
       margin-bottom: 40px;
+      padding-bottom: 24px;
+      border-bottom: 1.5px solid var(--ink);
     }
     article h2 {
-      font-size: 24px;
-      font-weight: 700;
-      color: #f9fafb;
-      margin-top: 40px;
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 28px;
+      color: var(--ink);
+      margin-top: 48px;
       margin-bottom: 16px;
+      letter-spacing: -.02em;
+      line-height: 1.15;
     }
     article h3 {
-      font-size: 20px;
-      font-weight: 700;
-      color: #e5e7eb;
-      margin-top: 32px;
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 80;
+      font-size: 22px;
+      color: var(--ink);
+      margin-top: 36px;
       margin-bottom: 12px;
+      letter-spacing: -.015em;
     }
     article p {
       margin-bottom: 20px;
       font-size: 17px;
+      color: var(--ink-2);
     }
     article ul, article ol {
       margin-bottom: 20px;
       padding-left: 24px;
     }
     article li {
-      margin-bottom: 8px;
+      margin-bottom: 10px;
       font-size: 17px;
+      color: var(--ink-2);
     }
-    article strong { color: #f9fafb; }
-    article a { color: #3b82f6; text-decoration: none; }
-    article a:hover { text-decoration: underline; }
+    article li::marker { color: var(--ink-3); }
+    article strong { color: var(--ink); font-weight: 700; }
+    article a {
+      color: var(--amber);
+      text-decoration: underline;
+      text-decoration-color: rgba(217,119,6,.45);
+      text-underline-offset: 3px;
+    }
+    article a:hover { text-decoration-color: var(--amber); }
     article blockquote {
-      border-left: 3px solid #3b82f6;
-      padding-left: 20px;
-      margin: 24px 0;
-      color: #9ca3af;
+      border-left: 3px solid var(--amber);
+      padding: 4px 0 4px 22px;
+      margin: 28px 0;
+      color: var(--ink-2);
+      font-family: 'Fraunces', serif;
       font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 500, "SOFT" 50;
+      font-size: 19px;
+      line-height: 1.6;
     }
+
     .cta-box {
-      background: #1a1d27;
-      border: 1px solid rgba(59,130,246,0.3);
-      border-radius: 14px;
-      padding: 32px;
-      margin: 48px 0;
+      background: var(--paper-2);
+      border: 1.5px solid var(--ink);
+      padding: 36px 32px;
+      margin: 56px 0 0;
       text-align: center;
     }
     .cta-box h3 {
-      color: #f9fafb;
-      margin-top: 0;
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 24px;
+      color: var(--ink);
       margin-bottom: 12px;
+      letter-spacing: -.015em;
     }
+    .cta-box h3 em { font-style: italic; color: var(--amber); }
     .cta-box p {
-      color: #9ca3af;
-      margin-bottom: 20px;
+      color: var(--ink-2);
+      margin-bottom: 22px;
+      font-size: 16px;
     }
     .cta-box a.btn {
-      display: inline-block;
-      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
-      color: #fff;
-      padding: 12px 24px;
-      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--ink);
+      color: var(--paper);
+      padding: 14px 26px;
+      border-radius: 999px;
+      border: 1.5px solid var(--ink);
+      font-family: 'Manrope', sans-serif;
       font-weight: 700;
       font-size: 15px;
-      text-decoration: none;
+      transition: background .12s, transform .15s;
     }
-    footer {
-      padding: 32px 24px;
+    .cta-box a.btn:hover { background: var(--terra-deep); border-color: var(--terra-deep); transform: translateY(-1px); }
+
+    footer.site {
+      padding: 56px 0 80px;
       text-align: center;
-      color: #4b5563;
-      font-size: 13px;
-      border-top: 1px solid rgba(255,255,255,0.06);
+      color: var(--ink-3);
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      border-top: 1.5px solid var(--ink);
     }
+    footer.site a { color: var(--ink-3); margin: 0 12px; transition: color .12s; }
+    footer.site a:hover { color: var(--ink); }
   </style>
 </head>
 <body>
 
-  <nav class="nav">
-    <a href="/blog/">&larr; LotLogic Blog</a>
+  <nav class="site">
+    <div class="container inner">
+      <a href="/" class="logo">
+        <span class="stamp" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="6" width="18" height="12" rx="2"/>
+            <path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/>
+          </svg>
+        </span>
+        <div class="wm">LotL<em>o</em>gic</div>
+      </a>
+      <div class="links">
+        <a href="/">home</a>
+        <a href="/services.html">services</a>
+        <a href="/blog/" class="active">blog</a>
+        <a href="mailto:lotlogicai@gmail.com?subject=LotLogic%20demo%20request" class="cta">Book a Demo</a>
+      </div>
+    </div>
   </nav>
 
   <article>
@@ -205,14 +308,22 @@
 <p>The technology exists, it's been deployed at enough Charlotte communities to have a reliable track record, and the cost structure makes it accessible without capital expenditure. If you're dealing with any of these problems, the most useful question is: how much of your staff's time is currently going to parking-related issues per month? The answer usually justifies a closer look at automation.</p>
 
     <div class="cta-box">
-      <h3>Ready to automate parking enforcement?</h3>
-      <p>Free cameras, digital passes, and automated towing — at zero cost to your community.</p>
-      <a class="btn" href="mailto:lotlogicai@gmail.com?subject=LotLogic%20demo%20request">Book a 15-min demo &rarr;</a>
+      <h3>Worth <em>15 minutes</em> of your day?</h3>
+      <p>Free cameras, digital passes, automated dispatch. <em>Free pilot in Charlotte.</em></p>
+      <a class="btn" href="mailto:lotlogicai@gmail.com?subject=LotLogic%20demo%20request">Book the 15-min thing →</a>
     </div>
   </article>
 
-  <footer>
-    &copy; 2026 LotLogic LLC &middot; AI-powered parking enforcement
+  <footer class="site">
+    <div class="container">
+      <a href="/">home</a>
+      <a href="/services.html">services</a>
+      <a href="/blog/">blog</a>
+      <a href="/privacy.html">privacy</a>
+      <a href="/terms.html">terms</a>
+      <br><br>
+      © 2026 LotLogic LLC · Parking enforcement · Charlotte NC
+    </div>
   </footer>
 
 </body>
