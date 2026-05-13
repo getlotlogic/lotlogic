@@ -2923,7 +2923,7 @@ const db = {
     if (!supabase || !propertyId) return [];
     const { data, error } = await supabase
       .from('alpr_violations')
-      .select('id, plate_text, normalized_plate, property_id, plate_event_id, status, action_taken, created_at, plate_events:plate_event_id(image_url, created_at, alpr_cameras:camera_id(name))')
+      .select('id, plate_text, normalized_plate, property_id, plate_event_id, status, action_taken, violation_type, created_at, plate_events:plate_event_id(image_url, created_at, alpr_cameras:camera_id(name))')
       .eq('property_id', propertyId)
       .is('action_taken', null)
       .order('created_at', { ascending: false })
@@ -5976,7 +5976,7 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       const since = new Date(Date.now() - winDays * 86400000).toISOString();
       const { data, error } = await supabase
         .from('alpr_violations')
-        .select('id, property_id, plate_text, status, action_taken, action_channel, action_at, tow_confirmed_at, tow_confirmation, billing_held_at, force_bill_at, invoiced_at, dispatched_at, sms_sent_at, created_at, notes, plate_event_id, quickbooks_invoice_id, properties(name, tow_company_id)')
+        .select('id, property_id, plate_text, status, action_taken, action_channel, action_at, tow_confirmed_at, tow_confirmation, billing_held_at, force_bill_at, invoiced_at, dispatched_at, sms_sent_at, violation_type, created_at, notes, plate_event_id, quickbooks_invoice_id, properties(name, tow_company_id)')
         .in('property_id', propIds)
         .gte('created_at', since)
         .order('created_at', { ascending: false })
@@ -8199,9 +8199,17 @@ function TruckParkingLog({ propertyId }) {
   // Realtime subscription. New passes inserted (and exit/overstay updates)
   // refresh the log silently — filter + pagination state are preserved
   // because `load` reads from current state, not from the realtime payload.
+  //
+  // Channel name includes a per-mount nonce because supabase-js v2's
+  // removeChannel is asynchronous; when the effect re-runs (e.g. operator
+  // applies filters → `load` identity changes), recreating a channel with
+  // the same name before the prior one's unsubscribe ACK arrives silently
+  // fails and realtime stops. The nonce keeps each subscription's name
+  // unique so the new one establishes cleanly while the old one tears down.
   useEffect(() => {
     if (!supabase || !propertyId) return;
-    const ch = supabase.channel('parking-log-realtime-' + propertyId)
+    const nonce = Math.random().toString(36).slice(2, 10);
+    const ch = supabase.channel('parking-log-realtime-' + propertyId + '-' + nonce)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'visitor_passes', filter: 'property_id=eq.' + propertyId }, () => load())
       .subscribe();
     return () => { try { supabase.removeChannel(ch); } catch {} };

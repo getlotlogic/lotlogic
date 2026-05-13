@@ -162,11 +162,18 @@ serve(async (req) => {
     .limit(1)
     .maybeSingle();
 
+  // Match either front (plate_text) or back (normalized_back_plate). The
+  // violation row carries whichever plate the camera actually read, so a
+  // trailer-plate-triggered overstay otherwise renders "NEVER REGISTERED"
+  // because the pass row stores the back plate in normalized_back_plate.
+  // Normalize the violation plate so the back-plate column (already
+  // normalized in the DB) matches camera reads that may include hyphens.
+  const violPlateNorm = (violation.plate_text ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   const { data: lastPass } = await supabase
     .from("visitor_passes")
     .select("visitor_name, host_name, host_unit, valid_from, valid_until, stay_days, status, entry_seen_at, back_plate")
     .eq("property_id", violation.property_id)
-    .eq("plate_text", violation.plate_text)
+    .or(`plate_text.eq.${violPlateNorm},normalized_back_plate.eq.${violPlateNorm}`)
     .order("valid_until", { ascending: false })
     .limit(1)
     .maybeSingle();

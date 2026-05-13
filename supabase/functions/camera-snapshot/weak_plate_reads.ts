@@ -80,8 +80,15 @@ export async function findStaleGroups(
     .from("weak_plate_reads")
     .select("property_id,group_key,seen_at")
     .is("processed_at", null)
+    .order("seen_at", { ascending: false })
     .limit(2000);
   if (error) throw error;
+  if ((data?.length ?? 0) >= 2000) {
+    // Backlog: more unprocessed rows than this query can see. Logging so
+    // operators notice; the most-recent-first ordering means we still
+    // process fresh bursts, but old never-flushed groups can be stranded.
+    console.warn("findStaleGroups: 2000-row cap hit — older unprocessed weak_plate_reads may be stranded");
+  }
   type Bucket = { property_id: string; group_key: string; latest: number };
   const buckets = new Map<string, Bucket>();
   for (const r of (data ?? []) as Array<{ property_id: string; group_key: string; seen_at: string }>) {
@@ -219,11 +226,13 @@ async function findActiveUnexitedPassFuzzy(
   return null;
 }
 
-async function findTowTruckMatch(
+// Fetch the tow-truck plate set once for a property. Returns the partner
+// id and the normalized plate set so the caller can scan many candidate
+// plates without re-querying.
+async function loadTowTruckSet(
   db: SupabaseClient,
   propertyId: string,
-  normalized: string,
-): Promise<{ partner_id: string } | null> {
+): Promise<{ partner_id: string; plates: Set<string> } | null> {
   const { data: prop } = await db
     .from("properties")
     .select("tow_company_id")
@@ -236,9 +245,8 @@ async function findTowTruckMatch(
     .eq("id", prop.tow_company_id)
     .maybeSingle();
   if (!partner) return null;
-  const plates = (partner.tow_truck_plates ?? []).map((p: string) => normalizePlate(p));
-  if (!plates.includes(normalized)) return null;
-  return { partner_id: partner.id };
+  const plates = new Set<string>((partner.tow_truck_plates ?? []).map((p: string) => normalizePlate(p)));
+  return { partner_id: partner.id, plates };
 }
 
 export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
@@ -271,8 +279,34 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
     }
   }
 
-  // 4) Tow check + active-unexited-pass fuzzy match.
-  const tow = await findTowTruckMatch(db, propertyId, plateForMatch);
+  // 4) Tow check first — scan EVERY claimed weak read's plate (plus the
+  //    PR plate) against the partner's tow-truck list. A tow truck might
+  //    appear cleanly in a non-best-confidence frame; the previous logic
+  //    only checked the best frame's plate and could miss the sighting.
+  const towSet = await loadTowTruckSet(db, propertyId);
+  let tow: { partner_id: string } | null = null;
+  let towPlate = plateForMatch;
+  if (towSet) {
+    const candidates = new Set<string>();
+    candidates.add(plateForMatch);
+    for (const r of claimed) candidates.add(r.normalized_plate);
+    for (const c of candidates) {
+      if (towSet.plates.has(c)) {
+        tow = { partner_id: towSet.partner_id };
+        towPlate = c;
+        break;
+      }
+    }
+  }
+  // If we matched a tow truck on a NON-best frame, prefer that plate
+  // (and the frame's snapshot) as the canonical record so the sighting
+  // links to the snapshot that actually shows the tow truck.
+  let chosenFrame = best;
+  if (tow && towPlate !== plateForMatch) {
+    const towFrame = claimed.find((r) => r.normalized_plate === towPlate);
+    if (towFrame) chosenFrame = towFrame;
+    plateForMatch = towPlate;
+  }
   const pass = tow ? null : await findActiveUnexitedPassFuzzy(db, propertyId, plateForMatch, now);
 
   // 5) Emit a single plate_event for the "winning" read of this burst.
@@ -290,25 +324,27 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
     : (overstay ? "overstay" : (pass!.fuzzy ? "visitor_pass_fuzzy" : "visitor_pass"));
   const evIns = await db.from("plate_events").insert({
     property_id: propertyId,
-    camera_id: best.camera_id,
-    plate_text: (prUsed && prPlateRaw ? prPlateRaw : best.raw_plate).toUpperCase(),
+    camera_id: chosenFrame.camera_id,
+    plate_text: (prUsed && prPlateRaw && !tow ? prPlateRaw : chosenFrame.raw_plate).toUpperCase(),
     normalized_plate: plateForMatch,
-    image_url: best.image_url,
+    image_url: chosenFrame.image_url,
     raw_data: {
       flow: tow ? "partner_truck_sighting" : "truck_plaza_exit",
-      ocr_source: prUsed ? "pr_via_weak_buffer" : "sidecar_weak_buffer",
+      ocr_source: prUsed && !tow ? "pr_via_weak_buffer" : "sidecar_weak_buffer",
       pass_id: pass?.id ?? null,
       pass_match_fuzzy: pass?.fuzzy ?? false,
       overstay,
       burst_size: claimed.length,
-      chosen_weak_read_id: best.id,
+      chosen_weak_read_id: chosenFrame.id,
+      best_confidence_weak_read_id: best.id,
       sidecar_best_plate: best.raw_plate,
       sidecar_best_confidence: best.confidence,
-      pr_used: prUsed,
+      pr_used: prUsed && !tow,
       pr_confidence: prConfidence,
+      tow_matched_on_non_best_frame: tow ? chosenFrame.id !== best.id : false,
     },
     match_status: matchStatus,
-    confidence: prUsed ? prConfidence : best.confidence,
+    confidence: tow ? chosenFrame.confidence : (prUsed ? prConfidence : chosenFrame.confidence),
   }).select("id").single();
   if (evIns.error) throw evIns.error;
   const plateEventId = evIns.data.id as string;
@@ -332,37 +368,60 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
   }
 
   // 7) Pass-exit branch. Reuse the existing overstay violation if the
-  //    proactive cron already inserted one — otherwise we'd duplicate-fire
-  //    the dispatch email for the same incident.
-  let overstayViolationId: string | null = null;
-  if (overstay) {
-    if (pass!.overstay_violation_id) {
-      overstayViolationId = pass!.overstay_violation_id;
-      const vUpd = await db.from("alpr_violations")
-        .update({
-          plate_event_id: plateEventId,
-          notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads). Originally fired by overstay sweep.`,
-        })
-        .eq("id", overstayViolationId);
-      if (vUpd.error) throw vUpd.error;
-    } else {
-      const vIns = await db.from("alpr_violations").insert({
-        property_id: propertyId,
+  //    proactive cron already inserted one. If not, INSERT and then race-
+  //    safely claim the pass — cron may have stamped its own id between
+  //    our SELECT and our claim; in that case delete our duplicate.
+  let overstayViolationId: string | null = pass!.overstay_violation_id ?? null;
+  if (overstay && overstayViolationId) {
+    const vUpd = await db.from("alpr_violations")
+      .update({
         plate_event_id: plateEventId,
-        plate_text: (prUsed && prPlateRaw ? prPlateRaw : best.raw_plate).toUpperCase(),
-        status: "pending",
-        violation_type: "overstay",
-        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads)`,
-      }).select("id").single();
-      if (vIns.error) throw vIns.error;
-      overstayViolationId = vIns.data.id as string;
+        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads). Originally fired by overstay sweep.`,
+      })
+      .eq("id", overstayViolationId);
+    if (vUpd.error) throw vUpd.error;
+  } else if (overstay) {
+    const vIns = await db.from("alpr_violations").insert({
+      property_id: propertyId,
+      plate_event_id: plateEventId,
+      plate_text: (prUsed && prPlateRaw && !tow ? prPlateRaw : chosenFrame.raw_plate).toUpperCase(),
+      status: "pending",
+      violation_type: "overstay",
+      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads)`,
+    }).select("id").single();
+    if (vIns.error) throw vIns.error;
+    const candidateId = vIns.data.id as string;
+    const claim = await db.from("visitor_passes")
+      .update({ overstay_violation_id: candidateId })
+      .eq("id", pass!.id)
+      .is("overstay_violation_id", null)
+      .is("exited_at", null)
+      .select("overstay_violation_id");
+    if (claim.error) throw claim.error;
+    if (!claim.data || claim.data.length === 0) {
+      await db.from("alpr_violations").delete().eq("id", candidateId);
+      const reread = await db.from("visitor_passes")
+        .select("overstay_violation_id")
+        .eq("id", pass!.id)
+        .single();
+      overstayViolationId = (reread.data?.overstay_violation_id as string | null) ?? null;
+      if (overstayViolationId) {
+        await db.from("alpr_violations")
+          .update({
+            plate_event_id: plateEventId,
+            notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads, race-loser path).`,
+          })
+          .eq("id", overstayViolationId);
+      }
+    } else {
+      overstayViolationId = candidateId;
     }
   }
 
   const upd = await db.from("visitor_passes")
     .update({
       exited_at: now.toISOString(),
-      exited_via_camera_id: best.camera_id,
+      exited_via_camera_id: chosenFrame.camera_id,
       exited_via_plate_event_id: plateEventId,
       overstay_violation_id: overstayViolationId,
     })

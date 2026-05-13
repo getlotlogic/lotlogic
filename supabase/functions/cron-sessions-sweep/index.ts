@@ -449,6 +449,12 @@ const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
 const PR_SDK_URL = Deno.env.get("PR_SDK_URL") ?? "";
 const PR_API_URL = PR_SDK_URL || "https://api.platerecognizer.com/v1/plate-reader/";
 
+// Hard cap on groups flushed per cron tick. Each flush makes a synchronous
+// PR call (up to 8s) — without this, a recovery scenario with N stale
+// groups can wall-clock the edge-function invocation (Supabase limit 150s).
+// Excess groups roll over to the next cron tick.
+const WEAK_FLUSH_MAX_PER_TICK = Number(Deno.env.get("WEAK_FLUSH_MAX_PER_TICK") ?? "10");
+
 async function sweepWeakPlateReads(): Promise<number> {
   if (!PR_TOKEN) {
     // No PR token configured — can't second-opinion the best frame.
@@ -460,8 +466,11 @@ async function sweepWeakPlateReads(): Promise<number> {
   const now = new Date();
   const stale = await findStaleGroups(db, now);
   if (stale.length === 0) return 0;
+  if (stale.length > WEAK_FLUSH_MAX_PER_TICK) {
+    console.warn(`sweepWeakPlateReads: ${stale.length} stale groups; processing first ${WEAK_FLUSH_MAX_PER_TICK} this tick, rest deferred to next cron`);
+  }
   let flushed = 0;
-  for (const g of stale) {
+  for (const g of stale.slice(0, WEAK_FLUSH_MAX_PER_TICK)) {
     try {
       const r = await flushGroup({
         db,
@@ -483,7 +492,7 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
   const cutoff = new Date(Date.now() - DISPATCH_HOLD_MINUTES * 60 * 1000).toISOString();
   const { data: pending, error } = await db
     .from("alpr_violations")
-    .select("id, session_id, created_at")
+    .select("id, session_id, violation_type, created_at")
     .is("sms_sent_at", null)
     .lt("created_at", cutoff)
     .limit(50);
@@ -495,15 +504,21 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
   const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
 
   for (const v of pending) {
-    if (!v.session_id) continue;
-    const { data: sess, error: sErr } = await db
-      .from("plate_sessions")
-      .select("exit_hinted_at")
-      .eq("id", v.session_id)
-      .maybeSingle();
-    if (sErr) { console.warn("dispatchPending session fetch failed:", sErr.message); continue; }
+    // The session_id-keyed exit_hinted_at suppression only applies to the
+    // legacy apartment session pipeline. Truck-plaza overstays (and other
+    // session-less violations) skip that step but MUST still dispatch.
+    let sessionExitHinted: string | null = null;
+    if (v.session_id) {
+      const { data: sess, error: sErr } = await db
+        .from("plate_sessions")
+        .select("exit_hinted_at")
+        .eq("id", v.session_id)
+        .maybeSingle();
+      if (sErr) { console.warn("dispatchPending session fetch failed:", sErr.message); continue; }
+      sessionExitHinted = sess?.exit_hinted_at ?? null;
+    }
 
-    if (sess?.exit_hinted_at) {
+    if (sessionExitHinted) {
       // Truck was seen heading out during the post-violation hold —
       // they left before Frank would have rolled. Suppress the dispatch
       // and stamp the audit flag.
@@ -522,7 +537,7 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
         .is("sms_sent_at", null);
       if (upd.error) console.warn(`auto-no-tow update failed for ${v.id}: ${upd.error.message}`);
       else {
-        console.log(`auto_no_tow violation=${v.id} session=${v.session_id} exit_hinted_at=${sess.exit_hinted_at}`);
+        console.log(`auto_no_tow violation=${v.id} session=${v.session_id} exit_hinted_at=${sessionExitHinted}`);
         leftBeforeTow++;
       }
       continue;

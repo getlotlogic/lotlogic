@@ -344,29 +344,58 @@ export async function handleTruckPlazaExit(args: {
   //   2) truck physically leaves, camera fires at valid_until+30min
   //   3) we'd insert violation B and overwrite the link
   // would deliver two emails for one incident and orphan violation A.
-  let overstayViolationId: string | null = null;
-  if (overstay) {
-    if (pass!.overstay_violation_id) {
-      // Cron got here first — link the exit evidence onto its violation.
-      overstayViolationId = pass!.overstay_violation_id;
-      const vUpd = await db.from("alpr_violations")
-        .update({
-          plate_event_id: plateEventId,
-          notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via camera (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late). Originally fired by overstay sweep.`,
-        })
-        .eq("id", overstayViolationId);
-      if (vUpd.error) throw vUpd.error;
-    } else {
-      const vIns = await db.from("alpr_violations").insert({
-        property_id: camera.property_id,
+  let overstayViolationId: string | null = pass!.overstay_violation_id ?? null;
+  if (overstay && overstayViolationId) {
+    // Cron sweep already filed this overstay — link the camera evidence
+    // onto its row instead of inserting a duplicate.
+    const vUpd = await db.from("alpr_violations")
+      .update({
         plate_event_id: plateEventId,
-        plate_text: resolved.raw.toUpperCase(),
-        status: "pending",
-        violation_type: "overstay",
-        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late)`,
-      }).select("id").single();
-      if (vIns.error) throw vIns.error;
-      overstayViolationId = vIns.data.id as string;
+        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via camera (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late). Originally fired by overstay sweep.`,
+      })
+      .eq("id", overstayViolationId);
+    if (vUpd.error) throw vUpd.error;
+  } else if (overstay) {
+    // No prior overstay row. Race-safe insert: INSERT then conditionally
+    // claim the pass; if cron got there first (between our SELECT and
+    // our claim), delete the duplicate and adopt the cron's violation id.
+    const vIns = await db.from("alpr_violations").insert({
+      property_id: camera.property_id,
+      plate_event_id: plateEventId,
+      plate_text: resolved.raw.toUpperCase(),
+      status: "pending",
+      violation_type: "overstay",
+      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late)`,
+    }).select("id").single();
+    if (vIns.error) throw vIns.error;
+    const candidateId = vIns.data.id as string;
+    const claim = await db.from("visitor_passes")
+      .update({ overstay_violation_id: candidateId })
+      .eq("id", pass!.id)
+      .is("overstay_violation_id", null)
+      .is("exited_at", null)
+      .select("overstay_violation_id");
+    if (claim.error) throw claim.error;
+    if (!claim.data || claim.data.length === 0) {
+      // Race lost — cron stamped its own violation id. Delete our
+      // duplicate and re-read the winning id off the pass.
+      await db.from("alpr_violations").delete().eq("id", candidateId);
+      const reread = await db.from("visitor_passes")
+        .select("overstay_violation_id")
+        .eq("id", pass!.id)
+        .single();
+      overstayViolationId = (reread.data?.overstay_violation_id as string | null) ?? null;
+      // Best-effort: link the camera evidence onto the winning row.
+      if (overstayViolationId) {
+        await db.from("alpr_violations")
+          .update({
+            plate_event_id: plateEventId,
+            notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via camera (race-loser path).`,
+          })
+          .eq("id", overstayViolationId);
+      }
+    } else {
+      overstayViolationId = candidateId;
     }
   }
 
@@ -375,11 +404,8 @@ export async function handleTruckPlazaExit(args: {
       exited_at: now.toISOString(),
       exited_via_camera_id: camera.id,
       exited_via_plate_event_id: plateEventId,
-      // COALESCE-style: keep the prior overstay_violation_id when we found
-      // one on the pass (we just attached evidence to it above); otherwise
-      // stamp the newly-created one. Conditional .is("exited_at", null)
-      // also keeps a concurrent flusher from clobbering this update.
-      overstay_violation_id: overstayViolationId,
+      // overstay_violation_id is already correct from the race-safe
+      // branches above. Don't touch it here.
     })
     .eq("id", pass!.id)
     .is("exited_at", null);
