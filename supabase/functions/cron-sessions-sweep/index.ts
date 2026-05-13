@@ -20,6 +20,7 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
+import { findStaleGroups, flushGroup } from "../camera-snapshot/weak_plate_reads.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -56,6 +57,7 @@ Deno.serve(async (_req: Request) => {
     const grace = await graceExpiry();
     const overstayExpired = await overstayExpiry();
     const passOverstay = await sweepUnexitedPassesForOverstay();
+    const weakReads = await sweepWeakPlateReads();
     const dispatch = await dispatchPendingViolations();
     const closedRegistered = await closeRegistered();
     const closedResident = await closeResident();
@@ -67,6 +69,7 @@ Deno.serve(async (_req: Request) => {
       grace_thrown_away: grace.thrown_away,
       overstay_expired: overstayExpired,
       pass_overstay_fired: passOverstay,
+      weak_reads_flushed: weakReads,
       dispatched: dispatch.dispatched,
       auto_no_tow_left_before_tow: dispatch.left_before_tow,
       closed_registered: closedRegistered,
@@ -433,6 +436,47 @@ async function sweepUnexitedPassesForOverstay(): Promise<number> {
     fired++;
   }
   return fired;
+}
+
+// SC211 burst-flush safety net. truck_plaza_exit.ts does an opportunistic
+// flush whenever a new SC211 frame arrives, but for the last burst of
+// the night (no follow-up frame) we need a time-driven backstop. Every
+// minute we look for weak_plate_reads groups whose newest read is older
+// than the burst window and run flushGroup on each — picks the best
+// frame, PR-OCRs it, runs the tow + active-pass match, records exit /
+// overstay / sighting just like the camera-snapshot inline path.
+const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
+const PR_SDK_URL = Deno.env.get("PR_SDK_URL") ?? "";
+const PR_API_URL = PR_SDK_URL || "https://api.platerecognizer.com/v1/plate-reader/";
+
+async function sweepWeakPlateReads(): Promise<number> {
+  if (!PR_TOKEN) {
+    // No PR token configured — can't second-opinion the best frame.
+    // Skip rather than do a sidecar-only flush from here (we'd risk
+    // marking exits off raw weak reads). The opportunistic path in
+    // camera-snapshot does its own flush so this is a true backstop.
+    return 0;
+  }
+  const now = new Date();
+  const stale = await findStaleGroups(db, now);
+  if (stale.length === 0) return 0;
+  let flushed = 0;
+  for (const g of stale) {
+    try {
+      const r = await flushGroup({
+        db,
+        propertyId: g.property_id,
+        groupKey: g.group_key,
+        now,
+        prToken: PR_TOKEN,
+        prApiUrl: PR_API_URL,
+      });
+      if (r.outcome !== "no_op") flushed++;
+    } catch (err) {
+      console.warn(`sweepWeakPlateReads: flushGroup ${g.property_id}/${g.group_key} failed: ${String(err)}`);
+    }
+  }
+  return flushed;
 }
 
 async function dispatchPendingViolations(): Promise<{ dispatched: number; left_before_tow: number }> {

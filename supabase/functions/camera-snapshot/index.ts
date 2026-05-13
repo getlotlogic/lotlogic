@@ -214,7 +214,12 @@ Deno.serve(async (req: Request) => {
     if (propertyType === "truck_plaza") {
       const r = await handleTruckPlazaExit({
         db,
-        camera: { id: camera.id, property_id: camera.property_id, api_key: camera.api_key },
+        camera: {
+          id: camera.id,
+          property_id: camera.property_id,
+          api_key: camera.api_key,
+          gate_id: (camera as { gate_id?: string | null }).gate_id ?? null,
+        },
         payload: {
           bytes: extracted.bytes,
           cameraHint: extracted.cameraHint,
@@ -228,6 +233,14 @@ Deno.serve(async (req: Request) => {
         },
         prToken: PR_TOKEN,
         prApiUrl: PR_SDK_URL || "https://api.platerecognizer.com/v1/plate-reader/",
+        sidecarRead: OPENALPR_SIDECAR_URL ? async (bytes, cameraId) => {
+          const sc = await callOpenAlprSidecar(bytes, cameraId);
+          if (!sc.ok) return null;
+          const plate = sc.bestPlate ?? sc.topReadPlate;
+          const conf = sc.bestPlate ? sc.bestConfidence : sc.topReadConfidence;
+          if (!plate) return null;
+          return { plate, confidence: conf };
+        } : undefined,
       });
       console.log(`truck_plaza_exit camera=${camera.id} outcome=${r.outcome}`);
       return json(200, { ok: true, fn: "truck_plaza_exit", ...r });

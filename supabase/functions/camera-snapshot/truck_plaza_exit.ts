@@ -22,12 +22,18 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { plateSimilar, plateMatchesPartial } from "./sessions.ts";
+import { insertWeakRead, findStaleGroups, flushGroup } from "./weak_plate_reads.ts";
 
 export type CameraRow = {
   id: string;
   property_id: string;
   api_key: string;
+  // Group multiple cameras that should be treated as one logical camera
+  // for SC211 burst dedup. NULL = camera is its own group.
+  gate_id: string | null;
 };
+
+export type SidecarRead = { plate: string; confidence: number } | null;
 
 export type TruckPlazaPayload = {
   bytes: Uint8Array;
@@ -50,9 +56,21 @@ export type TruckPlazaResult =
   | { outcome: "dropped"; reason: string }
   | { outcome: "exit_clean"; pass_id: string; plate_event_id: string }
   | { outcome: "exit_overstay"; pass_id: string; plate_event_id: string; violation_id: string }
-  | { outcome: "partner_truck_sighting"; partner_id: string; plate_event_id: string; sighting_id: string };
+  | { outcome: "partner_truck_sighting"; partner_id: string; plate_event_id: string; sighting_id: string }
+  | { outcome: "buffered"; weak_read_id: string; opportunistic_flushed: number };
 
 type ResolvedPlate = { raw: string; normalized: string; confidence: number | null; source: "onboard" | "pr" };
+
+// Sidecar threshold. Below this confidence we drop the frame outright;
+// at-or-above buffers into weak_plate_reads for best-of-N selection in
+// flushGroup() at end of burst.
+export const SC211_SIDECAR_FLOOR = 0.20;
+
+// Group key for burst dedup. SC211s at the same gate share a group so
+// the best frame across cameras gets chosen as the winning read.
+function groupKeyFor(camera: CameraRow): string {
+  return camera.gate_id ?? camera.id;
+}
 
 type PassMatch = { id: string; valid_until: string; fuzzy: boolean };
 
@@ -154,40 +172,11 @@ async function findTowTruckMatch(
   return { partner_id: partner.id };
 }
 
-// Single Plate Recognizer call against /v1/plate-reader/. Returns the
-// highest-confidence plate, or null on no-plate / API failure. Used as a
-// second-opinion OCR after onboard LPR misses every list — most reads
-// don't pay this cost since most reads ARE registered passes or partner
-// trucks that hit on the onboard read.
-async function callPlateRecognizer(
-  bytes: Uint8Array,
-  token: string,
-  apiUrl: string,
-): Promise<{ plate: string; confidence: number | null } | null> {
-  try {
-    const form = new FormData();
-    form.append("upload", new Blob([bytes as BlobPart], { type: "image/jpeg" }), "snapshot.jpg");
-    form.append("regions", "us");
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
-    const res = await fetch(apiUrl, {
-      method: "POST",
-      headers: { Authorization: `Token ${token}` },
-      body: form,
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const body = await res.json();
-    const results = (body?.results ?? []) as Array<{ plate?: string; score?: number }>;
-    if (results.length === 0) return null;
-    const best = results.reduce((a, b) => (Number(b.score ?? 0) > Number(a.score ?? 0) ? b : a));
-    if (!best.plate) return null;
-    return { plate: best.plate, confidence: typeof best.score === "number" ? best.score : null };
-  } catch (_) {
-    return null;
-  }
-}
+// PR call helper removed — the SC211 path now buffers weak reads and
+// calls PR once per burst inside weak_plate_reads.flushGroup (which
+// owns its own PR call). The TS4467 onboard path doesn't call PR at
+// all (per the Charlotte registered-only model — overstay cron is the
+// safety net for onboard misreads).
 
 export async function handleTruckPlazaExit(args: {
   db: SupabaseClient;
@@ -197,15 +186,15 @@ export async function handleTruckPlazaExit(args: {
   uploadJpeg: (bytes: Uint8Array, key: string) => Promise<string | null>;
   prToken: string;
   prApiUrl: string;
+  // Sidecar OCR for cameras without onboard LPR (SC211). Returns the
+  // best plate above the sidecar's own internal threshold (or null).
+  // truck_plaza_exit applies its own SC211_SIDECAR_FLOOR on top.
+  sidecarRead?: (bytes: Uint8Array, cameraId: string) => Promise<SidecarRead>;
 }): Promise<TruckPlazaResult> {
   const { db, camera, payload, now } = args;
   const onboard = payload.onboardLpr;
 
-  // 1. Resolve a plate to look up. Onboard LPR is the primary source; if
-  //    the camera doesn't have onboard ANPR (SC211 cloud-OCR), fall
-  //    through to a PR call directly. Direction is preserved when known —
-  //    only Leave reads count as exits, but tow trucks count both ways.
-  const direction = onboard?.direction ?? null;
+  // 1. Resolve a plate from the onboard LPR if present.
   const onboardRaw = (onboard?.plate ?? "").trim();
   let resolved: ResolvedPlate | null = null;
   if (onboardRaw) {
@@ -215,44 +204,71 @@ export async function handleTruckPlazaExit(args: {
     }
   }
 
-  // 2. Look up tow-truck and pass with the onboard plate (cheap).
+  // 2. SC211 (no onboard plate) flow: run sidecar, buffer for best-of-N
+  //    burst flush. The actual lookup happens inside flushGroup at end
+  //    of burst window (cron-driven or opportunistic). Returns early.
+  if (!resolved && args.sidecarRead) {
+    const sc = await args.sidecarRead(payload.bytes, camera.id);
+    if (!sc || sc.confidence < SC211_SIDECAR_FLOOR) {
+      // No usable read — drop. Opportunistic flush still gets a chance
+      // since we're at a camera that's part of a burst group.
+      const stale = await findStaleGroups(db, now);
+      const myGroup = groupKeyFor(camera);
+      let flushed = 0;
+      for (const s of stale) {
+        if (s.property_id === camera.property_id && s.group_key === myGroup) {
+          const r = await flushGroup({ db, propertyId: s.property_id, groupKey: s.group_key, now, prToken: args.prToken, prApiUrl: args.prApiUrl });
+          if (r.outcome !== "no_op") flushed++;
+        }
+      }
+      return { outcome: "dropped", reason: sc ? `sidecar_below_floor_${sc.confidence.toFixed(2)}` : "sidecar_empty" };
+    }
+    // Sidecar has a read >= floor — upload snapshot + buffer the row.
+    const normalized = normalizePlate(sc.plate);
+    if (normalized.length < 4) return { outcome: "dropped", reason: "sidecar_plate_too_short" };
+    const dateStr = now.toISOString().slice(0, 10);
+    const r2Key = `${camera.property_id}/${dateStr}/weak-${camera.api_key}-${now.getTime()}-${normalized}.jpg`;
+    const imageUrl = await args.uploadJpeg(payload.bytes, r2Key);
+    const groupKey = groupKeyFor(camera);
+    const weakId = await insertWeakRead(db, {
+      property_id: camera.property_id,
+      camera_id: camera.id,
+      group_key: groupKey,
+      raw_plate: sc.plate,
+      normalized_plate: normalized,
+      confidence: sc.confidence,
+      image_url: imageUrl,
+    });
+    // Opportunistic flush: if another burst on this same group has gone
+    // quiet for >= BURST_WINDOW_MS, process it now. The newly-inserted
+    // row above is NOT eligible since its seen_at is `now`.
+    const stale = await findStaleGroups(db, now);
+    let flushed = 0;
+    for (const s of stale) {
+      if (s.property_id === camera.property_id && s.group_key === groupKey) {
+        const r = await flushGroup({ db, propertyId: s.property_id, groupKey: s.group_key, now, prToken: args.prToken, prApiUrl: args.prApiUrl });
+        if (r.outcome !== "no_op") flushed++;
+      }
+    }
+    return { outcome: "buffered", weak_read_id: weakId, opportunistic_flushed: flushed };
+  }
+
+  // 3. TS4467 onboard-plate flow. Tow + active-pass lookups. No PR
+  //    fallback (per the Charlotte registered-only model — overstay
+  //    cron is the safety net for onboard misreads).
   let tow: { partner_id: string } | null = null;
   let pass: PassMatch | null = null;
   if (resolved) {
     tow = await findTowTruckMatch(db, camera.property_id, resolved.normalized);
-    if (!tow && direction === "Leave") {
+    if (!tow) {
       pass = await findActiveUnexitedPass(db, camera.property_id, resolved.normalized, now);
-    }
-  }
-
-  // 3. PR fallback. Only fires when we have NO onboard plate at all
-  //    (SC211 cloud-OCR cameras) — PR is the only OCR available there.
-  //    When onboard returned a plate but it didn't match either list,
-  //    we no longer second-opinion via PR. Trade-off: an onboard
-  //    misread of a registered driver's exit becomes a missed exit;
-  //    the proactive overstay cron fires at valid_until and the
-  //    operator can dispute. Saves the per-read PR cost at high
-  //    truck-plaza volume.
-  if (!resolved && args.prToken && args.prApiUrl) {
-    const pr = await callPlateRecognizer(payload.bytes, args.prToken, args.prApiUrl);
-    if (pr) {
-      const norm = normalizePlate(pr.plate);
-      if (norm.length >= 4) {
-        tow = await findTowTruckMatch(db, camera.property_id, norm);
-        if (!tow && direction === "Leave") {
-          pass = await findActiveUnexitedPass(db, camera.property_id, norm, now);
-        }
-        if (tow || pass) {
-          resolved = { raw: pr.plate, normalized: norm, confidence: pr.confidence, source: "pr" };
-        }
-      }
     }
   }
 
   // 4. No usable read = drop. Nothing to upload, nothing to insert.
   if (!resolved) return { outcome: "dropped", reason: onboardRaw ? "plate_too_short" : "no_plate" };
   if (!tow && !pass) {
-    return { outcome: "dropped", reason: direction === "Leave" ? "no_active_pass" : `unmatched_${direction ?? "null"}` };
+    return { outcome: "dropped", reason: "no_match_onboard" };
   }
 
   // 5. Matched — upload snapshot + insert plate_event for evidence.
@@ -278,7 +294,7 @@ export async function handleTruckPlazaExit(args: {
       onboardLpr: onboard,
       flow: tow ? "partner_truck_sighting" : "truck_plaza_exit",
       ocr_source: resolved.source,
-      direction,
+      direction: onboard?.direction ?? null,
       pass_id: pass?.id ?? null,
       pass_match_fuzzy: fuzzyHit,
       overstay,
