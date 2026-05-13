@@ -55,6 +55,7 @@ Deno.serve(async (_req: Request) => {
     const promoted = await registrationTransition();
     const grace = await graceExpiry();
     const overstayExpired = await overstayExpiry();
+    const passOverstay = await sweepUnexitedPassesForOverstay();
     const dispatch = await dispatchPendingViolations();
     const closedRegistered = await closeRegistered();
     const closedResident = await closeResident();
@@ -65,6 +66,7 @@ Deno.serve(async (_req: Request) => {
       promoted,
       grace_thrown_away: grace.thrown_away,
       overstay_expired: overstayExpired,
+      pass_overstay_fired: passOverstay,
       dispatched: dispatch.dispatched,
       auto_no_tow_left_before_tow: dispatch.left_before_tow,
       closed_registered: closedRegistered,
@@ -366,6 +368,72 @@ async function closeExpired(): Promise<number> {
 // left. This is the practical fix for "still getting violations on cars
 // that are leaving" reported on 2026-04-29.
 const DISPATCH_HOLD_MINUTES = Number(Deno.env.get("DISPATCH_HOLD_MINUTES") ?? "5");
+
+// Truck-plaza proactive overstay sweep. Under the registration-as-entrance
+// model (handled by truck_plaza_exit.ts in camera-snapshot), an exit camera
+// stamps visitor_passes.exited_at + overstay_violation_id when it sees a
+// registered vehicle leave. If valid_until passes WITHOUT a camera-detected
+// exit, this sweep fires the violation proactively so the partner email
+// goes out without waiting for the eventual exit read.
+//
+// Matches: visitor_passes where valid_until < now, exited_at IS NULL,
+// overstay_violation_id IS NULL, status='active'. Per-property guard:
+// only properties whose property_type='truck_plaza' use this model.
+async function sweepUnexitedPassesForOverstay(): Promise<number> {
+  const nowIso = new Date().toISOString();
+  // Join via property_type filter — only truck_plaza properties participate.
+  const { data: passes, error } = await db
+    .from("visitor_passes")
+    .select("id, property_id, plate_text, properties!inner(property_type)")
+    .is("exited_at", null)
+    .is("overstay_violation_id", null)
+    .eq("status", "active")
+    .lt("valid_until", nowIso)
+    .eq("properties.property_type", "truck_plaza")
+    .limit(200);
+  if (error) throw error;
+  if (!passes || passes.length === 0) return 0;
+
+  let fired = 0;
+  for (const p of passes) {
+    // Insert the violation. plate_event_id is null — there's no read; this
+    // is a time-based fire. The eventual exit read in truck_plaza_exit will
+    // backfill the actual exit camera + event ids onto the pass row.
+    const vIns = await db.from("alpr_violations").insert({
+      property_id: p.property_id,
+      plate_text: p.plate_text,
+      status: "pending",
+      violation_type: "overstay",
+      notes: `Pass valid_until passed without camera-detected exit. Fired by cron-sessions-sweep.`,
+    }).select("id").single();
+    if (vIns.error) {
+      console.warn(`overstay_sweep: violation insert failed pass=${p.id}: ${vIns.error.message}`);
+      continue;
+    }
+    // Claim the pass via conditional update so a near-simultaneous camera
+    // exit can't double-insert. If the camera beat us to it, overstay_violation_id
+    // is now non-null and our update no-ops; rollback the violation row.
+    const claim = await db.from("visitor_passes")
+      .update({ overstay_violation_id: vIns.data.id })
+      .eq("id", p.id)
+      .is("overstay_violation_id", null)
+      .is("exited_at", null)
+      .select("id");
+    if (claim.error) {
+      console.warn(`overstay_sweep: claim failed pass=${p.id}: ${claim.error.message}`);
+      await db.from("alpr_violations").delete().eq("id", vIns.data.id);
+      continue;
+    }
+    if (!claim.data || claim.data.length === 0) {
+      // Lost the race — camera-snapshot stamped overstay_violation_id on
+      // this same pass between our SELECT and UPDATE. Drop our duplicate.
+      await db.from("alpr_violations").delete().eq("id", vIns.data.id);
+      continue;
+    }
+    fired++;
+  }
+  return fired;
+}
 
 async function dispatchPendingViolations(): Promise<{ dispatched: number; left_before_tow: number }> {
   const cutoff = new Date(Date.now() - DISPATCH_HOLD_MINUTES * 60 * 1000).toISOString();

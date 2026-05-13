@@ -5,6 +5,7 @@ import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { extractFromRequest } from "./extract.ts";
 import { parsePath } from "./path.ts";
 import { findSimilarOpenSession, findRecentSessionByCamera, findRecentPrCallForCamera, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome, findCooldownPriorSession, type CooldownHit } from "./sessions.ts";
+import { handleTruckPlazaExit } from "./truck_plaza_exit.ts";
 import { isPlateHeld } from "./holds.ts";
 import { extractUsdot } from "./usdot-ocr.ts";
 import { computeImageHashes } from "./image-hash.ts";
@@ -197,6 +198,38 @@ Deno.serve(async (req: Request) => {
     if (cameraQ.error) throw cameraQ.error;
     const camera = (cameraQ.data ?? [])[0];
     if (!camera) return json(200, { ok: false, reason: "unknown_camera", api_key: cameraApiKey });
+
+    // Property-type branch. Truck-plaza properties use the registration-
+    // as-entrance model: visitor_passes is the source of truth for "on
+    // property", cameras only detect EXITS of registered vehicles. The
+    // legacy session state machine below handles all other property
+    // types (currently apartments only).
+    const propQ = await db
+      .from("properties")
+      .select("property_type")
+      .eq("id", camera.property_id)
+      .maybeSingle();
+    if (propQ.error) throw propQ.error;
+    const propertyType = (propQ.data?.property_type as string | null) ?? null;
+    if (propertyType === "truck_plaza") {
+      const r = await handleTruckPlazaExit({
+        db,
+        camera: { id: camera.id, property_id: camera.property_id, api_key: camera.api_key },
+        payload: {
+          bytes: extracted.bytes,
+          cameraHint: extracted.cameraHint,
+          onboardLpr: extracted.onboardLpr ?? null,
+          rawMeta: extracted.rawMeta,
+        },
+        now: new Date(),
+        uploadJpeg: async (bytes, key) => {
+          const res = await r2(key, bytes);
+          return res.ok ? res.url : null;
+        },
+      });
+      console.log(`truck_plaza_exit camera=${camera.id} outcome=${r.outcome}`);
+      return json(200, { ok: true, fn: "truck_plaza_exit", ...r });
+    }
 
     // Tier 0 race guard removed 2026-04-25. Operator decision: the guard
     // was killing 30s of property-wide traffic every time the entry path
