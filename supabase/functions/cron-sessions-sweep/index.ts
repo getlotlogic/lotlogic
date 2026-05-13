@@ -8,9 +8,10 @@
 //      'expired' + violation + email.
 //   3. overstayExpiry — registered sessions whose pass expired more than
 //      OVERSTAY_GRACE_MINUTES ago → 'expired' + violation + email.
-//   4. closeRegistered — registered sessions with exit_hinted_at set (fast
-//      path, EXIT_HINT_BUFFER_MINUTES buffer) OR pass expired + 2h +
-//      no recent detections (slow path) → close + 24h cooldown hold.
+//   4. closeRegistered — registered sessions with exit_hinted_at set
+//      (EXIT_HINT_BUFFER_MINUTES buffer) → close + 24h cooldown hold.
+//      Silence-based slow-path removed 2026-05-12 — sessions only close
+//      via camera-detected exit.
 //   5. closeExpired — expired sessions whose violation is resolved or tow
 //      confirmed → close + 24h cooldown hold.
 //
@@ -25,19 +26,14 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 // Tuning knobs (env-overridable).
 const OVERSTAY_GRACE_MINUTES = Number(Deno.env.get("OVERSTAY_GRACE_MINUTES") ?? "5");
-const CLOSE_BUFFER_HOURS = Number(Deno.env.get("CLOSE_BUFFER_HOURS") ?? "2");
 const EXIT_HINT_BUFFER_MINUTES = Number(Deno.env.get("EXIT_HINT_BUFFER_MINUTES") ?? "5");
 const COOLDOWN_HOURS = Number(Deno.env.get("COOLDOWN_HOURS") ?? "24");
-// Grace window — how long an unregistered plate has after entry before
-// we fire a violation. Generous by design: the priority is avoiding
-// false-positive partner emails at multi-tenant properties (Charlotte
-// shares driveways with Shell and adjacent businesses). A legitimate
-// pass-through visit — fuel + food + bathroom + maybe wait in line —
-// essentially never exceeds 2 hours. Real truck parkers overstay for
-// hours or overnight, so a 2h grace still catches them cleanly.
-// Silence-gap closes the session earlier (clean, no violation) if any
-// camera sees the vehicle leaving within the window.
-const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "30");
+// Grace window — how long an unregistered plate has after entry to scan
+// the QR and register. After this window with no match, the session is
+// thrown away (closed_clean, no violation). The registered-only model
+// means we never fire violations on unregistered plates — they're noise
+// we discard.
+const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "15");
 
 // PRESENCE_EVIDENCE_MINUTES + MIN_DWELL_SECONDS removed 2026-04-29 in
 // PR #161 — gate-only properties (Charlotte) can never satisfy the
@@ -47,8 +43,14 @@ const GRACE_EXPIRY_MINUTES = Number(Deno.env.get("GRACE_EXPIRY_MINUTES") ?? "30"
 
 const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// Global kill switch. Mirrors camera-snapshot's SYSTEM_PAUSED. When true,
+// the sweep no-ops so we don't accidentally close sessions or fire
+// violations while the camera ingest is paused.
+const SYSTEM_PAUSED = (Deno.env.get("SYSTEM_PAUSED") ?? "false").toLowerCase() === "true";
+
 Deno.serve(async (_req: Request) => {
   const started = Date.now();
+  if (SYSTEM_PAUSED) return json(200, { ok: true, paused: true });
   try {
     const promoted = await registrationTransition();
     const grace = await graceExpiry();
@@ -61,9 +63,7 @@ Deno.serve(async (_req: Request) => {
     return json(200, {
       ok: true,
       promoted,
-      grace_violated: grace.violated,
-      grace_closed_no_evidence: grace.closed_no_evidence,
-      grace_closed_exit_hint: grace.closed_exit_hint,
+      grace_thrown_away: grace.thrown_away,
       overstay_expired: overstayExpired,
       dispatched: dispatch.dispatched,
       auto_no_tow_left_before_tow: dispatch.left_before_tow,
@@ -119,85 +119,37 @@ async function registrationTransition(): Promise<number> {
   return promoted;
 }
 
-// Grace expiry. Two close paths (per PR #161 — gate-only Charlotte):
-//   - Silence-gap fired during grace window (vehicle detected leaving on
-//     any camera after idle threshold) → close clean, no violation.
-//   - Grace window expired AND no exit hint AND ≥1 read on session →
-//     fire violation. Sessions with zero linked reads close clean as
-//     orphans.
-async function graceExpiry(): Promise<{ violated: number; closed_exit_hint: number; closed_no_evidence: number }> {
+// Grace expiry. Under the registered-only model: a plate that's been in
+// `grace` for GRACE_EXPIRY_MINUTES without matching a pass/resident is
+// thrown away — closed_clean, NO violation. The driver had their chance
+// to scan the QR; we discard the data and never act on them. Used to
+// fire a violation in the old apartment-style model; that branch is gone.
+async function graceExpiry(): Promise<{ thrown_away: number }> {
   const cutoff = new Date(Date.now() - GRACE_EXPIRY_MINUTES * 60 * 1000).toISOString();
   const { data: sessions, error } = await db
     .from("plate_sessions")
-    .select("id, property_id, plate_text, entry_plate_event_id, exit_hinted_at, entered_at")
+    .select("id, last_detected_at, entered_at")
     .eq("state", "grace")
-    .is("exited_at", null);
+    .is("exited_at", null)
+    .lt("entered_at", cutoff);
   if (error) throw error;
-  if (!sessions || sessions.length === 0) return { violated: 0, closed_exit_hint: 0, closed_no_evidence: 0 };
+  if (!sessions || sessions.length === 0) return { thrown_away: 0 };
 
-  let violated = 0;
-  let closedExitHint = 0;
-  let closedNoEvidence = 0;
-  const nowMs = Date.now();
-  const nowIso = new Date(nowMs).toISOString();
-
+  let thrownAway = 0;
+  const nowIso = new Date().toISOString();
   for (const s of sessions) {
-    // Branch 1 — silence-gap fired. Vehicle was detected leaving on any
-    // camera after silence. Close clean, no violation. Respect the
-    // EXIT_HINT_BUFFER_MINUTES age floor — a hint set seconds ago might
-    // get revoked by a subsequent detection, and we'd rather wait a few
-    // minutes than close a session that turns out to still be on-site.
-    // Mirrors closeRegistered / closeResident which already gate on this.
-    if (s.exit_hinted_at) {
-      const hintAgeMs = nowMs - new Date(s.exit_hinted_at).getTime();
-      if (hintAgeMs <= EXIT_HINT_BUFFER_MINUTES * 60 * 1000) continue;
-      const upd = await db.from("plate_sessions")
-        .update({ state: "closed_clean", exited_at: s.exit_hinted_at, updated_at: nowIso })
-        .eq("id", s.id)
-        .eq("state", "grace");
-      if (upd.error) throw upd.error;
-      closedExitHint++;
-      continue;
-    }
-
-    if (s.entered_at >= cutoff) continue; // grace not yet expired
-
-    // Charlotte (and any gate-only property) has zero interior coverage,
-    // so a truck that enters once and parks silently is invisible to the
-    // cameras for the rest of the stay. The old "≥2 distinct cameras OR
-    // ≥5 min event span" check would never fire on those silent over-
-    // stayers, which is exactly the case enforcement is for.
-    //
-    // New rule: grace expired (30 min) + no exit hint (branch 1 above)
-    // + at least one read tied to this session → fire violation. The
-    // remaining drive-by edge case (single read at one gate, never
-    // re-detected, never picked up by an exit camera) is rare in
-    // practice and the operator's Mark No-Tow override on the billing
-    // review queue is the safety valve.
-    const { data: evRows, error: evErr } = await db
-      .from("plate_events")
-      .select("id")
-      .eq("session_id", s.id)
-      .limit(1);
-    if (evErr) throw evErr;
-
-    if (!evRows || evRows.length === 0) {
-      // Orphan session with no supporting reads — close clean rather
-      // than violate without any underlying evidence.
-      const upd = await db.from("plate_sessions")
-        .update({ state: "closed_clean", exited_at: nowIso, updated_at: nowIso })
-        .eq("id", s.id)
-        .eq("state", "grace");
-      if (upd.error) throw upd.error;
-      console.log(`grace_closed_no_evidence session=${s.id} reason=no_events`);
-      closedNoEvidence++;
-      continue;
-    }
-
-    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "grace");
-    violated++;
+    // exited_at = last_detected_at when we have one, else entered_at —
+    // never `now`, because `now` is when the cron fired, not when the
+    // truck was actually here.
+    const exitedAt = s.last_detected_at ?? s.entered_at;
+    const upd = await db.from("plate_sessions")
+      .update({ state: "closed_clean", exited_at: exitedAt, updated_at: nowIso })
+      .eq("id", s.id)
+      .eq("state", "grace");
+    if (upd.error) throw upd.error;
+    thrownAway++;
   }
-  return { violated, closed_exit_hint: closedExitHint, closed_no_evidence: closedNoEvidence };
+  return { thrown_away: thrownAway };
 }
 
 // NEW — registered session + pass expired > OVERSTAY_GRACE_MINUTES ago =
@@ -240,57 +192,29 @@ async function overstayExpiry(): Promise<number> {
   return n;
 }
 
-// NEW — close registered sessions whose pass expired AND are likely gone.
-// Fast path: exit_hinted_at set > EXIT_HINT_BUFFER_MINUTES ago (cross-camera
-// timing inferred the truck was exiting; give them a few minutes to clear
-// the lot, then close).
-// Slow path: pass expired > CLOSE_BUFFER_HOURS ago AND no hint (fallback —
-// assume they left silently within the buffer).
+// Close registered sessions when an exit camera sighting fires. Silence-
+// based fallbacks were removed 2026-05-12 — under the registered-only
+// ignore-unregistered policy, sessions ONLY close via a camera-detected
+// exit (dedup→exit in camera-snapshot, or exit_hinted_at on multi-camera
+// properties). A pass expiring without a corresponding exit fires an
+// overstay violation in overstayExpiry; we never auto-close on silence.
 async function closeRegistered(): Promise<number> {
   const nowMs = Date.now();
   const { data: sessions, error } = await db
     .from("plate_sessions")
-    .select("id, property_id, normalized_plate, last_detected_at, exit_hinted_at, visitor_pass_id")
+    .select("id, property_id, normalized_plate, exit_hinted_at, visitor_pass_id")
     .eq("state", "registered")
-    .is("exited_at", null);
+    .is("exited_at", null)
+    .not("exit_hinted_at", "is", null);
   if (error) throw error;
   if (!sessions || sessions.length === 0) return 0;
 
   let closed = 0;
   for (const s of sessions) {
-    if (!s.visitor_pass_id) continue;
-    const { data: pass, error: pErr } = await db
-      .from("visitor_passes")
-      .select("valid_until")
-      .eq("id", s.visitor_pass_id)
-      .single();
-    if (pErr) throw pErr;
-    if (!pass?.valid_until) continue;
+    // exit_hinted_at IS NOT NULL is enforced by the SQL filter above.
+    if (nowMs - new Date(s.exit_hinted_at!).getTime() <= EXIT_HINT_BUFFER_MINUTES * 60 * 1000) continue;
 
-    const validUntilMs = new Date(pass.valid_until).getTime();
-    const fastPath = s.exit_hinted_at &&
-      nowMs - new Date(s.exit_hinted_at).getTime() > EXIT_HINT_BUFFER_MINUTES * 60 * 1000;
-    // Slow path now also requires the truck to have been silent for at
-    // least CLOSE_BUFFER_HOURS. Without this, a registered truck that
-    // overstays but is still being detected by an interior camera gets
-    // auto-closed at pass-expiry + buffer, with no overstay violation
-    // ever opened. Failure mode reported in the 2026-04-26 audit.
-    const lastSeenMs = s.last_detected_at ? new Date(s.last_detected_at).getTime() : nowMs;
-    const stillBeingSeen = nowMs - lastSeenMs <= CLOSE_BUFFER_HOURS * 60 * 60 * 1000;
-    const slowPath = (nowMs - validUntilMs > CLOSE_BUFFER_HOURS * 60 * 60 * 1000) && !stillBeingSeen;
-
-    if (!fastPath && !slowPath) continue;
-
-    // Close the session. exited_at = best estimate of physical exit:
-    // - fast path: exit_hinted_at is when silence-gap or depth-pair
-    //   inferred the truck crossed the throat again → real exit time.
-    // - slow path: we never detected an exit. last_detected_at could be
-    //   days stale (truck parked silently for its whole stay), which
-    //   would make a (last_detected_at + 24h) cooldown already expired
-    //   by the time we write it. Use close-time instead so the 24h hold
-    //   runs from the moment we decide the truck is gone. Slightly
-    //   conservative vs. pass expiry, but never in-the-past.
-    const exitedAt = s.exit_hinted_at ?? new Date().toISOString();
+    const exitedAt = s.exit_hinted_at!;
     const sUpd = await db.from("plate_sessions")
       .update({
         state: "closed_clean",
@@ -314,7 +238,7 @@ async function closeRegistered(): Promise<number> {
     // would leave the truck free to return immediately with no cooldown.
     if (hIns.error) throw hIns.error;
 
-    console.log(`close_registered session=${s.id} path=${fastPath ? "hint" : "buffer"} exited_at=${exitedAt}`);
+    console.log(`close_registered session=${s.id} exited_at=${exitedAt}`);
     closed++;
   }
   return closed;

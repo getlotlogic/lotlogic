@@ -436,6 +436,9 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <label for="plate">License Plate <span class="required">*</span></label>
           <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
 
+          <label for="backPlate">Back License Plate <span style="opacity:.7;font-weight:normal;">(if different)</span></label>
+          <input type="text" id="backPlate" class="plate-input" placeholder="leave blank if same" maxlength="10" autocomplete="off">
+
           <label for="vehicleType">Vehicle Type <span class="required">*</span></label>
           <select id="vehicleType" required>
             <option value="" disabled selected>Select vehicle type</option>
@@ -475,9 +478,12 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="passForm">
-          <label for="plate">Truck License Plate <span class="required">*</span></label>
+          <label for="plate">Truck License Plate <span class="required">*</span> <span style="opacity:.7;font-weight:normal;">(front-of-tractor)</span></label>
           <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
           <div id="preflightMsg" style="font-size:13px;color:#9A5530;margin-top:-8px;margin-bottom:8px;font-family:'DM Mono',monospace;letter-spacing:.04em;"></div>
+
+          <label for="backPlate">Trailer / Rear License Plate <span style="opacity:.7;font-weight:normal;">(if different)</span></label>
+          <input type="text" id="backPlate" class="plate-input" placeholder="leave blank if same" maxlength="10" autocomplete="off">
 
           <label for="phone">Phone Number <span class="required">*</span></label>
           <input type="tel" id="phone" placeholder="(555) 123-4567" required>
@@ -570,12 +576,15 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
 
       try {
         const plateText = normalizePlate(document.getElementById('plate').value);
+        const backPlateRaw = document.getElementById('backPlate')?.value || '';
+        const backPlateText = backPlateRaw.trim() ? normalizePlate(backPlateRaw) : null;
         const visitorName = document.getElementById('visitorName').value.trim();
         const vehicleType = document.getElementById('vehicleType').value;
         const stayHours = parseInt(document.getElementById('stayHours').value, 10);
         const phone = normalizePhone(document.getElementById('phone').value);
 
         if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
+        if (backPlateText && backPlateText.length < 2) throw new Error('Back plate must be at least 2 characters, or leave it blank.');
         if (!stayHours || stayHours > 48) throw new Error('Choose how long you will be parked (max 48 hours).');
 
         const recaptchaToken = await getRecaptchaToken('pass_register').catch(() => null);
@@ -586,6 +595,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const result = await backendRegister('/visitor_passes/register', {
           property_id: property.id,
           plate_text: plateText,
+          back_plate: backPlateText,
           visitor_name: visitorName,
           vehicle_type: vehicleType || null,
           host_unit: '',
@@ -622,6 +632,8 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const companyName = document.getElementById('companyName').value.trim();
         const driverName  = document.getElementById('driverName').value.trim();
         const plateText   = normalizePlate(document.getElementById('plate').value);
+        const backPlateRaw = document.getElementById('backPlate')?.value || '';
+        const backPlateText = backPlateRaw.trim() ? normalizePlate(backPlateRaw) : null;
         const phone       = normalizePhone(document.getElementById('phone').value);
         const placardColor = document.getElementById('placardColor').value.trim();
         const stayHours = parseInt(document.getElementById('stayHours').value, 10) || 0;
@@ -629,6 +641,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         if (!companyName) throw new Error('Company name is required.');
         if (!driverName) throw new Error('Operator name is required.');
         if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
+        if (backPlateText && backPlateText.length < 2) throw new Error('Trailer/rear plate must be at least 2 characters, or leave it blank.');
         if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
         if (!placardColor) throw new Error('Color placard is required.');
         if (![12, 24, 36, 48].includes(stayHours)) throw new Error('Choose 12, 24, 36, or 48 hours.');
@@ -642,6 +655,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const result = await backendRegister('/visitor_passes/register', {
           property_id: property.id,
           plate_text: plateText,
+          back_plate: backPlateText,
           visitor_name: driverName,
           company_name: companyName,
           vehicle_type: 'semi',

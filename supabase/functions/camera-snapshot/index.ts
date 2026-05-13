@@ -4,10 +4,11 @@ import { makeR2Uploader } from "../pr-ingest/r2.ts";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { extractFromRequest } from "./extract.ts";
 import { parsePath } from "./path.ts";
-import { findSimilarOpenSession, findRecentSessionByCamera, findRecentPrCallForCamera, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome } from "./sessions.ts";
+import { findSimilarOpenSession, findRecentSessionByCamera, findRecentPrCallForCamera, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome, findCooldownPriorSession, type CooldownHit } from "./sessions.ts";
 import { isPlateHeld } from "./holds.ts";
 import { extractUsdot } from "./usdot-ocr.ts";
 import { computeImageHashes } from "./image-hash.ts";
+import { rotateJpegBytes, type RotationDir } from "./image-rotate.ts";
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
@@ -70,6 +71,26 @@ const OPENALPR_SIDECAR_URL = Deno.env.get("OPENALPR_SIDECAR_URL") ?? "";
 const OPENALPR_SIDECAR_TOKEN = Deno.env.get("OPENALPR_SIDECAR_TOKEN") ?? "";
 const OPENALPR_MIN_CONFIDENCE = Number(Deno.env.get("OPENALPR_MIN_CONFIDENCE") ?? "0.80");
 const OPENALPR_TIMEOUT_MS = Number(Deno.env.get("OPENALPR_TIMEOUT_MS") ?? "4000");
+// Per-camera rotation map. Cameras physically mounted at a 90°/180°
+// rotation must have their frames rotated upright BEFORE being handed to
+// Plate Recognizer or the USDOT/ParkPow OCR fallback — neither has a
+// rotation parameter, and they return junk on sideways bytes. The
+// sidecar has its own equivalent ROTATE_BEFORE_PROCESS env and rotates
+// internally; this one runs in the edge function for the recognizers
+// that don't.
+// Format: "<uuid>:cw,<uuid>:ccw,<uuid>:180"
+const ROTATE_BEFORE_PROCESS_MAP: Map<string, RotationDir> = new Map(
+  (Deno.env.get("ROTATE_BEFORE_PROCESS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .map((entry): [string, RotationDir] | null => {
+      const [id, dir] = entry.split(":");
+      if (!id || !dir) return null;
+      const d = dir.toLowerCase();
+      if (d !== "cw" && d !== "ccw" && d !== "180") return null;
+      return [id, d as RotationDir];
+    })
+    .filter((e): e is [string, RotationDir] => e !== null),
+);
 // Direction inference: if a plate is detected on camera B within this
 // window after being detected on camera A (different position_order), we
 // infer direction of travel. Entries → no action. Exits → set session's
@@ -141,11 +162,19 @@ const r2 = makeR2Uploader({
   publicBaseUrl: R2_PUBLIC_BASE_URL,
 });
 
+// Global kill switch. When SYSTEM_PAUSED=true, the function 200s immediately
+// without processing — cameras keep firing HTTP pushes, but we don't touch
+// the DB. Used to pause the whole pipeline overnight or during incident
+// triage without going into the camera UI. Flip back to false (or unset)
+// to resume.
+const SYSTEM_PAUSED = (Deno.env.get("SYSTEM_PAUSED") ?? "false").toLowerCase() === "true";
+
 Deno.serve(async (req: Request) => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
-    return json(200, { ok: true, fn: "camera-snapshot", accepts: "POST image/json/multipart" });
+    return json(200, { ok: true, fn: "camera-snapshot", accepts: "POST image/json/multipart", paused: SYSTEM_PAUSED });
   }
   if (req.method !== "POST") return json(405, { ok: false, error: "method_not_allowed" });
+  if (SYSTEM_PAUSED) return json(200, { ok: true, paused: true });
 
   const { apiKey: pathApiKey, secret } = parsePath(new URL(req.url));
   if (!URL_SECRET || secret !== URL_SECRET) return json(401, { ok: false, error: "unauthorized" });
@@ -558,7 +587,20 @@ Deno.serve(async (req: Request) => {
     }
     // Both rechecks missed — really is a new vehicle. Pay for PR.
 
-    const prResp = await callPlateRecognizer(extracted.bytes, cameraApiKey);
+    // For physically-rotated cameras, rotate the bytes upright BEFORE
+    // handing them to PR or USDOT/ParkPow OCR. Neither service has a
+    // rotation knob; on sideways bytes they return junk or nothing.
+    // Sidecar has its own ROTATE_BEFORE_PROCESS and self-rotates above,
+    // so this rotation only affects the downstream recognizers.
+    const rotateDir = ROTATE_BEFORE_PROCESS_MAP.get(camera.id);
+    const bytesForRecognizers = rotateDir
+      ? await rotateJpegBytes(extracted.bytes, rotateDir)
+      : extracted.bytes;
+    if (rotateDir) {
+      console.log(`camera-snapshot: pre-rotated bytes (${rotateDir}) for camera=${camera.id} before PR/USDOT`);
+    }
+
+    const prResp = await callPlateRecognizer(bytesForRecognizers, cameraApiKey);
     if (!prResp.ok) {
       console.warn("camera-snapshot PR call failed:", prResp.status, prResp.bodyText.slice(0, 200));
       return json(200, { ok: false, reason: "pr_call_failed", status: prResp.status });
@@ -588,7 +630,7 @@ Deno.serve(async (req: Request) => {
     const shouldCallUsdot = (USDOT_ENABLED && !!USDOT_TOKEN) && noUsablePlate;
 
     const usdotResult = shouldCallUsdot
-      ? await extractUsdot(extracted.bytes, { token: USDOT_TOKEN, minScore: USDOT_MIN_SCORE, cameraId: cameraApiKey })
+      ? await extractUsdot(bytesForRecognizers, { token: USDOT_TOKEN, minScore: USDOT_MIN_SCORE, cameraId: cameraApiKey })
       : { kind: "none" as const };
 
     // Extend the burst window. A no-plate frame extends the window another
@@ -871,8 +913,45 @@ Deno.serve(async (req: Request) => {
           db, camera.property_id, normalized, 120, frameUsdot, frameMc, imageHashes.dhash,
         );
         if (openSession) {
-          // Noise: second entry with no exit. Append an event for visibility;
-          // do not open a new session; do not modify existing session.
+          // The presence model: re-reads of an open session map to either
+          //   (a) DEDUP — within the 15-min dedup window, treat as continued
+          //       presence, bump last_detected_at, keep session open
+          //   (b) EXIT — outside the dedup window, vehicle is driving past
+          //       the camera AGAIN (leaving the lot). Close the session.
+          // The dedup window is keyed on last_detected_at, sliding.
+          // Same-vehicle reads via the OTHER plate (front vs back) collapse
+          // to the same session via vehicle_id (visitor_pass_id /
+          // resident_plate_id) so plate-pair reads don't false-fire exits.
+          const DEDUP_WINDOW_MS = 15 * 60 * 1000;
+          const lastSeen = openSession.last_detected_at
+            ? new Date(openSession.last_detected_at).getTime()
+            : new Date(openSession.entered_at).getTime();
+          const gap = now.getTime() - lastSeen;
+
+          if (gap > DEDUP_WINDOW_MS) {
+            // EXIT — re-pass after dedup expired. Close the session.
+            const exitEv = await db.from("plate_events")
+              .insert({ ...baseEventRow(openSession.id, "unmatched"), event_type: "exit" })
+              .select().single();
+            if (exitEv.error) throw exitEv.error;
+
+            await db.from("plate_sessions")
+              .update({
+                exited_at: now.toISOString(),
+                exit_camera_id: camera.id,
+                exit_plate_event_id: exitEv.data.id,
+                last_detected_at: now.toISOString(),
+                state: openSession.state === "expired" ? "expired" : "closed_clean",
+                updated_at: now.toISOString(),
+              })
+              .eq("id", openSession.id);
+
+            console.log(`exit detected: session=${openSession.id} plate=${normalized} gap=${Math.round(gap/60000)}min`);
+            eventCount++;
+            continue;
+          }
+
+          // DEDUP — still within window. Continued presence.
           const ev = await db.from("plate_events")
             .insert(baseEventRow(openSession.id, "unmatched"))
             .select().single();
@@ -881,8 +960,7 @@ Deno.serve(async (req: Request) => {
           // the silence-gap branch inside inferDirection sees the prior
           // timestamp.
           await inferDirection(db, openSession.id, camera.property_id, normalized, camera.id, now);
-          // Bump session activity so the cron's silence-gap exit logic
-          // sees recent presence.
+          // Bump session activity so we extend the dedup window on next read.
           await db.from("plate_sessions")
             .update({ last_detected_at: now.toISOString() })
             .eq("id", openSession.id);
@@ -920,6 +998,9 @@ Deno.serve(async (req: Request) => {
 
         // Allowlist match: try the plate first, then the USDOT/MC number if
         // we have one. Either hit upgrades the session to resident/registered.
+        // Both lookups now check FRONT and BACK plate columns on the registered
+        // row — drivers register both plates at QR check-in since tractors and
+        // trailers can show different plates.
         let resident = await findActiveResident(db, camera.property_id, normalized);
         if (!resident && frameUsdot)   resident = await findActiveResident(db, camera.property_id, `DOT${frameUsdot}`);
         if (!resident && frameMc)      resident = await findActiveResident(db, camera.property_id, `MC${frameMc}`);
@@ -928,9 +1009,25 @@ Deno.serve(async (req: Request) => {
         if (!resident && !pass && frameUsdot) pass = await findActiveVisitorPass(db, camera.property_id, `DOT${frameUsdot}`, now);
         if (!resident && !pass && frameMc)    pass = await findActiveVisitorPass(db, camera.property_id, `MC${frameMc}`, now);
 
+        // Cooldown: a previously-REGISTERED vehicle that parked and left
+        // within cooldown_hours blocks re-entry regardless of its current
+        // registration status. Only checked when there's no live resident/
+        // pass match (those bypass cooldown).
+        const cooldown: CooldownHit | null = (resident || pass)
+          ? null
+          : await findCooldownPriorSession(db, camera.property_id, normalized, now);
+
+        // Unregistered plates DO open a session — in `grace` state, giving
+        // the driver 15 min to register via QR. graceExpiry in the cron sweep
+        // throws the session away (closed_clean, no violation) at 15 min if
+        // still unmatched. Registration in that window promotes the session
+        // to `registered` via registrationTransition.
         const held     = resident || pass ? false : await isPlateHeld(db, camera.property_id, normalized, now);
-        const state = resident ? "resident" : pass ? "registered" : "grace";
-        const matchStatus = resident ? "resident" : pass ? "visitor_pass" : "unmatched";
+        // Cooldown was already computed above (used for the ignore-unregistered
+        // early-return decision). When state="expired" + matchStatus="cooldown",
+        // the alpr_violations row is inserted below.
+        const state = resident ? "resident" : pass ? "registered" : cooldown ? "expired" : "grace";
+        const matchStatus = resident ? "resident" : pass ? "visitor_pass" : cooldown ? "cooldown" : "unmatched";
 
         // Insert plate_events first so session can reference it.
         const ev = await db.from("plate_events")
@@ -946,10 +1043,16 @@ Deno.serve(async (req: Request) => {
         // evidence joins.
         let sess;
         try {
+          // Paired plate: the OTHER side of the registration pair (the side
+          // the camera didn't read this entry). Stamped onto the session so
+          // future cooldown queries match either plate of the pair.
+          const paired = resident ?? pass;
           sess = await insertSession(db, {
             propertyId: camera.property_id,
             normalizedPlate: normalized,
             plateText: plateUpper,
+            backPlate: paired?.paired_plate ?? null,
+            normalizedBackPlate: paired?.normalized_paired_plate ?? null,
             vehicleType,
             entryCameraId: camera.id,
             entryPlateEventId: ev.data.id,
@@ -981,6 +1084,33 @@ Deno.serve(async (req: Request) => {
           const existing = baseEventRow(sess.id, matchStatus).raw_data as Record<string, unknown>;
           await db.from("plate_events")
             .update({ raw_data: { ...existing, _on_hold: true } })
+            .eq("id", ev.data.id);
+        }
+
+        // 24h cooldown violation: the session was opened with state='expired'
+        // above. Create the alpr_violations row inline so the dashboard +
+        // tow-dispatch fire immediately (no waiting for cron-sessions-sweep).
+        if (cooldown) {
+          const vIns = await db.from("alpr_violations").insert({
+            property_id: camera.property_id,
+            plate_event_id: ev.data.id,
+            plate_text: plateUpper,
+            status: "pending",
+            violation_type: "cooldown",
+            session_id: sess.id,
+            notes: `Re-entry within ${cooldown.cooldown_hours}h cooldown (prior exit ${cooldown.prior_exited_at})`,
+          }).select("id").single();
+          if (vIns.error) throw vIns.error;
+
+          const sUpd = await db.from("plate_sessions")
+            .update({ violation_id: vIns.data.id, updated_at: now.toISOString() })
+            .eq("id", sess.id);
+          if (sUpd.error) throw sUpd.error;
+
+          // Stash cooldown context on the plate_event for operator visibility.
+          const existing = baseEventRow(sess.id, matchStatus).raw_data as Record<string, unknown>;
+          await db.from("plate_events")
+            .update({ raw_data: { ...existing, _cooldown_violation: cooldown } })
             .eq("id", ev.data.id);
         }
 

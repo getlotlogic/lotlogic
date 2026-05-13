@@ -17,6 +17,7 @@ export type OpenSessionRow = {
   plate_text: string;
   state: "grace" | "registered" | "resident" | "expired";
   entered_at: string;
+  last_detected_at?: string;  // bumped on every re-read; used for dedup→exit gate
   visitor_pass_id: string | null;
   resident_plate_id: string | null;
   violation_id: string | null;
@@ -29,13 +30,81 @@ export async function findOpenSession(
 ): Promise<OpenSessionRow | null> {
   const { data, error } = await db
     .from("plate_sessions")
-    .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+    .select("id,property_id,normalized_plate,plate_text,state,entered_at,last_detected_at,visitor_pass_id,resident_plate_id,violation_id")
     .eq("property_id", propertyId)
     .eq("normalized_plate", normalizedPlate)
     .is("exited_at", null)
     .limit(1);
   if (error) throw error;
   return (data ?? [])[0] ?? null;
+}
+
+export type CooldownHit = {
+  prior_session_id: string;
+  prior_exited_at: string;
+  cooldown_hours: number;
+};
+
+/**
+ * 24-hour cooldown (anti-camping) enforcement.
+ *
+ * Returns the most recent closed-and-parked session for this plate at this
+ * property, IF its exit was within the property's cooldown_hours window. Null
+ * means no cooldown applies — open a normal grace session.
+ *
+ * Triggers an immediate `cooldown` violation on the next session open (no
+ * 15-min grace). Residents and visitors-with-active-pass are exempt: callers
+ * skip this check when they have a match.
+ *
+ * "Parked" = a session that wasn't a transient drive-through. The check
+ * uses exited_at - entered_at > 2 minutes as the floor; shorter dwells are
+ * treated as drive-throughs and don't trigger cooldown.
+ */
+export async function findCooldownPriorSession(
+  db: SupabaseClient,
+  propertyId: string,
+  normalizedPlate: string,
+  now: Date,
+): Promise<CooldownHit | null> {
+  const { data: propRows, error: propErr } = await db
+    .from("properties")
+    .select("cooldown_hours")
+    .eq("id", propertyId)
+    .limit(1);
+  if (propErr) throw propErr;
+  const cooldownHours = propRows?.[0]?.cooldown_hours ?? null;
+  if (cooldownHours === null || cooldownHours <= 0) return null;
+
+  const cutoff = new Date(now.getTime() - cooldownHours * 3600 * 1000).toISOString();
+  // Cooldown only applies to vehicles that were REGISTERED on their prior
+  // visit (had an active pass or resident match). Unregistered grace
+  // sessions get thrown away at 15 min with no violation — they aren't
+  // tracked, so they can't trip cooldown either.
+  // Match against either plate column — a driver may have entered showing
+  // front plate and exited showing back plate (or vice versa), and the same
+  // vehicle should be on cooldown regardless of which plate the camera reads
+  // on re-entry.
+  const { data, error } = await db
+    .from("plate_sessions")
+    .select("id,entered_at,exited_at,normalized_plate,normalized_back_plate,visitor_pass_id,resident_plate_id")
+    .eq("property_id", propertyId)
+    .or(`normalized_plate.eq.${normalizedPlate},normalized_back_plate.eq.${normalizedPlate}`)
+    .not("exited_at", "is", null)
+    .gt("exited_at", cutoff)
+    .order("exited_at", { ascending: false })
+    .limit(5);
+  if (error) throw error;
+  const row = (data ?? []).find((r: { visitor_pass_id: string | null; resident_plate_id: string | null }) => r.visitor_pass_id || r.resident_plate_id);
+  if (!row || !row.exited_at) return null;
+
+  const dwellMs = new Date(row.exited_at).getTime() - new Date(row.entered_at).getTime();
+  if (dwellMs < 2 * 60 * 1000) return null; // <2min = drive-through, not parking
+
+  return {
+    prior_session_id: row.id,
+    prior_exited_at: row.exited_at,
+    cooldown_hours: cooldownHours,
+  };
 }
 
 // Fuzzy plate equality for OCR drift. ALPR engines routinely misread one
@@ -255,7 +324,7 @@ export async function findOpenSessionByImageHash(
 
   const { data: openRows, error: sErr } = await db
     .from("plate_sessions")
-    .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+    .select("id,property_id,normalized_plate,plate_text,state,entered_at,last_detected_at,visitor_pass_id,resident_plate_id,violation_id")
     .eq("id", bestSessionId)
     .is("exited_at", null)
     .limit(1);
@@ -296,7 +365,7 @@ export async function findSimilarOpenSession(
   if (usdotNumber) {
     const { data, error } = await db
       .from("plate_sessions")
-      .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+      .select("id,property_id,normalized_plate,plate_text,state,entered_at,last_detected_at,visitor_pass_id,resident_plate_id,violation_id")
       .eq("property_id", propertyId)
       .eq("usdot_number", usdotNumber)
       .is("exited_at", null)
@@ -307,7 +376,7 @@ export async function findSimilarOpenSession(
   if (mcNumber) {
     const { data, error } = await db
       .from("plate_sessions")
-      .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+      .select("id,property_id,normalized_plate,plate_text,state,entered_at,last_detected_at,visitor_pass_id,resident_plate_id,violation_id")
       .eq("property_id", propertyId)
       .eq("mc_number", mcNumber)
       .is("exited_at", null)
@@ -359,7 +428,7 @@ export async function findSimilarOpenSession(
 
   const { data: openRows, error: sErr } = await db
     .from("plate_sessions")
-    .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+    .select("id,property_id,normalized_plate,plate_text,state,entered_at,last_detected_at,visitor_pass_id,resident_plate_id,violation_id")
     .in("id", Array.from(candidateIds))
     .is("exited_at", null)
     .order("entered_at", { ascending: false })
@@ -394,7 +463,7 @@ export async function findRecentSessionByCamera(
   const cutoffIso = new Date(Date.now() - withinSeconds * 1000).toISOString();
   const { data, error } = await db
     .from("plate_sessions")
-    .select("id,property_id,normalized_plate,plate_text,state,entered_at,visitor_pass_id,resident_plate_id,violation_id")
+    .select("id,property_id,normalized_plate,plate_text,state,entered_at,last_detected_at,visitor_pass_id,resident_plate_id,violation_id")
     .eq("entry_camera_id", cameraId)
     .is("exited_at", null)
     .gte("last_detected_at", cutoffIso)
@@ -464,7 +533,15 @@ export async function findRecentPrCallForCamera(
   return null;
 }
 
-export type ResidentRow = { id: string };
+export type ResidentRow = {
+  id: string;
+  // The OTHER plate in the registration pair (the side the camera DIDN'T
+  // read this time). Null when the registration has only one plate. Used
+  // by the caller to populate plate_sessions.back_plate so future cooldown
+  // queries match either side of the pair.
+  paired_plate: string | null;
+  normalized_paired_plate: string | null;
+};
 export async function findActiveResident(
   db: SupabaseClient,
   propertyId: string,
@@ -486,35 +563,36 @@ export async function findActiveResident(
       .eq(col, fmcsa.number)
       .limit(1);
     if (error) throw error;
-    return (data ?? [])[0] ? { id: data![0].id } : null;
+    return (data ?? [])[0]
+      ? { id: data![0].id, paired_plate: null, normalized_paired_plate: null }
+      : null;
   }
 
-  // Standard plate path.
+  // Standard plate path. Match against EITHER front plate (plate_text) or
+  // back plate (back_plate) — drivers register both since tractor + trailer
+  // can show different plates depending on which way they're facing the camera.
   const { data, error } = await db
     .from("resident_plates")
-    .select("id,plate_text,active,property_id")
+    .select("id,plate_text,back_plate,active,property_id")
     .eq("property_id", propertyId)
     .eq("active", true)
     .limit(200);
   if (error) throw error;
-  // Two-pass: exact normalized match first so co-registered plates that
-  // collide under OCR-confusion fuzziness (e.g. ABC123 + ABG123 with C↔G)
-  // never wrong-link a clean read.
-  for (const r of data ?? []) {
-    if (normalizePlate(r.plate_text ?? "") === normalizedPlate) return { id: r.id };
-  }
-  for (const r of data ?? []) {
-    if (plateSimilar(normalizePlate(r.plate_text ?? ""), normalizedPlate, true)) return { id: r.id };
-  }
-  // Last-resort: partial read against a longer registered plate (≥50%
-  // length, substring). Logs as a fuzzy match for operator review.
-  for (const r of data ?? []) {
-    if (plateMatchesPartial(normalizedPlate, normalizePlate(r.plate_text ?? ""))) return { id: r.id };
-  }
-  return null;
+  type Row = { id: string; plate_text?: string | null; back_plate?: string | null };
+  return matchPairedRow<Row, { id: string }>(
+    (data ?? []) as Row[],
+    normalizedPlate,
+    (r) => ({ id: r.id }),
+  );
 }
 
-export type PassRow = { id: string; valid_until: string };
+export type PassRow = {
+  id: string;
+  valid_until: string;
+  // Same semantics as ResidentRow.paired_plate.
+  paired_plate: string | null;
+  normalized_paired_plate: string | null;
+};
 export async function findActiveVisitorPass(
   db: SupabaseClient,
   propertyId: string,
@@ -537,57 +615,107 @@ export async function findActiveVisitorPass(
     for (const r of data ?? []) {
       if (r.valid_from && new Date(r.valid_from) > now) continue;
       if (!r.valid_until || new Date(r.valid_until) <= now) continue;
-      return { id: r.id, valid_until: r.valid_until };
+      return { id: r.id, valid_until: r.valid_until, paired_plate: null, normalized_paired_plate: null };
     }
     return null;
   }
 
-  // Standard plate path.
+  // Standard plate path. Match against EITHER front or back plate — drivers
+  // register both at QR-checkin (tractor + trailer plates often differ).
   const { data, error } = await db
     .from("visitor_passes")
-    .select("id,plate_text,valid_from,valid_until,cancelled_at,property_id")
+    .select("id,plate_text,back_plate,valid_from,valid_until,cancelled_at,property_id")
     .eq("property_id", propertyId)
     .limit(500);
   if (error) throw error;
-  const isValid = (r: any): boolean => {
+  type Row = {
+    id: string;
+    valid_until: string;
+    valid_from?: string | null;
+    cancelled_at?: string | null;
+    plate_text?: string | null;
+    back_plate?: string | null;
+  };
+  const valid = ((data ?? []) as Row[]).filter((r) => {
     if (r.cancelled_at) return false;
     if (r.valid_from && new Date(r.valid_from) > now) return false;
     if (!r.valid_until || new Date(r.valid_until) <= now) return false;
     return true;
+  });
+  return matchPairedRow<Row, { id: string; valid_until: string }>(
+    valid,
+    normalizedPlate,
+    (r) => ({ id: r.id, valid_until: r.valid_until }),
+  );
+}
+
+/**
+ * Three-pass matcher (exact → fuzzy → partial) over a list of rows that each
+ * have plate_text + back_plate columns. Returns the first hit, attaching the
+ * "paired" plate (the side that DIDN'T match — i.e. the side the camera
+ * didn't read this entry) so the caller can stamp it onto plate_sessions for
+ * future cooldown lookups.
+ *
+ * The two-pass exact-first ordering matters: co-registered plates that
+ * collide under OCR-confusion fuzziness (e.g. ABC123 + ABG123 with C↔G)
+ * must not wrong-link a clean read of one to the other's row.
+ */
+function matchPairedRow<
+  R extends { plate_text?: string | null; back_plate?: string | null },
+  B extends { id: string },
+>(
+  rows: R[],
+  normalizedPlate: string,
+  pickBase: (r: R) => B,
+): (B & { paired_plate: string | null; normalized_paired_plate: string | null }) | null {
+  type Cand = { front: string | null; back: string | null };
+  const cand = (r: R): Cand => ({
+    front: r.plate_text ? normalizePlate(r.plate_text) : null,
+    back: r.back_plate ? normalizePlate(r.back_plate) : null,
+  });
+
+  // Decide which side matched, then return the OTHER side raw.
+  const pair = (r: R, matchedFront: boolean) => {
+    const other = matchedFront ? r.back_plate : r.plate_text;
+    return {
+      paired_plate: other ?? null,
+      normalized_paired_plate: other ? normalizePlate(other) : null,
+    };
   };
-  // Two-pass: exact normalized match first so co-registered plates that
-  // collide under OCR-confusion fuzziness never wrong-link a clean read.
-  for (const r of data ?? []) {
-    if (!isValid(r)) continue;
-    if (normalizePlate(r.plate_text ?? "") === normalizedPlate) {
-      return { id: r.id, valid_until: r.valid_until };
+
+  const test = (
+    pred: (a: string, b: string) => boolean,
+  ): (B & { paired_plate: string | null; normalized_paired_plate: string | null }) | null => {
+    for (const r of rows) {
+      const c = cand(r);
+      const frontHit = c.front !== null && pred(c.front, normalizedPlate);
+      if (frontHit) return { ...pickBase(r), ...pair(r, true) };
+      const backHit = c.back !== null && pred(c.back, normalizedPlate);
+      if (backHit) return { ...pickBase(r), ...pair(r, false) };
     }
-  }
-  for (const r of data ?? []) {
-    if (!isValid(r)) continue;
-    if (plateSimilar(normalizePlate(r.plate_text ?? ""), normalizedPlate, true)) {
-      return { id: r.id, valid_until: r.valid_until };
-    }
-  }
-  // Last-resort: partial read against a longer registered plate (≥50%
-  // length, substring). Logs as a fuzzy match for operator review.
-  for (const r of data ?? []) {
-    if (!isValid(r)) continue;
-    if (plateMatchesPartial(normalizedPlate, normalizePlate(r.plate_text ?? ""))) {
-      return { id: r.id, valid_until: r.valid_until };
-    }
-  }
-  return null;
+    return null;
+  };
+
+  return (
+    test((a, b) => a === b) ??
+    test((a, b) => plateSimilar(a, b, true)) ??
+    test((a, b) => plateMatchesPartial(b, a))
+  );
 }
 
 export type NewSessionInput = {
   propertyId: string;
   normalizedPlate: string;
   plateText: string;
+  // Pair plate (the OTHER side — front if normalizedPlate is back, back if
+  // normalizedPlate is front). Pulled from the matched pass/resident row
+  // so that cooldown queries can match either plate on re-entry attempts.
+  backPlate?: string | null;
+  normalizedBackPlate?: string | null;
   vehicleType: string | null;
   entryCameraId: string;
   entryPlateEventId: string;
-  state: "grace" | "registered" | "resident";
+  state: "grace" | "registered" | "resident" | "expired";
   visitorPassId?: string | null;
   residentPlateId?: string | null;
   usdotNumber?: string | null;
@@ -603,6 +731,8 @@ export async function insertSession(
     property_id: input.propertyId,
     normalized_plate: input.normalizedPlate,
     plate_text: input.plateText,
+    back_plate: input.backPlate ?? null,
+    normalized_back_plate: input.normalizedBackPlate ?? null,
     vehicle_type: input.vehicleType,
     entry_camera_id: input.entryCameraId,
     entry_plate_event_id: input.entryPlateEventId,

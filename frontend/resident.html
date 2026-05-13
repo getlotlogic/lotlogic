@@ -443,6 +443,9 @@
           <label for="plate">${plateLabel}</label>
           <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" ${plateAttr} maxlength="10" autocomplete="off">
 
+          <label for="backPlate">${isPlaza ? 'Trailer / Rear Plate' : 'Back Plate'} <span style="color:#6b7280;font-size:12px;">(if different)</span></label>
+          <input type="text" id="backPlate" class="plate-input" placeholder="leave blank if same" maxlength="10" autocomplete="off">
+
           ${extraFields}
 
           <label for="vehicleType">Vehicle Type <span class="required">*</span></label>
@@ -478,6 +481,9 @@
         const holderName = document.getElementById('holderName').value.trim();
         const plateRaw = document.getElementById('plate').value.trim();
         const plateText = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const backPlateRaw = (document.getElementById('backPlate')?.value || '').trim();
+        const backPlateText = backPlateRaw ? backPlateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+        if (backPlateText && backPlateText.length < 2) throw new Error('Back plate must be at least 2 characters, or leave it blank.');
         const vehicleType = document.getElementById('vehicleType').value;
         const phone = document.getElementById('phone').value.trim();
         const isPlaza = property.property_type === 'truck_plaza';
@@ -508,6 +514,7 @@
           await backendRegister('/resident_plates/register', {
             property_id: property.id,
             plate_text: effectivePlate,
+            back_plate: backPlateText || null,
             holder_name: holderName,
             holder_role: property.property_type === 'truck_plaza' ? 'employee' : 'resident',
             vehicle_type: vehicleType || 'car',
