@@ -406,23 +406,23 @@
 
     function showForm() {
       const isPlaza = property.property_type === 'truck_plaza';
-      const headline = isPlaza ? 'Employee Plate Registration' : 'Permanent Pass Request';
-      const submitLabel = isPlaza ? 'Register Employee Plate' : 'Request Permanent Pass';
 
-      const extraFields = isPlaza ? `
-          <label for="usdot" style="margin-top:14px;">USDOT Number <span style="color:#6b7280;font-size:12px;">(optional, 5-8 digits)</span></label>
-          <input type="text" id="usdot" inputmode="numeric" pattern="\\d{5,8}" placeholder="1234567" maxlength="8" autocomplete="off">
-
-          <label for="mc" style="margin-top:8px;">MC Number <span style="color:#6b7280;font-size:12px;">(optional, 5-8 digits)</span></label>
-          <input type="text" id="mc" inputmode="numeric" pattern="\\d{5,8}" placeholder="567890" maxlength="8" autocomplete="off">
-
-          <div style="font-size:12px;color:#9ca3af;margin-top:6px;margin-bottom:6px;">If your tractor has no license plate visible, enter your USDOT or MC number so our cameras can identify it.</div>
-      ` : '';
-
-      const plateLabel = isPlaza
-        ? `License Plate <span style="color:#6b7280;font-size:12px;">(required unless you enter USDOT or MC)</span>`
-        : `License Plate <span class="required">*</span>`;
-      const plateAttr = isPlaza ? '' : 'required';
+      // Truck-plaza properties don't use permanent passes — every visit is
+      // a temporary pass via visit.html. Surface a clean dead-end so a
+      // misrouted scan isn't a confusing form.
+      if (isPlaza) {
+        app.innerHTML = `
+          <div class="logo">
+            <div class="shield"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/></svg></div>
+            <h1>LotL<span>o</span>gic</h1>
+          </div>
+          <div class="not-found">
+            <h2>Use the parking-pass QR</h2>
+            <p>This lot only issues temporary passes. Scan the temporary pass QR on the signage to register.</p>
+          </div>
+        `;
+        return;
+      }
 
       app.innerHTML = `
         <div class="logo">
@@ -430,7 +430,7 @@
           <h1>LotL<span>o</span>gic</h1>
         </div>
         <div class="property-name">
-          ${escapeHtml(headline.toLowerCase())} at
+          permanent pass request at
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="regForm">
@@ -440,24 +440,13 @@
           <label for="phone">Phone Number <span class="required">*</span></label>
           <input type="tel" id="phone" placeholder="(555) 123-4567" required>
 
-          <label for="plate">${plateLabel}</label>
-          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" ${plateAttr} maxlength="10" autocomplete="off">
+          <label for="plate">License Plate <span class="required">*</span></label>
+          <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
 
-          <label for="backPlate">${isPlaza ? 'Trailer / Rear Plate' : 'Back Plate'} <span style="color:#6b7280;font-size:12px;">(if different)</span></label>
+          <label for="backPlate">Back Plate <span style="color:#6b7280;font-size:12px;">(if different)</span></label>
           <input type="text" id="backPlate" class="plate-input" placeholder="leave blank if same" maxlength="10" autocomplete="off">
 
-          ${extraFields}
-
-          <label for="vehicleType">Vehicle Type <span class="required">*</span></label>
-          <select id="vehicleType" required>
-            <option value="" disabled selected>Select vehicle type</option>
-            <option value="car">Car</option>
-            <option value="pickup">Pickup</option>
-            <option value="semi">Semi / Truck</option>
-            <option value="other">Other</option>
-          </select>
-
-          <button type="submit" class="submit-btn" id="submitBtn">${escapeHtml(submitLabel)}</button>
+          <button type="submit" class="submit-btn" id="submitBtn">Request Permanent Pass</button>
           <div class="hint">PENDING OWNER APPROVAL</div>
           <div id="errorMsg"></div>
         </form>
@@ -485,24 +474,9 @@
         const backPlateText = backPlateRaw ? backPlateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
         if (backPlateText && backPlateText.length < 2) throw new Error('Back plate must be at least 2 characters, or leave it blank.');
         if (backPlateText && backPlateText === plateText) throw new Error('Back plate must differ from the front plate, or leave it blank.');
-        const vehicleType = document.getElementById('vehicleType').value;
         const phone = document.getElementById('phone').value.trim();
-        const isPlaza = property.property_type === 'truck_plaza';
-        const usdotRaw = isPlaza ? ((document.getElementById('usdot') || {}).value || '').trim() : '';
-        const mcRaw    = isPlaza ? ((document.getElementById('mc')    || {}).value || '').trim() : '';
-        const usdot = /^\d{5,8}$/.test(usdotRaw) ? usdotRaw : null;
-        const mc    = /^\d{5,8}$/.test(mcRaw)    ? mcRaw    : null;
-        if (usdotRaw && !usdot) throw new Error('USDOT must be 5-8 digits.');
-        if (mcRaw    && !mc)    throw new Error('MC number must be 5-8 digits.');
 
-        let effectivePlate = plateText;
-        if (!effectivePlate) {
-          if (isPlaza && usdot)    effectivePlate = `DOT-${usdot}`;
-          else if (isPlaza && mc)  effectivePlate = `MC-${mc}`;
-          else                     throw new Error(isPlaza
-            ? 'Enter a license plate or a USDOT / MC number.'
-            : 'Please enter a valid license plate number.');
-        } else if (effectivePlate.length < 2) {
+        if (!plateText || plateText.length < 2) {
           throw new Error('Please enter a valid license plate number.');
         }
 
@@ -514,15 +488,12 @@
         try {
           await backendRegister('/resident_plates/register', {
             property_id: property.id,
-            plate_text: effectivePlate,
+            plate_text: plateText,
             back_plate: backPlateText || null,
             holder_name: holderName,
-            holder_role: property.property_type === 'truck_plaza' ? 'employee' : 'resident',
-            vehicle_type: vehicleType || 'car',
+            holder_role: 'resident',
             phone: phone,
             recaptcha_token: recaptchaToken,
-            usdot_number: usdot,
-            mc_number: mc,
           });
         } catch (error) {
           if (error.status === 409) {
@@ -533,13 +504,11 @@
           throw error;
         }
 
-        showSuccess(effectivePlate);
+        showSuccess(plateText);
       } catch (err) {
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
-        btn.textContent = property.property_type === 'truck_plaza'
-          ? 'Register Employee Plate'
-          : 'Request Permanent Pass';
+        btn.textContent = 'Request Permanent Pass';
         submitting = false;
       }
     }

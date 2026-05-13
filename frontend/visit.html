@@ -439,15 +439,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <label for="backPlate">Back License Plate <span style="opacity:.7;font-weight:normal;">(if different)</span></label>
           <input type="text" id="backPlate" class="plate-input" placeholder="leave blank if same" maxlength="10" autocomplete="off">
 
-          <label for="vehicleType">Vehicle Type <span class="required">*</span></label>
-          <select id="vehicleType" required>
-            <option value="" disabled selected>Select vehicle type</option>
-            <option value="car">Car</option>
-            <option value="pickup">Pickup</option>
-            <option value="semi">Semi / Truck</option>
-            <option value="other">Other</option>
-          </select>
-
           <label for="stayHours">How long will you be here? <span class="required">*</span></label>
           <select id="stayHours" required>
             <option value="2">2 hours</option>
@@ -579,7 +570,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const backPlateRaw = document.getElementById('backPlate')?.value || '';
         const backPlateText = backPlateRaw.trim() ? normalizePlate(backPlateRaw) : null;
         const visitorName = document.getElementById('visitorName').value.trim();
-        const vehicleType = document.getElementById('vehicleType').value;
         const stayHours = parseInt(document.getElementById('stayHours').value, 10);
         const phone = normalizePhone(document.getElementById('phone').value);
 
@@ -598,7 +588,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           plate_text: plateText,
           back_plate: backPlateText,
           visitor_name: visitorName,
-          vehicle_type: vehicleType || null,
           host_unit: '',
           host_name: '',
           phone: phone,
@@ -660,7 +649,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           back_plate: backPlateText,
           visitor_name: driverName,
           company_name: companyName,
-          vehicle_type: 'semi',
           host_unit: '',
           host_name: '',
           phone: phone,

@@ -226,6 +226,8 @@ Deno.serve(async (req: Request) => {
           const res = await r2(key, bytes);
           return res.ok ? res.url : null;
         },
+        prToken: PR_TOKEN,
+        prApiUrl: PR_SDK_URL || "https://api.platerecognizer.com/v1/plate-reader/",
       });
       console.log(`truck_plaza_exit camera=${camera.id} outcome=${r.outcome}`);
       return json(200, { ok: true, fn: "truck_plaza_exit", ...r });
