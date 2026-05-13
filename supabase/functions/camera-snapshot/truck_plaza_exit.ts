@@ -72,7 +72,15 @@ function groupKeyFor(camera: CameraRow): string {
   return camera.gate_id ?? camera.id;
 }
 
-type PassMatch = { id: string; valid_until: string; fuzzy: boolean };
+type PassMatch = {
+  id: string;
+  valid_until: string;
+  fuzzy: boolean;
+  // If the proactive overstay cron already created an overstay violation
+  // (and stamped it on the pass), we want to link the camera-detected
+  // exit to that existing row instead of inserting a duplicate.
+  overstay_violation_id: string | null;
+};
 
 // Active visitor_pass that hasn't been marked exited. Three-pass matcher
 // over the (typically small) active-unexited set for this property:
@@ -104,10 +112,11 @@ async function findActiveUnexitedPass(
     plate_text: string | null;
     back_plate: string | null;
     normalized_back_plate: string | null;
+    overstay_violation_id: string | null;
   };
   const { data, error } = await db
     .from("visitor_passes")
-    .select("id,valid_until,valid_from,plate_text,back_plate,normalized_back_plate")
+    .select("id,valid_until,valid_from,plate_text,back_plate,normalized_back_plate,overstay_violation_id")
     .eq("property_id", propertyId)
     .eq("status", "active")
     .is("exited_at", null)
@@ -127,21 +136,23 @@ async function findActiveUnexitedPass(
     return out;
   };
 
+  const wrap = (r: Row, fuzzy: boolean): PassMatch => ({
+    id: r.id,
+    valid_until: r.valid_until,
+    fuzzy,
+    overstay_violation_id: r.overstay_violation_id ?? null,
+  });
   // 1) Exact
   for (const r of rows) {
-    if (candidates(r).includes(normalized)) return { id: r.id, valid_until: r.valid_until, fuzzy: false };
+    if (candidates(r).includes(normalized)) return wrap(r, false);
   }
   // 2) Fuzzy (OCR confusion + ≤1 true edit, same-length)
   for (const r of rows) {
-    if (candidates(r).some((p) => plateSimilar(p, normalized, true))) {
-      return { id: r.id, valid_until: r.valid_until, fuzzy: true };
-    }
+    if (candidates(r).some((p) => plateSimilar(p, normalized, true))) return wrap(r, true);
   }
   // 3) Partial substring (last resort) at the default 0.5 minRatio.
   for (const r of rows) {
-    if (candidates(r).some((p) => plateMatchesPartial(normalized, p))) {
-      return { id: r.id, valid_until: r.valid_until, fuzzy: true };
-    }
+    if (candidates(r).some((p) => plateMatchesPartial(normalized, p))) return wrap(r, true);
   }
   return null;
 }
@@ -326,18 +337,37 @@ export async function handleTruckPlazaExit(args: {
   }
 
   // 6b. Pass-exit branch: stamp exited_at + overstay violation if late.
+  //
+  // Reuse the existing overstay row if the proactive cron already created
+  // one. Without this, a sequence of:
+  //   1) cron sweep at valid_until+1min creates violation A, dispatches email
+  //   2) truck physically leaves, camera fires at valid_until+30min
+  //   3) we'd insert violation B and overwrite the link
+  // would deliver two emails for one incident and orphan violation A.
   let overstayViolationId: string | null = null;
   if (overstay) {
-    const vIns = await db.from("alpr_violations").insert({
-      property_id: camera.property_id,
-      plate_event_id: plateEventId,
-      plate_text: resolved.raw.toUpperCase(),
-      status: "pending",
-      violation_type: "overstay",
-      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late)`,
-    }).select("id").single();
-    if (vIns.error) throw vIns.error;
-    overstayViolationId = vIns.data.id as string;
+    if (pass!.overstay_violation_id) {
+      // Cron got here first — link the exit evidence onto its violation.
+      overstayViolationId = pass!.overstay_violation_id;
+      const vUpd = await db.from("alpr_violations")
+        .update({
+          plate_event_id: plateEventId,
+          notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via camera (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late). Originally fired by overstay sweep.`,
+        })
+        .eq("id", overstayViolationId);
+      if (vUpd.error) throw vUpd.error;
+    } else {
+      const vIns = await db.from("alpr_violations").insert({
+        property_id: camera.property_id,
+        plate_event_id: plateEventId,
+        plate_text: resolved.raw.toUpperCase(),
+        status: "pending",
+        violation_type: "overstay",
+        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late)`,
+      }).select("id").single();
+      if (vIns.error) throw vIns.error;
+      overstayViolationId = vIns.data.id as string;
+    }
   }
 
   const upd = await db.from("visitor_passes")
@@ -345,6 +375,10 @@ export async function handleTruckPlazaExit(args: {
       exited_at: now.toISOString(),
       exited_via_camera_id: camera.id,
       exited_via_plate_event_id: plateEventId,
+      // COALESCE-style: keep the prior overstay_violation_id when we found
+      // one on the pass (we just attached evidence to it above); otherwise
+      // stamp the newly-created one. Conditional .is("exited_at", null)
+      // also keeps a concurrent flusher from clobbering this update.
       overstay_violation_id: overstayViolationId,
     })
     .eq("id", pass!.id)

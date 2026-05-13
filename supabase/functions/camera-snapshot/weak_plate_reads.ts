@@ -172,17 +172,18 @@ async function findActiveUnexitedPassFuzzy(
   propertyId: string,
   normalized: string,
   now: Date,
-): Promise<{ id: string; valid_until: string; fuzzy: boolean } | null> {
+): Promise<{ id: string; valid_until: string; fuzzy: boolean; overstay_violation_id: string | null } | null> {
   type Row = {
     id: string;
     valid_until: string;
     valid_from: string | null;
     plate_text: string | null;
     normalized_back_plate: string | null;
+    overstay_violation_id: string | null;
   };
   const { data, error } = await db
     .from("visitor_passes")
-    .select("id,valid_until,valid_from,plate_text,normalized_back_plate")
+    .select("id,valid_until,valid_from,plate_text,normalized_back_plate,overstay_violation_id")
     .eq("property_id", propertyId)
     .eq("status", "active")
     .is("exited_at", null)
@@ -200,18 +201,20 @@ async function findActiveUnexitedPassFuzzy(
     if (r.normalized_back_plate) out.push(r.normalized_back_plate);
     return out;
   };
+  const wrap = (r: Row, fuzzy: boolean) => ({
+    id: r.id,
+    valid_until: r.valid_until,
+    fuzzy,
+    overstay_violation_id: r.overstay_violation_id ?? null,
+  });
   for (const r of rows) {
-    if (cands(r).includes(normalized)) return { id: r.id, valid_until: r.valid_until, fuzzy: false };
+    if (cands(r).includes(normalized)) return wrap(r, false);
   }
   for (const r of rows) {
-    if (cands(r).some((p) => plateSimilar(p, normalized, true))) {
-      return { id: r.id, valid_until: r.valid_until, fuzzy: true };
-    }
+    if (cands(r).some((p) => plateSimilar(p, normalized, true))) return wrap(r, true);
   }
   for (const r of rows) {
-    if (cands(r).some((p) => plateMatchesPartial(normalized, p))) {
-      return { id: r.id, valid_until: r.valid_until, fuzzy: true };
-    }
+    if (cands(r).some((p) => plateMatchesPartial(normalized, p))) return wrap(r, true);
   }
   return null;
 }
@@ -328,19 +331,32 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
     };
   }
 
-  // 7) Pass-exit branch.
+  // 7) Pass-exit branch. Reuse the existing overstay violation if the
+  //    proactive cron already inserted one — otherwise we'd duplicate-fire
+  //    the dispatch email for the same incident.
   let overstayViolationId: string | null = null;
   if (overstay) {
-    const vIns = await db.from("alpr_violations").insert({
-      property_id: propertyId,
-      plate_event_id: plateEventId,
-      plate_text: (prUsed && prPlateRaw ? prPlateRaw : best.raw_plate).toUpperCase(),
-      status: "pending",
-      violation_type: "overstay",
-      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads)`,
-    }).select("id").single();
-    if (vIns.error) throw vIns.error;
-    overstayViolationId = vIns.data.id as string;
+    if (pass!.overstay_violation_id) {
+      overstayViolationId = pass!.overstay_violation_id;
+      const vUpd = await db.from("alpr_violations")
+        .update({
+          plate_event_id: plateEventId,
+          notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads). Originally fired by overstay sweep.`,
+        })
+        .eq("id", overstayViolationId);
+      if (vUpd.error) throw vUpd.error;
+    } else {
+      const vIns = await db.from("alpr_violations").insert({
+        property_id: propertyId,
+        plate_event_id: plateEventId,
+        plate_text: (prUsed && prPlateRaw ? prPlateRaw : best.raw_plate).toUpperCase(),
+        status: "pending",
+        violation_type: "overstay",
+        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads)`,
+      }).select("id").single();
+      if (vIns.error) throw vIns.error;
+      overstayViolationId = vIns.data.id as string;
+    }
   }
 
   const upd = await db.from("visitor_passes")

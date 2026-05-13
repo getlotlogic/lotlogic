@@ -175,6 +175,11 @@ serve(async (req) => {
   const firstSeen = firstEvent?.created_at ?? triggerEvent?.created_at ?? violation.created_at;
   const firstSeenAgo = firstSeen ? humanDuration(now - new Date(firstSeen).getTime()) : "?";
 
+  // Overstay duration: how long PAST valid_until they've been on property.
+  // Only meaningful for `violation_type='overstay'` where lastPass exists.
+  const overstayMs = lastPass?.valid_until ? now - new Date(lastPass.valid_until).getTime() : 0;
+  const overstayAgo = overstayMs > 0 ? humanDuration(overstayMs) : null;
+
   const passLine = (() => {
     if (!lastPass) return "NONE (never registered)";
     const duration = lastPass.valid_from && lastPass.valid_until
@@ -267,12 +272,15 @@ serve(async (req) => {
     `Links valid 48h · single-use · routed to dispatch ledger`,
   ].filter(Boolean).join("\n");
 
+  // Brand-v2 (cream paper + Fraunces + DM Mono) — palette aligned with
+  // visit.html / resident.html. Mail-client-safe: all styles inline, tables
+  // for layout, no media queries, no external CSS reliance for fallbacks.
   const photoBlock = triggerEvent?.image_url
     ? `
-<tr><td style="padding:0 24px 18px;">
-  <div style="background:#0F0A03; border:1px solid #2A2014; border-radius:8px; overflow:hidden;">
-    <div style="padding:8px 12px; font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#FBBF24; border-bottom:1px solid #2A2014;">
-      &#9654; Trigger frame &middot; ${escapeHtml(formatLocal(triggerEvent?.created_at))}
+<tr><td style="padding:0 28px 18px;">
+  <div style="background:#F2EAD8; border:1.5px solid #1F1B14; overflow:hidden;">
+    <div style="padding:10px 14px; font-family:'DM Mono',ui-monospace,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#6F6450; border-bottom:1.5px solid #1F1B14;">
+      Trigger frame &middot; ${escapeHtml(formatLocal(triggerEvent?.created_at))}
     </div>
     <img src="${escapeHtml(triggerEvent.image_url)}" alt="Plate snapshot" style="display:block; width:100%; height:auto;" />
   </div>
@@ -280,22 +288,22 @@ serve(async (req) => {
     : "";
 
   const buttonsBlock = (towLink && noTowLink) ? `
-<tr><td style="padding:0 24px 6px;">
+<tr><td style="padding:4px 28px 8px;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;">
     <tr>
       <td style="padding:0 6px 10px 0; width:50%;">
-        <a href="${escapeHtml(towLink)}" style="display:block; background:#B91C1C; color:#FFF7E6; padding:18px 12px; text-align:center; text-decoration:none; border-radius:8px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-weight:400; font-size:18px; letter-spacing:.18em; text-transform:uppercase; border:2px solid #7F1313; box-shadow:inset 0 -3px 0 rgba(0,0,0,.25);">
-          &#9654; Tow Confirmed
+        <a href="${escapeHtml(towLink)}" style="display:block; background:#1F1B14; color:#F2EAD8; padding:18px 12px; text-align:center; text-decoration:none; border-radius:2px; font-family:'Fraunces',Georgia,serif; font-style:italic; font-weight:600; font-size:18px; letter-spacing:.02em; border:1.5px solid #1F1B14;">
+          Tow confirmed
         </a>
       </td>
       <td style="padding:0 0 10px 6px; width:50%;">
-        <a href="${escapeHtml(noTowLink)}" style="display:block; background:#1A1206; color:#FBBF24; padding:18px 12px; text-align:center; text-decoration:none; border-radius:8px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-weight:400; font-size:18px; letter-spacing:.18em; text-transform:uppercase; border:2px solid #FBBF24;">
-          &#9654; Stand Down
+        <a href="${escapeHtml(noTowLink)}" style="display:block; background:#F2EAD8; color:#1F1B14; padding:18px 12px; text-align:center; text-decoration:none; border-radius:2px; font-family:'Fraunces',Georgia,serif; font-style:italic; font-weight:600; font-size:18px; letter-spacing:.02em; border:1.5px solid #1F1B14;">
+          Stand down
         </a>
       </td>
     </tr>
   </table>
-  <p style="margin:4px 0 0; font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:#6F5A2C; text-align:center;">
+  <p style="margin:4px 0 0; font-family:'DM Mono',ui-monospace,monospace; font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:#6F6450; text-align:center;">
     Single tap &middot; Single use &middot; Expires 48h
   </p>
 </td></tr>` : "";
@@ -306,77 +314,95 @@ serve(async (req) => {
 
   const metaRow = (label: string, value: string, mono = false) => `
 <tr>
-  <td style="padding:10px 0; width:36%; vertical-align:top; font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#8A6F3D; border-bottom:1px dashed #2A2014;">
+  <td style="padding:12px 0; width:36%; vertical-align:top; font-family:'DM Mono',ui-monospace,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#6F6450; border-bottom:1.5px dashed #1F1B14;">
     ${escapeHtml(label)}
   </td>
-  <td style="padding:10px 0; vertical-align:top; font-family:${mono ? "'DM Mono',Menlo,Consolas,monospace" : "'Manrope','Helvetica Neue',Arial,sans-serif"}; font-size:14px; color:#F5F1EA; border-bottom:1px dashed #2A2014;">
+  <td style="padding:12px 0; vertical-align:top; font-family:${mono ? "'DM Mono',ui-monospace,monospace" : "'Manrope','Helvetica Neue',Arial,sans-serif"}; font-size:14px; color:#1F1B14; border-bottom:1.5px dashed #1F1B14;">
     ${value}
   </td>
 </tr>`;
+
+  // Plate-card subtitle is violation-type-aware. Overstays foreground the
+  // overstay duration ("Overstayed 2h past 1:00 PM"); other types keep
+  // the simpler "on property since" framing.
+  const isOverstay = (violation.violation_type ?? "").toLowerCase() === "overstay";
+  const plateSubtitle = isOverstay && overstayAgo
+    ? `
+<div style="margin-top:14px; font-family:'Fraunces',Georgia,serif; font-style:italic; font-size:20px; color:#9A5530; line-height:1.1;">
+  Overstayed <strong style="font-style:normal; color:#1F1B14;">${escapeHtml(overstayAgo)}</strong>
+</div>
+<div style="margin-top:4px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:12px; color:#3D3528;">
+  past pass expiry &middot; ${escapeHtml(formatLocal(lastPass?.valid_until))}
+</div>
+<div style="margin-top:10px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:12px; color:#6F6450;">
+  First seen on lot ${escapeHtml(firstSeenAgo)} ago &middot; ${escapeHtml(formatLocal(firstSeen))}
+</div>`
+    : `
+<div style="margin-top:12px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#3D3528;">
+  On property <strong style="color:#9A5530;">${escapeHtml(firstSeenAgo)}</strong> &middot; since ${escapeHtml(formatLocal(firstSeen))}
+</div>`;
 
   const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark">
-<meta name="supported-color-schemes" content="light dark">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light">
 <title>${escapeHtml(subject)}</title>
 </head>
-<body style="margin:0; padding:0; background:#0B0905; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; color:#F5F1EA;">
+<body style="margin:0; padding:0; background:#E6DBC2; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; color:#1F1B14;">
 <div style="display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; overflow:hidden; mso-hide:all;">
   ${escapeHtml(preheader)}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
 </div>
 
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0B0905;">
-  <tr><td align="center" style="padding:24px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#E6DBC2;">
+  <tr><td align="center" style="padding:32px 12px;">
 
-    <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px; width:100%; background:#1A1206; border-radius:12px; overflow:hidden; border:1px solid #2A2014;">
+    <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px; width:100%; background:#F2EAD8; border-radius:0; overflow:hidden; border:1.5px solid #1F1B14;">
 
-      <tr><td style="height:6px; background:repeating-linear-gradient(45deg, #FBBF24 0 12px, #1A1206 12px 24px);">&nbsp;</td></tr>
+      <tr><td style="height:8px; background:repeating-linear-gradient(45deg, #9A5530 0 14px, #F2EAD8 14px 28px);">&nbsp;</td></tr>
 
-      <tr><td style="padding:18px 24px 8px;">
+      <tr><td style="padding:22px 28px 8px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
           <tr>
-            <td style="font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-size:26px; letter-spacing:.14em; color:#FBBF24; text-transform:uppercase;">
-              LotView
+            <td style="font-family:'Fraunces',Georgia,serif; font-style:italic; font-size:28px; color:#1F1B14; letter-spacing:-.02em; line-height:1;">
+              LotL<span style="color:#D97706; font-style:normal;">o</span>gic
             </td>
-            <td align="right" style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:#8A6F3D;">
+            <td align="right" style="font-family:'DM Mono',ui-monospace,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#6F6450;">
               Dispatch &middot; ${escapeHtml(formatLocal(now))}
             </td>
           </tr>
         </table>
       </td></tr>
 
-      <tr><td style="padding:6px 24px 14px;">
-        <div style="display:inline-block; background:#B91C1C; color:#FFF7E6; padding:6px 12px; border-radius:4px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-size:14px; letter-spacing:.22em; text-transform:uppercase;">
-          &#9654; Tow Authorization Requested
+      <tr><td style="padding:6px 28px 22px;">
+        <div style="display:inline-block; background:#9A5530; color:#F2EAD8; padding:7px 12px; border-radius:2px; font-family:'DM Mono',ui-monospace,monospace; font-size:11px; letter-spacing:.18em; text-transform:uppercase;">
+          Tow authorization requested
         </div>
-        <div style="margin-top:10px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-size:22px; letter-spacing:.04em; color:#F5F1EA; text-transform:uppercase; line-height:1.15;">
+        <div style="margin-top:14px; font-family:'Fraunces',Georgia,serif; font-style:italic; font-size:30px; line-height:1.1; color:#1F1B14; letter-spacing:-.01em;">
           ${escapeHtml(propertyName)}
         </div>
-        ${property.address ? `<div style="margin-top:4px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#A0916F;">${escapeHtml(property.address)}</div>` : ""}
+        ${property.address ? `<div style="margin-top:6px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#6F6450;">${escapeHtml(property.address)}</div>` : ""}
       </td></tr>
 
-      <tr><td style="padding:0 24px 18px;">
-        <div style="background:#0F0A03; border:2px solid #FBBF24; border-radius:10px; padding:20px; text-align:center;">
-          <div style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.28em; text-transform:uppercase; color:#FBBF24; margin-bottom:8px;">
-            License Plate &middot; ${escapeHtml(reasonCopy.badge)}
+      <tr><td style="padding:0 28px 22px;">
+        <div style="background:#FBBF24; border:1.5px solid #1F1B14; padding:24px 20px; text-align:center;">
+          <div style="font-family:'DM Mono',ui-monospace,monospace; font-size:10px; letter-spacing:.22em; text-transform:uppercase; color:#1F1B14; margin-bottom:10px;">
+            License plate &middot; ${escapeHtml(reasonCopy.badge)}
           </div>
-          <div style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:42px; letter-spacing:.18em; color:#FFFFFF; font-weight:700;">
+          <div style="font-family:'DM Mono',ui-monospace,monospace; font-size:38px; letter-spacing:.18em; color:#1F1B14; font-weight:500;">
             ${escapeHtml(violation.plate_text)}
           </div>
-          <div style="margin-top:10px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#E0D4B8;">
-            On property <strong style="color:#FBBF24;">${escapeHtml(firstSeenAgo)}</strong> &middot; since ${escapeHtml(formatLocal(firstSeen))}
-          </div>
+          ${plateSubtitle}
         </div>
       </td></tr>
 
-      <tr><td style="padding:0 24px 14px;">
+      <tr><td style="padding:0 28px 18px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-          ${lastPass?.back_plate ? metaRow("Trailer Plate", escapeHtml(lastPass.back_plate), true) : ""}
-          ${confidencePct != null ? metaRow("Read Confidence", `${confidencePct}%`, true) : ""}
-          ${metaRow("Pass on File", escapeHtml(passLine))}
+          ${lastPass?.back_plate ? metaRow("Trailer plate", escapeHtml(lastPass.back_plate), true) : ""}
+          ${confidencePct != null ? metaRow("Read confidence", `${confidencePct}%`, true) : ""}
+          ${metaRow("Pass on file", escapeHtml(passLine))}
           ${lastPass?.visitor_name ? metaRow("Driver", escapeHtml(lastPass.visitor_name)) : ""}
         </table>
       </td></tr>
@@ -385,26 +411,26 @@ serve(async (req) => {
 
       ${buttonsBlock}
 
-      <tr><td style="padding:14px 24px 20px;">
-        <a href="https://lotlogicparking.com/app" style="display:block; background:#FBBF24; color:#1A1206; padding:14px 16px; text-align:center; text-decoration:none; border-radius:8px; font-family:'Anton','Impact','Helvetica Neue',Arial,sans-serif; font-size:15px; letter-spacing:.2em; text-transform:uppercase; border:1px solid #C4940F;">
-          &#9654; Open LotView Dashboard
+      <tr><td style="padding:18px 28px 22px;">
+        <a href="https://lotlogicparking.com/app" style="display:block; background:#D97706; color:#F2EAD8; padding:14px 16px; text-align:center; text-decoration:none; border-radius:2px; font-family:'DM Mono',ui-monospace,monospace; font-size:12px; letter-spacing:.22em; text-transform:uppercase; border:1.5px solid #9A5530;">
+          Open LotView dashboard
         </a>
       </td></tr>
 
-      <tr><td style="padding:14px 24px 18px; border-top:1px solid #2A2014;">
+      <tr><td style="padding:16px 28px 18px; border-top:1.5px solid #1F1B14;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
           <tr>
-            <td style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#6F5A2C;">
-              LotView &middot; Highway Dispatch
+            <td style="font-family:'DM Mono',ui-monospace,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#6F6450;">
+              LotLogic &middot; Highway dispatch
             </td>
-            <td align="right" style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#6F5A2C;">
+            <td align="right" style="font-family:'Fraunces',Georgia,serif; font-style:italic; font-size:12px; color:#6F6450;">
               lotlogicparking.com
             </td>
           </tr>
         </table>
       </td></tr>
 
-      <tr><td style="height:4px; background:#FBBF24;">&nbsp;</td></tr>
+      <tr><td style="height:6px; background:#D97706;">&nbsp;</td></tr>
 
     </table>
 
