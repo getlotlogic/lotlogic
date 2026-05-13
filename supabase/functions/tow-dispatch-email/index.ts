@@ -378,7 +378,7 @@ serve(async (req) => {
 
       <tr><td style="padding:6px 28px 22px;">
         <div style="display:inline-block; background:#9A5530; color:#F2EAD8; padding:7px 12px; border-radius:2px; font-family:'DM Mono',ui-monospace,monospace; font-size:11px; letter-spacing:.18em; text-transform:uppercase;">
-          Tow authorization requested
+          Tow request
         </div>
         <div style="margin-top:14px; font-family:'Fraunces',Georgia,serif; font-style:italic; font-size:30px; line-height:1.1; color:#1F1B14; letter-spacing:-.01em;">
           ${escapeHtml(propertyName)}
