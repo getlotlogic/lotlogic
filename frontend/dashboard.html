@@ -2856,9 +2856,9 @@ const db = {
     if (opts.format) params.set('format', opts.format);
     if (opts.status) params.set('status', opts.status);
     if (opts.plate) params.set('plate', opts.plate);
-    if (opts.company_name) params.set('company_name', opts.company_name);
-    if (opts.date_from) params.set('date_from', opts.date_from);
-    if (opts.date_to) params.set('date_to', opts.date_to);
+    if (opts.company_name) params.set('company', opts.company_name);
+    if (opts.date_from) params.set('from_date', opts.date_from);
+    if (opts.date_to) params.set('to_date', opts.date_to);
     if (opts.page) params.set('page', String(opts.page));
     if (opts.page_size) params.set('page_size', String(opts.page_size));
     if (opts.format === 'csv') {
@@ -8130,20 +8130,27 @@ function TruckParkingLog({ propertyId }) {
         page,
         page_size: pageSize,
       });
-      setRows(res.items || []);
-      setTotal(res.total ?? (res.items?.length || 0));
+      setRows(res.rows || []);
+      setTotal(res.total ?? (res.rows?.length || 0));
     } catch (e) {
       setErr(e.message || 'Failed to load log');
     }
     setLoading(false);
   }, [propertyId, filters, page]);
 
-  // One-shot load per `load` identity. External changes to visitor_passes
-  // no longer trigger a full reload of the log — the parent's realtime
-  // channel already refreshes its own list; the log owns its filter +
-  // pagination state and uses the explicit Refresh button (via applyFilters)
-  // or filter changes to refetch.
+  // Initial load + on filter / page changes via `load` identity.
   useIntervalFetch(load, 0, [load]);
+
+  // Realtime subscription. New passes inserted (and exit/overstay updates)
+  // refresh the log silently — filter + pagination state are preserved
+  // because `load` reads from current state, not from the realtime payload.
+  useEffect(() => {
+    if (!supabase || !propertyId) return;
+    const ch = supabase.channel('parking-log-realtime-' + propertyId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'visitor_passes', filter: 'property_id=eq.' + propertyId }, () => load())
+      .subscribe();
+    return () => { try { supabase.removeChannel(ch); } catch {} };
+  }, [propertyId, load]);
 
   async function handleCancel(reason) {
     if (!cancelModal) return;
