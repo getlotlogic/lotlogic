@@ -171,16 +171,19 @@ export async function handleTruckPlazaExit(args: {
     }
   }
 
-  // 3. PR fallback. Triggered when we have nothing yet AND a token is
-  //    configured. Two scenarios:
-  //      a) Onboard misread — onboard plate didn't match anything but PR
-  //         might read it correctly.
-  //      b) No onboard LPR at all (SC211) — PR is our only OCR.
-  if (!tow && !pass && args.prToken && args.prApiUrl) {
+  // 3. PR fallback. Only fires when we have NO onboard plate at all
+  //    (SC211 cloud-OCR cameras) — PR is the only OCR available there.
+  //    When onboard returned a plate but it didn't match either list,
+  //    we no longer second-opinion via PR. Trade-off: an onboard
+  //    misread of a registered driver's exit becomes a missed exit;
+  //    the proactive overstay cron fires at valid_until and the
+  //    operator can dispute. Saves the per-read PR cost at high
+  //    truck-plaza volume.
+  if (!resolved && args.prToken && args.prApiUrl) {
     const pr = await callPlateRecognizer(payload.bytes, args.prToken, args.prApiUrl);
     if (pr) {
       const norm = normalizePlate(pr.plate);
-      if (norm.length >= 4 && (!resolved || norm !== resolved.normalized)) {
+      if (norm.length >= 4) {
         tow = await findTowTruckMatch(db, camera.property_id, norm);
         if (!tow && direction === "Leave") {
           pass = await findActiveUnexitedPass(db, camera.property_id, norm);
