@@ -21,6 +21,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
+import { plateSimilar, plateMatchesPartial } from "./sessions.ts";
 
 export type CameraRow = {
   id: string;
@@ -53,25 +54,78 @@ export type TruckPlazaResult =
 
 type ResolvedPlate = { raw: string; normalized: string; confidence: number | null; source: "onboard" | "pr" };
 
-// Active visitor_pass that hasn't been marked exited. Front OR back plate
-// match. Most-recent first so a driver mid-renewal exits the latest pass.
+type PassMatch = { id: string; valid_until: string; fuzzy: boolean };
+
+// Active visitor_pass that hasn't been marked exited. Three-pass matcher
+// over the (typically small) active-unexited set for this property:
+//
+//   1. EXACT — front (plate_text) or back (normalized_back_plate) equals
+//      the camera's normalized read. Runs against every row first so a
+//      clean read of "ABC1234" never wrong-links to "ABC1235" via the
+//      fuzzy pass below.
+//   2. FUZZY — same-length plates that differ only in OCR-confusion
+//      pairs (C↔G, O↔0, I↔1, etc., curated from production drift) plus
+//      up to one true edit. plateSimilar(anchored=true) — the tight
+//      variant. Catches TS4467 onboard drift like "ABC1234" → "ABG1234".
+//   3. PARTIAL — last-resort substring match (≥50% length overlap).
+//      Covers reads where the camera caught only part of the plate.
+//
+// `fuzzy=true` on the return tells the caller to stamp a distinct
+// match_status on the plate_event so the operator dashboard can spot-
+// review fuzzy hits.
 async function findActiveUnexitedPass(
   db: SupabaseClient,
   propertyId: string,
   normalized: string,
-): Promise<{ id: string; valid_until: string } | null> {
+  now: Date,
+): Promise<PassMatch | null> {
+  type Row = {
+    id: string;
+    valid_until: string;
+    valid_from: string | null;
+    plate_text: string | null;
+    back_plate: string | null;
+    normalized_back_plate: string | null;
+  };
   const { data, error } = await db
     .from("visitor_passes")
-    .select("id,valid_until")
+    .select("id,valid_until,valid_from,plate_text,back_plate,normalized_back_plate")
     .eq("property_id", propertyId)
     .eq("status", "active")
     .is("exited_at", null)
-    .or(`plate_text.eq.${normalized},normalized_back_plate.eq.${normalized}`)
     .order("valid_from", { ascending: false })
-    .limit(1);
+    .limit(200);
   if (error) throw error;
-  const row = (data ?? [])[0];
-  return row ? { id: row.id, valid_until: row.valid_until } : null;
+  const rows = ((data ?? []) as Row[]).filter((r) => {
+    if (r.valid_from && new Date(r.valid_from) > now) return false;
+    return true;
+  });
+  if (rows.length === 0) return null;
+
+  const candidates = (r: Row): string[] => {
+    const out: string[] = [];
+    if (r.plate_text) out.push(normalizePlate(r.plate_text));
+    if (r.normalized_back_plate) out.push(r.normalized_back_plate);
+    return out;
+  };
+
+  // 1) Exact
+  for (const r of rows) {
+    if (candidates(r).includes(normalized)) return { id: r.id, valid_until: r.valid_until, fuzzy: false };
+  }
+  // 2) Fuzzy (OCR confusion + ≤1 true edit, same-length)
+  for (const r of rows) {
+    if (candidates(r).some((p) => plateSimilar(p, normalized, true))) {
+      return { id: r.id, valid_until: r.valid_until, fuzzy: true };
+    }
+  }
+  // 3) Partial substring (last resort)
+  for (const r of rows) {
+    if (candidates(r).some((p) => plateMatchesPartial(normalized, p))) {
+      return { id: r.id, valid_until: r.valid_until, fuzzy: true };
+    }
+  }
+  return null;
 }
 
 // Tow-truck sighting candidate. property.tow_company_id points at the
@@ -163,11 +217,11 @@ export async function handleTruckPlazaExit(args: {
 
   // 2. Look up tow-truck and pass with the onboard plate (cheap).
   let tow: { partner_id: string } | null = null;
-  let pass: { id: string; valid_until: string } | null = null;
+  let pass: PassMatch | null = null;
   if (resolved) {
     tow = await findTowTruckMatch(db, camera.property_id, resolved.normalized);
     if (!tow && direction === "Leave") {
-      pass = await findActiveUnexitedPass(db, camera.property_id, resolved.normalized);
+      pass = await findActiveUnexitedPass(db, camera.property_id, resolved.normalized, now);
     }
   }
 
@@ -186,7 +240,7 @@ export async function handleTruckPlazaExit(args: {
       if (norm.length >= 4) {
         tow = await findTowTruckMatch(db, camera.property_id, norm);
         if (!tow && direction === "Leave") {
-          pass = await findActiveUnexitedPass(db, camera.property_id, norm);
+          pass = await findActiveUnexitedPass(db, camera.property_id, norm, now);
         }
         if (tow || pass) {
           resolved = { raw: pr.plate, normalized: norm, confidence: pr.confidence, source: "pr" };
@@ -209,7 +263,10 @@ export async function handleTruckPlazaExit(args: {
 
   // Compute overstay before any writes (used by the pass branch only).
   const overstay = pass !== null && now.getTime() > new Date(pass.valid_until).getTime();
-  const matchStatus = tow ? "partner_truck" : (overstay ? "overstay" : "visitor_pass");
+  const fuzzyHit = pass?.fuzzy ?? false;
+  const matchStatus = tow
+    ? "partner_truck"
+    : (overstay ? "overstay" : (fuzzyHit ? "visitor_pass_fuzzy" : "visitor_pass"));
 
   const evIns = await db.from("plate_events").insert({
     property_id: camera.property_id,
@@ -223,6 +280,7 @@ export async function handleTruckPlazaExit(args: {
       ocr_source: resolved.source,
       direction,
       pass_id: pass?.id ?? null,
+      pass_match_fuzzy: fuzzyHit,
       overstay,
       ...(payload.rawMeta ?? {}),
     },
