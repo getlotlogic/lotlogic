@@ -134,7 +134,13 @@ export function extractMilesightPayload(obj: Record<string, unknown>): Extracted
   // captures are typically 30-200KB.
   if (bytes.byteLength < 1024) return null;
 
-  const devMac = typeof values.devMac === "string" ? (values.devMac as string) : null;
+  // Normalize the devMac to lowercase + alphanumeric-only so it matches
+  // the convention used by alpr_cameras.api_key. Without this, an SC211
+  // sending "1CC31660025E" wouldn't match a DB row stored as
+  // "1cc31660025e" — every read would silently 200 with unknown_camera.
+  const devMac = typeof values.devMac === "string"
+    ? (values.devMac as string).toLowerCase().replace(/[^a-z0-9]/g, "")
+    : null;
 
   // rawMeta is what we preserve in plate_events.raw_data — drop the (huge)
   // base64 blob but keep everything else useful for forensics.
