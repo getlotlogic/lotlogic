@@ -1,5 +1,5 @@
 // Supabase Edge Function: notify-expiring-plates
-// Runs daily via cron. Emails residents whose plates expire within 72 hours.
+// Runs daily via cron. Emails permanent-pass holders whose plates expire within 72 hours.
 // Requires RESEND_API_KEY env var and SUPABASE_SERVICE_ROLE_KEY.
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
@@ -61,18 +61,18 @@ function escapeHtml(value: unknown): string {
     .replaceAll("'", "&#39;");
 }
 
-function buildEmailHtml(resident: ResidentPlate, propertyName: string): string {
-  const expDate = new Date(resident.plate_expiration).toLocaleDateString("en-US", {
+function buildEmailHtml(holder: ResidentPlate, propertyName: string): string {
+  const expDate = new Date(holder.plate_expiration).toLocaleDateString("en-US", {
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric",
   });
 
-  const holderName = escapeHtml(resident.holder_name || "there");
-  const plateText = escapeHtml(resident.plate_text);
+  const holderName = escapeHtml(holder.holder_name || "there");
+  const plateText = escapeHtml(holder.plate_text);
   const safePropertyName = escapeHtml(propertyName);
-  const unitLabel = resident.unit_number ? `Unit ${escapeHtml(resident.unit_number)}` : "your unit";
+  const unitLabel = holder.unit_number ? `Unit ${escapeHtml(holder.unit_number)}` : "your unit";
 
   return `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 500px; margin: 0 auto; padding: 32px 24px; background: #f9fafb; border-radius: 12px;">
@@ -120,7 +120,7 @@ serve(async (req: Request) => {
     const todayStr = now.toISOString().split("T")[0];
     const in72hStr = in72h.toISOString().split("T")[0];
 
-    // Find active residents with plates expiring within 72 hours who haven't been notified
+    // Find active permanent-pass holders with plates expiring within 72 hours who haven't been notified
     const { data: expiring, error: fetchErr } = await supabase
       .from("resident_plates")
       .select("id, plate_text, holder_name, unit_number, email, plate_expiration, property_id")
@@ -157,11 +157,11 @@ serve(async (req: Request) => {
 
     let sentCount = 0;
     let skippedCount = 0;
-    for (const resident of expiring as ResidentPlate[]) {
-      const propertyName = propMap[resident.property_id] || "your property";
-      const html = buildEmailHtml(resident, propertyName);
+    for (const holder of expiring as ResidentPlate[]) {
+      const propertyName = propMap[holder.property_id] || "your property";
+      const html = buildEmailHtml(holder, propertyName);
       const sent = await sendEmail(
-        resident.email,
+        holder.email,
         "Your vehicle registration expires soon - action required",
         html
       );
@@ -170,7 +170,7 @@ serve(async (req: Request) => {
         await supabase
           .from("resident_plates")
           .update({ expiry_notified_at: now.toISOString() })
-          .eq("id", resident.id);
+          .eq("id", holder.id);
         sentCount++;
       } else {
         skippedCount++;
@@ -178,7 +178,7 @@ serve(async (req: Request) => {
     }
 
     return json(200, {
-      message: `Notified ${sentCount} resident(s)`,
+      message: `Notified ${sentCount} permanent-pass holder(s)`,
       count: sentCount,
       skipped: skippedCount,
       dry_run: !RESEND_API_KEY,
