@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Temporary Parking Pass</title>
+  <title>Parking Pass</title>
   <!-- reCAPTCHA v3. The site key is a PUBLIC value by design (Google docs
        explicitly state it's safe to expose); security relies only on the
        server-side RECAPTCHA_SECRET_KEY. The key below is a placeholder —
@@ -465,7 +465,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <h1>LotL<span>o</span>gic</h1>
         </div>
         <div class="property-name">
-          truck parking registration<br>
+          parking pass registration<br>
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="passForm">
@@ -498,10 +498,10 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           </select>
 
           <div style="margin-top:18px;background:#EADFC7;border:1.5px solid #1F1B14;padding:16px;font-size:13px;color:#3D3528;line-height:1.55;">
-            By submitting, you agree to the property's truck parking policies. Maximum stay 48 hours. After your pass expires, you must remain off the property for 24 hours before re-registering. <em style="font-family:'Fraunces',serif;font-style:italic;">Unregistered vehicles are subject to tow at owner's expense.</em>
+            By submitting, you agree to the property's parking-pass policies. Maximum stay 48 hours. After your pass expires, you must remain off the property for 24 hours before re-registering. <em style="font-family:'Fraunces',serif;font-style:italic;">Unregistered vehicles are subject to tow at owner's expense.</em>
           </div>
 
-          <button type="submit" class="submit-btn" id="submitBtn" style="margin-top:18px;">Register my truck →</button>
+          <button type="submit" class="submit-btn" id="submitBtn" style="margin-top:18px;">Get parking pass →</button>
           <div id="errorMsg"></div>
         </form>
       `;
@@ -678,13 +678,13 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
             : cooldownMatch[1];
           errorDiv.innerHTML = '<div class="error">This plate is in a 24-hour cooldown. You can register again at ' + escapeHtml(local) + '. If you believe this is in error, please contact the property.</div>';
           btn.disabled = false;
-          btn.textContent = 'Register Truck';
+          btn.textContent = 'Get parking pass';
           submitting = false;
           return;
         }
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
-        btn.textContent = 'Register Truck';
+        btn.textContent = 'Get parking pass';
         submitting = false;
       }
     }
