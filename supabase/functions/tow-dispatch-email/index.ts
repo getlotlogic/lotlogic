@@ -122,7 +122,7 @@ serve(async (req) => {
 
   const { data: violation, error: vErr } = await supabase
     .from("alpr_violations")
-    .select("id, property_id, plate_event_id, plate_text, status, sms_sent_at, created_at")
+    .select("id, property_id, plate_event_id, plate_text, status, sms_sent_at, created_at, violation_type")
     .eq("id", violationId)
     .single();
   if (vErr || !violation) return json({ error: "Violation not found", detail: vErr?.message }, 404);
@@ -164,7 +164,7 @@ serve(async (req) => {
 
   const { data: lastPass } = await supabase
     .from("visitor_passes")
-    .select("visitor_name, host_name, host_unit, valid_from, valid_until, stay_days, status, entry_seen_at")
+    .select("visitor_name, host_name, host_unit, valid_from, valid_until, stay_days, status, entry_seen_at, back_plate")
     .eq("property_id", violation.property_id)
     .eq("plate_text", violation.plate_text)
     .order("valid_until", { ascending: false })
@@ -205,21 +205,54 @@ serve(async (req) => {
 
   const propertyName = property.name || "Property";
 
+  // Branch copy by violation_type. The DB column carries the dispatch reason
+  // (overstay / cooldown / unregistered / alpr_unmatched). Anything else
+  // falls back to "Active overstay" so older rows without the column still
+  // render sane text.
+  const reasonCopy = (() => {
+    switch ((violation.violation_type ?? "").toLowerCase()) {
+      case "cooldown":
+        return {
+          subjectReason: "Cooldown breach",
+          badge: "Cooldown breach",
+          textStatus: "COOLDOWN BREACH",
+          preheaderLead: `Cooldown breach · re-entered within 24h block · ${firstSeenAgo} on property`,
+        };
+      case "unregistered":
+      case "alpr_unmatched":
+        return {
+          subjectReason: "Unregistered vehicle",
+          badge: "Unregistered vehicle",
+          textStatus: "UNREGISTERED VEHICLE",
+          preheaderLead: `Unregistered vehicle · no pass on file · ${firstSeenAgo} on property`,
+        };
+      case "overstay":
+      default:
+        return {
+          subjectReason: "Active overstay",
+          badge: "Active overstay",
+          textStatus: `ACTIVE OVERSTAY (${firstSeenAgo})`,
+          preheaderLead: `Active overstay · ${firstSeenAgo} on property`,
+        };
+    }
+  })();
+
   // Subject is the inbox headline. Lead with siren + plate so the line
-  // scans in a phone notification: "DISPATCH · ABC1234 · Charlotte Travel Plaza".
-  const subject = `🚨 DISPATCH · ${violation.plate_text} · ${propertyName}`;
+  // scans in a phone notification: "DISPATCH · ABC1234 · Active overstay · Charlotte Travel Plaza".
+  const subject = `🚨 DISPATCH · ${violation.plate_text} · ${reasonCopy.subjectReason} · ${propertyName}`;
 
   // Preheader: hidden span that mail clients surface in the inbox preview
   // line under the subject. This is the second-most read text in the email
   // and we control it entirely.
-  const preheader = `Active overstay · ${firstSeenAgo} on property · tap to dispatch or stand down`;
+  const preheader = `${reasonCopy.preheaderLead} · tap to dispatch or stand down`;
 
   const textBody = [
     `LOTVIEW DISPATCH`,
     `${propertyName}${property.address ? ` — ${property.address}` : ""}`,
     ``,
     `PLATE        ${violation.plate_text}`,
-    `STATUS       ACTIVE OVERSTAY (${firstSeenAgo})`,
+    lastPass?.back_plate ? `TRAILER      ${lastPass.back_plate}` : null,
+    `STATUS       ${reasonCopy.textStatus}`,
     `FIRST SEEN   ${formatLocal(firstSeen)}`,
     triggerEvent?.confidence != null ? `READ CONF.   ${Math.round(triggerEvent.confidence * 100)}%` : null,
     `PASS         ${passLine}`,
@@ -328,7 +361,7 @@ serve(async (req) => {
       <tr><td style="padding:0 24px 18px;">
         <div style="background:#0F0A03; border:2px solid #FBBF24; border-radius:10px; padding:20px; text-align:center;">
           <div style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:10px; letter-spacing:.28em; text-transform:uppercase; color:#FBBF24; margin-bottom:8px;">
-            License Plate &middot; Active Overstay
+            License Plate &middot; ${escapeHtml(reasonCopy.badge)}
           </div>
           <div style="font-family:'DM Mono',Menlo,Consolas,monospace; font-size:42px; letter-spacing:.18em; color:#FFFFFF; font-weight:700;">
             ${escapeHtml(violation.plate_text)}
@@ -341,6 +374,7 @@ serve(async (req) => {
 
       <tr><td style="padding:0 24px 14px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+          ${lastPass?.back_plate ? metaRow("Trailer Plate", escapeHtml(lastPass.back_plate), true) : ""}
           ${confidencePct != null ? metaRow("Read Confidence", `${confidencePct}%`, true) : ""}
           ${metaRow("Pass on File", escapeHtml(passLine))}
           ${lastPass?.visitor_name ? metaRow("Driver", escapeHtml(lastPass.visitor_name)) : ""}
