@@ -4870,12 +4870,6 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                 {v._isALPR ? (
                   <span className="vs-item">
                     <span style={{fontWeight:800, letterSpacing:'.04em', fontFamily:'SFMono-Regular, Consolas, monospace'}}>{v.plate_text}</span>
-                    {v._usdot_number && (
-                      <span title={`USDOT ${v._usdot_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>USDOT {v._usdot_number}</span>
-                    )}
-                    {v._mc_number && (
-                      <span title={`MC ${v._mc_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC {v._mc_number}</span>
-                    )}
                     <span style={{color:'var(--text-muted)', marginLeft:6}}>Unregistered plate</span>
                   </span>
                 ) : (
@@ -5650,6 +5644,11 @@ function computeBillingStatus(v) {
   const a = v.action_taken;
   const conf = !!v.tow_confirmed_at;
   const dispatched = v.dispatched_at ? new Date(v.dispatched_at) : null;
+  // Cooldown-breach rows are never tow-eligible and never enter the QuickBooks
+  // pipeline. Visually segregated into their own queue so operators don't
+  // confuse them with billable tow events. Backend billing query is patched
+  // separately to exclude these rows.
+  if (v.violation_type === 'cooldown')          return 'cooldown_breach';
   if (v.left_before_tow_at)                     return 'left_before_tow';
   if (a === 'plate_correction')                 return 'no_tow';
   if (a === 'tow'     && conf)                  return 'confirmed';
@@ -5676,6 +5675,7 @@ function displayBucketFor(rawStatus) {
     case 'no_tow_timeout':        return 'no_tow';
     case 'manually_held':         return 'held_or_forced';
     case 'force_billed':          return 'held_or_forced';
+    case 'cooldown_breach':       return 'cooldown_breach';
     default:                      return 'pending';
   }
 }
@@ -5690,6 +5690,7 @@ const REVIEW_QUEUES = [
   { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              empty: 'No camera-confirmed tows missing partner action.',                             tone: 'amber', glyph: '\u25C6' },
   { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    empty: 'No newly-confirmed tows this window. Check Earnings for history.',              tone: 'green', glyph: '\u2713' /* ✓ */ },
   { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           empty: 'Nothing pending. Next dispatch will appear here automatically.',               tone: 'gray',  glyph: '\u2014' /* — */ },
+  { id: 'cooldown_breach',      title: 'Cooldown breach',       desc: 'Driver re-registered inside the 24h cooldown. Not billable.',      empty: 'No cooldown breaches in this window.',                                          tone: 'gray',  glyph: '\u2014' },
   { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        empty: 'No cancelled / no-tow records in this window.',                                tone: 'gray',  glyph: '\u2014' },
   { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                empty: 'No operator overrides. Nothing frozen, nothing force-billed.',                 tone: 'blue',  glyph: '\u275A\u275A' /* ❚❚ */ },
 ];
@@ -7784,9 +7785,11 @@ function ActivePassTracker({ propertyId }) {
       return ta - tb;
     });
 
-  // Violation column: TWO sources unified.
-  //   1. Overstay  = visitor_passes that expired (had a pass, ran past it)
+  // Violation column: THREE sources unified.
+  //   1. Overstay        = visitor_passes that expired (had a pass, ran past it)
   //   2. No registration = alpr_violations open rows (in lot, never registered)
+  //   3. Cooldown        = alpr_violations rows where violation_type='cooldown'
+  //                        (driver tried to re-register inside the 24h cooldown)
   // Each item normalized to { key, kind, plate_text, company_name?, …
   // sourceRow, when }. Sorted most-recent first (most-likely-still-in-lot).
   const overstayItems = passes
@@ -7799,15 +7802,27 @@ function ActivePassTracker({ propertyId }) {
       pass: p,
       when: new Date(p.valid_until || p.created_at).getTime(),
     }));
-  const noRegItems = alprViols.map(v => ({
-    key: 'alpr:' + v.id,
-    kind: 'no_registration',
-    plate_text: v.plate_text,
-    company_name: null,
-    alpr: v,
-    when: new Date(v.created_at).getTime(),
-  }));
-  const violationColumn = [...overstayItems, ...noRegItems].sort((a, b) => b.when - a.when);
+  const noRegItems = alprViols
+    .filter(v => v.violation_type !== 'cooldown')
+    .map(v => ({
+      key: 'alpr:' + v.id,
+      kind: 'no_registration',
+      plate_text: v.plate_text,
+      company_name: null,
+      alpr: v,
+      when: new Date(v.created_at).getTime(),
+    }));
+  const cooldownItems = alprViols
+    .filter(v => v.violation_type === 'cooldown')
+    .map(v => ({
+      key: 'alpr:' + v.id,
+      kind: 'cooldown',
+      plate_text: v.plate_text,
+      company_name: null,
+      alpr: v,
+      when: new Date(v.created_at).getTime(),
+    }));
+  const violationColumn = [...overstayItems, ...noRegItems, ...cooldownItems].sort((a, b) => b.when - a.when);
 
   function fmtRemaining(targetMs, fromMs) {
     const ms = Math.max(0, targetMs - fromMs);
@@ -7850,7 +7865,7 @@ function ActivePassTracker({ propertyId }) {
     if (imageCache[key]) return;
 
     // Fast path: alpr_violations carries the trigger plate_event image.
-    if (item.kind === 'no_registration') {
+    if (item.kind === 'no_registration' || item.kind === 'cooldown') {
       const ev = item.alpr?.plate_events;
       if (ev?.image_url) {
         setImageCache(c => ({ ...c, [key]: { url: ev.image_url, capturedAt: ev.created_at, cameraName: ev.alpr_cameras?.name } }));
@@ -7896,18 +7911,29 @@ function ActivePassTracker({ propertyId }) {
         boxShadow: '0 2px 14px rgba(0,0,0,.06)',
       }}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10,flexWrap:'wrap'}}>
-          <div style={{display:'flex',alignItems:'baseline',flexWrap:'wrap',gap:10,minWidth:0}}>
-            <div style={{
-              fontSize: 'clamp(38px, 7vw, 64px)',
-              fontWeight: 900,
-              fontFamily: "'Courier New', ui-monospace, monospace",
-              letterSpacing: '.08em',
-              color: plateColor,
-              lineHeight: 1,
-              wordBreak: 'break-all',
-            }}>{p.plate_text}</div>
-            {p.usdot_number && <span style={{fontSize:10,fontWeight:800,letterSpacing:'.07em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#1d4ed8',border:'1px solid rgba(59,130,246,.3)'}}>USDOT {p.usdot_number}</span>}
-            {p.mc_number && <span style={{fontSize:10,fontWeight:800,letterSpacing:'.07em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#1d4ed8',border:'1px solid rgba(59,130,246,.3)'}}>MC {p.mc_number}</span>}
+          <div style={{display:'flex',flexDirection:'column',gap:4,minWidth:0}}>
+            <div style={{display:'flex',alignItems:'baseline',flexWrap:'wrap',gap:10,minWidth:0}}>
+              <div style={{
+                fontSize: 'clamp(38px, 7vw, 64px)',
+                fontWeight: 900,
+                fontFamily: "'Courier New', ui-monospace, monospace",
+                letterSpacing: '.08em',
+                color: plateColor,
+                lineHeight: 1,
+                wordBreak: 'break-all',
+              }}>{p.plate_text}</div>
+              {p.usdot_number && <span style={{fontSize:10,fontWeight:800,letterSpacing:'.07em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#1d4ed8',border:'1px solid rgba(59,130,246,.3)'}}>USDOT {p.usdot_number}</span>}
+              {p.mc_number && <span style={{fontSize:10,fontWeight:800,letterSpacing:'.07em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#1d4ed8',border:'1px solid rgba(59,130,246,.3)'}}>MC {p.mc_number}</span>}
+            </div>
+            {p.back_plate && (
+              <div style={{
+                fontSize: 13,
+                fontWeight: 700,
+                fontFamily: "'Courier New', ui-monospace, monospace",
+                letterSpacing: '.06em',
+                color: 'var(--text-muted)',
+              }}>Trailer · {p.back_plate}</div>
+            )}
           </div>
           <span style={{fontSize:11,fontWeight:800,padding:'5px 12px',borderRadius:22,background:accent,color:'#fff',textTransform:'uppercase',letterSpacing:'.08em',whiteSpace:'nowrap',flexShrink:0,boxShadow:`0 2px 8px ${accent}55`}}>
             {expiring ? 'Expiring' : 'Active'}
@@ -7944,8 +7970,12 @@ function ActivePassTracker({ propertyId }) {
     const imgEntry = imageCache[item.key];
     const pass = item.pass;
     const alpr = item.alpr;
-    const typeLabel = item.kind === 'overstay' ? 'Overstay' : 'No Registration';
-    const typeColor = item.kind === 'overstay' ? '#dc2626' : '#9333ea';
+    const typeLabel = item.kind === 'overstay' ? 'Overstay'
+      : item.kind === 'cooldown' ? 'Cooldown'
+      : 'No Registration';
+    const typeColor = item.kind === 'overstay' ? '#dc2626'
+      : item.kind === 'cooldown' ? '#f59e0b'
+      : '#9333ea';
     const accentBorder = 'rgba(239,68,68,.5)';
 
     return (
@@ -8029,6 +8059,17 @@ function ActivePassTracker({ propertyId }) {
                   </div>
                 </>
               )}
+              {item.kind === 'cooldown' && alpr && (
+                <>
+                  <div style={{fontSize:14,color:'var(--text-primary)'}}>
+                    <span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Cause</span>
+                    Driver attempted to re-register inside the 24h cooldown window.
+                  </div>
+                  <div style={{fontSize:12,color:'#f59e0b',fontWeight:700}}>
+                    Flagged {fmtElapsed(new Date(alpr.created_at).getTime(), nowTick)} — {fmtAbsolute(alpr.created_at)}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Image */}
@@ -8068,29 +8109,43 @@ function ActivePassTracker({ propertyId }) {
         </div>
       </div>
 
-      {/* Active-only single-column layout for now. The Violations column
-          is intentionally hidden until the underlying data is clean —
-          the alpr_violations + visitor_passes fetches still run so the
-          column can be re-enabled with one render-side change.
-          Future violation types when we turn it back on:
+      {/* Two-column layout: Active passes (green) on the left, Violations
+          (red/amber/purple) on the right. Violations are bucketed by kind:
             • Overstay          (visitor_passes that ran past valid_until)
             • No Registration   (alpr_violations open rows — no pass at all)
-            • 24h Cooldown      (insert blocked by enforce_truck_plaza_cooldown
+            • 24h Cooldown      (alpr_violations rows with violation_type='cooldown'
                                  — driver tried to re-register too soon) */}
-      <div style={{display:'flex',flexDirection:'column',gap:12,minWidth:0}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
-          <div style={{fontSize:14,fontWeight:800,color:'#15803d',letterSpacing:'.04em',textTransform:'uppercase'}}>
-            Active Now
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))',gap:18,minWidth:0}}>
+        <div style={{display:'flex',flexDirection:'column',gap:12,minWidth:0}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+            <div style={{fontSize:14,fontWeight:800,color:'#15803d',letterSpacing:'.04em',textTransform:'uppercase'}}>
+              Active Now
+            </div>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{activeColumn.length}</div>
           </div>
-          <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{activeColumn.length}</div>
+          {activeColumn.length === 0 ? (
+            <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
+              No active passes
+            </div>
+          ) : (
+            activeColumn.map(p => <ActivePassCard key={p.id} p={p} />)
+          )}
         </div>
-        {activeColumn.length === 0 ? (
-          <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
-            No active passes
+        <div style={{display:'flex',flexDirection:'column',gap:12,minWidth:0}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+            <div style={{fontSize:14,fontWeight:800,color:'#dc2626',letterSpacing:'.04em',textTransform:'uppercase'}}>
+              Violations
+            </div>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{violationColumn.length}</div>
           </div>
-        ) : (
-          activeColumn.map(p => <ActivePassCard key={p.id} p={p} />)
-        )}
+          {violationColumn.length === 0 ? (
+            <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
+              No active violations
+            </div>
+          ) : (
+            violationColumn.map(item => <ViolationCard key={item.key} item={item} />)
+          )}
+        </div>
       </div>
     </div>
   );
@@ -8379,22 +8434,27 @@ function TruckParkingLog({ propertyId }) {
               }}>
                 {/* Top row: plate + status pill */}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}}>
-                  <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,minWidth:0}}>
-                    <div style={{
-                      fontSize: (isViolation || isExpiring) ? 32 : 18,
-                      fontWeight: 900,
-                      fontFamily:"'Courier New',monospace",
-                      letterSpacing: (isViolation || isExpiring) ? '.08em' : '.06em',
-                      color: isViolation ? '#ef4444' : isExpiring ? '#ca8a04' : 'var(--text-primary)',
-                      lineHeight: 1.05,
-                    }}>
-                      {r.plate_text}
+                  <div style={{display:'flex',flexDirection:'column',gap:3,minWidth:0}}>
+                    <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,minWidth:0}}>
+                      <div style={{
+                        fontSize: (isViolation || isExpiring) ? 32 : 18,
+                        fontWeight: 900,
+                        fontFamily:"'Courier New',monospace",
+                        letterSpacing: (isViolation || isExpiring) ? '.08em' : '.06em',
+                        color: isViolation ? '#ef4444' : isExpiring ? '#ca8a04' : 'var(--text-primary)',
+                        lineHeight: 1.05,
+                      }}>
+                        {r.plate_text}
+                      </div>
                     </div>
-                    {r.usdot_number && (
-                      <span title={`USDOT ${r.usdot_number}`} style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#60a5fa',border:'1px solid rgba(59,130,246,.3)'}}>USDOT {r.usdot_number}</span>
-                    )}
-                    {r.mc_number && (
-                      <span title={`MC ${r.mc_number}`} style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#60a5fa',border:'1px solid rgba(59,130,246,.3)'}}>MC {r.mc_number}</span>
+                    {r.back_plate && (
+                      <div style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        fontFamily:"'Courier New',monospace",
+                        letterSpacing: '.05em',
+                        color: 'var(--text-muted)',
+                      }}>Trailer · {r.back_plate}</div>
                     )}
                   </div>
                   <span aria-label={`Pass status: ${statusDisplay[s] || s}`} style={{
@@ -8437,11 +8497,18 @@ function TruckParkingLog({ propertyId }) {
                 )}
 
                 {/* Time range */}
-                <div style={{display:'grid',gridTemplateColumns:'1fr auto 1fr',alignItems:'center',gap:10,padding:'10px 12px',background:'var(--bg-inset)',borderRadius:8,fontSize:11}}>
+                <div style={{display:'grid',gridTemplateColumns: r.exited_at ? '1fr auto 1fr auto 1fr' : '1fr auto 1fr',alignItems:'center',gap:10,padding:'10px 12px',background:'var(--bg-inset)',borderRadius:8,fontSize:11}}>
                   <div>
                     <div style={{color:'var(--text-faint)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',fontSize:9,marginBottom:2}}>Registered</div>
                     <div style={{color:'var(--text-primary)',fontWeight:600}}>{fmtDateTime(r.created_at)}</div>
                   </div>
+                  {r.exited_at && <div style={{color:'var(--text-faint)',fontSize:14}}>→</div>}
+                  {r.exited_at && (
+                    <div style={{textAlign:'center'}}>
+                      <div style={{color:'var(--text-faint)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',fontSize:9,marginBottom:2}}>Exited</div>
+                      <div style={{color:'var(--text-primary)',fontWeight:600}}>{fmtDateTime(r.exited_at)}</div>
+                    </div>
+                  )}
                   <div style={{color:'var(--text-faint)',fontSize:14}}>→</div>
                   <div style={{textAlign:'right'}}>
                     <div style={{color:'var(--text-faint)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',fontSize:9,marginBottom:2}}>{r.cancelled_at ? 'Cancelled' : 'Expires'}</div>
@@ -8512,7 +8579,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   const [loading, setLoading] = useState(true);
   const [showAddPlate, setShowAddPlate] = useState(false);
   const [showAddCam, setShowAddCam] = useState(false);
-  const [newPlate, setNewPlate] = useState({ plate_text: '', unit_number: '', holder_name: '', vehicle_description: '', phone: '', vehicle_type: '' });
+  const [newPlate, setNewPlate] = useState({ plate_text: '', unit_number: '', holder_name: '', vehicle_description: '', phone: '' });
   const [newCam, setNewCam] = useState({ name: '', location_description: '' });
   const [newApiKey, setNewApiKey] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -8697,7 +8764,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         delete payload.plate_expiration;
       }
       await db.addResidentPlate(payload);
-      setNewPlate({ plate_text: '', unit_number: '', holder_name: '', vehicle_description: '', phone: '', vehicle_type: '' });
+      setNewPlate({ plate_text: '', unit_number: '', holder_name: '', vehicle_description: '', phone: '' });
       setShowAddPlate(false);
       const pl = await db.getResidentPlates(propertyId);
       setPlates(pl);
@@ -8880,17 +8947,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           <input value={newPlate.plate_text} onChange={e => setNewPlate({...newPlate, plate_text: e.target.value})} placeholder="Plate (e.g. ABC1234)" required style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14,textTransform:'uppercase'}} />
           <input value={newPlate.holder_name} onChange={e => setNewPlate({...newPlate, holder_name: e.target.value})} placeholder={isTruckPlaza ? 'Employee name' : 'Holder name'} style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
           {isTruckPlaza && (
-            <>
-              <input type="tel" value={newPlate.phone} onChange={e => setNewPlate({...newPlate, phone: e.target.value})} placeholder="Phone" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
-              <select value={newPlate.vehicle_type} onChange={e => setNewPlate({...newPlate, vehicle_type: e.target.value})} style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}}>
-                <option value="">Vehicle type…</option>
-                <option value="semi">Semi</option>
-                <option value="box_truck">Box truck</option>
-                <option value="van">Van</option>
-                <option value="car">Car</option>
-                <option value="other">Other</option>
-              </select>
-            </>
+            <input type="tel" value={newPlate.phone} onChange={e => setNewPlate({...newPlate, phone: e.target.value})} placeholder="Phone" style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
           )}
           <input value={newPlate.vehicle_description} onChange={e => setNewPlate({...newPlate, vehicle_description: e.target.value})} placeholder={isTruckPlaza ? 'Vehicle (e.g. Freightliner Cascadia)' : 'Vehicle (e.g. Blue Honda Civic)'} style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
           {!isTruckPlaza && (
@@ -8916,7 +8973,8 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                     {p.mc_number && (
                       <span title={`MC ${p.mc_number}`} style={{marginLeft:6,fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 6px',borderRadius:14,background:'#1d4ed820',color:'#60a5fa',border:'1px solid #3b82f640'}}>MC#</span>
                     )}
-                    <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>{p.holder_name || ''}{p.vehicle_type ? ` · ${p.vehicle_type}` : ''}{p.phone ? ` · ${p.phone}` : ''}</span>
+                    <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:8}}>{p.holder_name || ''}{p.phone ? ` · ${p.phone}` : ''}</span>
+                    {p.back_plate && <div style={{fontSize:11,fontWeight:700,fontFamily:"'Courier New',monospace",letterSpacing:'.05em',color:'var(--text-muted)',marginTop:2}}>Trailer · {p.back_plate}</div>}
                     {p.usdot_number && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>USDOT {p.usdot_number}</div>}
                     {p.mc_number && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>MC {p.mc_number}</div>}
                   </div>
@@ -9064,9 +9122,12 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         const reviewable = events.filter(e => ['low_confidence','review_needed','camera_suspended','overstay'].includes(e.match_status));
         if (reviewable.length === 0) return null;
         const statusLabel = {
-          low_confidence:   { label: 'Low confidence', color: '#fbbf24' },
-          review_needed:    { label: 'Ambiguous match', color: '#fbbf24' },
-          camera_suspended: { label: 'Camera suspended', color: '#f87171' },
+          low_confidence:      { label: 'Low confidence', color: '#fbbf24' },
+          review_needed:       { label: 'Ambiguous match', color: '#fbbf24' },
+          camera_suspended:    { label: 'Camera suspended', color: '#f87171' },
+          overstay:            { label: 'Overstay', color: '#f87171' },
+          partner_truck:       { label: 'Partner truck', color: '#4ade80' },
+          visitor_pass_fuzzy:  { label: 'Pass (fuzzy)', color: '#4ade80' },
         };
         return (
           <>
