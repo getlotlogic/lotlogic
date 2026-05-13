@@ -119,13 +119,9 @@ async function findActiveUnexitedPass(
       return { id: r.id, valid_until: r.valid_until, fuzzy: true };
     }
   }
-  // 3) Partial substring (last resort). minRatio loosened to 0.4 — a 3-
-  //    char fragment can match a 7-char registered plate. Friendlier to
-  //    TS4467 drift where the leading/trailing char drops, at the cost
-  //    of more permissive cross-vehicle matching. Operator dashboard
-  //    surfaces these via match_status='visitor_pass_fuzzy'.
+  // 3) Partial substring (last resort) at the default 0.5 minRatio.
   for (const r of rows) {
-    if (candidates(r).some((p) => plateMatchesPartial(normalized, p, 0.4))) {
+    if (candidates(r).some((p) => plateMatchesPartial(normalized, p))) {
       return { id: r.id, valid_until: r.valid_until, fuzzy: true };
     }
   }
