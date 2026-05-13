@@ -92,19 +92,32 @@ export async function findCooldownPriorSession(
     .not("exited_at", "is", null)
     .gt("exited_at", cutoff)
     .order("exited_at", { ascending: false })
-    .limit(5);
+    .limit(10);
   if (error) throw error;
-  const row = (data ?? []).find((r: { visitor_pass_id: string | null; resident_plate_id: string | null }) => r.visitor_pass_id || r.resident_plate_id);
-  if (!row || !row.exited_at) return null;
-
-  const dwellMs = new Date(row.exited_at).getTime() - new Date(row.entered_at).getTime();
-  if (dwellMs < 2 * 60 * 1000) return null; // <2min = drive-through, not parking
-
-  return {
-    prior_session_id: row.id,
-    prior_exited_at: row.exited_at,
-    cooldown_hours: cooldownHours,
+  // Find the most-recent prior session that was BOTH registered AND a real
+  // park (≥2 min dwell). Iterating: a registered drive-through doesn't block
+  // a later legitimate park, and we don't want a drive-through "first hit"
+  // to short-circuit the dwell check and miss an older park within the
+  // cooldown window.
+  type Row = {
+    id: string;
+    entered_at: string;
+    exited_at: string | null;
+    visitor_pass_id: string | null;
+    resident_plate_id: string | null;
   };
+  for (const r of (data ?? []) as Row[]) {
+    if (!r.exited_at) continue;
+    if (!(r.visitor_pass_id || r.resident_plate_id)) continue;
+    const dwellMs = new Date(r.exited_at).getTime() - new Date(r.entered_at).getTime();
+    if (dwellMs < 2 * 60 * 1000) continue; // drive-through, skip
+    return {
+      prior_session_id: r.id,
+      prior_exited_at: r.exited_at,
+      cooldown_hours: cooldownHours,
+    };
+  }
+  return null;
 }
 
 // Fuzzy plate equality for OCR drift. ALPR engines routinely misread one

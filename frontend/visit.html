@@ -585,6 +585,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
 
         if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
         if (backPlateText && backPlateText.length < 2) throw new Error('Back plate must be at least 2 characters, or leave it blank.');
+        if (backPlateText && backPlateText === plateText) throw new Error('Back plate must differ from the front plate, or leave it blank.');
         if (!stayHours || stayHours > 48) throw new Error('Choose how long you will be parked (max 48 hours).');
 
         const recaptchaToken = await getRecaptchaToken('pass_register').catch(() => null);
@@ -642,6 +643,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         if (!driverName) throw new Error('Operator name is required.');
         if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
         if (backPlateText && backPlateText.length < 2) throw new Error('Trailer/rear plate must be at least 2 characters, or leave it blank.');
+        if (backPlateText && backPlateText === plateText) throw new Error('Trailer/rear plate must differ from the front plate, or leave it blank.');
         if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
         if (!placardColor) throw new Error('Color placard is required.');
         if (![12, 24, 36, 48].includes(stayHours)) throw new Error('Choose 12, 24, 36, or 48 hours.');

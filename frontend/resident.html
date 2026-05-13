@@ -484,6 +484,7 @@
         const backPlateRaw = (document.getElementById('backPlate')?.value || '').trim();
         const backPlateText = backPlateRaw ? backPlateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
         if (backPlateText && backPlateText.length < 2) throw new Error('Back plate must be at least 2 characters, or leave it blank.');
+        if (backPlateText && backPlateText === plateText) throw new Error('Back plate must differ from the front plate, or leave it blank.');
         const vehicleType = document.getElementById('vehicleType').value;
         const phone = document.getElementById('phone').value.trim();
         const isPlaza = property.property_type === 'truck_plaza';
