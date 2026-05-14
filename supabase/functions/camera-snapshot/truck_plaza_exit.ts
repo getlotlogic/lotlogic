@@ -21,7 +21,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
-import { plateSimilar, plateMatchesPartial } from "./sessions.ts";
+import { plateSimilar } from "./sessions.ts";
 import { insertWeakRead, findStaleGroups, flushGroup } from "./weak_plate_reads.ts";
 
 export type CameraRow = {
@@ -106,6 +106,7 @@ async function findActiveUnexitedPass(
   propertyId: string,
   normalized: string,
   now: Date,
+  opts: { exactOnly?: boolean } = {},
 ): Promise<PassMatch | null> {
   type Row = {
     id: string;
@@ -148,14 +149,19 @@ async function findActiveUnexitedPass(
   for (const r of rows) {
     if (candidates(r).includes(normalized)) return wrap(r, false);
   }
-  // 2) Fuzzy (OCR confusion + ≤1 true edit, same-length)
-  for (const r of rows) {
-    if (candidates(r).some((p) => plateSimilar(p, normalized, true))) return wrap(r, true);
+  if (opts.exactOnly) return null;
+  // 2) Fuzzy (OCR confusion + ≤1 true edit, same-length). Min-length floor
+  //    on the camera read — 5-char plates are too short for the fuzzy
+  //    matcher's loose budget (e.g. 2R028 fuzzy-matched 24023 on Honda).
+  if (normalized.length >= 6) {
+    for (const r of rows) {
+      if (candidates(r).some((p) => plateSimilar(p, normalized, true))) return wrap(r, true);
+    }
   }
-  // 3) Partial substring (last resort) at the default 0.5 minRatio.
-  for (const r of rows) {
-    if (candidates(r).some((p) => plateMatchesPartial(normalized, p))) return wrap(r, true);
-  }
+  // 3) Partial substring path REMOVED for onboard / camera matching —
+  //    it was the path that mismatched 2R028 onto 24023 via shared "02".
+  //    Sidecar (SC211) flows that need this fallback are not on this
+  //    function; they have their own best-of-burst PR-resolved matcher.
   return null;
 }
 
@@ -185,11 +191,40 @@ async function findTowTruckMatch(
   return { partner_id: partner.id };
 }
 
-// PR call helper removed — the SC211 path now buffers weak reads and
-// calls PR once per burst inside weak_plate_reads.flushGroup (which
-// owns its own PR call). The TS4467 onboard path doesn't call PR at
-// all (per the Charlotte registered-only model — overstay cron is the
-// safety net for onboard misreads).
+// PR call for low-confidence onboard reads (TS4467). Takes bytes directly
+// so we don't have to upload to R2 first — the snapshot may end up dropped
+// if PR also fails, no point staging it. Returns null on empty/failed PR.
+async function callPlateRecognizerCloud(
+  token: string,
+  apiUrl: string,
+  bytes: Uint8Array,
+): Promise<{ plate: string; confidence: number } | null> {
+  if (!token) return null;
+  try {
+    const form = new FormData();
+    form.append("upload", new Blob([bytes as BlobPart], { type: "image/jpeg" }), "snapshot.jpg");
+    form.append("regions", "us");
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(apiUrl, {
+      method: "POST",
+      headers: { Authorization: `Token ${token}` },
+      body: form,
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const body = await res.json();
+    const results = (body?.results ?? []) as Array<{ plate?: string; score?: number }>;
+    if (results.length === 0) return null;
+    const best = results.reduce((a, b) => (Number(b.score ?? 0) > Number(a.score ?? 0) ? b : a));
+    if (!best.plate || typeof best.score !== "number") return null;
+    return { plate: best.plate, confidence: best.score };
+  } catch (err) {
+    console.warn(`callPlateRecognizerCloud failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
+    return null;
+  }
+}
 
 export async function handleTruckPlazaExit(args: {
   db: SupabaseClient;
@@ -270,15 +305,49 @@ export async function handleTruckPlazaExit(args: {
     return { outcome: "buffered", weak_read_id: weakId, opportunistic_flushed: flushed };
   }
 
-  // 3. TS4467 onboard-plate flow. Tow + active-pass lookups. No PR
-  //    fallback (per the Charlotte registered-only model — overstay
-  //    cron is the safety net for onboard misreads).
+  // 3. TS4467 onboard-plate flow.
+  //
+  // Confidence gate: low-confidence onboard reads (< 0.50) regularly
+  // hallucinate plates (e.g. Honda car read as "2R028" at 0.27 conf,
+  // fuzzy-matched the registered "24023" — wrong vehicle, wrong exit).
+  // For low-conf reads, we send the same JPEG to Plate Recognizer Cloud
+  // as an authoritative second opinion. If PR returns a plate, we use
+  // it for EXACT-only matching (no fuzzy fallback). If PR also fails,
+  // we drop the read entirely rather than trust the bad onboard.
+  const ONBOARD_CONF_FLOOR = 0.50;
+  const PR_RESOLVE_FLOOR = 0.40; // PR cloud's own confidence floor
+  let lowConfPath = false;
+  if (resolved && resolved.confidence !== null && resolved.confidence < ONBOARD_CONF_FLOOR) {
+    lowConfPath = true;
+    const prResult = await callPlateRecognizerCloud(
+      args.prToken,
+      args.prApiUrl,
+      payload.bytes,
+    );
+    if (prResult && prResult.plate && prResult.confidence >= PR_RESOLVE_FLOOR) {
+      const prNorm = normalizePlate(prResult.plate);
+      if (prNorm.length >= 4) {
+        resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr" };
+      } else {
+        return { outcome: "dropped", reason: `low_conf_pr_short_${resolved.confidence.toFixed(2)}` };
+      }
+    } else {
+      return { outcome: "dropped", reason: `low_conf_pr_empty_${resolved.confidence.toFixed(2)}` };
+    }
+  }
+
   let tow: { partner_id: string } | null = null;
   let pass: PassMatch | null = null;
   if (resolved) {
     tow = await findTowTruckMatch(db, camera.property_id, resolved.normalized);
     if (!tow) {
-      pass = await findActiveUnexitedPass(db, camera.property_id, resolved.normalized, now);
+      // PR-verified path is exact-only (we trusted PR, no need to fuzzy
+      // around its output). Direct onboard at >= 0.50 still allows fuzzy
+      // for OCR-confusion drift (ABC1234 → ABG1234), but no partial.
+      pass = await findActiveUnexitedPass(
+        db, camera.property_id, resolved.normalized, now,
+        { exactOnly: lowConfPath },
+      );
     }
   }
 

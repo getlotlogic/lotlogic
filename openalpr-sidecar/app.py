@@ -140,7 +140,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.7.0",
+    version="3.8.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -149,6 +149,12 @@ detector: Optional[LicensePlateDetector] = None
 detector_fallback: Optional[LicensePlateDetector] = None
 ocr_reader: Optional[LicensePlateRecognizer] = None
 easyocr_reader = None  # only loaded if ENABLE_EASYOCR_FALLBACK=true
+# PaddleOCR PPOCRv4 — runs in parallel with fast-plate-ocr on every
+# crop variant. Stronger on low-contrast / IR-illuminated text where
+# fast-plate-ocr returns empty. Multi-engine agreement boosts confidence
+# in _ocr_best.
+paddle_reader = None
+ENABLE_PADDLE_OCR = os.environ.get("ENABLE_PADDLE_OCR", "true").lower() == "true"
 
 
 @app.on_event("startup")
@@ -178,6 +184,17 @@ def on_startup() -> None:
     if ENABLE_EASYOCR_FALLBACK:
         import easyocr as _easyocr
         easyocr_reader = _easyocr.Reader(["en"], gpu=False, verbose=False)
+    if ENABLE_PADDLE_OCR:
+        global paddle_reader
+        try:
+            from paddleocr import PaddleOCR
+            paddle_reader = PaddleOCR(
+                use_angle_cls=False, lang="en", use_gpu=False, show_log=False,
+            )
+            print("[startup] PaddleOCR PPOCRv4 loaded", flush=True)
+        except Exception as e:
+            print(f"[startup] PaddleOCR load failed: {e}", flush=True)
+            paddle_reader = None
 
 
 class RecognizeRequest(BaseModel):
@@ -206,7 +223,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.7.0",
+        "version": "3.8.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -216,6 +233,7 @@ def health() -> dict:
         "auto_equalize_luma_threshold": AUTO_EQUALIZE_LUMA_THRESHOLD,
         "ocr_loaded": ocr_reader is not None,
         "easyocr_fallback": easyocr_reader is not None,
+        "paddle_ocr_loaded": paddle_reader is not None,
     }
 
 
@@ -377,6 +395,31 @@ def _ocr_best(crops: List[np.ndarray]):
         except Exception:
             return crop_in
 
+    # PaddleOCR PPOCRv4 reader. Runs on each crop variant in parallel with
+    # fast-plate-ocr; particularly strong on low-contrast / IR-illuminated
+    # plates where fast-plate-ocr returns empty. Returns 0-N text regions
+    # per call — we take the highest-confidence one and apply the same
+    # A-Z0-9 normalization downstream.
+    def _paddle_decode(c: np.ndarray) -> Optional[tuple]:
+        if paddle_reader is None:
+            return None
+        try:
+            result = paddle_reader.ocr(c, det=False, cls=False)
+        except Exception:
+            return None
+        # PaddleOCR ocr(det=False) returns [[(text, conf), ...]] — first
+        # batch, first hypothesis. det=False skips the text-region detector
+        # and just OCRs the whole crop, which is what we want post-YOLO.
+        if not result or not result[0]:
+            return None
+        try:
+            text, conf = result[0][0]
+        except Exception:
+            return None
+        if not text or not isinstance(text, str):
+            return None
+        return text, float(conf)
+
     results: List[tuple] = []
     for crop in crops:
         ocr_candidates = [crop]
@@ -385,23 +428,26 @@ def _ocr_best(crops: List[np.ndarray]):
             ocr_candidates.append(upscaled)
         ocr_candidates.append(_clahe_crop(upscaled))
         for c in ocr_candidates:
+            # 1) fast-plate-ocr — purpose-built, fast.
             try:
                 ocr_result = ocr_reader.run(c, return_confidence=True)
             except Exception:
-                continue
-            if not ocr_result:
-                continue
-            pred = ocr_result[0]
-            text = getattr(pred, "plate", None) or getattr(pred, "text", "") or ""
-            if not text:
-                continue
-            if hasattr(pred, "char_probs") and pred.char_probs is not None:
-                conf = float(pred.char_probs.mean())
-            elif hasattr(pred, "confidence"):
-                conf = float(pred.confidence)
-            else:
-                conf = 1.0
-            results.append((text, conf))
+                ocr_result = None
+            if ocr_result:
+                pred = ocr_result[0]
+                text = getattr(pred, "plate", None) or getattr(pred, "text", "") or ""
+                if text:
+                    if hasattr(pred, "char_probs") and pred.char_probs is not None:
+                        conf = float(pred.char_probs.mean())
+                    elif hasattr(pred, "confidence"):
+                        conf = float(pred.confidence)
+                    else:
+                        conf = 1.0
+                    results.append((text, conf))
+            # 2) PaddleOCR — second-opinion OCR for low-contrast frames.
+            paddle = _paddle_decode(c)
+            if paddle is not None:
+                results.append(paddle)
     if not results:
         return None, 0.0
     # Group by normalized text so "ABC-123" and "ABC123" count as agreeing.

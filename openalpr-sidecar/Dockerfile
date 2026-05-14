@@ -23,6 +23,11 @@ RUN python -c "from open_image_models import LicensePlateDetector; LicensePlateD
 # runtime, but pre-fetching keeps the fallback path instant.
 RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False, verbose=False)" || true
 
+# PaddleOCR PPOCRv4 detector + recognizer pre-fetch. We only use the
+# recognizer (det=False at call sites), but PaddleOCR's __init__ pulls
+# detection too on first run; pre-fetch both to keep cold-start fast.
+RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(use_angle_cls=False, lang='en', use_gpu=False, show_log=False); print('PaddleOCR pre-fetch complete')" || true
+
 COPY app.py .
 COPY custom_yolo.py .
 

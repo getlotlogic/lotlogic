@@ -313,6 +313,7 @@ Deno.serve(async (req: Request) => {
           content_type: ctHdr, source: extracted.source, bytes_len: extracted.bytes.byteLength,
           extra: { camera_id: camera.id, has_onboard: extracted.onboardLpr != null,
                    onboard_plate: extracted.onboardLpr?.plate ?? null,
+                   onboard_conf: extracted.onboardLpr?.plateConfidence ?? null,
                    debug_url: debugUrl,
                    keys: milesightKeys,
                    sidecar_reason: lastSidecarReason,

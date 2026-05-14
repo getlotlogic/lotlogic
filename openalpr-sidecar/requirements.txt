@@ -10,3 +10,10 @@ fast-plate-ocr[onnx]==1.1.0
 # Optional easyocr fallback for graceful degradation when ONNX models
 # fail to load. Default OFF via ENABLE_EASYOCR_FALLBACK.
 easyocr==1.7.1
+# PaddleOCR (PPOCRv4 recognizer) — strong on low-contrast / IR-illuminated
+# plate text where fast-plate-ocr returns empty. Runs in parallel with the
+# fast-plate-ocr stage; multi-model agreement boosts confidence. CPU-only
+# build (~10x larger than fast-plate-ocr's ONNX but well within Railway
+# memory limits).
+paddleocr==2.8.1
+paddlepaddle==2.6.2
