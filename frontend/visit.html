@@ -327,14 +327,14 @@
 
     async function init() {
       if (!qrCodeId) {
-        showNotFound('Invalid Link', 'This temporary pass link is not valid.');
+        showNotFound('Invalid Link', 'This parking pass link is not valid.');
         return;
       }
       try {
         const rows = await pgRest(`/properties?select=id,name,address,property_type,policy_text,policy_phone&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`);
         const data = Array.isArray(rows) ? rows[0] : null;
         if (!data) {
-          showNotFound('Lot Not Found', 'This temporary pass link is not valid or has expired.');
+          showNotFound('Lot Not Found', 'This parking pass link is not valid or has expired.');
           return;
         }
         property = data;
@@ -423,7 +423,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <h1>LotL<span>o</span>gic</h1>
         </div>
         <div class="property-name">
-          temporary parking pass at
+          parking pass at
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="passForm">
@@ -611,7 +611,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
       } catch (err) {
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
-        btn.textContent = 'Get Temporary Pass';
+        btn.textContent = 'Get my pass →';
         submitting = false;
       }
     }

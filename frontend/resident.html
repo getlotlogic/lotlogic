@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Permanent Pass Request</title>
+  <title>Parking Pass Request</title>
   <!-- reCAPTCHA v3. The site key is a PUBLIC value by design; security
        relies only on the server-side RECAPTCHA_SECRET_KEY. The placeholder
        below must be replaced with the real site key from the Google
@@ -355,7 +355,7 @@
 
     async function init() {
       if (!qrCodeId) {
-        showNotFound('Invalid Link', 'This permanent pass link is not valid.');
+        showNotFound('Invalid Link', 'This parking pass link is not valid.');
         return;
       }
       try {
@@ -418,7 +418,7 @@
           </div>
           <div class="not-found">
             <h2>Use the parking-pass QR</h2>
-            <p>This lot only issues temporary passes. Scan the temporary pass QR on the signage to register.</p>
+            <p>This lot only issues parking passes from the other QR. Scan the parking pass QR on the signage to register.</p>
           </div>
         `;
         return;
@@ -430,7 +430,7 @@
           <h1>LotL<span>o</span>gic</h1>
         </div>
         <div class="property-name">
-          permanent pass request at
+          parking pass request at
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="regForm">
@@ -446,7 +446,7 @@
           <label for="backPlate">Back Plate <span style="color:#6b7280;font-size:12px;">(if different)</span></label>
           <input type="text" id="backPlate" class="plate-input" placeholder="leave blank if same" maxlength="10" autocomplete="off">
 
-          <button type="submit" class="submit-btn" id="submitBtn">Request Permanent Pass</button>
+          <button type="submit" class="submit-btn" id="submitBtn">Request Parking Pass</button>
           <div class="hint">PENDING OWNER APPROVAL</div>
           <div id="errorMsg"></div>
         </form>
@@ -508,7 +508,7 @@
       } catch (err) {
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
-        btn.textContent = 'Request Permanent Pass';
+        btn.textContent = 'Request Parking Pass';
         submitting = false;
       }
     }
@@ -522,7 +522,7 @@
             </svg>
           </div>
           <h2>Request <em>submitted.</em></h2>
-          <p>Your permanent pass for <em>${escapeHtml(property.name)}</em> is queued. The owner gets a ping next.</p>
+          <p>Your parking pass for <em>${escapeHtml(property.name)}</em> is queued. The owner gets a ping next.</p>
           <div class="success-plate">${escapeHtml(plate)}</div>
           <div class="pending-badge">Pending owner approval</div>
           <div class="success-detail">YOU'LL HEAR BACK ONCE IT'S APPROVED.</div>

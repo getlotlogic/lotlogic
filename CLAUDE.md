@@ -260,7 +260,7 @@ Resolved vs earlier versions of this note:
 - All timestamps are UTC (TIMESTAMPTZ)
 - Legacy `violations` row status is only 'pending' or 'resolved' (CHECK constraint); `alpr_violations` uses a richer state machine driven by `action_taken` + `tow_confirmed_at`
 - `action_taken` values: boot, tow, dismissed, already_gone, no_action, plate_correction; on `alpr_violations` also: `tow`, `no_tow`
-- **User-facing naming rule**: never write "Resident", "Visitor", or "Guest" in any UI string, email body, SMS body, or comment. Use **Permanent**, **Temporary**, or **Driver**. Database column names stay (`resident_plates`, `visitor_passes`, `visitor_name`) — UI labels everything.
+- **User-facing naming rule (updated 2026-05-14)**: the only user-facing term is **parking pass**. Never write "Resident", "Visitor", "Permanent", "Temporary", "Guest", or "Driver" in any UI string, email body, SMS body, or comment. Database column names stay (`resident_plates`, `visitor_passes`, `visitor_name`, `holder_role`) — UI labels everything. Operational note: the two backing tables `visitor_passes` and `resident_plates` are being merged into a unified `parking_passes` table; old tables stay during the cutover window as a rollback safety net.
 
 ## Truck-plaza passes (Apr 2026)
 
@@ -311,3 +311,31 @@ Guardrails:
 - Never turn on the orange cloud (Cloudflare proxy) for SendGrid CNAMEs — they're `em{N}.lotlogicparking.com`, `s1._domainkey.lotlogicparking.com`, `s2._domainkey.lotlogicparking.com` and must be DNS-only.
 - SendGrid tracking is explicitly disabled per-message in `tow-dispatch-email/index.ts` via `tracking_settings`. Re-enabling it will route every link through `url{N}.lotlogicparking.com` and the branded-link SSL cert breaks Tow / No Tow buttons until provisioned.
 - `EMAIL_OVERRIDE_TO` currently set to `standardvendingcompany@gmail.com` during testing. Production: unset the secret and emails route to each violation's `enforcement_partners.email`.
+
+## Audit & Simplification Mandate (2026-04-29)
+
+This codebase grew fast during the Charlotte launch. The dashboard is a single ~10K-line `frontend/dashboard.html` with in-browser Babel; edge functions have accumulated guards, tuning knobs, and patches that may now be redundant. **Default mode for any audit pass is: read-only review, propose simplifications, do not edit production-shaped surfaces without explicit go-ahead.**
+
+When auditing, look for:
+
+1. **Dead or obsoleted code paths** — old constants, feature flags that are always-on/always-off, error-handling for cases that can't happen, hand-written fallbacks for libraries we no longer use (SendGrid removed Apr 24, Twilio removed Apr 24, etc.).
+2. **Duplicate logic** between camera-snapshot, cron-sessions-sweep, and the backend (e.g. plate normalization, pass-matching, JWT signing all exist in multiple places).
+3. **Over-defensive guards** — checks for impossible states, retry-on-retry wrappers, "in case" comments without a documented incident behind them.
+4. **Premature abstractions** — single-call helper functions, two-line "utilities", config knobs no one has ever changed.
+5. **Tight coupling that fights the file-size limit** — places where dashboard.html could lose 200 lines by collapsing redundant React components or replacing copy-paste blocks with a shared helper.
+6. **Comments that describe WHAT not WHY** — names already describe the what.
+
+When proposing a fix, prefer:
+
+- **Surgical diffs** — narrowest change that achieves the goal. No drive-by reformatting.
+- **Deletions over additions** — removing dead code is the highest-value change. Don't replace 10 lines with 8 lines if you could just delete all 10.
+- **One change, one PR** — don't bundle a bug fix with a refactor.
+- **Reasoned tradeoffs** — when removing a guard, name the incident the guard was protecting against (often there isn't one — that's the point).
+
+Stay out of:
+
+- The reCAPTCHA / auth / RLS layer (security-sensitive, audited recently).
+- The state-machine ordering in `cron-sessions-sweep` (very recently re-tuned for gate-only properties).
+- Migrations.
+
+Output style for an audit pass: a numbered punch list with file:line references and the proposed action, sorted by ROI (deletion-only first, then internal refactors, then larger restructures).

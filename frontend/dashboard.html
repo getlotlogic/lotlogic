@@ -5684,13 +5684,13 @@ function displayBucketFor(rawStatus) {
 // Glyphs make the tone distinguishable without relying on color alone
 // (WCAG 1.4.1 — Use of Color). Mirror glyphs are used by status chips below.
 const REVIEW_QUEUES = [
-  { id: 'left_before_tow',      title: 'Left before tow',       desc: 'Driver exited after dispatch but before the tow truck arrived.',   empty: 'No drivers exited before the tow truck arrived in this window.',               tone: 'amber', glyph: '\u25C6' /* ◆ */ },
+  { id: 'left_before_tow',      title: 'Left before tow',       desc: 'Vehicle exited after dispatch but before the tow truck arrived.',  empty: 'No vehicles exited before the tow truck arrived in this window.',               tone: 'amber', glyph: '\u25C6' /* ◆ */ },
   { id: 'fraud',                title: 'Possible fraud',        desc: 'Camera and partner disagree. Review before billing.',             empty: 'No disputes \u2014 partners and cameras agree on every tow.',                  tone: 'red',   glyph: '!'  },
   { id: 'verify',               title: 'Needs verification',    desc: 'Partner reported a tow but no camera sighting. Confirm manually.', empty: 'No pending manual verifications.',                                            tone: 'amber', glyph: '\u25C6' /* ◆ */ },
   { id: 'unreported_confirmed', title: 'Unreported confirmed',  desc: 'Camera confirmed a tow but partner never responded.',              empty: 'No camera-confirmed tows missing partner action.',                             tone: 'amber', glyph: '\u25C6' },
   { id: 'confirmed',            title: 'Confirmed',             desc: 'Happy path — ready to bill on the weekly run.',                    empty: 'No newly-confirmed tows this window. Check Earnings for history.',              tone: 'green', glyph: '\u2713' /* ✓ */ },
   { id: 'pending',              title: 'Pending',               desc: 'Still waiting on partner response and camera sighting.',           empty: 'Nothing pending. Next dispatch will appear here automatically.',               tone: 'gray',  glyph: '\u2014' /* — */ },
-  { id: 'cooldown_breach',      title: 'Cooldown breach',       desc: 'Driver re-registered inside the 24h cooldown. Not billable.',      empty: 'No cooldown breaches in this window.',                                          tone: 'gray',  glyph: '\u2014' },
+  { id: 'cooldown_breach',      title: 'Cooldown breach',       desc: 'Pass holder re-registered inside the 24h cooldown. Not billable.',      empty: 'No cooldown breaches in this window.',                                          tone: 'gray',  glyph: '\u2014' },
   { id: 'no_tow',               title: 'No tow',                desc: 'Partner said no-tow, or dispatched >24h with no sighting.',        empty: 'No cancelled / no-tow records in this window.',                                tone: 'gray',  glyph: '\u2014' },
   { id: 'held_or_forced',       title: 'Held / force-billed',   desc: 'Operator overrides — frozen or force-billed rows.',                empty: 'No operator overrides. Nothing frozen, nothing force-billed.',                 tone: 'blue',  glyph: '\u275A\u275A' /* ❚❚ */ },
 ];
@@ -5893,8 +5893,7 @@ function TimelineStrip({ row }) {
 
 // Pass-on-this-plate panel. Surfaces a visitor_pass row that matches the
 // violation's plate — diagnostic for disputes because if a legit pass
-// exists, the tow likely shouldn't have happened. Uses the Driver naming
-// convention per the project's Permanent/Temporary/Driver rule.
+// exists, the tow likely shouldn't have happened.
 function PassContextPanel({ pass }) {
   if (!pass) return null;
   const validFrom = pass.valid_from ? (fmtDate(pass.valid_from) + ' ' + fmtTime(pass.valid_from)) : '—';
@@ -5903,7 +5902,7 @@ function PassContextPanel({ pass }) {
     ? new Date(pass.valid_until).getTime() > Date.now() : false;
   const tone = activeNow ? TONE_COLORS.amber : TONE_COLORS.gray;
   const bits = [];
-  if (pass.visitor_name) bits.push({ label: 'Driver', value: pass.visitor_name });
+  if (pass.visitor_name) bits.push({ label: 'Pass holder', value: pass.visitor_name });
   if (pass.company_name) bits.push({ label: '', value: pass.company_name });
   if (pass.parking_spot) bits.push({ label: 'spot', value: pass.parking_spot });
   if (pass.placard_color) bits.push({ label: 'placard', value: pass.placard_color });
@@ -8043,7 +8042,7 @@ function ActivePassTracker({ propertyId }) {
               {/* All info */}
               {item.kind === 'overstay' && pass && (
                 <>
-                  {pass.visitor_name && <div style={{fontSize:14,color:'var(--text-primary)'}}><span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Driver</span>{pass.visitor_name}</div>}
+                  {pass.visitor_name && <div style={{fontSize:14,color:'var(--text-primary)'}}><span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Pass holder</span>{pass.visitor_name}</div>}
                   {pass.phone && <div style={{fontSize:14,color:'var(--text-primary)'}}><span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Phone</span>📞 {pass.phone}</div>}
                   <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                     {pass.parking_spot && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Spot</span>{pass.parking_spot}</span>}
@@ -8070,7 +8069,7 @@ function ActivePassTracker({ propertyId }) {
                 <>
                   <div style={{fontSize:14,color:'var(--text-primary)'}}>
                     <span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Cause</span>
-                    Driver attempted to re-register inside the 24h cooldown window.
+                    Vehicle attempted to re-register inside the 24h cooldown window.
                   </div>
                   <div style={{fontSize:12,color:'#f59e0b',fontWeight:700}}>
                     Flagged {fmtElapsed(new Date(alpr.created_at).getTime(), nowTick)} — {fmtAbsolute(alpr.created_at)}
@@ -8487,7 +8486,7 @@ function TruckParkingLog({ propertyId }) {
                   }}>{statusDisplay[s] || s}</span>
                 </div>
 
-                {/* Driver / company / phone line */}
+                {/* Pass holder / company / phone line */}
                 <div style={{display:'flex',flexDirection:'column',gap:3}}>
                   <div style={{fontSize:13,color:'var(--text-primary)',fontWeight:600}}>{driverLine}</div>
                   {r.phone && <div style={{fontSize:12,color:'var(--text-muted)'}}>📞 {r.phone}</div>}
@@ -8892,7 +8891,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           </select>
           {passTotalCount > 0 && (
             <div style={{fontSize:11,color:'var(--text-faint)'}}>
-              Property type is locked: {passTotalCount} temporary pass{passTotalCount === 1 ? '' : 'es'} on record. Changing type after passes exist would corrupt the log.
+              Property type is locked: {passTotalCount} parking pass{passTotalCount === 1 ? '' : 'es'} on record. Changing type after passes exist would corrupt the log.
             </div>
           )}
           {settingsDraft.property_type === 'truck_plaza' && (
@@ -8920,21 +8919,21 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         <div className="pd-qr-grid">
           <div className="pd-qr-tile">
             <div className="pd-qr-head">
-              <span className="pd-share-label" style={{color:'#3b82f6'}}>Temporary</span>
+              <span className="pd-share-label" style={{color:'#3b82f6'}}>Self-serve pass</span>
               <span className="pd-qr-sub">up to 48 hrs</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={tempQrRef} /></div>
             <div className="pd-qr-url">{tempUrl}</div>
-            <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast('Temporary link copied', 'success'); }}>Copy link</button>
+            <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast('Self-serve link copied', 'success'); }}>Copy link</button>
           </div>
           <div className="pd-qr-tile">
             <div className="pd-qr-head">
-              <span className="pd-share-label" style={{color:'#4ade80'}}>Permanent</span>
+              <span className="pd-share-label" style={{color:'#4ade80'}}>Long-term pass</span>
               <span className="pd-qr-sub">owner-approved</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={permQrRef} /></div>
             <div className="pd-qr-url">{permUrl}</div>
-            <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(permUrl); addToast('Permanent link copied', 'success'); }}>Copy link</button>
+            <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(permUrl); addToast('Long-term link copied', 'success'); }}>Copy link</button>
           </div>
         </div>
       )}
@@ -8944,7 +8943,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           property management. */}
       {isOwner && (() => {
         const pendingCount = plates.filter(p => p.status === 'pending').length;
-        const label = isTruckPlaza ? 'Permanent Plates (Employees)' : 'Permanent Plates';
+        const label = isTruckPlaza ? 'Approved Plates (Employees)' : 'Approved Plates';
         return (
           <div className="pd-section-head">
             <div style={{display:'flex',alignItems:'baseline',gap:8}}>
@@ -9004,7 +9003,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               </div>
             );
           })}
-          {plates.length === 0 && <div className="pd-empty">No permanent plates yet</div>}
+          {plates.length === 0 && <div className="pd-empty">No approved plates yet</div>}
         </div>
       )}
 
@@ -9039,7 +9038,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           <>
             <div className="pd-section-head">
               <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-                <span className="pd-section-title">Temporary Passes</span>
+                <span className="pd-section-title">Parking Passes</span>
                 <span className="pd-section-count">{activeVisitors.length}</span>
               </div>
               <div className="pd-section-meta">
@@ -9049,7 +9048,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:6}}>
               {activeVisitors.length === 0 ? (
-                <div className="pd-empty">No active temporary passes</div>
+                <div className="pd-empty">No active parking passes</div>
               ) : activeVisitors.map(v => {
                 const remainMs = v.valid_until ? new Date(v.valid_until).getTime() - nowTick : 0;
                 const urgent = remainMs > 0 && remainMs < 60 * 60 * 1000;

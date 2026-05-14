@@ -173,6 +173,15 @@ const OCR_CONFUSIONS_BASE: Array<[string, string]> = [
   ["E", "F"],
 ];
 
+// Minimum observation count for an auto-mined pair to count as a real
+// OCR confusion. Count=2 noise pairs (e.g. 2↔7, 5↔9, 1↔7) accumulated
+// from a couple of incidental misreads on different plates and caused
+// the 2152206↔219778C false-positive fuzzy match (4 chars different but
+// all "confusable" via low-count noise pairs). Setting floor to 5
+// keeps the strongly-attested confusions (M↔W=7, 8↔B=6, 3↔8=6, 0↔8=5,
+// 4↔6=5) and drops everything below.
+const AUTO_FUZZY_MIN_COUNT = 5;
+
 const OCR_CONFUSIONS: Array<[string, string]> = (() => {
   const seen = new Set<string>();
   const merged: Array<[string, string]> = [];
@@ -184,9 +193,13 @@ const OCR_CONFUSIONS: Array<[string, string]> = (() => {
   };
   for (const [a, b] of OCR_CONFUSIONS_BASE) add(a, b);
   // Auto-mined pairs; ignored if the JSON is the stub (length 0).
-  const auto = (autoFuzzyConfig as { ocr_confusions?: Array<{ pair: string[] }> }).ocr_confusions ?? [];
+  // Filter by count to reject noisy low-frequency observations that
+  // collapse distinct plates into fuzzy-matching twins.
+  const auto = (autoFuzzyConfig as { ocr_confusions?: Array<{ pair: string[]; count?: number }> }).ocr_confusions ?? [];
   for (const entry of auto) {
-    if (entry.pair && entry.pair.length === 2) add(entry.pair[0], entry.pair[1]);
+    if (entry.pair && entry.pair.length === 2 && (entry.count ?? 0) >= AUTO_FUZZY_MIN_COUNT) {
+      add(entry.pair[0], entry.pair[1]);
+    }
   }
   return merged;
 })();

@@ -314,7 +314,7 @@ export async function handleTruckPlazaExit(args: {
   // as an authoritative second opinion. If PR returns a plate, we use
   // it for EXACT-only matching (no fuzzy fallback). If PR also fails,
   // we drop the read entirely rather than trust the bad onboard.
-  const ONBOARD_CONF_FLOOR = 0.50;
+  const ONBOARD_CONF_FLOOR = 0.35;
   const PR_RESOLVE_FLOOR = 0.40; // PR cloud's own confidence floor
   let lowConfPath = false;
   if (resolved && resolved.confidence !== null && resolved.confidence < ONBOARD_CONF_FLOOR) {

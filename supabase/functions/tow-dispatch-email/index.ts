@@ -268,7 +268,7 @@ serve(async (req) => {
     `FIRST SEEN   ${formatLocal(firstSeen)}`,
     triggerEvent?.confidence != null ? `READ CONF.   ${Math.round(triggerEvent.confidence * 100)}%` : null,
     `PASS         ${passLine}`,
-    lastPass?.visitor_name ? `DRIVER       ${lastPass.visitor_name}` : null,
+    lastPass?.visitor_name ? `PASS HOLDER  ${lastPass.visitor_name}` : null,
     triggerEvent?.image_url ? `PHOTO        ${triggerEvent.image_url}` : null,
     "",
     "── ONE-TAP ACTIONS ───────────────────",
@@ -410,7 +410,7 @@ serve(async (req) => {
           ${lastPass?.back_plate ? metaRow("Trailer plate", escapeHtml(lastPass.back_plate), true) : ""}
           ${confidencePct != null ? metaRow("Read confidence", `${confidencePct}%`, true) : ""}
           ${metaRow("Pass on file", escapeHtml(passLine))}
-          ${lastPass?.visitor_name ? metaRow("Driver", escapeHtml(lastPass.visitor_name)) : ""}
+          ${lastPass?.visitor_name ? metaRow("Pass holder", escapeHtml(lastPass.visitor_name)) : ""}
         </table>
       </td></tr>
 
