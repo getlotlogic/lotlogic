@@ -4304,7 +4304,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
               plate_text: r.raw_plate || r.normalized_plate || '—',
               violation_type: 'no_parking_pass',
               _noRegId: r.id,
-            })) : [])
+            })) : []))
             .catch(() => [])
         )
       ).then(arrays => {
