@@ -13,6 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Install CPU-only torch first so the rest of the requirements file can
+# pick up the already-installed torch as a transitive dep without
+# pulling the CUDA-bundled wheel (which is 5x larger).
+RUN pip install --no-cache-dir torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -37,6 +42,13 @@ RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False, verbose=False)"
 # sidecar falls back to the bundled detector via the existing
 # DETECTOR_MODEL_PATH-or-bundled branch in app.py.
 RUN mkdir -p /app/models && python -c "from huggingface_hub import hf_hub_download; p = hf_hub_download(repo_id='keremberke/yolov8m-license-plate', filename='best.onnx', local_dir='/app/models'); import os; os.rename(p, '/app/models/yolov8m-plate.onnx'); print('plate detector ONNX cached at /app/models/yolov8m-plate.onnx')" || true
+
+# DETR plate detector. nateraw/detr-license-plate-detector is the
+# most-validated public plate-fine-tuned DETR available. Cache the
+# pre-trained weights + processor at build time so the first request
+# doesn't pay 30+ seconds of model download. Best-effort: HF download
+# can flake, so || true falls back to lazy load on first inference.
+RUN python -c "from transformers import DetrImageProcessor, DetrForObjectDetection; DetrImageProcessor.from_pretrained('nateraw/detr-license-plate-detector'); DetrForObjectDetection.from_pretrained('nateraw/detr-license-plate-detector'); print('DETR plate detector pre-fetch complete')" || true
 
 COPY app.py .
 COPY custom_yolo.py .
