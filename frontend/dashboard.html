@@ -9621,92 +9621,76 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </>
       )}
 
-      {/* SC211: Possible no parking pass — plates seen in lot past grace with no active pass */}
+      {/* SC211: Possible no parking pass — brand-v2 drill-down panel, inline within property detail */}
       {noRegViolations.length > 0 && (() => {
         const flaggedCount = noRegViolations.filter(r => r.status === 'flagged').length;
         return (
-          <>
+          <div style={{marginBottom:16}}>
             <div className="pd-section-head">
               <div style={{display:'flex',alignItems:'baseline',gap:6}}>
                 <span className="pd-section-title">Possible no parking pass</span>
                 {flaggedCount > 0 && <span className="nreg-badge-count">{flaggedCount} flagged</span>}
               </div>
-              <div className="pd-section-meta" style={{color:'#ef8070'}}>No pass found</div>
+              <div className="pd-section-meta" style={{color:'var(--red-paper)'}}>No pass found</div>
             </div>
-            <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:16}}>
+            <div className="drill-paper">
               {noRegViolations.map(row => {
                 const isActing = noRegActing === row.id;
                 const anyActing = !!noRegActing;
-                // Presence strength
                 const strength = (row.presence_strength || '').toLowerCase();
-                const stripeClass = row.status === 'flagged' ? 'nreg-flagged'
-                  : row.status === 'pending' ? 'nreg-pending'
-                  : row.status === 'dismissed' ? 'nreg-dismissed'
-                  : 'nreg-resolved';
-                // Grace countdown for pending rows
+                const stageClass = row.status === 'flagged' ? 'stage-flagged'
+                  : row.status === 'pending' ? 'stage-pending'
+                  : row.status === 'dismissed' ? 'stage-dismissed'
+                  : 'stage-resolved';
                 let graceLabel = null;
-                if (row.status === 'pending' && row.flagged_at) {
-                  const minsLeft = Math.max(0, Math.ceil((new Date(row.flagged_at) - Date.now()) / 60000));
+                if (row.status === 'pending' && row.grace_until) {
+                  const minsLeft = Math.max(0, Math.ceil((new Date(row.grace_until) - Date.now()) / 60000));
                   graceLabel = minsLeft > 0 ? `In grace (${minsLeft} min left)` : 'Grace expired';
                 }
-                // Evidence snapshots (up to 4), sorted by confidence desc
                 const evidence = Array.isArray(row.evidence) ? row.evidence : [];
                 const bestConf = row.best_confidence;
-                const sorted = evidence
-                  .slice()
-                  .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-                  .slice(0, 4);
-                const bestIdx = sorted.findIndex(e => e.confidence === bestConf) ?? 0;
-                // Confidence display
+                const sorted = evidence.slice().sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 4);
+                const bestIdx = sorted.findIndex(e => e.confidence === bestConf);
                 const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
+                const firstSeen = row.first_seen_at || row.created_at;
+                const ageMins = firstSeen ? Math.round((Date.now() - new Date(firstSeen)) / 60000) : null;
                 return (
-                  <div key={row.id} className={`nreg-row ${stripeClass}`}>
-                    {/* Row header */}
-                    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                      <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{row.raw_plate || row.normalized_plate || '—'}</span>
-                      {strength === 'lingered' ? (
-                        <span className="nreg-pill-strength-lingered">Lingered</span>
-                      ) : strength === 'brief' ? (
-                        <span className="nreg-pill-strength-brief">Brief</span>
-                      ) : null}
-                      {row.status === 'flagged' && (
-                        <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 8px',borderRadius:20,background:'rgba(177,69,53,.15)',color:'#ef8070',border:'1px solid rgba(177,69,53,.3)'}}>Flagged</span>
-                      )}
-                      {graceLabel && (
-                        <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:20,background:'rgba(217,119,6,.15)',color:'#fbbf24',border:'1px solid rgba(217,119,6,.3)'}}>{graceLabel}</span>
-                      )}
-                      {confPct != null && (
-                        <span style={{fontSize:11,color:'var(--text-faint)'}}>{confPct}% conf</span>
-                      )}
+                  <div key={row.id} className={`nr-row-paper ${stageClass}`}>
+                    <div className="nr-row-top-paper">
+                      <span className="plate-tag-paper">{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+                      <div className="nr-times-paper">
+                        {ageMins != null && <span className="age">{ageMins} min ago</span>}
+                        {firstSeen && <span>First seen {fmtTime(firstSeen)}</span>}
+                      </div>
                     </div>
-                    {/* Timestamps */}
-                    <div style={{fontSize:11,color:'var(--text-muted)',display:'flex',gap:12,flexWrap:'wrap'}}>
-                      {row.first_seen_at && <span>First seen: {new Date(row.first_seen_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
-                      {row.last_seen_at && <span>Last seen: {new Date(row.last_seen_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
-                      {row.exit_seen_at && <span style={{color:'#4ade80'}}>Exited: {new Date(row.exit_seen_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
+                    <div className="nr-meta-paper">
+                      {strength === 'lingered' ? <span className="badge lingered">Lingered</span> : strength === 'brief' ? <span className="badge">Brief</span> : null}
+                      {row.status === 'flagged' && <span className="badge lingered">Flagged</span>}
+                      {graceLabel && <span className="badge" style={{background:'var(--amber-bg-paper)',color:'var(--amber-paper)'}}>{graceLabel}</span>}
+                      {confPct != null && <span>{confPct}% confidence</span>}
+                      {row.last_seen_at && <span>Last seen {fmtTime(row.last_seen_at)}</span>}
+                      {row.exit_seen_at && <span style={{color:'var(--green-paper)'}}>Exited {fmtTime(row.exit_seen_at)}</span>}
                     </div>
-                    {/* Snapshot strip */}
                     {sorted.length > 0 && (
-                      <div className="nreg-snap-strip">
+                      <div className="nr-snaps-paper">
                         {sorted.map((ev, i) => (
-                          <div key={i} className="nreg-snap-wrap">
-                            <img src={ev.url} alt="evidence" loading="lazy" />
-                            {(bestIdx === i) && <span className="nreg-snap-badge">BEST</span>}
-                            {ev.taken_at && <span className="nreg-snap-time">{fmtTime(ev.taken_at)}</span>}
+                          <div key={i} className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`}>
+                            {ev.url && <img src={ev.url} alt="evidence frame" loading="lazy" />}
+                            <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
+                            {ev.taken_at && <span className="snt">{fmtTime(ev.taken_at)}</span>}
                           </div>
                         ))}
                       </div>
                     )}
-                    {/* Actions */}
-                    <div className="nreg-actions">
+                    <div className="nr-actions-paper">
                       <button
-                        className="nreg-btn-dismiss"
+                        className="btn-paper"
                         disabled={anyActing}
                         onClick={() => handleNoRegDismiss(row.id)}
                         style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
                       >{isActing ? '…' : 'Dismiss'}</button>
                       <button
-                        className="nreg-btn-tow"
+                        className="btn-paper primary"
                         disabled={anyActing}
                         onClick={() => handleNoRegTow(row.id)}
                         style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
@@ -9716,7 +9700,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                 );
               })}
             </div>
-          </>
+          </div>
         );
       })()}
 
@@ -9980,6 +9964,219 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
       </div>
       </>
       )}
+    </div>
+  );
+}
+
+// ── NoRegDrill — Possible no parking pass drill-down ─────────────────────────
+// Lists flagged + pending no-reg violations for a single property.
+// Each row shows plate, presence chip, timestamps, confidence, snapshot strip,
+// and Dismiss / Mark Towed actions. Left-edge lifecycle stripe colors by status.
+function NoRegDrill({ propertyId, propertyName, onBack }) {
+  const { addToast } = useToast();
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [acting, setActing] = useState(null); // id being acted on
+
+  const load = useCallback(async () => {
+    if (!propertyId) return;
+    setLoading(true);
+    try {
+      const [flagged, pending] = await Promise.all([
+        apiFetch(`/no-reg-violations?property_id=${propertyId}&status=flagged`).catch(() => []),
+        apiFetch(`/no-reg-violations?property_id=${propertyId}&status=pending`).catch(() => []),
+      ]);
+      const all = [...(Array.isArray(flagged) ? flagged : []), ...(Array.isArray(pending) ? pending : [])];
+      all.sort((a, b) => {
+        if (a.status === 'flagged' && b.status !== 'flagged') return -1;
+        if (b.status === 'flagged' && a.status !== 'flagged') return 1;
+        return new Date(b.flagged_at || b.created_at) - new Date(a.flagged_at || a.created_at);
+      });
+      setRows(all);
+    } finally { setLoading(false); }
+  }, [propertyId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleDismiss(id) {
+    if (acting) return;
+    setActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/dismiss`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'operator dismissed' }),
+      });
+      addToast('Dismissed', 'success');
+      setRows(prev => prev.filter(r => r.id !== id));
+    } catch (err) { addToast('Dismiss failed: ' + (err.message || ''), 'error'); }
+    finally { setActing(null); }
+  }
+
+  async function handleTow(id) {
+    if (acting) return;
+    setActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/tow`, { method: 'POST' });
+      addToast('Marked towed', 'success');
+      setRows(prev => prev.filter(r => r.id !== id));
+    } catch (err) { addToast('Mark towed failed: ' + (err.message || ''), 'error'); }
+    finally { setActing(null); }
+  }
+
+  return (
+    <div className="page-enter">
+      <div className="drill-paper">
+        <header className="drill-head-paper">
+          <div className="title">Possible no parking pass{propertyName ? ` · ${propertyName}` : ''}</div>
+          <button className="back" onClick={onBack}>‹ Back</button>
+        </header>
+
+        {loading ? (
+          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>No flagged or pending violations</div>
+        ) : rows.map(row => {
+          const isActing = acting === row.id;
+          const anyActing = !!acting;
+          const strength = (row.presence_strength || '').toLowerCase();
+          const stageClass = row.status === 'flagged' ? 'stage-flagged'
+            : row.status === 'pending' ? 'stage-pending'
+            : row.status === 'dismissed' ? 'stage-dismissed'
+            : 'stage-resolved';
+          // Grace countdown for pending rows
+          let graceLabel = null;
+          if (row.status === 'pending' && row.grace_until) {
+            const minsLeft = Math.max(0, Math.ceil((new Date(row.grace_until) - Date.now()) / 60000));
+            graceLabel = minsLeft > 0 ? `In grace (${minsLeft} min left)` : 'Grace expired';
+          }
+          // Evidence strip — up to 4 frames, sorted by confidence desc
+          const evidence = Array.isArray(row.evidence) ? row.evidence : [];
+          const bestConf = row.best_confidence;
+          const sorted = evidence.slice().sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 4);
+          const bestIdx = sorted.findIndex(e => e.confidence === bestConf);
+          const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
+          // First-seen age
+          const firstSeen = row.first_seen_at || row.created_at;
+          const ageMins = firstSeen ? Math.round((Date.now() - new Date(firstSeen)) / 60000) : null;
+
+          return (
+            <div key={row.id} className={`nr-row-paper ${stageClass}`}>
+              <div className="nr-row-top-paper">
+                <span className="plate-tag-paper">{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+                <div className="nr-times-paper">
+                  {ageMins != null && <span className="age">{ageMins} min ago</span>}
+                  {firstSeen && <span>First seen {fmtTime(firstSeen)}</span>}
+                </div>
+              </div>
+
+              <div className="nr-meta-paper">
+                {strength === 'lingered' ? (
+                  <span className="badge lingered">Lingered</span>
+                ) : strength === 'brief' ? (
+                  <span className="badge">Brief</span>
+                ) : null}
+                {row.status === 'flagged' && <span className="badge lingered">Flagged</span>}
+                {graceLabel && <span className="badge" style={{background:'var(--amber-bg-paper)',color:'var(--amber-paper)'}}>{graceLabel}</span>}
+                {confPct != null && <span>{confPct}% confidence</span>}
+                {row.last_seen_at && <span>Last seen {fmtTime(row.last_seen_at)}</span>}
+                {row.exit_seen_at && <span style={{color:'var(--green-paper)'}}>Exited {fmtTime(row.exit_seen_at)}</span>}
+              </div>
+
+              {sorted.length > 0 && (
+                <div className="nr-snaps-paper">
+                  {sorted.map((ev, i) => (
+                    <div key={i} className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`}>
+                      {ev.url && <img src={ev.url} alt="evidence frame" loading="lazy" />}
+                      <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
+                      {ev.taken_at && <span className="snt">{fmtTime(ev.taken_at)}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="nr-actions-paper">
+                <button
+                  className="btn-paper"
+                  disabled={anyActing}
+                  onClick={() => handleDismiss(row.id)}
+                  style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
+                >{isActing ? '…' : 'Dismiss'}</button>
+                <button
+                  className="btn-paper primary"
+                  disabled={anyActing}
+                  onClick={() => handleTow(row.id)}
+                  style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
+                >{isActing ? '…' : 'Mark Towed'}</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── RegisteredDrill — Active parking passes drill-down ───────────────────────
+// Lists active parking passes for a property from GET /lots/<id>/registered.
+// Shows plate, holder name, duration info (no "Permanent"/"Temporary" labels),
+// space number if present, and a green ACTIVE indicator.
+function RegisteredDrill({ propertyId, propertyName, onBack }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const nowTick = useNowTick(60000);
+
+  useEffect(() => {
+    if (!propertyId) return;
+    setLoading(true);
+    apiFetch(`/lots/${propertyId}/registered`)
+      .then(data => { setRows(Array.isArray(data) ? data : []); })
+      .catch(() => { setRows([]); })
+      .finally(() => { setLoading(false); });
+  }, [propertyId]);
+
+  // Compute human-readable pass duration without "Permanent"/"Temporary" labels.
+  // API returns pass_type 'Permanent' | 'Temporary' — we intentionally ignore it
+  // and derive display text from the expiry timestamp only.
+  function passExpiryLabel(row) {
+    if (!row.expires_at) return 'No expiry';
+    const ms = new Date(row.expires_at) - Date.now();
+    if (ms <= 0) return 'Expired';
+    const totalMins = Math.ceil(ms / 60000);
+    if (totalMins < 60) return `Expires in ${totalMins}m`;
+    const h = Math.floor(totalMins / 60);
+    const m = totalMins % 60;
+    return `Expires in ${h}h${m > 0 ? ` ${m}m` : ''}`;
+  }
+
+  return (
+    <div className="page-enter">
+      <div className="drill-paper">
+        <header className="drill-head-paper">
+          <div className="title">Registered{propertyName ? ` · ${propertyName}` : ''}</div>
+          <button className="back" onClick={onBack}>‹ Back</button>
+        </header>
+
+        {loading ? (
+          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>No active parking passes</div>
+        ) : rows.map((row, i) => (
+          <div key={row.id || i} className="reg-row-paper">
+            <span className="plate-tag-paper" style={{fontSize:13,padding:'5px 9px'}}>{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+            <div>
+              <div className="reg-name-paper">{row.driver_name || row.holder_name || 'Unknown'}</div>
+              <div className="reg-detail-paper">
+                {passExpiryLabel(row)}{row.space_number ? ` · Space #${row.space_number}` : ''}
+              </div>
+            </div>
+            <div className="reg-time-paper">
+              <span className="reg-live-paper">● ACTIVE</span>
+              {row.starts_at && <span style={{fontSize:11}}>Since {fmtTime(row.starts_at)}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
