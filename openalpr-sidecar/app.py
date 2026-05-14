@@ -148,7 +148,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.12.2",
+    version="3.13.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -175,10 +175,23 @@ detr_model = None
 detr_load_error: Optional[str] = None
 detr_load_attempted = False
 ENABLE_DETR = os.environ.get("ENABLE_DETR", "true").lower() == "true"
-# Real plate-fine-tuned DETR — verified to exist on HF Hub. The earlier
-# nateraw/* name I'd used was a hallucination and 404'd at runtime.
 DETR_MODEL_NAME = os.environ.get("DETR_MODEL_NAME", "nickmuchi/detr-resnet50-license-plate-detection")
-DETR_MIN_CONF = float(os.environ.get("DETR_MIN_CONF", "0.30"))
+# 0.10 floor (was 0.30). Charlotte plates are heavily angled / low-contrast
+# from the SC211 + TS4467 mounts; DETR returns these in the 0.15-0.30 band
+# and we were filtering them out before they could fire.
+DETR_MIN_CONF = float(os.environ.get("DETR_MIN_CONF", "0.10"))
+
+# YOLOS-small — DETR-family transformer detector, plate-fine-tuned by
+# nickmuchi. 2073 downloads (11x the DETR plate model) — more
+# battle-tested. Different architecture head than DETR-ResNet50 so it
+# contributes detections from yet another bias, increasing recall on
+# heavily-angled / small plates that single-model approaches miss.
+yolos_processor = None
+yolos_model = None
+yolos_load_error: Optional[str] = None
+ENABLE_YOLOS = os.environ.get("ENABLE_YOLOS", "true").lower() == "true"
+YOLOS_MODEL_NAME = os.environ.get("YOLOS_MODEL_NAME", "nickmuchi/yolos-small-finetuned-license-plate-detection")
+YOLOS_MIN_CONF = float(os.environ.get("YOLOS_MIN_CONF", "0.10"))
 
 
 @app.on_event("startup")
@@ -218,6 +231,7 @@ def on_startup() -> None:
 
 _paddle_load_attempted = False
 _detr_load_attempted = False
+_yolos_load_attempted = False
 
 
 def _ensure_paddle_loaded() -> None:
@@ -260,6 +274,25 @@ def _ensure_detr_loaded() -> None:
         detr_model = None
 
 
+def _ensure_yolos_loaded() -> None:
+    """Idempotent: load YOLOS plate detector if not already loaded."""
+    global yolos_processor, yolos_model, yolos_load_error, _yolos_load_attempted
+    if _yolos_load_attempted or not ENABLE_YOLOS:
+        return
+    _yolos_load_attempted = True
+    try:
+        from transformers import YolosImageProcessor, YolosForObjectDetection
+        yolos_processor = YolosImageProcessor.from_pretrained(YOLOS_MODEL_NAME)
+        yolos_model = YolosForObjectDetection.from_pretrained(YOLOS_MODEL_NAME)
+        yolos_model.eval()
+        print(f"[lazy] YOLOS loaded: {YOLOS_MODEL_NAME}", flush=True)
+    except Exception as e:
+        yolos_load_error = f"{type(e).__name__}: {e}"
+        print(f"[lazy] YOLOS load failed: {yolos_load_error}", flush=True)
+        yolos_processor = None
+        yolos_model = None
+
+
 class RecognizeRequest(BaseModel):
     image_base64: str = Field(..., description="Base64-encoded JPEG (data: URI prefix optional).")
     auth_token: Optional[str] = Field(None, description="Shared secret; must match SIDECAR_AUTH_TOKEN.")
@@ -286,7 +319,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.12.2",
+        "version": "3.13.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -301,6 +334,9 @@ def health() -> dict:
         "detr_loaded": detr_model is not None,
         "detr_model_name": DETR_MODEL_NAME if detr_model is not None else None,
         "detr_load_error": detr_load_error,
+        "yolos_loaded": yolos_model is not None,
+        "yolos_model_name": YOLOS_MODEL_NAME if yolos_model is not None else None,
+        "yolos_load_error": yolos_load_error,
     }
 
 
@@ -579,13 +615,51 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
             print(f"[detr] inference failed: {type(e).__name__}: {e}", flush=True)
             return []
 
-    # Run YOLO and DETR detectors in parallel union mode. Both architectures
-    # have different strengths — YOLO on bright/clean plates, DETR on
-    # small/angled/cluttered scenes — combining them increases recall.
-    # The OCR step dedups across overlapping bboxes naturally.
+    def _run_yolos(image: np.ndarray) -> list:
+        """Run YOLOS plate detector on the full image. DETR-family
+        transformer (sequence-based attention) — different bias than
+        DETR-ResNet50, contributes detections on plates where DETR
+        misses. Output mapped to the same _Detection-compatible shape."""
+        if yolos_processor is None or yolos_model is None:
+            return []
+        try:
+            import torch
+            from PIL import Image as PILImage
+            from types import SimpleNamespace
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            pil_img = PILImage.fromarray(rgb)
+            inputs = yolos_processor(images=pil_img, return_tensors="pt")
+            with torch.no_grad():
+                outputs = yolos_model(**inputs)
+            h0, w0 = image.shape[:2]
+            target_sizes = torch.tensor([[h0, w0]])
+            results = yolos_processor.post_process_object_detection(
+                outputs, target_sizes=target_sizes, threshold=YOLOS_MIN_CONF,
+            )[0]
+            out = []
+            for score, box in zip(results["scores"].tolist(), results["boxes"].tolist()):
+                x1, y1, x2, y2 = box
+                out.append(SimpleNamespace(
+                    confidence=float(score),
+                    label="License Plate",
+                    bounding_box=SimpleNamespace(
+                        x1=int(x1), y1=int(y1), x2=int(x2), y2=int(y2),
+                    ),
+                ))
+            return out
+        except Exception as e:
+            print(f"[yolos] inference failed: {type(e).__name__}: {e}", flush=True)
+            return []
+
+    # Run YOLO9-s + DETR + YOLOS in parallel union mode. Three architectures
+    # with different biases — YOLO anchor-based, DETR transformer-encoder,
+    # YOLOS sequence-vit. Combining them maximizes recall on the variety
+    # of plate angles/sizes/lighting we see. OCR dedups overlapping bboxes.
     det_results = _run_detector(img)
     detr_dets = _run_detr(img)
+    yolos_dets = _run_yolos(img)
     det_results.extend(detr_dets)
+    det_results.extend(yolos_dets)
 
     # Tiled fallback. When full-frame detection returns nothing, run the
     # detector on 2x2 overlapping tiles. At 608 imgsz the model sees each
@@ -794,6 +868,7 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
     # FIRST request after container start pays the download cost.
     _ensure_paddle_loaded()
     _ensure_detr_loaded()
+    _ensure_yolos_loaded()
 
     try:
         img = _decode_image(req.image_base64, camera_id=req.camera_id)
