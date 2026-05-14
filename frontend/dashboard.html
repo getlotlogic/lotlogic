@@ -1774,6 +1774,85 @@
       font-size: 10px; font-weight: 600; color: var(--text-ghost);
       text-align: center; padding: 4px 0; margin-bottom: 8px;
     }
+
+    /* ── SC211: Possible no parking pass ── */
+    .nreg-row {
+      position: relative;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px 10px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow: hidden;
+    }
+    .nreg-row::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 4px;
+    }
+    .nreg-row.nreg-flagged::before   { background: #B14535; }
+    .nreg-row.nreg-pending::before   { background: #D97706; }
+    .nreg-row.nreg-resolved::before  { background: #4A7A48; }
+    .nreg-row.nreg-dismissed::before { background: var(--border); }
+    .nreg-snap-strip {
+      display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px;
+    }
+    .nreg-snap-wrap {
+      position: relative; flex-shrink: 0;
+      width: 80px; height: 56px;
+      border-radius: 6px; overflow: hidden;
+      background: var(--snapshot-bg);
+      border: 1px solid var(--border-subtle);
+    }
+    .nreg-snap-wrap img {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+    }
+    .nreg-snap-badge {
+      position: absolute; bottom: 3px; left: 3px;
+      background: var(--accent); color: #000;
+      font-size: 8px; font-weight: 800;
+      padding: 1px 4px; border-radius: 3px;
+      letter-spacing: .04em;
+    }
+    .nreg-snap-time {
+      position: absolute; bottom: 3px; right: 3px;
+      background: rgba(0,0,0,.65); color: #fff;
+      font-size: 8px; font-weight: 600;
+      padding: 1px 4px; border-radius: 3px;
+    }
+    .nreg-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .nreg-btn-dismiss {
+      padding: 6px 14px; border-radius: 7px; font-size: 12px; font-weight: 700;
+      cursor: pointer; font-family: inherit; border: 1px solid var(--border);
+      background: var(--bg-inset); color: var(--text-muted); transition: opacity .15s;
+    }
+    .nreg-btn-dismiss:active { opacity: .7; }
+    .nreg-btn-tow {
+      padding: 6px 14px; border-radius: 7px; font-size: 12px; font-weight: 700;
+      cursor: pointer; font-family: inherit; border: 1px solid rgba(239,68,68,.4);
+      background: rgba(239,68,68,.12); color: #ef4444; transition: opacity .15s;
+    }
+    .nreg-btn-tow:active { opacity: .7; }
+    .nreg-pill-strength-lingered {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+      padding: 2px 8px; border-radius: 20px;
+      background: rgba(177,69,53,.15); color: #ef8070; border: 1px solid rgba(177,69,53,.35);
+    }
+    .nreg-pill-strength-brief {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+      padding: 2px 8px; border-radius: 20px;
+      background: var(--bg-inset); color: var(--text-muted); border: 1px solid var(--border);
+    }
+    .nreg-badge-count {
+      font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px;
+      background: rgba(177,69,53,.15); color: #ef8070; border: 1px solid rgba(177,69,53,.25);
+      margin-left: 6px; white-space: nowrap;
+    }
+    .theme-light .nreg-btn-dismiss { background: #f3f4f6; border-color: #e5e7eb; color: #6b7280; }
+    .theme-light .nreg-pill-strength-brief { background: #f3f4f6; border-color: #e5e7eb; color: #6b7280; }
   </style>
 </head>
 <body>
@@ -4204,6 +4283,38 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
 
   const { addToast } = useToast();
 
+  // SC211: flagged no-reg violations mapped into job-row shape for the filter pill
+  const [noRegRows, setNoRegRows] = useState([]);
+  useEffect(() => {
+    if (!user) return;
+    // Fetch flagged no-reg violations for all accessible properties
+    db._getPropertyIds(user.id, user._role).then(propIds => {
+      if (!propIds.length) return;
+      return Promise.all(
+        propIds.map(pid =>
+          apiFetch(`/no-reg-violations?property_id=${pid}&status=flagged`)
+            .then(rows => (Array.isArray(rows) ? rows.map(r => ({
+              ...r,
+              _isNoReg: true,
+              detected_at: r.first_seen_at || r.created_at,
+              status: 'alerted',
+              _origStatus: r.status,
+              lot_id: null,
+              _lot_name: r._property_name || pid.slice(0, 8),
+              plate_text: r.raw_plate || r.normalized_plate || '—',
+              violation_type: 'no_parking_pass',
+              _noRegId: r.id,
+            })) : [])
+            .catch(() => [])
+        )
+      ).then(arrays => {
+        const flat = arrays.flat();
+        flat.sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
+        setNoRegRows(flat);
+      });
+    }).catch(() => {});
+  }, [user]);
+
   // Auto-select violation from SMS deep link
   useEffect(() => {
     if (deepLinkViolationId && violations.length && !selectedViol) {
@@ -4484,10 +4595,11 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
   }, [active]);
 
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState('all'); // all | urgent
+  const [filter, setFilter] = useState('all'); // all | urgent | nreg
 
-  // Filter active jobs
-  const filteredActive = active.filter(v => {
+  // Filter active jobs — nreg pill swaps in the no-reg rows instead of the standard active list
+  const baseList = filter === 'nreg' ? noRegRows : active;
+  const filteredActive = baseList.filter(v => {
     if (filter === 'urgent') { const t = elapsed(v.detected_at); return t?.val >= 30; }
     return true;
   }).filter(v => {
@@ -4498,6 +4610,8 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
       (v.vehicle_make?.toLowerCase().includes(q)) ||
       (v.vehicle_model?.toLowerCase().includes(q)) ||
       (lotMap[v.lot_id]?.name?.toLowerCase().includes(q)) ||
+      (v._lot_name?.toLowerCase().includes(q)) ||
+      (v.plate_text?.toLowerCase().includes(q)) ||
       (v.zone_id?.toLowerCase().includes(q));
   });
 
@@ -4562,7 +4676,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
       )}
 
       {/* Search and filter */}
-      {active.length > 0 && (
+      {(active.length > 0 || noRegRows.length > 0) && (
         <div className="search-bar">
           <div className="search-wrap">
             <SearchIcon />
@@ -4570,6 +4684,15 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
           </div>
           <button className={`filter-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>All</button>
           <button className={`filter-chip ${filter === 'urgent' ? 'active' : ''}`} onClick={() => setFilter('urgent')}>Urgent</button>
+          {noRegRows.length > 0 && (
+            <button
+              className={`filter-chip ${filter === 'nreg' ? 'active' : ''}`}
+              onClick={() => setFilter('nreg')}
+              aria-label="Filter: possible no parking pass"
+            >
+              Possible no parking pass{noRegRows.length > 0 ? ` (${noRegRows.length})` : ''}
+            </button>
+          )}
         </div>
       )}
 
@@ -4678,8 +4801,8 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
 
       {/* Active jobs */}
       <div className="section-header">
-        <div className="section-title">Open Jobs</div>
-        <div className="section-count">{filteredActive.length} active</div>
+        <div className="section-title">{filter === 'nreg' ? 'Possible no parking pass' : 'Open Jobs'}</div>
+        <div className="section-count">{filteredActive.length} {filter === 'nreg' ? 'flagged' : 'active'}</div>
       </div>
 
       {filteredActive.length === 0 && active.length > 0 ? (
@@ -4867,7 +4990,12 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
               })()}
               {/* Vehicle summary bar — quick-glance info for the tow operator */}
               <div className="vehicle-summary">
-                {v._isALPR ? (
+                {v._isNoReg ? (
+                  <span className="vs-item">
+                    <span style={{fontWeight:800, letterSpacing:'.04em', fontFamily:'SFMono-Regular, Consolas, monospace'}}>{v.plate_text}</span>
+                    <span style={{color:'#ef8070', marginLeft:6}}>No parking pass</span>
+                  </span>
+                ) : v._isALPR ? (
                   <span className="vs-item">
                     <span style={{fontWeight:800, letterSpacing:'.04em', fontFamily:'SFMono-Regular, Consolas, monospace'}}>{v.plate_text}</span>
                     <span style={{color:'var(--text-muted)', marginLeft:6}}>Unregistered plate</span>
@@ -4891,8 +5019,9 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
               <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 16px'}}>
                 <div style={{flex:1, minWidth:0}}>
                   <div className="job-lot-name" style={{fontSize:14, display:'flex', alignItems:'center', gap:8}}>
-                    {v._isALPR ? v._lot_name : (lot?.name || 'Unknown Lot')}
-                    {v._isALPR && <span style={{fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:6, background:'rgba(167,139,250,.15)', color:'#a78bfa', whiteSpace:'nowrap'}}>PARKING PASS</span>}
+                    {v._isNoReg ? v._lot_name : v._isALPR ? v._lot_name : (lot?.name || 'Unknown Lot')}
+                    {v._isNoReg && <span style={{fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:6, background:'rgba(177,69,53,.15)', color:'#ef8070', whiteSpace:'nowrap'}}>NO PASS</span>}
+                    {!v._isNoReg && v._isALPR && <span style={{fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:6, background:'rgba(167,139,250,.15)', color:'#a78bfa', whiteSpace:'nowrap'}}>PARKING PASS</span>}
                     {/* Status badge */}
                     {(() => {
                       const badge = statusBadge[v.status] || statusBadge.pending;
@@ -4930,7 +5059,18 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
               </div>
               {/* Primary actions — hidden for departed violations (dismiss from banner instead) */}
               {!(v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) && (<>
-              {v._isALPR ? (
+              {v._isNoReg ? (
+              <>
+              <div className="job-actions-row" role="group" aria-label="Enforcement actions" style={{gap:8, padding:'10px 12px'}}>
+                <button className="action-btn tow" disabled={anyActing} onClick={async () => { setActing(v.id); try { await apiFetch(`/no-reg-violations/${v._noRegId}/tow`, { method: 'POST' }); addToast('Marked towed', 'success'); setNoRegRows(prev => prev.filter(r => r._noRegId !== v._noRegId)); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Mark towed" style={{padding:'12px 6px', fontSize:13}}>
+                  {isActing ? '…' : 'Mark Towed'}
+                </button>
+                <button className="action-btn dismiss" disabled={anyActing} onClick={async () => { setActing(v.id); try { await apiFetch(`/no-reg-violations/${v._noRegId}/dismiss`, { method: 'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({reason:'operator dismissed'}) }); addToast('Dismissed', 'success'); setNoRegRows(prev => prev.filter(r => r._noRegId !== v._noRegId)); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Dismiss" style={{padding:'12px 6px', fontSize:13}}>
+                  {isActing ? '…' : 'Dismiss'}
+                </button>
+              </div>
+              </>
+              ) : v._isALPR ? (
               <>
               <div className="job-actions-row" role="group" aria-label="Enforcement actions" style={{gap:8, padding:'10px 12px'}}>
                 <button className="action-btn tow" disabled={anyActing} onClick={async () => { setActing(v.id); try { await db.dispatchALPRViolation(v.id); addToast('Tow dispatched', 'success'); if (onAction) onAction(); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Dispatch tow" style={{padding:'12px 6px', fontSize:13}}>
@@ -8603,6 +8743,9 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   const [passTotalCount, setPassTotalCount] = useState(0);
   const [openSessions, setOpenSessions] = useState([]);
   const [activeHolds, setActiveHolds] = useState([]);
+  // SC211: Possible no parking pass violations
+  const [noRegViolations, setNoRegViolations] = useState([]);
+  const [noRegActing, setNoRegActing] = useState(null); // id of row being acted on
   const nowTick = useNowTick();
   const tempQrRef = useRef(null);
   const permQrRef = useRef(null);
@@ -8634,6 +8777,60 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   }, [propertyId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // SC211: fetch flagged + pending no-reg violations for this property
+  const loadNoReg = useCallback(async () => {
+    if (!propertyId) return;
+    try {
+      const [flagged, pending] = await Promise.all([
+        apiFetch(`/no-reg-violations?property_id=${propertyId}&status=flagged`),
+        apiFetch(`/no-reg-violations?property_id=${propertyId}&status=pending`),
+      ]);
+      const rows = [...(flagged || []), ...(pending || [])];
+      // sort: flagged first, then by flagged_at desc
+      rows.sort((a, b) => {
+        if (a.status === 'flagged' && b.status !== 'flagged') return -1;
+        if (b.status === 'flagged' && a.status !== 'flagged') return 1;
+        return new Date(b.flagged_at || b.created_at) - new Date(a.flagged_at || a.created_at);
+      });
+      setNoRegViolations(rows);
+    } catch (err) {
+      // Non-fatal: backend may not have this endpoint yet on older deployments
+      console.warn('SC211 no-reg fetch failed:', err.message);
+    }
+  }, [propertyId]);
+
+  useEffect(() => { loadNoReg(); }, [loadNoReg]);
+
+  // SC211: dismiss a no-reg violation
+  async function handleNoRegDismiss(id) {
+    if (noRegActing) return;
+    setNoRegActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/dismiss`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'operator dismissed' }),
+      });
+      addToast('Dismissed', 'success');
+      setNoRegViolations(prev => prev.filter(r => r.id !== id));
+    } catch (err) {
+      addToast('Dismiss failed: ' + (err.message || ''), 'error');
+    } finally { setNoRegActing(null); }
+  }
+
+  // SC211: mark towed
+  async function handleNoRegTow(id) {
+    if (noRegActing) return;
+    setNoRegActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/tow`, { method: 'POST' });
+      addToast('Marked towed', 'success');
+      setNoRegViolations(prev => prev.filter(r => r.id !== id));
+    } catch (err) {
+      addToast('Mark towed failed: ' + (err.message || ''), 'error');
+    } finally { setNoRegActing(null); }
+  }
 
   // Render the Temporary + Permanent QR codes once we know the property
   useEffect(() => {
@@ -9130,6 +9327,105 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </>
       )}
 
+      {/* SC211: Possible no parking pass — plates seen in lot past grace with no active pass */}
+      {noRegViolations.length > 0 && (() => {
+        const flaggedCount = noRegViolations.filter(r => r.status === 'flagged').length;
+        return (
+          <>
+            <div className="pd-section-head">
+              <div style={{display:'flex',alignItems:'baseline',gap:6}}>
+                <span className="pd-section-title">Possible no parking pass</span>
+                {flaggedCount > 0 && <span className="nreg-badge-count">{flaggedCount} flagged</span>}
+              </div>
+              <div className="pd-section-meta" style={{color:'#ef8070'}}>No pass found</div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:16}}>
+              {noRegViolations.map(row => {
+                const isActing = noRegActing === row.id;
+                const anyActing = !!noRegActing;
+                // Presence strength
+                const strength = (row.presence_strength || '').toLowerCase();
+                const stripeClass = row.status === 'flagged' ? 'nreg-flagged'
+                  : row.status === 'pending' ? 'nreg-pending'
+                  : row.status === 'dismissed' ? 'nreg-dismissed'
+                  : 'nreg-resolved';
+                // Grace countdown for pending rows
+                let graceLabel = null;
+                if (row.status === 'pending' && row.flagged_at) {
+                  const minsLeft = Math.max(0, Math.ceil((new Date(row.flagged_at) - Date.now()) / 60000));
+                  graceLabel = minsLeft > 0 ? `In grace (${minsLeft} min left)` : 'Grace expired';
+                }
+                // Evidence snapshots (up to 4), sorted by confidence desc
+                const evidence = Array.isArray(row.evidence) ? row.evidence : [];
+                const bestConf = row.best_confidence;
+                const sorted = evidence
+                  .slice()
+                  .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+                  .slice(0, 4);
+                const bestIdx = sorted.findIndex(e => e.confidence === bestConf) ?? 0;
+                // Confidence display
+                const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
+                return (
+                  <div key={row.id} className={`nreg-row ${stripeClass}`}>
+                    {/* Row header */}
+                    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                      <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{row.raw_plate || row.normalized_plate || '—'}</span>
+                      {strength === 'lingered' ? (
+                        <span className="nreg-pill-strength-lingered">Lingered</span>
+                      ) : strength === 'brief' ? (
+                        <span className="nreg-pill-strength-brief">Brief</span>
+                      ) : null}
+                      {row.status === 'flagged' && (
+                        <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 8px',borderRadius:20,background:'rgba(177,69,53,.15)',color:'#ef8070',border:'1px solid rgba(177,69,53,.3)'}}>Flagged</span>
+                      )}
+                      {graceLabel && (
+                        <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:20,background:'rgba(217,119,6,.15)',color:'#fbbf24',border:'1px solid rgba(217,119,6,.3)'}}>{graceLabel}</span>
+                      )}
+                      {confPct != null && (
+                        <span style={{fontSize:11,color:'var(--text-faint)'}}>{confPct}% conf</span>
+                      )}
+                    </div>
+                    {/* Timestamps */}
+                    <div style={{fontSize:11,color:'var(--text-muted)',display:'flex',gap:12,flexWrap:'wrap'}}>
+                      {row.first_seen_at && <span>First seen: {new Date(row.first_seen_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
+                      {row.last_seen_at && <span>Last seen: {new Date(row.last_seen_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
+                      {row.exit_seen_at && <span style={{color:'#4ade80'}}>Exited: {new Date(row.exit_seen_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
+                    </div>
+                    {/* Snapshot strip */}
+                    {sorted.length > 0 && (
+                      <div className="nreg-snap-strip">
+                        {sorted.map((ev, i) => (
+                          <div key={i} className="nreg-snap-wrap">
+                            <img src={ev.url} alt="evidence" loading="lazy" />
+                            {(bestIdx === i) && <span className="nreg-snap-badge">BEST</span>}
+                            {ev.taken_at && <span className="nreg-snap-time">{fmtTime(ev.taken_at)}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Actions */}
+                    <div className="nreg-actions">
+                      <button
+                        className="nreg-btn-dismiss"
+                        disabled={anyActing}
+                        onClick={() => handleNoRegDismiss(row.id)}
+                        style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
+                      >{isActing ? '…' : 'Dismiss'}</button>
+                      <button
+                        className="nreg-btn-tow"
+                        disabled={anyActing}
+                        onClick={() => handleNoRegTow(row.id)}
+                        style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
+                      >{isActing ? '…' : 'Mark Towed'}</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        );
+      })()}
+
       {/* Needs Review — match_status held for human decision before enforcement.
           Owner-only: partners don't approve flagged plate events. */}
       {isOwner && (() => {
@@ -9402,12 +9698,30 @@ function ALPRPropertiesPage({ user }) {
   const [newProp, setNewProp] = useState({ name: '', address: '', property_type: 'apartment' });
   const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
+  // SC211: flagged no-reg counts per property_id
+  const [noRegCounts, setNoRegCounts] = useState({}); // { [propertyId]: number }
 
   useEffect(() => {
     if (!user) return;
     setLoading(true);
     db.getProperties(user.id, user._role).then(p => { setProperties(p); setLoading(false); }).catch(() => setLoading(false));
   }, [user]);
+
+  // Fetch flagged no-reg counts for all visible properties (best-effort, non-blocking)
+  useEffect(() => {
+    if (!properties.length) return;
+    Promise.all(
+      properties.map(p =>
+        apiFetch(`/no-reg-violations?property_id=${p.id}&status=flagged`)
+          .then(rows => [p.id, Array.isArray(rows) ? rows.length : 0])
+          .catch(() => [p.id, 0])
+      )
+    ).then(pairs => {
+      const counts = {};
+      pairs.forEach(([id, n]) => { if (n > 0) counts[id] = n; });
+      setNoRegCounts(counts);
+    });
+  }, [properties]);
 
   async function handleAdd(e) {
     e.preventDefault();
@@ -9476,7 +9790,12 @@ function ALPRPropertiesPage({ user }) {
           {properties.map(p => (
             <div key={p.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <button onClick={() => setSelectedId(p.id)} style={{background:'none',border:'none',cursor:'pointer',textAlign:'left',flex:1,padding:0}}>
-                <div style={{fontSize:15,fontWeight:700,color:'var(--text-primary)'}}>{p.name}</div>
+                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                  <span style={{fontSize:15,fontWeight:700,color:'var(--text-primary)'}}>{p.name}</span>
+                  {noRegCounts[p.id] > 0 && (
+                    <span className="nreg-badge-count">{noRegCounts[p.id]} no-pass {noRegCounts[p.id] === 1 ? 'flag' : 'flags'}</span>
+                  )}
+                </div>
                 <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{p.address || 'No address'}</div>
               </button>
               <div style={{display:'flex',gap:8,alignItems:'center'}}>
