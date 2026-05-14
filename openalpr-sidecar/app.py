@@ -140,7 +140,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.8.2",
+    version="3.9.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -231,7 +231,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.8.2",
+        "version": "3.9.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -437,23 +437,12 @@ def _ocr_best(crops: List[np.ndarray]):
             ocr_candidates.append(upscaled)
         ocr_candidates.append(_clahe_crop(upscaled))
         for c in ocr_candidates:
-            # 1) fast-plate-ocr — purpose-built, fast.
-            try:
-                ocr_result = ocr_reader.run(c, return_confidence=True)
-            except Exception:
-                ocr_result = None
-            if ocr_result:
-                pred = ocr_result[0]
-                text = getattr(pred, "plate", None) or getattr(pred, "text", "") or ""
-                if text:
-                    if hasattr(pred, "char_probs") and pred.char_probs is not None:
-                        conf = float(pred.char_probs.mean())
-                    elif hasattr(pred, "confidence"):
-                        conf = float(pred.confidence)
-                    else:
-                        conf = 1.0
-                    results.append((text, conf))
-            # 2) PaddleOCR — second-opinion OCR for low-contrast frames.
+            # PaddleOCR-only mode. fast-plate-ocr was producing low-quality
+            # single-char partials ("A", "11", etc.) that polluted the
+            # results pool. PaddleOCR PPOCRv4 reads low-contrast / IR plates
+            # significantly better. Operator decision 2026-05-14 to drop
+            # the parallel fast-plate-ocr call. The model stays loaded so
+            # we can re-enable it as a fallback without a redeploy.
             paddle = _paddle_decode(c)
             if paddle is not None:
                 results.append(paddle)
