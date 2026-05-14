@@ -148,7 +148,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.13.2",
+    version="3.13.3",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -324,7 +324,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.13.2",
+        "version": "3.13.3",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -712,41 +712,64 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
     # text Vol. text general; we filter to plate-like candidates (length 4-9
     # alphanumeric after stripping). The hit rate is lower than YOLO+OCR but
     # catches frames where YOLO is bad at the specific plate angle / size.
+    # Helper: filter a paddle full-frame OCR result list to plate-shaped
+    # candidates, excluding camera overlay text and noise patterns. Shared
+    # between the early (count==0) and late (no_plates) fallback paths.
+    def _filter_paddle_full_frame(full_results, img_h: int) -> List[PlateCandidate]:
+        out: List[PlateCandidate] = []
+        if not full_results or not full_results[0]:
+            return out
+        # Reject anything whose bbox center sits in the top 10% of frame —
+        # that's where SC211 + TS4467 cameras put their timestamp overlay
+        # ("2026-05-14 12:45:31" → paddle reads HHMMSS fragments → false positive plate).
+        top_strip_y = img_h * 0.10
+        for entry in full_results[0]:
+            try:
+                bbox_poly = entry[0]
+                text = entry[1][0]
+                conf = float(entry[1][1])
+            except Exception:
+                continue
+            if not text:
+                continue
+            # bbox_poly is a 4-point polygon [[x,y],...]. Center y is the
+            # mean of the 4 y values.
+            try:
+                ys = [pt[1] for pt in bbox_poly]
+                center_y = sum(ys) / max(1, len(ys))
+            except Exception:
+                center_y = img_h  # safe — keep
+            if center_y < top_strip_y:
+                continue  # camera overlay zone
+            cleaned = re.sub(r"[^A-Z0-9]", "", text.upper())
+            if not (4 <= len(cleaned) <= 9):
+                continue
+            if conf < alpr_floor:
+                continue
+            # Reject pure-numeric strings that look like time HHMMSS
+            # patterns even outside the overlay strip (defensive).
+            if cleaned.isdigit() and len(cleaned) == 6 and int(cleaned[0:2]) < 24:
+                continue
+            out.append(PlateCandidate(plate=cleaned, confidence=round(conf, 4)))
+        return out
+
     used_paddle_full_frame = False
     if raw_detection_count == 0 and paddle_reader is not None:
         try:
             full_results = paddle_reader.ocr(img, cls=False)
         except Exception:
             full_results = None
-        if full_results and full_results[0]:
-            plates_full: List[PlateCandidate] = []
-            for entry in full_results[0]:
-                # entry shape: [bbox_polygon, (text, confidence)]
-                try:
-                    text = entry[1][0]
-                    conf = float(entry[1][1])
-                except Exception:
-                    continue
-                if not text:
-                    continue
-                cleaned = re.sub(r"[^A-Z0-9]", "", text.upper())
-                # Plate-shape filter: 4-9 alphanumerics is the typical plate
-                # length envelope across US/EU formats.
-                if not (4 <= len(cleaned) <= 9):
-                    continue
-                if conf < alpr_floor:
-                    continue
-                plates_full.append(PlateCandidate(plate=cleaned, confidence=round(conf, 4)))
-            if plates_full:
-                used_paddle_full_frame = True
-                plates_full.sort(key=lambda p: p.confidence, reverse=True)
-                return RecognizeResponse(
-                    ok=True,
-                    plates=plates_full,
-                    raw_detection_count=len(plates_full),
-                    processing_time_ms=(time.monotonic() - started) * 1000,
-                    reason="paddle_full_frame_fallback",
-                )
+        plates_full = _filter_paddle_full_frame(full_results, img.shape[0])
+        if plates_full:
+            used_paddle_full_frame = True
+            plates_full.sort(key=lambda p: p.confidence, reverse=True)
+            return RecognizeResponse(
+                ok=True,
+                plates=plates_full,
+                raw_detection_count=len(plates_full),
+                processing_time_ms=(time.monotonic() - started) * 1000,
+                reason="paddle_full_frame_fallback",
+            )
 
     if raw_detection_count == 0:
         return RecognizeResponse(
@@ -819,31 +842,15 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
 
     # Late-stage paddle full-frame fallback. When detectors found candidates
     # but OCR couldn't produce any usable plates, run paddle-on-full-frame
-    # as a last resort. This catches the case where DETR/YOLOS at low conf
-    # surface noise candidates that don't contain real plates, but the
-    # actual plate is elsewhere in the frame and paddle's text detector
-    # would find it. Previously only fired when raw_detection_count==0.
+    # as a last resort. Uses the same plate-shape + camera-overlay filter
+    # as the early fallback (rejects top-10% timestamp text + HHMMSS noise).
     if not plates and paddle_reader is not None:
         try:
             full_results = paddle_reader.ocr(img, cls=False)
         except Exception:
             full_results = None
-        if full_results and full_results[0]:
-            for entry in full_results[0]:
-                try:
-                    text = entry[1][0]
-                    conf = float(entry[1][1])
-                except Exception:
-                    continue
-                if not text:
-                    continue
-                cleaned = re.sub(r"[^A-Z0-9]", "", text.upper())
-                if not (4 <= len(cleaned) <= 9):
-                    continue
-                if conf < alpr_floor:
-                    continue
-                plates.append(PlateCandidate(plate=cleaned, confidence=round(conf, 4)))
-            plates.sort(key=lambda p: p.confidence, reverse=True)
+        plates.extend(_filter_paddle_full_frame(full_results, img.shape[0]))
+        plates.sort(key=lambda p: p.confidence, reverse=True)
 
     if plates:
         reason = None
