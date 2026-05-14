@@ -51,7 +51,13 @@ export type FlushResult =
   | { outcome: "no_match"; group_key: string; chosen_plate: string; reads_consumed: number }
   | { outcome: "exit_clean"; pass_id: string; reads_consumed: number }
   | { outcome: "exit_overstay"; pass_id: string; violation_id: string; reads_consumed: number }
-  | { outcome: "partner_truck_sighting"; partner_id: string; sighting_id: string; reads_consumed: number };
+  | { outcome: "partner_truck_sighting"; partner_id: string; sighting_id: string; reads_consumed: number }
+  | {
+      outcome: "no_registration_recorded";
+      violation_id: string;
+      row_state: "created" | "updated_presence" | "updated_exit";
+      reads_consumed: number;
+    };
 
 type FlushArgs = {
   db: SupabaseClient;
