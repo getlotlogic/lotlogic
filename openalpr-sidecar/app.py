@@ -148,7 +148,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.13.1",
+    version="3.13.2",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -221,12 +221,17 @@ def on_startup() -> None:
     if ENABLE_EASYOCR_FALLBACK:
         import easyocr as _easyocr
         easyocr_reader = _easyocr.Reader(["en"], gpu=False, verbose=False)
-    # PaddleOCR + DETR are LOADED LAZILY on first /recognize call.
-    # Eager startup loading was blocking past Railway's 60s healthcheck
-    # window. Lazy loading lets uvicorn bind + /health respond
-    # immediately; the first /recognize call pays the warm-up cost
-    # once, then warm for the rest of container lifetime.
-    print("[startup] paddle + DETR will lazy-load on first /recognize", flush=True)
+    # Kick off paddle + DETR + YOLOS loads in BACKGROUND THREADS so
+    # startup returns instantly (healthcheck passes) but the models are
+    # warming concurrently. The first /recognize call hits _ensure_*
+    # which no-ops if the background load already finished — otherwise
+    # blocks the request until done. Edge function callers see fast
+    # responses once any model finishes loading.
+    import threading
+    threading.Thread(target=_ensure_paddle_loaded, daemon=True, name="paddle-load").start()
+    threading.Thread(target=_ensure_detr_loaded, daemon=True, name="detr-load").start()
+    threading.Thread(target=_ensure_yolos_loaded, daemon=True, name="yolos-load").start()
+    print("[startup] paddle + DETR + YOLOS background-loading", flush=True)
 
 
 _paddle_load_attempted = False
@@ -319,7 +324,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.13.1",
+        "version": "3.13.2",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -893,11 +898,11 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
         raise HTTPException(status_code=401, detail="unauthorized")
     if detector is None or ocr_reader is None:
         raise HTTPException(status_code=503, detail="models not loaded yet")
-    # Lazy-load the heavy non-essential models. Idempotent — only the
-    # FIRST request after container start pays the download cost.
-    _ensure_paddle_loaded()
-    _ensure_detr_loaded()
-    _ensure_yolos_loaded()
+    # Models load in background threads at startup (see on_startup).
+    # Request handlers do NOT block on model loads — if paddle/DETR/YOLOS
+    # aren't ready yet, the pipeline skips them and uses whatever IS loaded.
+    # Avoids the FIRST request blocking 30-60s while paddle downloads
+    # (which exceeded the edge function's 8s timeout and returned 502s).
 
     try:
         img = _decode_image(req.image_base64, camera_id=req.camera_id)
