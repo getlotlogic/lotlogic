@@ -148,7 +148,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.13.0",
+    version="3.13.1",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -319,7 +319,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.13.0",
+        "version": "3.13.1",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -811,6 +811,35 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
         plates.append(PlateCandidate(plate=cleaned, confidence=round(combined_conf, 4)))
 
     plates.sort(key=lambda p: p.confidence, reverse=True)
+
+    # Late-stage paddle full-frame fallback. When detectors found candidates
+    # but OCR couldn't produce any usable plates, run paddle-on-full-frame
+    # as a last resort. This catches the case where DETR/YOLOS at low conf
+    # surface noise candidates that don't contain real plates, but the
+    # actual plate is elsewhere in the frame and paddle's text detector
+    # would find it. Previously only fired when raw_detection_count==0.
+    if not plates and paddle_reader is not None:
+        try:
+            full_results = paddle_reader.ocr(img, cls=False)
+        except Exception:
+            full_results = None
+        if full_results and full_results[0]:
+            for entry in full_results[0]:
+                try:
+                    text = entry[1][0]
+                    conf = float(entry[1][1])
+                except Exception:
+                    continue
+                if not text:
+                    continue
+                cleaned = re.sub(r"[^A-Z0-9]", "", text.upper())
+                if not (4 <= len(cleaned) <= 9):
+                    continue
+                if conf < alpr_floor:
+                    continue
+                plates.append(PlateCandidate(plate=cleaned, confidence=round(conf, 4)))
+            plates.sort(key=lambda p: p.confidence, reverse=True)
+
     if plates:
         reason = None
     elif aspect_gated == raw_detection_count and raw_detection_count > 0:
