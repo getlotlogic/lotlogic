@@ -39,7 +39,15 @@ DETECTOR_MODEL = os.environ.get("DETECTOR_MODEL", "yolo-v9-s-608-license-plate-e
 # When set, this overrides DETECTOR_MODEL and uses the custom_yolo wrapper
 # (raw-prediction graph + Python NMS). When unset, fall back to the bundled
 # *-end2end model from open-image-models.
-DETECTOR_MODEL_PATH = os.environ.get("DETECTOR_MODEL_PATH", "")
+# DETECTOR_MODEL_PATH defaults to the Dockerfile-baked keremberke/yolov8m-
+# license-plate ONNX. Env can override (e.g. point at lotlogic-plate.onnx
+# for Charlotte-specific fine-tune). Empty string disables, falling back
+# to the bundled open_image_models detector.
+_DEFAULT_DETECTOR_PATH = "/app/models/yolov8m-plate.onnx"
+DETECTOR_MODEL_PATH = os.environ.get("DETECTOR_MODEL_PATH",
+                                     _DEFAULT_DETECTOR_PATH if os.path.exists(_DEFAULT_DETECTOR_PATH) else "")
+# yolov8m-license-plate was trained at 640x640. Override at runtime if
+# the active model uses a different training resolution.
 DETECTOR_IMGSZ = int(os.environ.get("DETECTOR_IMGSZ", "640"))
 # fast-plate-ocr v1.x ships several global models. cct-s-v2 is the current
 # default in the upstream README and supports US plate formats. Switch to
@@ -140,7 +148,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.10.0",
+    version="3.11.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -231,7 +239,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.10.0",
+        "version": "3.11.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,

@@ -30,6 +30,14 @@ RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False, verbose=False)"
 # ~5-10s to the first request, then warm for the rest of the container's
 # lifetime). Worth the trade for build reliability.
 
+# keremberke/yolov8m-license-plate — plate-specific YOLOv8m, benchmarks
+# better than the bundled yolo-v9-s-608 on small/angled plates. Download
+# the ONNX export at build time so /app/models/yolov8m-plate.onnx is
+# available for CustomYoloDetector. Best-effort: if HF Hub flakes, the
+# sidecar falls back to the bundled detector via the existing
+# DETECTOR_MODEL_PATH-or-bundled branch in app.py.
+RUN mkdir -p /app/models && python -c "from huggingface_hub import hf_hub_download; p = hf_hub_download(repo_id='keremberke/yolov8m-license-plate', filename='best.onnx', local_dir='/app/models'); import os; os.rename(p, '/app/models/yolov8m-plate.onnx'); print('plate detector ONNX cached at /app/models/yolov8m-plate.onnx')" || true
+
 COPY app.py .
 COPY custom_yolo.py .
 

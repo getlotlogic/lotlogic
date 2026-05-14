@@ -17,3 +17,6 @@ easyocr==1.7.1
 # memory limits).
 paddleocr==2.8.1
 paddlepaddle==2.6.2
+# huggingface_hub for downloading the keremberke yolov8m-license-plate
+# ONNX export at build time. Tiny dep (no torch/transformers).
+huggingface_hub==0.24.7
