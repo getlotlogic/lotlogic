@@ -10362,7 +10362,7 @@ function RegisteredDrill({ propertyId, propertyName, onBack }) {
             </div>
             <div className="reg-time-paper">
               <span className="reg-live-paper">● ACTIVE</span>
-              {row.starts_at && <span style={{fontSize:11}}>Since {fmtTime(row.starts_at)}</span>}
+              {row.starts_at && <span style={{fontSize:11}}>Since {new Date(row.starts_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
             </div>
           </div>
         ))}
