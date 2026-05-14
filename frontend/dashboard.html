@@ -67,6 +67,23 @@
       --grain-overlay: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.96  0 0 0 0 0.96  0 0 0 0 0.94  0 0 0 0.05 0'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
       /* Road-stripe — for section dividers, recalls actual lane markings */
       --road-stripe: repeating-linear-gradient(90deg, var(--accent) 0 22px, transparent 22px 36px);
+      /* Brand-v2 palette — used by the SC211 no-reg / lots-redesign surfaces */
+      --bg-paper: #F2EAD8;
+      --card-paper: #FAF5E8;
+      --border-paper: #E1D5B8;
+      --border-strong-paper: #C9B891;
+      --ink-paper: #1F1B14;
+      --ink-2-paper: #3D3528;
+      --ink-3-paper: #6F6450;
+      --ink-4-paper: #968B73;
+      --red-paper: #B14535;
+      --red-bg-paper: #F4DDD3;
+      --amber-paper: #D97706;
+      --amber-bg-paper: #F8E6C3;
+      --green-paper: #4A7A48;
+      --green-bg-paper: #DEE9D7;
+      --terra-paper: #C97A4A;
+      --shadow-paper: 0 1px 0 rgba(31,27,20,.04), 0 1px 3px rgba(31,27,20,.06);
     }
     .theme-light {
       --bg-primary: #F6F4EE;
@@ -1853,6 +1870,283 @@
     }
     .theme-light .nreg-btn-dismiss { background: #f3f4f6; border-color: #e5e7eb; color: #6b7280; }
     .theme-light .nreg-pill-strength-brief { background: #f3f4f6; border-color: #e5e7eb; color: #6b7280; }
+
+    /* ── Brand-v2 KPI tiles (lots redesign) ── */
+    .kpis-paper{display:grid;grid-template-columns:1fr 1fr}
+    .kpi-paper{
+      padding:18px 16px 16px;
+      border-right:1px solid var(--border-paper);
+      border-bottom:1px solid var(--border-paper);
+      cursor:pointer;display:block;text-decoration:none;color:inherit;
+      background:var(--card-paper);
+      transition:background 120ms;position:relative;
+    }
+    .kpi-paper:nth-child(2n){border-right:none}
+    .kpi-paper:nth-last-child(-n+2){border-bottom:none}
+    .kpi-paper:active,.kpi-paper:hover{background:#EFE4CA}
+    .kpi-paper .top-row{display:flex;align-items:baseline;justify-content:space-between}
+    .kpi-paper .val{
+      font-size:34px;font-weight:800;letter-spacing:-.03em;line-height:1;
+      font-variant-numeric:tabular-nums;color:var(--ink-paper);
+    }
+    .kpi-paper .chev{color:var(--ink-4-paper);font-size:18px}
+    .kpi-paper .label{margin-top:8px;font-size:12px;font-weight:600;color:var(--ink-3-paper)}
+    .kpi-paper.red .val{color:var(--red-paper)}
+    .kpi-paper.amber .val{color:var(--amber-paper)}
+    .kpi-paper.green .val{color:var(--green-paper)}
+    .kpi-paper.calm .val{color:var(--ink-3-paper)}
+
+    /* ── Brand-v2 lot card ── */
+    .lot-card-paper{
+      background:var(--card-paper);
+      border:1px solid var(--border-paper);
+      border-radius:14px;overflow:hidden;
+      margin-bottom:14px;
+      box-shadow:var(--shadow-paper);
+    }
+    .lot-head-paper{
+      padding:16px 18px 14px;
+      display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+      border-bottom:1px solid var(--border-paper);
+    }
+    .lot-name-paper{font-size:18px;font-weight:700;letter-spacing:-.01em;line-height:1.2;color:var(--ink-paper)}
+    .lot-addr-paper{font-size:13px;color:var(--ink-3-paper);margin-top:3px;font-weight:500}
+    .lot-foot-paper{
+      display:flex;border-top:1px solid var(--border-paper);
+    }
+    .lot-foot-paper button{
+      flex:1;padding:14px 12px;text-align:center;background:none;border:none;
+      font-size:14px;font-weight:600;color:var(--ink-paper);
+      border-right:1px solid var(--border-paper);
+      display:flex;align-items:center;justify-content:center;gap:6px;
+      cursor:pointer;font-family:inherit;
+    }
+    .lot-foot-paper button:last-child{border-right:none}
+    .lot-foot-paper button:active{background:#EFE4CA}
+    .lot-foot-paper .arr{color:var(--ink-3-paper);font-weight:500}
+    .lot-pill-paper{
+      flex-shrink:0;
+      font-size:11px;font-weight:700;letter-spacing:.02em;
+      padding:5px 10px;border-radius:999px;
+      display:inline-flex;align-items:center;gap:6px;
+      white-space:nowrap;
+    }
+    .lot-pill-paper .dot{width:7px;height:7px;border-radius:50%}
+    .lot-pill-paper.red{background:var(--red-bg-paper);color:var(--red-paper)}
+    .lot-pill-paper.red .dot{background:var(--red-paper)}
+    .lot-pill-paper.amber{background:var(--amber-bg-paper);color:var(--amber-paper)}
+    .lot-pill-paper.amber .dot{background:var(--amber-paper)}
+    .lot-pill-paper.green{background:var(--green-bg-paper);color:var(--green-paper)}
+    .lot-pill-paper.green .dot{background:var(--green-paper)}
+
+    /* ── Brand-v2 drill-down panels ── */
+    .drill-paper{
+      background:var(--card-paper);
+      border:1px solid var(--border-paper);
+      border-radius:14px;overflow:hidden;
+      box-shadow:var(--shadow-paper);
+      margin-bottom:16px;
+    }
+    .drill-head-paper{
+      padding:16px 18px;
+      border-bottom:1px solid var(--border-paper);
+      display:flex;align-items:center;justify-content:space-between;
+    }
+    .drill-head-paper .title{font-size:15px;font-weight:700;color:var(--ink-paper)}
+    .drill-head-paper .back{
+      font-size:13px;color:var(--ink-3-paper);font-weight:600;
+      background:none;border:none;cursor:pointer;font-family:inherit;
+      display:inline-flex;align-items:center;gap:4px;
+    }
+    .drill-head-paper .back:active{opacity:.7}
+
+    /* No-reg drill-down rows */
+    .nr-row-paper{
+      padding:14px 16px 14px 20px;
+      border-bottom:1px solid var(--border-paper);
+      position:relative;
+    }
+    .nr-row-paper:last-child{border-bottom:none}
+    .nr-row-paper::before{
+      content:'';position:absolute;left:0;top:0;bottom:0;
+      width:4px;
+    }
+    .nr-row-paper.stage-flagged::before{background:var(--red-paper)}
+    .nr-row-paper.stage-pending::before{background:var(--amber-paper)}
+    .nr-row-paper.stage-resolved::before{background:var(--green-paper)}
+    .nr-row-paper.stage-dismissed::before{background:var(--ink-4-paper)}
+    .nr-row-top-paper{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+    }
+    .plate-tag-paper{
+      font-family:ui-monospace,"SF Mono",Menlo,monospace;
+      font-size:16px;font-weight:700;letter-spacing:.04em;
+      padding:6px 10px;
+      background:var(--ink-paper);color:var(--card-paper);border-radius:6px;
+    }
+    .nr-times-paper{
+      font-size:12.5px;color:var(--ink-3-paper);
+      display:flex;flex-direction:column;align-items:flex-end;font-weight:500;
+      font-variant-numeric:tabular-nums;
+    }
+    .nr-times-paper .age{color:var(--red-paper);font-weight:700;font-size:14px}
+    .nr-meta-paper{
+      margin-top:10px;
+      font-size:12.5px;color:var(--ink-3-paper);
+      display:flex;gap:10px;flex-wrap:wrap;font-weight:500;
+    }
+    .nr-meta-paper .badge{
+      padding:3px 8px;border-radius:999px;background:var(--bg-paper);
+      font-size:11px;font-weight:700;letter-spacing:.02em;color:var(--ink-3-paper);
+    }
+    .nr-meta-paper .badge.lingered{background:var(--red-bg-paper);color:var(--red-paper)}
+    .nr-snaps-paper{
+      margin-top:12px;
+      display:grid;grid-template-columns:repeat(4,1fr);gap:6px;
+    }
+    .nr-snap-paper{
+      aspect-ratio:4/3;border-radius:6px;background:#0a0a0b;
+      position:relative;overflow:hidden;
+      background-image:repeating-linear-gradient(45deg,#1a1a1c,#1a1a1c 6px,#0a0a0b 6px,#0a0a0b 12px);
+      display:flex;align-items:flex-end;
+    }
+    .nr-snap-paper img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0}
+    .nr-snap-paper .snt{
+      width:100%;font-size:9.5px;font-weight:600;color:#fff;
+      background:linear-gradient(transparent,rgba(0,0,0,.7));
+      padding:8px 6px 4px;text-align:right;font-variant-numeric:tabular-nums;
+      position:relative;z-index:1;
+    }
+    .nr-snap-paper .snc{
+      position:absolute;top:4px;left:4px;
+      font-size:9px;font-weight:700;color:#fff;
+      background:rgba(0,0,0,.55);padding:2px 5px;border-radius:3px;
+      font-variant-numeric:tabular-nums;z-index:1;
+    }
+    .nr-snap-paper.best{outline:2px solid var(--red-paper);outline-offset:-2px}
+    .nr-snap-paper.best::after{
+      content:'BEST';position:absolute;top:4px;right:4px;
+      font-size:8.5px;font-weight:800;letter-spacing:.06em;
+      background:var(--red-paper);color:#fff;padding:2px 5px;border-radius:3px;z-index:1;
+    }
+    .nr-actions-paper{
+      margin-top:14px;display:flex;gap:8px;
+    }
+    .btn-paper{
+      flex:1;padding:11px 12px;border-radius:8px;
+      font-size:14px;font-weight:700;
+      text-align:center;cursor:pointer;
+      border:1px solid var(--border-strong-paper);background:var(--card-paper);color:var(--ink-paper);
+      font-family:inherit;transition:background 120ms;
+    }
+    .btn-paper:active{background:#EFE4CA}
+    .btn-paper.primary{background:var(--red-paper);color:var(--card-paper);border-color:var(--red-paper)}
+    .btn-paper.primary:active{background:#8E3528}
+
+    /* Registered drill-down rows */
+    .reg-row-paper{
+      padding:13px 16px;border-bottom:1px solid var(--border-paper);
+      display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
+    }
+    .reg-row-paper:last-child{border-bottom:none}
+    .reg-name-paper{font-size:15px;font-weight:600;color:var(--ink-paper)}
+    .reg-detail-paper{font-size:12.5px;color:var(--ink-3-paper);margin-top:2px;font-weight:500}
+    .reg-time-paper{
+      font-size:12px;color:var(--ink-3-paper);text-align:right;font-weight:500;
+      font-variant-numeric:tabular-nums;display:flex;flex-direction:column;align-items:flex-end;gap:2px;
+    }
+    .reg-live-paper{color:var(--green-paper);font-weight:700;font-size:11px;letter-spacing:.04em}
+
+    /* ── Brand-v2 filter pills (All Jobs) ── */
+    .filter-bar-paper{
+      display:flex;gap:6px;padding:14px 0 4px;overflow-x:auto;
+      -webkit-overflow-scrolling:touch;scrollbar-width:none;
+    }
+    .filter-bar-paper::-webkit-scrollbar{display:none}
+    .filter-pill-paper{
+      flex-shrink:0;padding:7px 13px;border-radius:999px;
+      font-size:13px;font-weight:600;letter-spacing:-.005em;
+      border:1px solid var(--border-strong-paper);background:var(--card-paper);color:var(--ink-2-paper);
+      cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+      white-space:nowrap;font-family:inherit;transition:background 120ms,color 120ms;
+    }
+    .filter-pill-paper:active{background:#EFE4CA}
+    .filter-pill-paper.active{background:var(--ink-paper);color:var(--card-paper);border-color:var(--ink-paper)}
+    .filter-pill-paper .n{
+      font-variant-numeric:tabular-nums;
+      font-size:11.5px;padding:1px 6px;border-radius:999px;
+      background:var(--bg-paper);color:var(--ink-3-paper);font-weight:700;
+    }
+    .filter-pill-paper.active .n{background:rgba(250,245,232,.18);color:var(--card-paper)}
+
+    /* ── Brand-v2 job rows (All Jobs) ── */
+    .job-row-paper{
+      background:var(--card-paper);border:1px solid var(--border-paper);border-radius:12px;
+      padding:14px 14px 12px 18px;margin-bottom:10px;box-shadow:var(--shadow-paper);
+      position:relative;cursor:pointer;
+    }
+    .job-row-paper::before{
+      content:'';position:absolute;left:0;top:8px;bottom:8px;
+      width:4px;border-radius:0 4px 4px 0;background:var(--ink-4-paper);
+    }
+    .job-row-paper.stage-flagged::before{background:var(--red-paper)}
+    .job-row-paper.stage-pending::before{background:var(--amber-paper)}
+    .job-row-paper.stage-resolved::before,.job-row-paper.stage-handled::before{background:var(--green-paper)}
+    .job-row-paper.stage-dismissed::before{background:var(--ink-4-paper)}
+    .job-row-paper:active{background:#F4ECD7}
+    .jr-top-paper{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .jr-type-paper{
+      font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+      padding:3px 8px;border-radius:999px;
+    }
+    .jr-type-paper.nreg{background:var(--red-bg-paper);color:var(--red-paper)}
+    .jr-type-paper.over{background:var(--amber-bg-paper);color:var(--amber-paper)}
+    .jr-type-paper.viol{background:var(--amber-bg-paper);color:var(--amber-paper)}
+    .jr-type-paper.done{background:var(--green-bg-paper);color:var(--green-paper)}
+    .jr-stage-paper{
+      font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+      margin-left:8px;color:var(--ink-3-paper);font-variant-numeric:tabular-nums;
+    }
+    .job-row-paper.stage-flagged .jr-stage-paper{color:var(--red-paper)}
+    .job-row-paper.stage-pending .jr-stage-paper{color:var(--amber-paper)}
+    .job-row-paper.stage-resolved .jr-stage-paper,.job-row-paper.stage-handled .jr-stage-paper{color:var(--green-paper)}
+    .jr-age-paper{
+      font-size:13px;font-weight:700;color:var(--ink-3-paper);font-variant-numeric:tabular-nums;
+      display:flex;align-items:center;gap:2px;
+    }
+    .jr-age-paper.urgent{color:var(--red-paper)}
+    .jr-chev-paper{
+      color:var(--ink-3-paper);font-size:18px;line-height:1;
+      transition:transform 200ms ease;display:inline-block;margin-left:4px;
+    }
+    .jr-mid-paper{display:flex;align-items:center;gap:10px;margin-top:11px}
+    .jr-mid-paper .where{
+      font-size:14px;font-weight:600;color:var(--ink-paper);letter-spacing:-.005em;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    }
+    .jr-bot-paper{
+      margin-top:9px;font-size:12.5px;color:var(--ink-3-paper);font-weight:500;
+      display:flex;gap:10px;flex-wrap:wrap;
+    }
+    .jr-bot-paper .sep{color:var(--border-strong-paper)}
+    .jr-expand-paper{
+      overflow:hidden;max-height:0;
+      transition:max-height 260ms ease;
+      border-top:0 solid transparent;
+    }
+    .job-row-paper.open .jr-expand-paper{
+      max-height:600px;border-top:1px solid var(--border-paper);
+      margin-top:12px;padding-top:12px;
+    }
+    .jr-snaps-paper{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px}
+    .jr-actions-paper{display:flex;gap:8px;margin-bottom:8px}
+    .jr-actions-paper .btn-paper{font-size:13.5px;padding:10px 12px}
+    .jr-kv-paper{
+      display:grid;grid-template-columns:auto 1fr;gap:6px 14px;
+      font-size:13px;font-weight:500;color:var(--ink-2-paper);margin-bottom:12px;
+    }
+    .jr-kv-paper dt{color:var(--ink-3-paper);font-weight:600}
+    .jr-kv-paper dd{color:var(--ink-paper);font-variant-numeric:tabular-nums}
   </style>
 </head>
 <body>
