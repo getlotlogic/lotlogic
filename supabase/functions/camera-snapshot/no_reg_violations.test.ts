@@ -57,3 +57,44 @@ Deno.test("findOpenViolation: returns null when nothing matches", async () => {
   const r = await findOpenViolation(db, { property_id: "p1", normalized_plate: "ABC123", within_hours: 24 });
   assertEquals(r, null);
 });
+
+import { insertViolation } from "./no_reg_violations.ts";
+
+function stubInsertDb(captured: { args?: any }) {
+  return {
+    from(_table: string) {
+      const builder: any = {
+        insert(row: any) {
+          captured.args = row;
+          return {
+            select: () => ({
+              single: () => Promise.resolve({ data: { ...row, id: "new-id" }, error: null }),
+            }),
+          };
+        },
+      };
+      return builder;
+    },
+  } as any;
+}
+
+Deno.test("insertViolation: inserts with provided fields and returns the row", async () => {
+  const captured: any = {};
+  const db = stubInsertDb(captured);
+  const out = await insertViolation(db, {
+    property_id: "p1",
+    normalized_plate: "ABC123",
+    raw_plate: "ABC-123",
+    best_confidence: 0.94,
+    first_seen_at: new Date("2026-05-14T08:14:03Z"),
+    last_seen_at: new Date("2026-05-14T08:14:18Z"),
+    presence_strength: "lingered",
+    evidence: [],
+    weak_read_ids: ["r1", "r2"],
+  });
+  assertEquals(out.id, "new-id");
+  assertEquals(captured.args.property_id, "p1");
+  assertEquals(captured.args.presence_strength, "lingered");
+  assertEquals(captured.args.status, "pending");
+  assertEquals(captured.args.first_seen_at, "2026-05-14T08:14:03.000Z");
+});

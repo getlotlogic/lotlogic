@@ -68,7 +68,7 @@ export async function findOpenViolation(db: SupabaseClient, args: {
   return (data?.[0] as NoRegViolationRow) ?? null;
 }
 
-export async function insertViolation(_db: SupabaseClient, _args: {
+export async function insertViolation(db: SupabaseClient, args: {
   property_id: string;
   normalized_plate: string;
   raw_plate: string;
@@ -78,7 +78,27 @@ export async function insertViolation(_db: SupabaseClient, _args: {
   presence_strength: "brief" | "lingered";
   evidence: EvidenceItem[];
   weak_read_ids: string[];
-}): Promise<NoRegViolationRow> { throw new Error("not implemented"); }
+}): Promise<NoRegViolationRow> {
+  const row = {
+    property_id: args.property_id,
+    normalized_plate: args.normalized_plate,
+    raw_plate: args.raw_plate,
+    best_confidence: args.best_confidence,
+    first_seen_at: args.first_seen_at.toISOString(),
+    last_seen_at: args.last_seen_at.toISOString(),
+    presence_strength: args.presence_strength,
+    status: "pending" as const,
+    evidence: args.evidence,
+    weak_read_ids: args.weak_read_ids,
+  };
+  const { data, error } = await db
+    .from("no_registration_violations")
+    .insert(row)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as NoRegViolationRow;
+}
 
 export async function updateViolation(_db: SupabaseClient, _id: string, _patch: {
   last_seen_at?: Date;
