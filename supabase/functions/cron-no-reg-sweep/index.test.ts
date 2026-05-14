@@ -78,7 +78,7 @@ Deno.test("sweepViolations: pending past grace WITH matching pass → resolved_p
       flagged_at: null as string | null,
     }],
     passes: [{
-      id: "pass1", property_id: "p1", normalized_plate: "ABC123",
+      id: "pass1", property_id: "p1", plate_text: "ABC-123", normalized_back_plate: null,
       created_at: "2026-05-14T08:05:00Z",
     }],
     updates: [] as any[],
@@ -99,7 +99,7 @@ Deno.test("sweepViolations: flagged + new pass arrives → resolved_late", async
       last_seen_at:   "2026-05-14T08:00:12Z",
     }],
     passes: [{
-      id: "pass1", property_id: "p1", normalized_plate: "ABC123",
+      id: "pass1", property_id: "p1", plate_text: "ABC-123", normalized_back_plate: null,
       created_at: "2026-05-14T08:30:00Z",
     }],
     updates: [] as any[],
