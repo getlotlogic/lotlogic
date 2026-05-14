@@ -17,11 +17,6 @@ easyocr==1.7.1
 # memory limits).
 paddleocr==2.8.1
 paddlepaddle==2.6.2
-# huggingface_hub for model downloads at build time.
+# huggingface_hub for downloading the keremberke yolov8m-license-plate
+# ONNX export at build time. Tiny dep (no torch/transformers).
 huggingface_hub==0.24.7
-# DETR-based plate detector. Heavy deps but the architecture handles
-# small/angled plates better than YOLO. torch is installed separately
-# in the Dockerfile via the CPU-only PyTorch index (cuts wheel size
-# ~6x vs the default CUDA-bundled torch).
-transformers==4.44.2
-timm==1.0.9
