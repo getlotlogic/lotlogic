@@ -252,14 +252,17 @@ export async function handleTruckPlazaExit(args: {
     }
   }
 
-  // 2. SC211 (no onboard plate) flow: run sidecar, buffer for best-of-N
-  //    burst flush. The actual lookup happens inside flushGroup at end
-  //    of burst window (cron-driven or opportunistic). Returns early.
+  // 2. SC211 (no onboard plate) flow: sidecar is the "is this frame worth
+  //    saving" gate ONLY. We ignore its plate text (too noisy on dark IR
+  //    frames — returns "E", "R", "11" from the timestamp banner). When
+  //    sidecar returns nothing → empty_scene → drop. When it returns
+  //    anything → there's IR-lit content worth a PR call → buffer the
+  //    raw frame with empty plate text. flushGroup picks the frame and
+  //    calls PR for the canonical read.
   if (!resolved && args.sidecarRead) {
     const sc = await args.sidecarRead(payload.bytes, camera.id);
-    if (!sc || sc.confidence < SC211_SIDECAR_FLOOR) {
-      // No usable read — drop. Opportunistic flush still gets a chance
-      // since we're at a camera that's part of a burst group.
+    if (!sc) {
+      // empty_scene — no text-shaped regions at all. Drop without buffering.
       const stale = await findStaleGroups(db, now);
       const myGroup = groupKeyFor(camera);
       let flushed = 0;
@@ -269,26 +272,22 @@ export async function handleTruckPlazaExit(args: {
           if (r.outcome !== "no_op") flushed++;
         }
       }
-      return { outcome: "dropped", reason: sc ? `sidecar_below_floor_${sc.confidence.toFixed(2)}` : "sidecar_empty" };
+      return { outcome: "dropped", reason: "sidecar_empty" };
     }
-    // Sidecar has a read >= floor — upload snapshot + buffer the row.
-    // Accept short reads (even single characters) so partial OCR results
-    // still land in weak_plate_reads where best-of-N can promote a fuller
-    // read from the same burst. The downstream match step requires full
-    // plates to find a pass, but partial reads are useful evidence.
-    const normalized = normalizePlate(sc.plate);
-    if (normalized.length < 1) return { outcome: "dropped", reason: "sidecar_plate_empty_normalized" };
+    // Sidecar saw IR-lit content. Buffer the frame for PR — but we do NOT
+    // trust the plate text it produced. raw_plate stays empty so flushGroup
+    // relies entirely on PR's read of the buffered image.
     const dateStr = now.toISOString().slice(0, 10);
-    const r2Key = `${camera.property_id}/${dateStr}/weak-${camera.api_key}-${now.getTime()}-${normalized}.jpg`;
+    const r2Key = `${camera.property_id}/${dateStr}/weak-${camera.api_key}-${now.getTime()}.jpg`;
     const imageUrl = await args.uploadJpeg(payload.bytes, r2Key);
     const groupKey = groupKeyFor(camera);
     const weakId = await insertWeakRead(db, {
       property_id: camera.property_id,
       camera_id: camera.id,
       group_key: groupKey,
-      raw_plate: sc.plate,
-      normalized_plate: normalized,
-      confidence: sc.confidence,
+      raw_plate: "",
+      normalized_plate: "",
+      confidence: 0,
       image_url: imageUrl,
     });
     // Opportunistic flush: if another burst on this same group has gone
@@ -314,7 +313,7 @@ export async function handleTruckPlazaExit(args: {
   // as an authoritative second opinion. If PR returns a plate, we use
   // it for EXACT-only matching (no fuzzy fallback). If PR also fails,
   // we drop the read entirely rather than trust the bad onboard.
-  const ONBOARD_CONF_FLOOR = 0.35;
+  const ONBOARD_CONF_FLOOR = 0.25;
   const PR_RESOLVE_FLOOR = 0.40; // PR cloud's own confidence floor
   let lowConfPath = false;
   if (resolved && resolved.confidence !== null && resolved.confidence < ONBOARD_CONF_FLOOR) {

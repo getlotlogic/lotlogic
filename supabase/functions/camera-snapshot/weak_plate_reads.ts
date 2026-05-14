@@ -30,6 +30,12 @@ import {
 } from "./no_reg_violations.ts";
 
 export const BURST_WINDOW_MS = 30 * 1000;
+// Hard cap: if a group's OLDEST unprocessed read is older than this, force
+// a flush even if new reads keep arriving. Without this, a burst that
+// never goes quiet (continuous SC211 motion) grows unboundedly and never
+// reaches PR. 90s is a generous upper bound for "a single truck still
+// arriving at the gate" — anything older is a stuck/oversize burst.
+export const HARD_FLUSH_MAX_AGE_MS = 90 * 1000;
 
 export type WeakReadInsert = {
   property_id: string;
@@ -103,22 +109,29 @@ export async function findStaleGroups(
     // process fresh bursts, but old never-flushed groups can be stranded.
     console.warn("findStaleGroups: 2000-row cap hit — older unprocessed weak_plate_reads may be stranded");
   }
-  type Bucket = { property_id: string; group_key: string; latest: number };
+  type Bucket = { property_id: string; group_key: string; latest: number; oldest: number };
   const buckets = new Map<string, Bucket>();
   for (const r of (data ?? []) as Array<{ property_id: string; group_key: string; seen_at: string }>) {
     const key = `${r.property_id}|${r.group_key}`;
     const ts = new Date(r.seen_at).getTime();
     const b = buckets.get(key);
     if (!b) {
-      buckets.set(key, { property_id: r.property_id, group_key: r.group_key, latest: ts });
-    } else if (ts > b.latest) {
-      b.latest = ts;
+      buckets.set(key, { property_id: r.property_id, group_key: r.group_key, latest: ts, oldest: ts });
+    } else {
+      if (ts > b.latest) b.latest = ts;
+      if (ts < b.oldest) b.oldest = ts;
     }
   }
-  const cutoffMsNum = new Date(cutoff).getTime();
+  const quietCutoff = new Date(cutoff).getTime();
+  const hardCutoff = now.getTime() - HARD_FLUSH_MAX_AGE_MS;
   const stale: Array<{ property_id: string; group_key: string }> = [];
   for (const b of buckets.values()) {
-    if (b.latest < cutoffMsNum) stale.push({ property_id: b.property_id, group_key: b.group_key });
+    // Flush if EITHER (a) burst went quiet for cutoffMs, OR (b) oldest
+    // unprocessed read in the group is past the hard-max-age — prevents
+    // continuous traffic from accumulating forever.
+    if (b.latest < quietCutoff || b.oldest < hardCutoff) {
+      stale.push({ property_id: b.property_id, group_key: b.group_key });
+    }
   }
   return stale;
 }
@@ -335,7 +348,9 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
   if (!tow && !pass) {
     // ── Unmatched: record/extend a no-registration violation row ────────────
     // Only record when we have a confirmed plate text to key the violation on.
-    if (!best.normalized_plate) {
+    // Use plateForMatch (= PR's read when available, else best.normalized_plate)
+    // — the weak_read's raw_plate is empty when buffered without sidecar OCR.
+    if (!plateForMatch) {
       return { outcome: "no_match", group_key: groupKey, chosen_plate: plateForMatch, reads_consumed: claimed.length };
     }
 
@@ -354,7 +369,7 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
 
     const candidate = await findOpenViolation(db, {
       property_id: propertyId,
-      normalized_plate: best.normalized_plate,
+      normalized_plate: plateForMatch,
       within_hours: 24,
     });
 
@@ -369,7 +384,7 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
         last_seen_at: burst_max,
         exit_seen_at: isExit ? burst_min : undefined,
         presence_strength: newStrength,
-        best_confidence: Math.max(Number(candidate.best_confidence), best.confidence),
+        best_confidence: Math.max(Number(candidate.best_confidence), prConfidence ?? best.confidence),
         evidence_append: bundleEvidence(evidenceRows),
         weak_read_ids_append: claimed.map((r) => r.id),
       });
@@ -384,9 +399,9 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
     const burst_span_ms = burst_max.getTime() - burst_min.getTime();
     const inserted = await insertViolation(db, {
       property_id: propertyId,
-      normalized_plate: best.normalized_plate,
-      raw_plate: best.raw_plate,
-      best_confidence: best.confidence,
+      normalized_plate: plateForMatch,
+      raw_plate: prPlateRaw ?? best.raw_plate,
+      best_confidence: prConfidence ?? best.confidence,
       first_seen_at: burst_min,
       last_seen_at: burst_max,
       presence_strength: burst_span_ms >= LINGER_MS ? "lingered" : "brief",
