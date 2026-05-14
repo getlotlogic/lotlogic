@@ -9992,8 +9992,10 @@ function ALPRPropertiesPage({ user }) {
   const [newProp, setNewProp] = useState({ name: '', address: '', property_type: 'apartment' });
   const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
-  // SC211: flagged no-reg counts per property_id
-  const [noRegCounts, setNoRegCounts] = useState({}); // { [propertyId]: number }
+  // KPI counts per property_id — { [propId]: { openJobs, noReg, overstays, registered } }
+  const [kpiCounts, setKpiCounts] = useState({});
+  // Drill-down state: { propId, drill: 'noreg' | 'registered' }
+  const [drillState, setDrillState] = useState(null); // { propId, drill }
 
   useEffect(() => {
     if (!user) return;
@@ -10001,19 +10003,45 @@ function ALPRPropertiesPage({ user }) {
     db.getProperties(user.id, user._role).then(p => { setProperties(p); setLoading(false); }).catch(() => setLoading(false));
   }, [user]);
 
-  // Fetch flagged no-reg counts for all visible properties (best-effort, non-blocking)
+  // Fetch all 4 KPI counts for every visible property (best-effort, non-blocking)
   useEffect(() => {
     if (!properties.length) return;
     Promise.all(
-      properties.map(p =>
-        apiFetch(`/no-reg-violations?property_id=${p.id}&status=flagged`)
-          .then(rows => [p.id, Array.isArray(rows) ? rows.length : 0])
-          .catch(() => [p.id, 0])
-      )
+      properties.map(async p => {
+        const [noRegRows, openRows, overstayRows, registeredRows] = await Promise.all([
+          apiFetch(`/no-reg-violations?property_id=${p.id}&status=flagged`)
+            .catch(() => []),
+          supabase
+            ? supabase.from('alpr_violations')
+                .select('id', { count: 'exact', head: true })
+                .eq('property_id', p.id)
+                .in('status', ['pending', 'dispatched'])
+                .then(r => ({ count: r.count || 0 }))
+                .catch(() => ({ count: 0 }))
+            : Promise.resolve({ count: 0 }),
+          supabase
+            ? supabase.from('alpr_violations')
+                .select('id', { count: 'exact', head: true })
+                .eq('property_id', p.id)
+                .ilike('violation_type', '%overstay%')
+                .in('status', ['pending', 'dispatched'])
+                .then(r => ({ count: r.count || 0 }))
+                .catch(() => ({ count: 0 }))
+            : Promise.resolve({ count: 0 }),
+          apiFetch(`/lots/${p.id}/registered`)
+            .catch(() => []),
+        ]);
+        return [p.id, {
+          noReg: Array.isArray(noRegRows) ? noRegRows.length : 0,
+          openJobs: openRows.count,
+          overstays: overstayRows.count,
+          registered: Array.isArray(registeredRows) ? registeredRows.length : 0,
+        }];
+      })
     ).then(pairs => {
       const counts = {};
-      pairs.forEach(([id, n]) => { if (n > 0) counts[id] = n; });
-      setNoRegCounts(counts);
+      pairs.forEach(([id, kpi]) => { counts[id] = kpi; });
+      setKpiCounts(counts);
     });
   }, [properties]);
 
@@ -10039,6 +10067,25 @@ function ALPRPropertiesPage({ user }) {
   if (selectedId) return <ErrorBoundary label="this property"><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} user={user} /></ErrorBoundary>;
 
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading properties...</div></div>;
+
+  // If a drill-down is open, render it on top
+  if (drillState) {
+    const prop = properties.find(p => p.id === drillState.propId);
+    if (drillState.drill === 'noreg') {
+      return (
+        <ErrorBoundary label="no-pass drill-down">
+          <NoRegDrill propertyId={drillState.propId} propertyName={prop?.name || ''} onBack={() => setDrillState(null)} />
+        </ErrorBoundary>
+      );
+    }
+    if (drillState.drill === 'registered') {
+      return (
+        <ErrorBoundary label="registered drill-down">
+          <RegisteredDrill propertyId={drillState.propId} propertyName={prop?.name || ''} onBack={() => setDrillState(null)} />
+        </ErrorBoundary>
+      );
+    }
+  }
 
   return (
     <div className="page-enter">
@@ -10080,24 +10127,75 @@ function ALPRPropertiesPage({ user }) {
           <div style={{fontSize:12,marginTop:4}}>Add a lot to start managing parking passes</div>
         </div>
       ) : (
-        <div style={{display:'flex',flexDirection:'column',gap:8}}>
-          {properties.map(p => (
-            <div key={p.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <button onClick={() => setSelectedId(p.id)} style={{background:'none',border:'none',cursor:'pointer',textAlign:'left',flex:1,padding:0}}>
-                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                  <span style={{fontSize:15,fontWeight:700,color:'var(--text-primary)'}}>{p.name}</span>
-                  {noRegCounts[p.id] > 0 && (
-                    <span className="nreg-badge-count">{noRegCounts[p.id]} no-pass {noRegCounts[p.id] === 1 ? 'flag' : 'flags'}</span>
-                  )}
+        <div>
+          {properties.map(p => {
+            const kpi = kpiCounts[p.id] || {};
+            const openJobs = kpi.openJobs || 0;
+            const noReg = kpi.noReg || 0;
+            const overstays = kpi.overstays || 0;
+            const registered = kpi.registered || 0;
+            // Lot-level status pill
+            const pillCls = noReg > 0 ? 'red' : openJobs > 0 ? 'amber' : 'green';
+            const pillLabel = noReg > 0 ? 'Needs attention' : openJobs > 0 ? `${openJobs} open job${openJobs !== 1 ? 's' : ''}` : 'All clear';
+            return (
+              <article key={p.id} className="lot-card-paper">
+                <div className="lot-head-paper">
+                  <div style={{minWidth:0,flex:1}}>
+                    <div className="lot-name-paper">{p.name}</div>
+                    <div className="lot-addr-paper">{p.address || 'No address'}</div>
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}}>
+                    <span className={`lot-pill-paper ${pillCls}`}>
+                      <span className="dot"></span>{pillLabel}
+                    </span>
+                    <button
+                      onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete "' + p.name + '"? This removes all its plates, cameras, and passes.')) return; try { await db.deleteProperty(p.id); setProperties(properties.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to delete. ' + (err.message || ''), 'error'); } }}
+                      style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700,cursor:'pointer'}}
+                    >Delete</button>
+                  </div>
                 </div>
-                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{p.address || 'No address'}</div>
-              </button>
-              <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                <button onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete property "' + p.name + '"? This will remove all its plates, cameras, and passes.')) return; try { await db.deleteProperty(p.id); setProperties(properties.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to delete. ' + (err.message || ''), 'error'); } }} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>Delete</button>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-              </div>
-            </div>
-          ))}
+
+                <div className="kpis-paper">
+                  <button
+                    className={`kpi-paper ${openJobs > 0 ? 'amber' : 'calm'}`}
+                    onClick={() => setSelectedId(p.id)}
+                    aria-label={`Open jobs for ${p.name}`}
+                  >
+                    <div className="top-row"><div className="val">{openJobs}</div><div className="chev">›</div></div>
+                    <div className="label">Open Jobs</div>
+                  </button>
+                  <button
+                    className={`kpi-paper ${noReg > 0 ? 'red' : 'calm'}`}
+                    onClick={() => setDrillState({ propId: p.id, drill: 'noreg' })}
+                    aria-label={`Possible no parking pass for ${p.name}`}
+                  >
+                    <div className="top-row"><div className="val">{noReg}</div><div className="chev">›</div></div>
+                    <div className="label">Possible No Pass</div>
+                  </button>
+                  <button
+                    className={`kpi-paper ${overstays > 0 ? 'amber' : 'calm'}`}
+                    onClick={() => setSelectedId(p.id)}
+                    aria-label={`Overstays for ${p.name}`}
+                  >
+                    <div className="top-row"><div className="val">{overstays}</div><div className="chev">›</div></div>
+                    <div className="label">Overstays</div>
+                  </button>
+                  <button
+                    className="kpi-paper green"
+                    onClick={() => setDrillState({ propId: p.id, drill: 'registered' })}
+                    aria-label={`Registered parking passes for ${p.name}`}
+                  >
+                    <div className="top-row"><div className="val">{registered}</div><div className="chev">›</div></div>
+                    <div className="label">Registered</div>
+                  </button>
+                </div>
+
+                <div className="lot-foot-paper">
+                  <button onClick={() => setSelectedId(p.id)}>View cameras <span className="arr">›</span></button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
     </div>
