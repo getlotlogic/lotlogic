@@ -6,6 +6,8 @@
 // See: docs/superpowers/specs/2026-05-14-sc211-possible-no-registration-design.md
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { normalizePlate } from "../pr-ingest/normalize.ts";
+import { plateSimilar } from "./sessions.ts";
 
 export const EVIDENCE_CAP = 20;
 export const LINGER_MS = 10_000;
@@ -154,60 +156,55 @@ export function bundleEvidence(claimedRows: Array<{
   }));
 }
 
+// visitor_passes has no `normalized_plate` column. We fetch raw `plate_text`
+// (also `back_plate` / `normalized_back_plate` for two-faced trucks) for all
+// passes in the window, normalize client-side, then exact + fuzzy match —
+// mirroring findActiveUnexitedPassFuzzy in truck_plaza_exit.ts.
 export async function findPassForPlateInWindow(db: SupabaseClient, args: {
   property_id: string;
   normalized_plate: string;
   window_start: Date;
   window_end: Date;
 }): Promise<{ id: string; normalized_plate: string } | null> {
-  const win_start = args.window_start.toISOString();
-  const win_end = args.window_end.toISOString();
+  const { data, error } = await db
+    .from("visitor_passes")
+    .select("id, plate_text, normalized_back_plate")
+    .eq("property_id", args.property_id)
+    .gte("created_at", args.window_start.toISOString())
+    .lte("created_at", args.window_end.toISOString())
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) throw error;
+  const rows = (data ?? []) as Array<{
+    id: string;
+    plate_text: string | null;
+    normalized_back_plate: string | null;
+  }>;
 
-  // Pass 1: exact match
-  {
-    const { data, error } = await db
-      .from("visitor_passes")
-      .select("id, normalized_plate")
-      .eq("property_id", args.property_id)
-      .eq("normalized_plate", args.normalized_plate)
-      .gte("created_at", win_start)
-      .lte("created_at", win_end)
-      .order("created_at", { ascending: false })
-      .limit(1);
-    if (error) throw error;
-    if (data?.[0]) return data[0];
+  const candidates = (r: typeof rows[number]): string[] => {
+    const out: string[] = [];
+    if (r.plate_text) out.push(normalizePlate(r.plate_text));
+    if (r.normalized_back_plate) out.push(r.normalized_back_plate);
+    return out;
+  };
+
+  // Pass 1: exact normalized match
+  for (const r of rows) {
+    const norms = candidates(r);
+    if (norms.includes(args.normalized_plate)) {
+      return { id: r.id, normalized_plate: args.normalized_plate };
+    }
   }
 
-  // Pass 2: fuzzy match — last 4 chars common
-  if (args.normalized_plate.length >= 4) {
-    const suffix = args.normalized_plate.slice(-4);
-    const { data, error } = await db
-      .from("visitor_passes")
-      .select("id, normalized_plate")
-      .eq("property_id", args.property_id)
-      .ilike("normalized_plate", `%${suffix}`)
-      .gte("created_at", win_start)
-      .lte("created_at", win_end)
-      .order("created_at", { ascending: false })
-      .limit(1);
-    if (error) throw error;
-    if (data?.[0]) return data[0];
-  }
-
-  // Pass 3: partial — first 3 chars common
-  if (args.normalized_plate.length >= 3) {
-    const prefix = args.normalized_plate.slice(0, 3);
-    const { data, error } = await db
-      .from("visitor_passes")
-      .select("id, normalized_plate")
-      .eq("property_id", args.property_id)
-      .ilike("normalized_plate", `${prefix}%`)
-      .gte("created_at", win_start)
-      .lte("created_at", win_end)
-      .order("created_at", { ascending: false })
-      .limit(1);
-    if (error) throw error;
-    if (data?.[0]) return data[0];
+  // Pass 2: fuzzy (anchored, OCR-confusion-tolerant). Min length 6 — shorter
+  // plates are too loose for the fuzzy matcher (per truck_plaza_exit.ts).
+  if (args.normalized_plate.length >= 6) {
+    for (const r of rows) {
+      const norms = candidates(r);
+      if (norms.some((p) => plateSimilar(p, args.normalized_plate, true))) {
+        return { id: r.id, normalized_plate: args.normalized_plate };
+      }
+    }
   }
 
   return null;

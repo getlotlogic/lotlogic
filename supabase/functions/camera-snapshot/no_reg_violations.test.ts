@@ -176,7 +176,8 @@ function stubPassDb(rows: any[]) {
 
 Deno.test("findPassForPlateInWindow: exact match in window returns pass", async () => {
   const db = stubPassDb([
-    { id: "pass1", property_id: "p1", normalized_plate: "ABC123",
+    { id: "pass1", property_id: "p1", plate_text: "ABC-123",
+      normalized_back_plate: null,
       created_at: "2026-05-14T08:30:00Z" },
   ]);
   const out = await findPassForPlateInWindow(db, {
@@ -189,7 +190,8 @@ Deno.test("findPassForPlateInWindow: exact match in window returns pass", async 
 
 Deno.test("findPassForPlateInWindow: ignores out-of-window passes", async () => {
   const db = stubPassDb([
-    { id: "pass-old", property_id: "p1", normalized_plate: "ABC123",
+    { id: "pass-old", property_id: "p1", plate_text: "ABC-123",
+      normalized_back_plate: null,
       created_at: "2026-05-13T08:00:00Z" },
   ]);
   const out = await findPassForPlateInWindow(db, {
@@ -198,4 +200,33 @@ Deno.test("findPassForPlateInWindow: ignores out-of-window passes", async () => 
     window_end:   new Date("2026-05-14T10:00:00Z"),
   });
   assertEquals(out, null);
+});
+
+Deno.test("findPassForPlateInWindow: fuzzy OCR-confusion match wins (8 vs B)", async () => {
+  const db = stubPassDb([
+    { id: "pass2", property_id: "p1", plate_text: "ABC1234",
+      normalized_back_plate: null,
+      created_at: "2026-05-14T08:30:00Z" },
+  ]);
+  // Camera read "ABCB234" — OCR confused 1 → B, but plateSimilar accepts.
+  const out = await findPassForPlateInWindow(db, {
+    property_id: "p1", normalized_plate: "ABCB234",
+    window_start: new Date("2026-05-14T07:00:00Z"),
+    window_end:   new Date("2026-05-14T10:00:00Z"),
+  });
+  assertEquals(out?.id, "pass2");
+});
+
+Deno.test("findPassForPlateInWindow: normalized_back_plate matches when only the back is read", async () => {
+  const db = stubPassDb([
+    { id: "pass3", property_id: "p1", plate_text: "FRONT123",
+      normalized_back_plate: "BACK4567",
+      created_at: "2026-05-14T08:30:00Z" },
+  ]);
+  const out = await findPassForPlateInWindow(db, {
+    property_id: "p1", normalized_plate: "BACK4567",
+    window_start: new Date("2026-05-14T07:00:00Z"),
+    window_end:   new Date("2026-05-14T10:00:00Z"),
+  });
+  assertEquals(out?.id, "pass3");
 });
