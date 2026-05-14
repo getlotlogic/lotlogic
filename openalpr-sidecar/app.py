@@ -140,7 +140,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.9.0",
+    version="3.10.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -231,7 +231,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.9.0",
+        "version": "3.10.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -527,6 +527,47 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
             used_tiles = True
 
     raw_detection_count = len(det_results)
+
+    # PaddleOCR full-frame fallback. When YOLO + tiled YOLO both find nothing,
+    # run PaddleOCR's own text detector on the full image. It finds plate-shaped
+    # text Vol. text general; we filter to plate-like candidates (length 4-9
+    # alphanumeric after stripping). The hit rate is lower than YOLO+OCR but
+    # catches frames where YOLO is bad at the specific plate angle / size.
+    used_paddle_full_frame = False
+    if raw_detection_count == 0 and paddle_reader is not None:
+        try:
+            full_results = paddle_reader.ocr(img, cls=False)
+        except Exception:
+            full_results = None
+        if full_results and full_results[0]:
+            plates_full: List[PlateCandidate] = []
+            for entry in full_results[0]:
+                # entry shape: [bbox_polygon, (text, confidence)]
+                try:
+                    text = entry[1][0]
+                    conf = float(entry[1][1])
+                except Exception:
+                    continue
+                if not text:
+                    continue
+                cleaned = re.sub(r"[^A-Z0-9]", "", text.upper())
+                # Plate-shape filter: 4-9 alphanumerics is the typical plate
+                # length envelope across US/EU formats.
+                if not (4 <= len(cleaned) <= 9):
+                    continue
+                if conf < alpr_floor:
+                    continue
+                plates_full.append(PlateCandidate(plate=cleaned, confidence=round(conf, 4)))
+            if plates_full:
+                used_paddle_full_frame = True
+                plates_full.sort(key=lambda p: p.confidence, reverse=True)
+                return RecognizeResponse(
+                    ok=True,
+                    plates=plates_full,
+                    raw_detection_count=len(plates_full),
+                    processing_time_ms=(time.monotonic() - started) * 1000,
+                    reason="paddle_full_frame_fallback",
+                )
 
     if raw_detection_count == 0:
         return RecognizeResponse(
