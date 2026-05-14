@@ -45,8 +45,16 @@ DETECTOR_IMGSZ = int(os.environ.get("DETECTOR_IMGSZ", "640"))
 # default in the upstream README and supports US plate formats. Switch to
 # 'cct-xs-v1-global-model' for a smaller / faster variant.
 OCR_MODEL = os.environ.get("OCR_MODEL", "cct-s-v2-global-model")
-DETECTOR_MIN_CONF = float(os.environ.get("DETECTOR_MIN_CONF", "0.15"))
-ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.50"))
+DETECTOR_MIN_CONF = float(os.environ.get("DETECTOR_MIN_CONF", "0.10"))
+ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.25"))
+# Auto-equalize underexposed frames before detection. The Milesight 4G
+# Solar ANPR variants ship a low-luma JPEG even in broad daylight, which
+# pushes plate regions outside YOLO's training distribution. CLAHE on the
+# luma channel restores local contrast without crushing highlights.
+ENABLE_AUTO_EQUALIZE = os.environ.get("ENABLE_AUTO_EQUALIZE", "true").lower() == "true"
+# Frames whose mean luminance is below this threshold get CLAHE applied.
+# 80/255 ≈ "looks dim to a human." Daylight scenes are typically 110-160.
+AUTO_EQUALIZE_LUMA_THRESHOLD = int(os.environ.get("AUTO_EQUALIZE_LUMA_THRESHOLD", "90"))
 # Hard cap on OCR calls per frame. With low DETECTOR_MIN_CONF overrides
 # the YOLO model can return 50+ candidate bboxes, each costing ~50-100ms
 # of OCR. Total processing time scales linearly and can blow past the
@@ -222,6 +230,13 @@ def _decode_image(image_base64: str, camera_id: Optional[str] = None) -> np.ndar
         new_w = MAX_IMAGE_WIDTH
         new_h = int(img.shape[0] * scale)
         img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    if ENABLE_AUTO_EQUALIZE:
+        yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+        y_mean = float(yuv[:, :, 0].mean())
+        if y_mean < AUTO_EQUALIZE_LUMA_THRESHOLD:
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            yuv[:, :, 0] = clahe.apply(yuv[:, :, 0])
+            img = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
     return img
 
 

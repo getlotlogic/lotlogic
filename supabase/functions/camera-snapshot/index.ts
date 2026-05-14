@@ -170,6 +170,10 @@ const r2 = makeR2Uploader({
 // to resume.
 const SYSTEM_PAUSED = (Deno.env.get("SYSTEM_PAUSED") ?? "false").toLowerCase() === "true";
 
+// Log critical config at module load so we can verify env wiring from the
+// edge-function logs without needing direct access to secrets.
+console.log(`camera-snapshot boot: sidecar_url_set=${OPENALPR_SIDECAR_URL ? "yes" : "NO"} pr_token_set=${PR_TOKEN ? "yes" : "NO"} url_secret_set=${URL_SECRET ? "yes" : "NO"} paused=${SYSTEM_PAUSED}`);
+
 Deno.serve(async (req: Request) => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
     return json(200, { ok: true, fn: "camera-snapshot", accepts: "POST image/json/multipart", paused: SYSTEM_PAUSED });
@@ -181,13 +185,29 @@ Deno.serve(async (req: Request) => {
   if (!URL_SECRET || secret !== URL_SECRET) return json(401, { ok: false, error: "unauthorized" });
 
   try {
+    const ctHdr = (req.headers.get("content-type") ?? "?").slice(0, 80);
+    const contentLengthHdr = Number(req.headers.get("content-length") ?? "0");
     const extracted = await extractFromRequest(req);
-    if (!extracted) return json(200, { ok: false, reason: "no_image_bytes" });
+    if (!extracted) {
+      console.warn(`camera-snapshot reject reason=no_image_bytes path_api_key=${pathApiKey ?? "?"} content_type="${ctHdr}" cl=${contentLengthHdr}`);
+      db.from("camera_snapshot_diag").insert({
+        reason: "no_image_bytes", path_api_key: pathApiKey, content_type: ctHdr,
+        bytes_len: contentLengthHdr,
+      }).then(() => {});
+      return json(200, { ok: false, reason: "no_image_bytes" });
+    }
 
     // Identify the camera. Path segment wins; otherwise fall back to whatever
     // the camera self-identifies as in the payload (Milesight → devMac).
     const cameraApiKey = pathApiKey ?? extracted.cameraHint;
-    if (!cameraApiKey) return json(200, { ok: false, reason: "no_camera_identity" });
+    if (!cameraApiKey) {
+      console.warn(`camera-snapshot reject reason=no_camera_identity source=${extracted.source} bytes=${extracted.bytes.byteLength}`);
+      db.from("camera_snapshot_diag").insert({
+        reason: "no_camera_identity", path_api_key: pathApiKey, content_type: ctHdr,
+        source: extracted.source, bytes_len: extracted.bytes.byteLength,
+      }).then(() => {});
+      return json(200, { ok: false, reason: "no_camera_identity" });
+    }
 
     const cameraQ = await db
       .from("alpr_cameras")
@@ -197,7 +217,14 @@ Deno.serve(async (req: Request) => {
       .limit(1);
     if (cameraQ.error) throw cameraQ.error;
     const camera = (cameraQ.data ?? [])[0];
-    if (!camera) return json(200, { ok: false, reason: "unknown_camera", api_key: cameraApiKey });
+    if (!camera) {
+      console.warn(`camera-snapshot reject reason=unknown_camera api_key=${cameraApiKey} source=${extracted.source} bytes=${extracted.bytes.byteLength}`);
+      db.from("camera_snapshot_diag").insert({
+        reason: "unknown_camera", path_api_key: pathApiKey, resolved_api_key: cameraApiKey,
+        content_type: ctHdr, source: extracted.source, bytes_len: extracted.bytes.byteLength,
+      }).then(() => {});
+      return json(200, { ok: false, reason: "unknown_camera", api_key: cameraApiKey });
+    }
 
     // Property-type branch. Truck-plaza properties use the registration-
     // as-entrance model: visitor_passes is the source of truth for "on
@@ -249,6 +276,35 @@ Deno.serve(async (req: Request) => {
         : r.outcome === "buffered" ? ` weak_read_id=${r.weak_read_id} opportunistic_flushed=${r.opportunistic_flushed}`
         : "";
       console.log(`truck_plaza_exit camera=${camera.id} outcome=${r.outcome}${detail}`);
+      if (r.outcome === "dropped") {
+        // For sidecar-empty drops, push the frame to R2 so we can SEE what
+        // the camera is sending. Capped at ~5 per minute per camera via the
+        // diag-row count check below.
+        let debugUrl: string | null = null;
+        if (r.reason === "sidecar_empty" || r.reason?.startsWith("sidecar_below_floor")) {
+          const recent = await db.from("camera_snapshot_diag")
+            .select("id", { count: "exact", head: true })
+            .eq("resolved_api_key", cameraApiKey)
+            .like("reason", "tpe_sidecar%")
+            .not("extra->>debug_url", "is", null)
+            .gte("at", new Date(Date.now() - 60_000).toISOString());
+          if ((recent.count ?? 0) < 5) {
+            const dateStr = new Date().toISOString().slice(0, 10);
+            const key = `debug/${camera.property_id}/${dateStr}/sidecarempty-${camera.api_key}-${Date.now()}.jpg`;
+            const up = await r2(key, extracted.bytes);
+            if (up.ok) debugUrl = up.url;
+          }
+        }
+        const milesightKeys = (extracted.rawMeta as Record<string, unknown> | null)?.milesight_keys ?? null;
+        db.from("camera_snapshot_diag").insert({
+          reason: `tpe_${r.reason}`, resolved_api_key: cameraApiKey,
+          content_type: ctHdr, source: extracted.source, bytes_len: extracted.bytes.byteLength,
+          extra: { camera_id: camera.id, has_onboard: extracted.onboardLpr != null,
+                   onboard_plate: extracted.onboardLpr?.plate ?? null,
+                   debug_url: debugUrl,
+                   keys: milesightKeys },
+        }).then(() => {});
+      }
       return json(200, { ok: true, fn: "truck_plaza_exit", ...r });
     }
 

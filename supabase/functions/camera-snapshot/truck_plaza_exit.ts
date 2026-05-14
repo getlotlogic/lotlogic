@@ -63,8 +63,10 @@ type ResolvedPlate = { raw: string; normalized: string; confidence: number | nul
 
 // Sidecar threshold. Below this confidence we drop the frame outright;
 // at-or-above buffers into weak_plate_reads for best-of-N selection in
-// flushGroup() at end of burst.
-export const SC211_SIDECAR_FLOOR = 0.20;
+// flushGroup() at end of burst. Lowered 2026-05-13 alongside sidecar CLAHE
+// preprocessing — the Milesight 4G Solar ANPR cams ship underexposed JPEGs
+// and the resulting reads land in the 0.10-0.30 combined-confidence band.
+export const SC211_SIDECAR_FLOOR = 0.10;
 
 // Group key for burst dedup. SC211s at the same gate share a group so
 // the best frame across cameras gets chosen as the winning read.

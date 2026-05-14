@@ -155,11 +155,44 @@ export function extractMilesightPayload(obj: Record<string, unknown>): Extracted
     },
   };
 
+  // ANPR variants of the 4G Solar Cam family include the onboard-detected
+  // plate text alongside the image. The traffic-sensing variant does not.
+  // Try every place a plate string is known to appear; first hit wins.
+  const candidatePlate =
+    (typeof values.plate === "string" && values.plate) ||
+    (typeof values.licensePlate === "string" && values.licensePlate) ||
+    (typeof values.license_plate === "string" && values.license_plate) ||
+    (typeof values.lpr === "string" && values.lpr) ||
+    (typeof values.anpr === "string" && values.anpr) ||
+    (typeof obj.plate === "string" && obj.plate) ||
+    (typeof obj.licensePlate === "string" && obj.licensePlate) ||
+    "";
+
+  const onboardLpr = candidatePlate ? {
+    plate: String(candidatePlate),
+    plateConfidence: null,
+    direction: null,
+    plateColor: null,
+    vehicleType: null,
+    vehicleColor: null,
+    vehicleBrand: null,
+    detectionRegion: null,
+    eventType: (typeof obj.topic === "string" ? obj.topic : null),
+  } : undefined;
+
+  // Surface the raw key list so we can see what an ANPR variant actually
+  // ships. Stored in rawMeta so the diag insert can pluck it.
+  (rawMeta as Record<string, unknown>).milesight_keys = {
+    root: Object.keys(obj),
+    values: Object.keys(values),
+  };
+
   return {
     bytes,
     cameraHint: devMac,
     source: "milesight_json",
     rawMeta,
+    ...(onboardLpr ? { onboardLpr } : {}),
   };
 }
 
