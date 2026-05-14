@@ -16,7 +16,12 @@ WORKDIR /app
 # Install CPU-only torch first so the rest of the requirements file can
 # pick up the already-installed torch as a transitive dep without
 # pulling the CUDA-bundled wheel (which is 5x larger).
-RUN pip install --no-cache-dir torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
+#
+# Use --extra-index-url (not --index-url) so pip can still resolve
+# torch's transitive deps (filelock, networkx, sympy, etc.) from PyPI.
+# --index-url would force ONLY the PyTorch CDN and torch's deps would
+# 404 — this was the v3.12.0 build failure.
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu torch==2.2.2+cpu
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -44,11 +49,11 @@ RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False, verbose=False)"
 RUN mkdir -p /app/models && python -c "from huggingface_hub import hf_hub_download; p = hf_hub_download(repo_id='keremberke/yolov8m-license-plate', filename='best.onnx', local_dir='/app/models'); import os; os.rename(p, '/app/models/yolov8m-plate.onnx'); print('plate detector ONNX cached at /app/models/yolov8m-plate.onnx')" || true
 
 # DETR plate detector. nateraw/detr-license-plate-detector is the
-# most-validated public plate-fine-tuned DETR available. Cache the
-# pre-trained weights + processor at build time so the first request
-# doesn't pay 30+ seconds of model download. Best-effort: HF download
-# can flake, so || true falls back to lazy load on first inference.
-RUN python -c "from transformers import DetrImageProcessor, DetrForObjectDetection; DetrImageProcessor.from_pretrained('nateraw/detr-license-plate-detector'); DetrForObjectDetection.from_pretrained('nateraw/detr-license-plate-detector'); print('DETR plate detector pre-fetch complete')" || true
+# most-validated public plate-fine-tuned DETR available. Model lazy-loads
+# on first /recognize call after startup (~30s download + ~10s init).
+# Skipping the pre-fetch at build time per the same hygiene as PaddleOCR
+# — HF Hub downloads can flake during build and bring down the whole
+# image. Lazy load is one-time, then warm forever.
 
 COPY app.py .
 COPY custom_yolo.py .
