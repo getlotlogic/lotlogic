@@ -4,9 +4,11 @@ ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive
 
 # opencv-python-headless needs libgl1 + libglib2.0 for cv2.imdecode.
+# paddlepaddle needs libgomp1 (GNU OpenMP runtime) for CPU inference.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
