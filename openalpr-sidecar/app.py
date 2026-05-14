@@ -148,7 +148,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.12.1",
+    version="3.12.2",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -173,8 +173,11 @@ ENABLE_PADDLE_OCR = os.environ.get("ENABLE_PADDLE_OCR", "true").lower() == "true
 detr_processor = None
 detr_model = None
 detr_load_error: Optional[str] = None
+detr_load_attempted = False
 ENABLE_DETR = os.environ.get("ENABLE_DETR", "true").lower() == "true"
-DETR_MODEL_NAME = os.environ.get("DETR_MODEL_NAME", "nateraw/detr-license-plate-detector")
+# Real plate-fine-tuned DETR — verified to exist on HF Hub. The earlier
+# nateraw/* name I'd used was a hallucination and 404'd at runtime.
+DETR_MODEL_NAME = os.environ.get("DETR_MODEL_NAME", "nickmuchi/detr-resnet50-license-plate-detection")
 DETR_MIN_CONF = float(os.environ.get("DETR_MIN_CONF", "0.30"))
 
 
@@ -205,37 +208,56 @@ def on_startup() -> None:
     if ENABLE_EASYOCR_FALLBACK:
         import easyocr as _easyocr
         easyocr_reader = _easyocr.Reader(["en"], gpu=False, verbose=False)
-    if ENABLE_PADDLE_OCR:
-        global paddle_reader, paddle_load_error
+    # PaddleOCR + DETR are LOADED LAZILY on first /recognize call.
+    # Eager startup loading was blocking past Railway's 60s healthcheck
+    # window. Lazy loading lets uvicorn bind + /health respond
+    # immediately; the first /recognize call pays the warm-up cost
+    # once, then warm for the rest of container lifetime.
+    print("[startup] paddle + DETR will lazy-load on first /recognize", flush=True)
+
+
+_paddle_load_attempted = False
+_detr_load_attempted = False
+
+
+def _ensure_paddle_loaded() -> None:
+    """Idempotent: load PaddleOCR if not already loaded. Called from the
+    request path so cold-start /health doesn't pay model-download cost."""
+    global paddle_reader, paddle_load_error, _paddle_load_attempted
+    if _paddle_load_attempted or not ENABLE_PADDLE_OCR:
+        return
+    _paddle_load_attempted = True
+    try:
+        from paddleocr import PaddleOCR
         try:
-            from paddleocr import PaddleOCR
-            # PaddleOCR 2.7+ deprecated use_gpu/show_log. Try the modern
-            # config first, fall back to legacy args if a 2.6.x runtime
-            # is actually installed.
-            try:
-                paddle_reader = PaddleOCR(use_angle_cls=False, lang="en")
-            except TypeError:
-                paddle_reader = PaddleOCR(
-                    use_angle_cls=False, lang="en", use_gpu=False, show_log=False,
-                )
-            print("[startup] PaddleOCR PPOCRv4 loaded", flush=True)
-        except Exception as e:
-            paddle_load_error = f"{type(e).__name__}: {e}"
-            print(f"[startup] PaddleOCR load failed: {paddle_load_error}", flush=True)
-            paddle_reader = None
-    if ENABLE_DETR:
-        global detr_processor, detr_model, detr_load_error
-        try:
-            from transformers import DetrImageProcessor, DetrForObjectDetection
-            detr_processor = DetrImageProcessor.from_pretrained(DETR_MODEL_NAME)
-            detr_model = DetrForObjectDetection.from_pretrained(DETR_MODEL_NAME)
-            detr_model.eval()
-            print(f"[startup] DETR plate detector loaded: {DETR_MODEL_NAME}", flush=True)
-        except Exception as e:
-            detr_load_error = f"{type(e).__name__}: {e}"
-            print(f"[startup] DETR load failed: {detr_load_error}", flush=True)
-            detr_processor = None
-            detr_model = None
+            paddle_reader = PaddleOCR(use_angle_cls=False, lang="en")
+        except TypeError:
+            paddle_reader = PaddleOCR(use_angle_cls=False, lang="en",
+                                      use_gpu=False, show_log=False)
+        print(f"[lazy] PaddleOCR loaded", flush=True)
+    except Exception as e:
+        paddle_load_error = f"{type(e).__name__}: {e}"
+        print(f"[lazy] PaddleOCR load failed: {paddle_load_error}", flush=True)
+        paddle_reader = None
+
+
+def _ensure_detr_loaded() -> None:
+    """Idempotent: load DETR if not already loaded."""
+    global detr_processor, detr_model, detr_load_error, _detr_load_attempted
+    if _detr_load_attempted or not ENABLE_DETR:
+        return
+    _detr_load_attempted = True
+    try:
+        from transformers import DetrImageProcessor, DetrForObjectDetection
+        detr_processor = DetrImageProcessor.from_pretrained(DETR_MODEL_NAME)
+        detr_model = DetrForObjectDetection.from_pretrained(DETR_MODEL_NAME)
+        detr_model.eval()
+        print(f"[lazy] DETR loaded: {DETR_MODEL_NAME}", flush=True)
+    except Exception as e:
+        detr_load_error = f"{type(e).__name__}: {e}"
+        print(f"[lazy] DETR load failed: {detr_load_error}", flush=True)
+        detr_processor = None
+        detr_model = None
 
 
 class RecognizeRequest(BaseModel):
@@ -264,7 +286,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.12.1",
+        "version": "3.12.2",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -768,6 +790,10 @@ def recognize(req: RecognizeRequest) -> RecognizeResponse:
         raise HTTPException(status_code=401, detail="unauthorized")
     if detector is None or ocr_reader is None:
         raise HTTPException(status_code=503, detail="models not loaded yet")
+    # Lazy-load the heavy non-essential models. Idempotent — only the
+    # FIRST request after container start pays the download cost.
+    _ensure_paddle_loaded()
+    _ensure_detr_loaded()
 
     try:
         img = _decode_image(req.image_base64, camera_id=req.camera_id)
