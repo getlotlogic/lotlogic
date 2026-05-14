@@ -54,7 +54,7 @@ ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.25"))
 ENABLE_AUTO_EQUALIZE = os.environ.get("ENABLE_AUTO_EQUALIZE", "true").lower() == "true"
 # Frames whose mean luminance is below this threshold get CLAHE applied.
 # 80/255 ≈ "looks dim to a human." Daylight scenes are typically 110-160.
-AUTO_EQUALIZE_LUMA_THRESHOLD = int(os.environ.get("AUTO_EQUALIZE_LUMA_THRESHOLD", "90"))
+AUTO_EQUALIZE_LUMA_THRESHOLD = int(os.environ.get("AUTO_EQUALIZE_LUMA_THRESHOLD", "150"))
 # Hard cap on OCR calls per frame. With low DETECTOR_MIN_CONF overrides
 # the YOLO model can return 50+ candidate bboxes, each costing ~50-100ms
 # of OCR. Total processing time scales linearly and can blow past the
@@ -140,7 +140,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.2.0",
+    version="3.3.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -206,7 +206,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.2.0",
+        "version": "3.3.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -403,17 +403,57 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
     # bounding box + confidence. End-to-end NMS is baked into the model,
     # so duplicates are already suppressed.
     used_fallback = False
-    if isinstance(detector, CustomYoloDetector):
-        det_results = detector.predict(img, conf_thresh=detector_floor)
-        # Fallback path: if the custom model misses entirely, retry with the
-        # bundled wide-trained detector. Catches the case where the small
-        # Charlotte-trained set doesn't generalize to a new vehicle type or
-        # an underexposed frame.
-        if len(det_results) == 0 and detector_fallback is not None:
-            det_results = detector_fallback.predict(img)
-            used_fallback = True
-    else:
-        det_results = detector.predict(img)
+    used_tiles = False
+
+    def _run_detector(image: np.ndarray) -> list:
+        if isinstance(detector, CustomYoloDetector):
+            primary = detector.predict(image, conf_thresh=detector_floor)
+            if len(primary) == 0 and detector_fallback is not None:
+                return detector_fallback.predict(image)
+            return primary
+        return detector.predict(image)
+
+    det_results = _run_detector(img)
+
+    # Tiled fallback. When full-frame detection returns nothing, run the
+    # detector on 2x2 overlapping tiles. At 608 imgsz the model sees each
+    # tile at ~2x effective resolution, so small plates (~5% of frame width)
+    # become detectable. Bbox coords are translated back to the original
+    # frame so the rest of the pipeline is unchanged. Gated to fire only
+    # when full-frame produced nothing, so the per-frame latency hit only
+    # applies to "would have dropped anyway" frames.
+    if len(det_results) == 0:
+        h0, w0 = img.shape[:2]
+        overlap = 0.2
+        for row in range(2):
+            for col in range(2):
+                y1 = max(0, int(row * h0 / 2 - overlap * h0 / 2))
+                y2 = min(h0, int((row + 1) * h0 / 2 + overlap * h0 / 2))
+                x1 = max(0, int(col * w0 / 2 - overlap * w0 / 2))
+                x2 = min(w0, int((col + 1) * w0 / 2 + overlap * w0 / 2))
+                tile = img[y1:y2, x1:x2]
+                if tile.size == 0:
+                    continue
+                tile_dets = _run_detector(tile)
+                for det in tile_dets:
+                    bb = det.bounding_box
+                    # Wrap with a SimpleNamespace because some detector libs
+                    # return immutable bbox objects. The pipeline downstream
+                    # only reads .x1/.x2/.y1/.y2/.confidence/.bounding_box
+                    # via getattr, so a plain namespace is enough.
+                    from types import SimpleNamespace
+                    translated = SimpleNamespace(
+                        confidence=float(getattr(det, "confidence", 0.0)),
+                        label=getattr(det, "label", "License Plate"),
+                        bounding_box=SimpleNamespace(
+                            x1=int(bb.x1) + x1, y1=int(bb.y1) + y1,
+                            x2=int(bb.x2) + x1, y2=int(bb.y2) + y1,
+                        ),
+                    )
+                    det_results.append(translated)
+        if len(det_results) > 0:
+            used_tiles = True
+
     raw_detection_count = len(det_results)
 
     if raw_detection_count == 0:
@@ -422,7 +462,7 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
             plates=[],
             raw_detection_count=0,
             processing_time_ms=(time.monotonic() - started) * 1000,
-            reason="empty_scene_both" if used_fallback else "empty_scene",
+            reason="empty_scene_all_paths",
         )
 
     # Stage 2: OCR each crop. Skip crops below the per-camera detector
