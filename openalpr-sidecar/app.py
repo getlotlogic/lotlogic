@@ -46,7 +46,7 @@ DETECTOR_IMGSZ = int(os.environ.get("DETECTOR_IMGSZ", "640"))
 # 'cct-xs-v1-global-model' for a smaller / faster variant.
 OCR_MODEL = os.environ.get("OCR_MODEL", "cct-s-v2-global-model")
 DETECTOR_MIN_CONF = float(os.environ.get("DETECTOR_MIN_CONF", "0.10"))
-ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.25"))
+ALPR_MIN_CONFIDENCE = float(os.environ.get("ALPR_MIN_CONFIDENCE", "0.05"))
 # Auto-equalize underexposed frames before detection. The Milesight 4G
 # Solar ANPR variants ship a low-luma JPEG even in broad daylight, which
 # pushes plate regions outside YOLO's training distribution. CLAHE on the
@@ -140,7 +140,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.3.0",
+    version="3.4.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -206,7 +206,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.3.0",
+        "version": "3.4.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -479,6 +479,9 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
     )[:det_cap]
     plates: List[PlateCandidate] = []
     aspect_gated = 0
+    # Capture every OCR attempt (even rejected ones) so the diag can see
+    # what the OCR was reading. Resets per frame.
+    debug_attempts: List[dict] = []
     for det in sorted_dets:
         bbox = getattr(det, "bounding_box", det)
         conf = float(getattr(det, "confidence", 0.0))
@@ -493,17 +496,29 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
         aspect = bw / bh
         if aspect < PLATE_ASPECT_MIN or aspect > PLATE_ASPECT_MAX:
             aspect_gated += 1
+            debug_attempts.append({"text": None, "conf": conf, "ocr_conf": 0.0,
+                                   "combined": 0.0, "aspect": round(aspect, 2),
+                                   "drop": "aspect_gated"})
             continue
         crops = _ocr_variants(img, bbox)
         if not crops:
+            debug_attempts.append({"text": None, "conf": conf, "ocr_conf": 0.0,
+                                   "combined": 0.0, "drop": "no_crops"})
             continue
         plate_text, ocr_conf = _ocr_best(crops)
         if not plate_text:
+            debug_attempts.append({"text": None, "conf": conf, "ocr_conf": float(ocr_conf),
+                                   "combined": 0.0, "drop": "ocr_empty"})
             continue
         cleaned = re.sub(r"[^A-Z0-9]", "", plate_text.upper())
+        combined_conf = conf * ocr_conf
+        debug_attempts.append({"text": plate_text, "cleaned": cleaned,
+                               "conf": round(conf, 3), "ocr_conf": round(float(ocr_conf), 3),
+                               "combined": round(combined_conf, 3),
+                               "drop": None if (cleaned and combined_conf >= alpr_floor)
+                                       else ("empty_clean" if not cleaned else "below_floor")})
         if not cleaned:
             continue
-        combined_conf = conf * ocr_conf
         if combined_conf < alpr_floor:
             continue
         plates.append(PlateCandidate(plate=cleaned, confidence=round(combined_conf, 4)))
@@ -514,7 +529,9 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
     elif aspect_gated == raw_detection_count and raw_detection_count > 0:
         reason = f"all_dets_aspect_gated:{aspect_gated}"
     else:
-        reason = "no_plate_shaped_text"
+        # Include a hint of what OCR actually read so we can diagnose.
+        first_text = next((a.get("text") for a in debug_attempts if a.get("text")), None)
+        reason = f"no_plate_shaped_text:{first_text}" if first_text else "no_plate_shaped_text"
     return RecognizeResponse(
         ok=True,
         plates=plates,
