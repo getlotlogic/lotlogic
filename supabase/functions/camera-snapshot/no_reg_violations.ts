@@ -154,11 +154,61 @@ export function bundleEvidence(claimedRows: Array<{
   }));
 }
 
-export async function findPassForPlateInWindow(_db: SupabaseClient, _args: {
+export async function findPassForPlateInWindow(db: SupabaseClient, args: {
   property_id: string;
   normalized_plate: string;
   window_start: Date;
   window_end: Date;
 }): Promise<{ id: string; normalized_plate: string } | null> {
-  throw new Error("not implemented");
+  const win_start = args.window_start.toISOString();
+  const win_end = args.window_end.toISOString();
+
+  // Pass 1: exact match
+  {
+    const { data, error } = await db
+      .from("visitor_passes")
+      .select("id, normalized_plate")
+      .eq("property_id", args.property_id)
+      .eq("normalized_plate", args.normalized_plate)
+      .gte("created_at", win_start)
+      .lte("created_at", win_end)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    if (data?.[0]) return data[0];
+  }
+
+  // Pass 2: fuzzy match — last 4 chars common
+  if (args.normalized_plate.length >= 4) {
+    const suffix = args.normalized_plate.slice(-4);
+    const { data, error } = await db
+      .from("visitor_passes")
+      .select("id, normalized_plate")
+      .eq("property_id", args.property_id)
+      .ilike("normalized_plate", `%${suffix}`)
+      .gte("created_at", win_start)
+      .lte("created_at", win_end)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    if (data?.[0]) return data[0];
+  }
+
+  // Pass 3: partial — first 3 chars common
+  if (args.normalized_plate.length >= 3) {
+    const prefix = args.normalized_plate.slice(0, 3);
+    const { data, error } = await db
+      .from("visitor_passes")
+      .select("id, normalized_plate")
+      .eq("property_id", args.property_id)
+      .ilike("normalized_plate", `${prefix}%`)
+      .gte("created_at", win_start)
+      .lte("created_at", win_end)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    if (data?.[0]) return data[0];
+  }
+
+  return null;
 }

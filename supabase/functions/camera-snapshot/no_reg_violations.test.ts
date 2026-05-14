@@ -148,3 +148,54 @@ Deno.test("updateViolation: sets exit_seen_at when provided", async () => {
   await updateViolation(db, "v1", { exit_seen_at: new Date("2026-05-14T09:00:00Z") });
   assertEquals(captured.patch.exit_seen_at, "2026-05-14T09:00:00.000Z");
 });
+
+import { findPassForPlateInWindow } from "./no_reg_violations.ts";
+
+function stubPassDb(rows: any[]) {
+  return {
+    from(table: string) {
+      if (table !== "visitor_passes") throw new Error(`unexpected: ${table}`);
+      let _rows = [...rows];
+      const builder: any = {
+        select() { return builder; },
+        eq(c: string, v: any) { _rows = _rows.filter((r: any) => r[c] === v); return builder; },
+        gte(c: string, v: any) { _rows = _rows.filter((r: any) => new Date(r[c]) >= new Date(v)); return builder; },
+        lte(c: string, v: any) { _rows = _rows.filter((r: any) => new Date(r[c]) <= new Date(v)); return builder; },
+        ilike(c: string, pattern: string) {
+          const rx = new RegExp("^" + pattern.replaceAll("%", ".*") + "$", "i");
+          _rows = _rows.filter((r: any) => rx.test(r[c]));
+          return builder;
+        },
+        order(_c: string, _o: any) { return builder; },
+        limit(n: number) { return Promise.resolve({ data: _rows.slice(0, n), error: null }); },
+      };
+      return builder;
+    },
+  } as any;
+}
+
+Deno.test("findPassForPlateInWindow: exact match in window returns pass", async () => {
+  const db = stubPassDb([
+    { id: "pass1", property_id: "p1", normalized_plate: "ABC123",
+      created_at: "2026-05-14T08:30:00Z" },
+  ]);
+  const out = await findPassForPlateInWindow(db, {
+    property_id: "p1", normalized_plate: "ABC123",
+    window_start: new Date("2026-05-14T07:00:00Z"),
+    window_end:   new Date("2026-05-14T10:00:00Z"),
+  });
+  assertEquals(out?.id, "pass1");
+});
+
+Deno.test("findPassForPlateInWindow: ignores out-of-window passes", async () => {
+  const db = stubPassDb([
+    { id: "pass-old", property_id: "p1", normalized_plate: "ABC123",
+      created_at: "2026-05-13T08:00:00Z" },
+  ]);
+  const out = await findPassForPlateInWindow(db, {
+    property_id: "p1", normalized_plate: "ABC123",
+    window_start: new Date("2026-05-14T07:00:00Z"),
+    window_end:   new Date("2026-05-14T10:00:00Z"),
+  });
+  assertEquals(out, null);
+});
