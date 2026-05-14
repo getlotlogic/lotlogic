@@ -38,7 +38,7 @@ jobs:
         run: npm ci || npm install
 
       - name: Install browsers
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Resolve BASE_URL
         id: base
