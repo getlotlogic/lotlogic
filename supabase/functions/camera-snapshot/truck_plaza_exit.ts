@@ -399,19 +399,31 @@ export async function handleTruckPlazaExit(args: {
     }
   }
 
+  // Status filter is critical: between our SELECT and this UPDATE, an
+  // operator may have cancelled the pass. Without `.eq("status", "active")`
+  // we'd stamp exited_at on a cancelled pass — the pass would then show
+  // both cancelled AND camera-exited, confusing the dashboard and
+  // breaking the close-clean flow. exited_at IS NULL is necessary too:
+  // another flusher may have stamped exit already (e.g. weak_reads).
   const upd = await db.from("visitor_passes")
     .update({
       exited_at: now.toISOString(),
       exited_via_camera_id: camera.id,
       exited_via_plate_event_id: plateEventId,
-      // overstay_violation_id is already correct from the race-safe
+      // overstay_violation_id already correct from the race-safe
       // branches above. Don't touch it here.
     })
     .eq("id", pass!.id)
+    .eq("status", "active")
     .is("exited_at", null);
   if (upd.error) throw upd.error;
 
-  return overstay
-    ? { outcome: "exit_overstay", pass_id: pass!.id, plate_event_id: plateEventId, violation_id: overstayViolationId! }
-    : { outcome: "exit_clean", pass_id: pass!.id, plate_event_id: plateEventId };
+  // overstayViolationId can be null in the triple-race where cron deleted
+  // its own duplicate violation between our claim-failed UPDATE and our
+  // re-read. Return exit_clean rather than a misleading exit_overstay
+  // with violation_id=undefined.
+  if (overstay && overstayViolationId) {
+    return { outcome: "exit_overstay", pass_id: pass!.id, plate_event_id: plateEventId, violation_id: overstayViolationId };
+  }
+  return { outcome: "exit_clean", pass_id: pass!.id, plate_event_id: plateEventId };
 }

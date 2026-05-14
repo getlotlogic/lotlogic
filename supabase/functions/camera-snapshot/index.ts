@@ -242,7 +242,13 @@ Deno.serve(async (req: Request) => {
           return { plate, confidence: conf };
         } : undefined,
       });
-      console.log(`truck_plaza_exit camera=${camera.id} outcome=${r.outcome}`);
+      // Always include the reason on drops so we can distinguish healthy
+      // "no driver registered" patterns from broken "sidecar returning 0
+      // for every frame" patterns just by tailing logs.
+      const detail = r.outcome === "dropped" ? ` reason=${r.reason}`
+        : r.outcome === "buffered" ? ` weak_read_id=${r.weak_read_id} opportunistic_flushed=${r.opportunistic_flushed}`
+        : "";
+      console.log(`truck_plaza_exit camera=${camera.id} outcome=${r.outcome}${detail}`);
       return json(200, { ok: true, fn: "truck_plaza_exit", ...r });
     }
 
@@ -1307,7 +1313,21 @@ async function callPlateRecognizer(
   const url = usingSdk ? PR_SDK_URL : "https://api.platerecognizer.com/v1/plate-reader/";
   const headers: Record<string, string> = usingSdk ? {} : { Authorization: `Token ${PR_TOKEN}` };
 
-  const res = await fetch(url, { method: "POST", headers, body: fd });
+  // 10s timeout. Without this, an unresponsive PR endpoint would park
+  // the edge-function invocation until Supabase's 150s wall-clock kills
+  // it and returns 500 to the camera — which then retries, queueing
+  // more invocations. Matches the sidecar / weak-buffer PR call patterns.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10_000);
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers, body: fd, signal: ctrl.signal });
+  } catch (err) {
+    clearTimeout(timer);
+    const reason = (err as Error)?.name === "AbortError" ? "timeout" : ((err as Error)?.message ?? "fetch_failed");
+    return { ok: false, status: 0, bodyText: reason };
+  }
+  clearTimeout(timer);
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
     return { ok: false, status: res.status, bodyText };

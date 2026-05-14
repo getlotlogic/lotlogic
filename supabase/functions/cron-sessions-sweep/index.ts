@@ -461,6 +461,9 @@ async function sweepWeakPlateReads(): Promise<number> {
     // Skip rather than do a sidecar-only flush from here (we'd risk
     // marking exits off raw weak reads). The opportunistic path in
     // camera-snapshot does its own flush so this is a true backstop.
+    // WARN so an accidental token rotation doesn't silently strand
+    // every SC211 burst forever.
+    console.warn("sweepWeakPlateReads: PLATE_RECOGNIZER_TOKEN not set; skipping SC211 flush this tick");
     return 0;
   }
   const now = new Date();
@@ -488,12 +491,20 @@ async function sweepWeakPlateReads(): Promise<number> {
   return flushed;
 }
 
+// After this many failed dispatch attempts, the violation is moved out of
+// the pending queue by stamping a sentinel sms_sent_at + error message.
+// Operators see it in the dashboard as "dispatch failed — needs review"
+// instead of having the cron retry it every minute forever (e.g. when
+// the property's tow_company_id is missing → permanent 409).
+const MAX_DISPATCH_ATTEMPTS = 3;
+
 async function dispatchPendingViolations(): Promise<{ dispatched: number; left_before_tow: number }> {
   const cutoff = new Date(Date.now() - DISPATCH_HOLD_MINUTES * 60 * 1000).toISOString();
   const { data: pending, error } = await db
     .from("alpr_violations")
-    .select("id, session_id, violation_type, created_at")
+    .select("id, session_id, violation_type, created_at, dispatch_attempts")
     .is("sms_sent_at", null)
+    .lt("dispatch_attempts", MAX_DISPATCH_ATTEMPTS)
     .lt("created_at", cutoff)
     .limit(50);
   if (error) throw error;
@@ -551,16 +562,43 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
       });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        console.warn(`tow-dispatch-email ${res.status} for ${v.id}: ${body.slice(0, 200)}`);
+        const errMsg = `${res.status}: ${body.slice(0, 200)}`;
+        console.warn(`tow-dispatch-email failed for ${v.id}: ${errMsg}`);
+        await failDispatch(v.id, v.dispatch_attempts ?? 0, errMsg);
       } else {
         dispatched++;
       }
     } catch (err) {
-      console.warn(`tow-dispatch-email fetch failed for ${v.id}: ${String(err)}`);
+      const errMsg = String(err).slice(0, 200);
+      console.warn(`tow-dispatch-email fetch failed for ${v.id}: ${errMsg}`);
+      await failDispatch(v.id, v.dispatch_attempts ?? 0, errMsg);
     }
   }
 
   return { dispatched, left_before_tow: leftBeforeTow };
+}
+
+// Increment dispatch_attempts; on cap-hit, stamp a sentinel sms_sent_at
+// + status='dispatch_failed' so the row stops being re-tried and shows
+// up in the operator dashboard for manual review.
+async function failDispatch(violationId: string, currentAttempts: number, errMsg: string): Promise<void> {
+  const newCount = currentAttempts + 1;
+  if (newCount >= MAX_DISPATCH_ATTEMPTS) {
+    const nowIso = new Date().toISOString();
+    await db.from("alpr_violations")
+      .update({
+        dispatch_attempts: newCount,
+        last_dispatch_error: errMsg,
+        sms_sent_at: nowIso,  // sentinel: removes from pending queue
+        status: "dispatch_failed",
+      })
+      .eq("id", violationId);
+    console.error(`dispatch_capped violation=${violationId} attempts=${newCount} err=${errMsg}`);
+  } else {
+    await db.from("alpr_violations")
+      .update({ dispatch_attempts: newCount, last_dispatch_error: errMsg })
+      .eq("id", violationId);
+  }
 }
 
 async function createViolationAndDispatch(

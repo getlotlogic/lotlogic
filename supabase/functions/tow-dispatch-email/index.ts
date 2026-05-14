@@ -461,9 +461,42 @@ serve(async (req) => {
     ? [ownerCc]
     : [];
 
+  // Atomic claim: stamp sms_sent_at BEFORE calling Resend. Without this,
+  // two concurrent cron ticks would both pass the `if (violation.sms_sent_at)`
+  // check at line ~129 (reading the row before either has written) and
+  // both send a Resend email → partner receives duplicates. By writing
+  // the claim first and checking the rowcount, only one invocation wins.
+  // If Resend ultimately fails we revert the claim so the cron can retry.
+  const claimTs = new Date().toISOString();
+  const claim = await supabase
+    .from("alpr_violations")
+    .update({
+      sms_sent_at: claimTs,
+      status: "dispatched",
+      dispatched_at: claimTs,
+    })
+    .eq("id", violation.id)
+    .is("sms_sent_at", null)
+    .select("id");
+  if (claim.error) {
+    return json({ error: "Claim failed", detail: claim.error.message }, 500);
+  }
+  if (!claim.data || claim.data.length === 0) {
+    // Another invocation beat us to it. Idempotent success — the email
+    // (or one identical to it) has already been sent or is in flight.
+    return json({ status: "already_sent_by_concurrent_invocation", violation_id: violation.id }, 200);
+  }
+
   const sendResult = await sendViaResend(resendKey, fromEmail, recipient, ccList, subject, textBody, html);
 
   if (!sendResult.ok) {
+    // Resend failed. Revert the claim so the cron retries on next tick.
+    // If THIS rollback fails too, we accept a stuck-dispatched row over
+    // duplicate emails — operator can manually re-fire from the dashboard.
+    await supabase
+      .from("alpr_violations")
+      .update({ sms_sent_at: null, status: "pending", dispatched_at: null })
+      .eq("id", violation.id);
     return json({
       error: `${sendResult.provider} send failed`,
       provider: sendResult.provider,
@@ -471,15 +504,6 @@ serve(async (req) => {
       body: sendResult.body,
     }, 502);
   }
-
-  await supabase
-    .from("alpr_violations")
-    .update({
-      sms_sent_at: new Date().toISOString(),
-      status: "dispatched",
-      dispatched_at: new Date().toISOString(),
-    })
-    .eq("id", violation.id);
 
   return json(
     {

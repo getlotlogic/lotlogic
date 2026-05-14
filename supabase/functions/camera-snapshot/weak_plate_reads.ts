@@ -169,7 +169,11 @@ async function callPrViaUrl(
     const best = results.reduce((a, b) => (Number(b.score ?? 0) > Number(a.score ?? 0) ? b : a));
     if (!best.plate) return null;
     return { plate: best.plate, confidence: typeof best.score === "number" ? best.score : null };
-  } catch (_) {
+  } catch (err) {
+    // Surface timeouts (AbortError after 8s) + network failures + parse
+    // errors so we can tell "PR returned no plate" (legitimate) from
+    // "PR is unreachable" (operational issue) without trawling the DB.
+    console.warn(`callPrViaUrl failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
     return null;
   }
 }
@@ -426,10 +430,12 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
       overstay_violation_id: overstayViolationId,
     })
     .eq("id", pass!.id)
+    .eq("status", "active")
     .is("exited_at", null);
   if (upd.error) throw upd.error;
 
-  return overstay
-    ? { outcome: "exit_overstay", pass_id: pass!.id, violation_id: overstayViolationId!, reads_consumed: claimed.length }
-    : { outcome: "exit_clean", pass_id: pass!.id, reads_consumed: claimed.length };
+  if (overstay && overstayViolationId) {
+    return { outcome: "exit_overstay", pass_id: pass!.id, violation_id: overstayViolationId, reads_consumed: claimed.length };
+  }
+  return { outcome: "exit_clean", pass_id: pass!.id, reads_consumed: claimed.length };
 }

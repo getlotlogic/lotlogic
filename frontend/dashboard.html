@@ -6142,8 +6142,15 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     // reason in the modal and render with a red Confirm button.
     // Partners have zero server-side permission on these endpoints (they
     // 400/403), so the view is purely read-only evidence for them.
+    // Cooldown-breach rows are NEVER billable — they're a gate-deny event,
+    // no tow ever happens. Suppress the destructive actions entirely so
+    // an operator can't accidentally force-bill or invoice one. The
+    // QuickBooks weekly cron also excludes violation_type='cooldown'
+    // (see lotlogic-backend/routers/quickbooks.py), but the UI gate
+    // is the more visible guardrail.
+    const isCooldownBreach = computeBillingStatus(r) === 'cooldown_breach';
     const actions = [];
-    if (role !== 'partner') {
+    if (role !== 'partner' && !isCooldownBreach) {
       if (r.billing_held_at) {
         actions.push({ key: 'resume-billing', label: 'Resume billing', primary: true });
       } else if (!r.invoiced_at) {
@@ -9360,7 +9367,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                   )}
                   <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${evColor}20`,color:evColor,border:`1px solid ${evColor}40`}}>{evType}</span>
                   {ev.match_status && (
-                    <span title={ev.match_reason || ev.match_status} style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${statusColor}18`,color:statusColor,border:`1px solid ${statusColor}40`}}>{ev.match_status.replace('_', ' ')}</span>
+                    <span title={ev.match_reason || ev.match_status} style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:`${statusColor}18`,color:statusColor,border:`1px solid ${statusColor}40`}}>{ev.match_status.replace(/_/g, ' ')}</span>
                   )}
                   {ev.plate_sessions?.state && (
                     <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'#1f293720',color:'#9ca3af',border:'1px solid #37415140'}}>session: {ev.plate_sessions.state.replace('_',' ')}</span>
@@ -10165,6 +10172,12 @@ function TrainingPage({ user, isOwner }) {
                 <span style={{color:'var(--text-primary)', fontFamily:'monospace', fontWeight:700}}>{cur.plate_text || '—'}</span>
                 <span>Confidence</span>
                 <span style={{color:'var(--text-primary)'}}>{((cur.confidence ?? 0) * 100).toFixed(1)}%</span>
+                {cur.match_status === 'partner_truck' && (
+                  <>
+                    <span>Match</span>
+                    <span style={{color:'#FBBF24', fontWeight:700}}>partner tow-truck</span>
+                  </>
+                )}
               </>
             )}
             {isRejected && (
@@ -10179,34 +10192,61 @@ function TrainingPage({ user, isOwner }) {
             <span style={{color:'var(--text-primary)'}}>{new Date(cur.created_at).toLocaleString()}</span>
           </div>
 
-          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:14}}>
-            <button onClick={() => label(verdictA.id)} disabled={submitting}
-              style={{
-                background: verdictA.color, color:'#fff', border:'none', borderRadius:12,
-                padding:'18px 12px', fontSize:15, fontWeight:800, cursor:submitting?'wait':'pointer',
-                minHeight:60, lineHeight:1.2,
-              }}>
-              {verdictA.label}
-            </button>
-            <button onClick={() => label(verdictB.id)} disabled={submitting}
-              style={{
-                background: verdictB.color, color:'#fff', border:'none', borderRadius:12,
-                padding:'18px 12px', fontSize:15, fontWeight:800, cursor:submitting?'wait':'pointer',
-                minHeight:60, lineHeight:1.2,
-              }}>
-              {verdictB.label}
-            </button>
-          </div>
-          <button onClick={skipFrame} disabled={submitting}
-            style={{
-              width:'100%', marginTop:10,
-              background:'rgba(100,116,139,.15)', color:'var(--text-secondary)',
-              border:'1px solid rgba(100,116,139,.3)', borderRadius:12,
-              padding:'14px 12px', fontSize:14, fontWeight:700, cursor:submitting?'wait':'pointer',
-              minHeight:48,
+          {cur.match_status === 'partner_truck' && !isRejected && !isFuzzy ? (
+            <div style={{
+              marginTop:14, padding:14, borderRadius:12,
+              background:'rgba(251,191,36,.12)', border:'1px solid rgba(251,191,36,.4)',
+              color:'var(--text-primary)',
             }}>
-            Skip — don't show me this one again
-          </button>
+              <div style={{fontWeight:800, fontSize:14, marginBottom:6, color:'#FBBF24'}}>
+                Partner tow-truck — not a training target
+              </div>
+              <div style={{fontSize:13, color:'var(--text-secondary)', marginBottom:12}}>
+                This plate matched a tow-truck registered with the enforcement partner. Labeling
+                it as a "real" or "fake" parking plate will poison the model. Skip it.
+              </div>
+              <button onClick={skipFrame} disabled={submitting}
+                style={{
+                  width:'100%', background:'#FBBF24', color:'#1A1206',
+                  border:'none', borderRadius:12,
+                  padding:'14px 12px', fontSize:14, fontWeight:800,
+                  cursor:submitting?'wait':'pointer', minHeight:48,
+                }}>
+                Skip — partner truck
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:14}}>
+                <button onClick={() => label(verdictA.id)} disabled={submitting}
+                  style={{
+                    background: verdictA.color, color:'#fff', border:'none', borderRadius:12,
+                    padding:'18px 12px', fontSize:15, fontWeight:800, cursor:submitting?'wait':'pointer',
+                    minHeight:60, lineHeight:1.2,
+                  }}>
+                  {verdictA.label}
+                </button>
+                <button onClick={() => label(verdictB.id)} disabled={submitting}
+                  style={{
+                    background: verdictB.color, color:'#fff', border:'none', borderRadius:12,
+                    padding:'18px 12px', fontSize:15, fontWeight:800, cursor:submitting?'wait':'pointer',
+                    minHeight:60, lineHeight:1.2,
+                  }}>
+                  {verdictB.label}
+                </button>
+              </div>
+              <button onClick={skipFrame} disabled={submitting}
+                style={{
+                  width:'100%', marginTop:10,
+                  background:'rgba(100,116,139,.15)', color:'var(--text-secondary)',
+                  border:'1px solid rgba(100,116,139,.3)', borderRadius:12,
+                  padding:'14px 12px', fontSize:14, fontWeight:700, cursor:submitting?'wait':'pointer',
+                  minHeight:48,
+                }}>
+                Skip — don't show me this one again
+              </button>
+            </>
+          )}
           <div style={{marginTop:10, textAlign:'center', fontSize:11, color:'var(--text-secondary)'}}>
             {idx + 1} of {queue.length} <span className="kbd-hint" style={{opacity:.7}}>· Desktop: 1 / 2 to label, S to skip</span>
           </div>
