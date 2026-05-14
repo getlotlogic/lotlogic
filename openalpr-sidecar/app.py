@@ -148,7 +148,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.11.0",
+    version="3.12.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -164,6 +164,18 @@ easyocr_reader = None  # only loaded if ENABLE_EASYOCR_FALLBACK=true
 paddle_reader = None
 paddle_load_error: Optional[str] = None
 ENABLE_PADDLE_OCR = os.environ.get("ENABLE_PADDLE_OCR", "true").lower() == "true"
+
+# DETR plate detector (transformer-based). When enabled, runs alongside
+# YOLO and contributes detections from a different architecture family —
+# DETR's attention layers handle small/angled plates better than YOLO's
+# anchor-based head. We RUN BOTH and union the detections; the OCR step
+# dedups by IoU so duplicate detections of the same plate are fine.
+detr_processor = None
+detr_model = None
+detr_load_error: Optional[str] = None
+ENABLE_DETR = os.environ.get("ENABLE_DETR", "true").lower() == "true"
+DETR_MODEL_NAME = os.environ.get("DETR_MODEL_NAME", "nateraw/detr-license-plate-detector")
+DETR_MIN_CONF = float(os.environ.get("DETR_MIN_CONF", "0.30"))
 
 
 @app.on_event("startup")
@@ -211,6 +223,19 @@ def on_startup() -> None:
             paddle_load_error = f"{type(e).__name__}: {e}"
             print(f"[startup] PaddleOCR load failed: {paddle_load_error}", flush=True)
             paddle_reader = None
+    if ENABLE_DETR:
+        global detr_processor, detr_model, detr_load_error
+        try:
+            from transformers import DetrImageProcessor, DetrForObjectDetection
+            detr_processor = DetrImageProcessor.from_pretrained(DETR_MODEL_NAME)
+            detr_model = DetrForObjectDetection.from_pretrained(DETR_MODEL_NAME)
+            detr_model.eval()
+            print(f"[startup] DETR plate detector loaded: {DETR_MODEL_NAME}", flush=True)
+        except Exception as e:
+            detr_load_error = f"{type(e).__name__}: {e}"
+            print(f"[startup] DETR load failed: {detr_load_error}", flush=True)
+            detr_processor = None
+            detr_model = None
 
 
 class RecognizeRequest(BaseModel):
@@ -239,7 +264,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.11.0",
+        "version": "3.12.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -251,6 +276,9 @@ def health() -> dict:
         "easyocr_fallback": easyocr_reader is not None,
         "paddle_ocr_loaded": paddle_reader is not None,
         "paddle_load_error": paddle_load_error,
+        "detr_loaded": detr_model is not None,
+        "detr_model_name": DETR_MODEL_NAME if detr_model is not None else None,
+        "detr_load_error": detr_load_error,
     }
 
 
@@ -493,7 +521,49 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
             return primary
         return detector.predict(image)
 
+    def _run_detr(image: np.ndarray) -> list:
+        """Run the DETR plate detector on the full image. Returns _Detection-
+        compatible namespaces so the rest of the pipeline can consume them
+        identically to YOLO output."""
+        if detr_processor is None or detr_model is None:
+            return []
+        try:
+            import torch
+            from PIL import Image as PILImage
+            from types import SimpleNamespace
+            # OpenCV uses BGR; PIL/transformers expect RGB.
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            pil_img = PILImage.fromarray(rgb)
+            inputs = detr_processor(images=pil_img, return_tensors="pt")
+            with torch.no_grad():
+                outputs = detr_model(**inputs)
+            h0, w0 = image.shape[:2]
+            target_sizes = torch.tensor([[h0, w0]])
+            results = detr_processor.post_process_object_detection(
+                outputs, target_sizes=target_sizes, threshold=DETR_MIN_CONF,
+            )[0]
+            out = []
+            for score, box in zip(results["scores"].tolist(), results["boxes"].tolist()):
+                x1, y1, x2, y2 = box
+                out.append(SimpleNamespace(
+                    confidence=float(score),
+                    label="License Plate",
+                    bounding_box=SimpleNamespace(
+                        x1=int(x1), y1=int(y1), x2=int(x2), y2=int(y2),
+                    ),
+                ))
+            return out
+        except Exception as e:
+            print(f"[detr] inference failed: {type(e).__name__}: {e}", flush=True)
+            return []
+
+    # Run YOLO and DETR detectors in parallel union mode. Both architectures
+    # have different strengths — YOLO on bright/clean plates, DETR on
+    # small/angled/cluttered scenes — combining them increases recall.
+    # The OCR step dedups across overlapping bboxes naturally.
     det_results = _run_detector(img)
+    detr_dets = _run_detr(img)
+    det_results.extend(detr_dets)
 
     # Tiled fallback. When full-frame detection returns nothing, run the
     # detector on 2x2 overlapping tiles. At 608 imgsz the model sees each
