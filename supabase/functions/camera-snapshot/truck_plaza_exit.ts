@@ -63,10 +63,10 @@ type ResolvedPlate = { raw: string; normalized: string; confidence: number | nul
 
 // Sidecar threshold. Below this confidence we drop the frame outright;
 // at-or-above buffers into weak_plate_reads for best-of-N selection in
-// flushGroup() at end of burst. Lowered 2026-05-13 alongside sidecar CLAHE
-// preprocessing — the Milesight 4G Solar ANPR cams ship underexposed JPEGs
-// and the resulting reads land in the 0.10-0.30 combined-confidence band.
-export const SC211_SIDECAR_FLOOR = 0.10;
+// flushGroup() at end of burst. Operator request 2026-05-13: filter less,
+// buffer everything the sidecar produces. Best-of-N over a burst window
+// will surface the strongest read across multiple frames anyway.
+export const SC211_SIDECAR_FLOOR = 0.0;
 
 // Group key for burst dedup. SC211s at the same gate share a group so
 // the best frame across cameras gets chosen as the winning read.
@@ -237,8 +237,12 @@ export async function handleTruckPlazaExit(args: {
       return { outcome: "dropped", reason: sc ? `sidecar_below_floor_${sc.confidence.toFixed(2)}` : "sidecar_empty" };
     }
     // Sidecar has a read >= floor — upload snapshot + buffer the row.
+    // Accept short reads (even single characters) so partial OCR results
+    // still land in weak_plate_reads where best-of-N can promote a fuller
+    // read from the same burst. The downstream match step requires full
+    // plates to find a pass, but partial reads are useful evidence.
     const normalized = normalizePlate(sc.plate);
-    if (normalized.length < 4) return { outcome: "dropped", reason: "sidecar_plate_too_short" };
+    if (normalized.length < 1) return { outcome: "dropped", reason: "sidecar_plate_empty_normalized" };
     const dateStr = now.toISOString().slice(0, 10);
     const r2Key = `${camera.property_id}/${dateStr}/weak-${camera.api_key}-${now.getTime()}-${normalized}.jpg`;
     const imageUrl = await args.uploadJpeg(payload.bytes, r2Key);

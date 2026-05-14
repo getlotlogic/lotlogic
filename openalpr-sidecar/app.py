@@ -140,7 +140,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.6.0",
+    version="3.7.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -206,7 +206,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.6.0",
+        "version": "3.7.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -355,11 +355,12 @@ def _ocr_best(crops: List[np.ndarray]):
 
     Returns (text, conf) or (None, 0.0) if no variant decoded.
     """
-    # Upscale undersized crops. fast-plate-ocr's training input is 140x40;
-    # tile-detected crops on the SC211 are often 50-100px wide which is
-    # below the model's effective floor. Cubic interpolation preserves
-    # character edges better than the alternatives.
-    def _upscale_for_ocr(crop_in: np.ndarray, target_w: int = 280) -> np.ndarray:
+    # Build a stack of OCR candidates per crop:
+    #   [0] original (preserves working cameras' behavior unchanged)
+    #   [1] upscaled (small crops below fast-plate-ocr's 140x40 input)
+    #   [2] CLAHE-enhanced upscaled (for low-contrast underexposed plates)
+    # OCR tries each; multi-variant agreement picks the canonical text.
+    def _upscale(crop_in: np.ndarray, target_w: int = 280) -> np.ndarray:
         ch, cw = crop_in.shape[:2]
         if cw >= target_w:
             return crop_in
@@ -367,13 +368,22 @@ def _ocr_best(crops: List[np.ndarray]):
         return cv2.resize(crop_in, (target_w, max(1, int(ch * scale))),
                           interpolation=cv2.INTER_CUBIC)
 
+    def _clahe_crop(crop_in: np.ndarray) -> np.ndarray:
+        try:
+            yuv = cv2.cvtColor(crop_in, cv2.COLOR_BGR2YUV)
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 4))
+            yuv[:, :, 0] = clahe.apply(yuv[:, :, 0])
+            return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
+        except Exception:
+            return crop_in
+
     results: List[tuple] = []
-    # Try original + upscaled variants. Original first to preserve working
-    # cameras' behavior; upscaled second for small-crop rescue.
     for crop in crops:
         ocr_candidates = [crop]
-        if crop.shape[1] < 280:
-            ocr_candidates.append(_upscale_for_ocr(crop))
+        upscaled = _upscale(crop)
+        if upscaled is not crop:
+            ocr_candidates.append(upscaled)
+        ocr_candidates.append(_clahe_crop(upscaled))
         for c in ocr_candidates:
             try:
                 ocr_result = ocr_reader.run(c, return_confidence=True)
