@@ -20,6 +20,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { plateSimilar, plateMatchesPartial } from "./sessions.ts";
+import {
+  findOpenViolation,
+  insertViolation,
+  updateViolation,
+  bundleEvidence,
+  LINGER_MS,
+  EXIT_GAP_MS,
+} from "./no_reg_violations.ts";
 
 export const BURST_WINDOW_MS = 30 * 1000;
 
@@ -129,6 +137,7 @@ async function claimGroup(
   normalized_plate: string;
   confidence: number;
   image_url: string | null;
+  seen_at: string;
 }>> {
   const { data, error } = await db
     .from("weak_plate_reads")
@@ -136,7 +145,7 @@ async function claimGroup(
     .eq("property_id", propertyId)
     .eq("group_key", groupKey)
     .is("processed_at", null)
-    .select("id,camera_id,raw_plate,normalized_plate,confidence,image_url");
+    .select("id,camera_id,raw_plate,normalized_plate,confidence,image_url,seen_at");
   if (error) throw error;
   return (data ?? []) as Array<{
     id: string;
@@ -145,6 +154,7 @@ async function claimGroup(
     normalized_plate: string;
     confidence: number;
     image_url: string | null;
+    seen_at: string;
   }>;
 }
 
@@ -323,9 +333,72 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
   //    raw_data carries the burst metadata so the dashboard can show
   //    "this exit was chosen from N candidate reads via PR".
   if (!tow && !pass) {
-    // No enforcement-relevant match. The weak reads are already marked
-    // processed; we just don't insert a plate_event or do anything more.
-    return { outcome: "no_match", group_key: groupKey, chosen_plate: plateForMatch, reads_consumed: claimed.length };
+    // ── Unmatched: record/extend a no-registration violation row ────────────
+    // Only record when we have a confirmed plate text to key the violation on.
+    if (!best.normalized_plate) {
+      return { outcome: "no_match", group_key: groupKey, chosen_plate: plateForMatch, reads_consumed: claimed.length };
+    }
+
+    const burst_min = claimed.reduce(
+      (m, r) => (new Date(r.seen_at) < m ? new Date(r.seen_at) : m),
+      new Date(claimed[0].seen_at),
+    );
+    const burst_max = claimed.reduce(
+      (m, r) => (new Date(r.seen_at) > m ? new Date(r.seen_at) : m),
+      new Date(claimed[0].seen_at),
+    );
+
+    // bundleEvidence requires image_url: string — filter out URL-less rows.
+    const evidenceRows = claimed
+      .filter((r): r is typeof r & { image_url: string } => r.image_url !== null);
+
+    const candidate = await findOpenViolation(db, {
+      property_id: propertyId,
+      normalized_plate: best.normalized_plate,
+      within_hours: 24,
+    });
+
+    if (candidate) {
+      const gap_ms = burst_min.getTime() - new Date(candidate.last_seen_at).getTime();
+      const isExit = gap_ms >= EXIT_GAP_MS && candidate.exit_seen_at === null;
+      const newSpan_ms = burst_max.getTime() - new Date(candidate.first_seen_at).getTime();
+      const newStrength: "brief" | "lingered" =
+        newSpan_ms >= LINGER_MS ? "lingered" : (candidate.presence_strength as "brief" | "lingered");
+
+      await updateViolation(db, candidate.id, {
+        last_seen_at: burst_max,
+        exit_seen_at: isExit ? burst_min : undefined,
+        presence_strength: newStrength,
+        best_confidence: Math.max(Number(candidate.best_confidence), best.confidence),
+        evidence_append: bundleEvidence(evidenceRows),
+        weak_read_ids_append: claimed.map((r) => r.id),
+      });
+      return {
+        outcome: "no_registration_recorded",
+        violation_id: candidate.id,
+        row_state: isExit ? "updated_exit" : "updated_presence",
+        reads_consumed: claimed.length,
+      };
+    }
+
+    const burst_span_ms = burst_max.getTime() - burst_min.getTime();
+    const inserted = await insertViolation(db, {
+      property_id: propertyId,
+      normalized_plate: best.normalized_plate,
+      raw_plate: best.raw_plate,
+      best_confidence: best.confidence,
+      first_seen_at: burst_min,
+      last_seen_at: burst_max,
+      presence_strength: burst_span_ms >= LINGER_MS ? "lingered" : "brief",
+      evidence: bundleEvidence(evidenceRows),
+      weak_read_ids: claimed.map((r) => r.id),
+    });
+    return {
+      outcome: "no_registration_recorded",
+      violation_id: inserted.id,
+      row_state: "created",
+      reads_consumed: claimed.length,
+    };
   }
 
   const overstay = pass !== null && now.getTime() > new Date(pass.valid_until).getTime();

@@ -5,7 +5,7 @@
 //
 // See: docs/superpowers/specs/2026-05-14-sc211-possible-no-registration-design.md
 
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const EVIDENCE_CAP = 20;
 export const LINGER_MS = 10_000;
