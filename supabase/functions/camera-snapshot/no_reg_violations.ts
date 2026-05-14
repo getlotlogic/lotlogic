@@ -76,14 +76,22 @@ export async function updateViolation(_db: SupabaseClient, _id: string, _patch: 
   weak_read_ids_append?: string[];
 }): Promise<void> { throw new Error("not implemented"); }
 
-export function bundleEvidence(_claimedRows: Array<{
+export function bundleEvidence(claimedRows: Array<{
   id: string;
   image_url: string;
   seen_at: string;
   confidence: number;
   camera_id: string;
   source?: "sidecar" | "pr_cloud";
-}>): EvidenceItem[] { throw new Error("not implemented"); }
+}>): EvidenceItem[] {
+  return claimedRows.map((r) => ({
+    url: r.image_url,
+    taken_at: r.seen_at,
+    confidence: r.confidence,
+    camera_id: r.camera_id,
+    source: r.source ?? "sidecar",
+  }));
+}
 
 export async function findPassForPlateInWindow(_db: SupabaseClient, _args: {
   property_id: string;
