@@ -140,7 +140,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.8.0",
+    version="3.8.1",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -154,6 +154,7 @@ easyocr_reader = None  # only loaded if ENABLE_EASYOCR_FALLBACK=true
 # fast-plate-ocr returns empty. Multi-engine agreement boosts confidence
 # in _ocr_best.
 paddle_reader = None
+paddle_load_error: Optional[str] = None
 ENABLE_PADDLE_OCR = os.environ.get("ENABLE_PADDLE_OCR", "true").lower() == "true"
 
 
@@ -185,15 +186,22 @@ def on_startup() -> None:
         import easyocr as _easyocr
         easyocr_reader = _easyocr.Reader(["en"], gpu=False, verbose=False)
     if ENABLE_PADDLE_OCR:
-        global paddle_reader
+        global paddle_reader, paddle_load_error
         try:
             from paddleocr import PaddleOCR
-            paddle_reader = PaddleOCR(
-                use_angle_cls=False, lang="en", use_gpu=False, show_log=False,
-            )
+            # PaddleOCR 2.7+ deprecated use_gpu/show_log. Try the modern
+            # config first, fall back to legacy args if a 2.6.x runtime
+            # is actually installed.
+            try:
+                paddle_reader = PaddleOCR(use_angle_cls=False, lang="en")
+            except TypeError:
+                paddle_reader = PaddleOCR(
+                    use_angle_cls=False, lang="en", use_gpu=False, show_log=False,
+                )
             print("[startup] PaddleOCR PPOCRv4 loaded", flush=True)
         except Exception as e:
-            print(f"[startup] PaddleOCR load failed: {e}", flush=True)
+            paddle_load_error = f"{type(e).__name__}: {e}"
+            print(f"[startup] PaddleOCR load failed: {paddle_load_error}", flush=True)
             paddle_reader = None
 
 
@@ -223,7 +231,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.8.0",
+        "version": "3.8.1",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -234,6 +242,7 @@ def health() -> dict:
         "ocr_loaded": ocr_reader is not None,
         "easyocr_fallback": easyocr_reader is not None,
         "paddle_ocr_loaded": paddle_reader is not None,
+        "paddle_load_error": paddle_load_error,
     }
 
 
