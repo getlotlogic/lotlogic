@@ -16,19 +16,19 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download ONNX model weights at build time so runtime has zero
-# network dependency and cold-start is bounded by container pull only.
-# Both models cache under ~/.cache.
-RUN python -c "from open_image_models import LicensePlateDetector; LicensePlateDetector(detection_model='yolo-v9-s-608-license-plate-end2end'); LicensePlateDetector(detection_model='yolo-v9-t-640-license-plate-end2end'); from fast_plate_ocr import LicensePlateRecognizer; LicensePlateRecognizer('cct-s-v2-global-model'); print('Model pre-fetch complete')"
+# Pre-download ONNX model weights at build time so cold-start is bounded
+# by container pull. Best-effort (|| true): if model download is flaky,
+# fall back to lazy load on first request rather than failing the build.
+RUN python -c "from open_image_models import LicensePlateDetector; LicensePlateDetector(detection_model='yolo-v9-s-608-license-plate-end2end'); LicensePlateDetector(detection_model='yolo-v9-t-640-license-plate-end2end'); from fast_plate_ocr import LicensePlateRecognizer; LicensePlateRecognizer('cct-s-v2-global-model'); print('YOLO + fast-plate-ocr pre-fetch complete')" || true
 
-# easyocr fallback model — only used if ENABLE_EASYOCR_FALLBACK=true at
-# runtime, but pre-fetching keeps the fallback path instant.
+# easyocr pre-fetch (fallback model). Best-effort.
 RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False, verbose=False)" || true
 
-# PaddleOCR PPOCRv4 detector + recognizer pre-fetch. We only use the
-# recognizer (det=False at call sites), but PaddleOCR's __init__ pulls
-# detection too on first run; pre-fetch both to keep cold-start fast.
-RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(use_angle_cls=False, lang='en', use_gpu=False, show_log=False); print('PaddleOCR pre-fetch complete')" || true
+# PaddleOCR PPOCRv4 — DO NOT pre-fetch at build time. The model download
+# from Baidu's CDN is flaky and causes intermittent Railway build failures.
+# Models lazy-load on first /recognize call after container start (adds
+# ~5-10s to the first request, then warm for the rest of the container's
+# lifetime). Worth the trade for build reliability.
 
 COPY app.py .
 COPY custom_yolo.py .
