@@ -140,7 +140,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.4.0",
+    version="3.5.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -206,7 +206,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.4.0",
+        "version": "3.5.0",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -355,10 +355,31 @@ def _ocr_best(crops: List[np.ndarray]):
 
     Returns (text, conf) or (None, 0.0) if no variant decoded.
     """
+    # Enhance each crop before OCR: per-crop CLAHE on luma + upscale to at
+    # least 280x80 (fast-plate-ocr's default 140x40 is a hard floor; tile-
+    # detected crops are often 50-100px wide and below that floor). Without
+    # this, the SC211 underexposed-plate crops decode as empty strings.
+    def _enhance_for_ocr(crop_in: np.ndarray) -> np.ndarray:
+        c = crop_in
+        try:
+            yuv = cv2.cvtColor(c, cv2.COLOR_BGR2YUV)
+            clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(4, 4))
+            yuv[:, :, 0] = clahe.apply(yuv[:, :, 0])
+            c = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
+        except Exception:
+            pass
+        ch, cw = c.shape[:2]
+        target_w = 280
+        if cw < target_w:
+            scale = target_w / cw
+            c = cv2.resize(c, (target_w, max(1, int(ch * scale))), interpolation=cv2.INTER_CUBIC)
+        return c
+
     results: List[tuple] = []
     for crop in crops:
+        enhanced = _enhance_for_ocr(crop)
         try:
-            ocr_result = ocr_reader.run(crop, return_confidence=True)
+            ocr_result = ocr_reader.run(enhanced, return_confidence=True)
         except Exception:
             continue
         if not ocr_result:
