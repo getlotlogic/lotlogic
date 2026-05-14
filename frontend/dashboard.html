@@ -4567,6 +4567,121 @@ function LoginPage({ onLogin }) {
   );
 }
 
+// ── JobNoRegRows — brand-v2 expandable row list for Possible no parking pass filter ──
+// Renders no-reg violations as job-row-paper cards with inline expand detail,
+// lifecycle stripe, and Dismiss / Mark Towed actions.
+function JobNoRegRows({ rows, onRefresh, addToast }) {
+  const [expanded, setExpanded] = useState({}); // { [id]: bool }
+  const [acting, setActing] = useState(null);
+
+  function toggle(id) {
+    setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  async function handleDismiss(e, id) {
+    e.stopPropagation();
+    if (acting) return;
+    setActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/dismiss`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'operator dismissed' }),
+      });
+      addToast('Dismissed', 'success');
+      if (onRefresh) onRefresh();
+    } catch (err) { addToast('Dismiss failed: ' + (err.message || ''), 'error'); }
+    finally { setActing(null); }
+  }
+
+  async function handleTow(e, id) {
+    e.stopPropagation();
+    if (acting) return;
+    setActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/tow`, { method: 'POST' });
+      addToast('Marked towed', 'success');
+      if (onRefresh) onRefresh();
+    } catch (err) { addToast('Mark towed failed: ' + (err.message || ''), 'error'); }
+    finally { setActing(null); }
+  }
+
+  if (!rows.length) return null;
+
+  return rows.map(v => {
+    const isOpen = !!expanded[v._noRegId || v.id];
+    const isActing = acting === (v._noRegId || v.id);
+    const anyActing = !!acting;
+    // Lifecycle stripe: flagged = red, pending/alerted = amber
+    const stageClass = v._origStatus === 'flagged' || v.status === 'alerted' ? 'stage-flagged'
+      : v._origStatus === 'pending' ? 'stage-pending'
+      : 'stage-dismissed';
+    const ageMins = v.detected_at ? Math.round((Date.now() - new Date(v.detected_at)) / 60000) : null;
+    const strength = (v.presence_strength || '').toLowerCase();
+    // Evidence
+    const evidence = Array.isArray(v.evidence) ? v.evidence : [];
+    const bestConf = v.best_confidence;
+    const sorted = evidence.slice().sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 4);
+    const bestIdx = sorted.findIndex(e => e.confidence === bestConf);
+    const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
+
+    return (
+      <div key={v._noRegId || v.id} className={`job-row-paper ${stageClass}${isOpen ? ' open' : ''}`} onClick={() => toggle(v._noRegId || v.id)}>
+        <div className="jr-top-paper">
+          <span className="jr-type-paper nreg">Possible no parking pass<span className="jr-stage-paper">
+            · {v._origStatus === 'flagged' ? 'Flagged' : v._origStatus === 'pending' ? 'In grace' : 'Flagged'}
+          </span></span>
+          <span className={`jr-age-paper${ageMins != null && ageMins >= 45 ? ' urgent' : ''}`}>
+            {ageMins != null ? ageMins + ' min' : '—'}
+            <span className="jr-chev-paper">›</span>
+          </span>
+        </div>
+        <div className="jr-mid-paper">
+          <span className="plate-tag-paper" style={{fontSize:14,padding:'5px 9px'}}>{(v.plate_text || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+          <span className="where">{v._lot_name || '—'}</span>
+        </div>
+        <div className="jr-bot-paper">
+          {v.detected_at && <span>First seen {fmtTime(v.detected_at)}</span>}
+          {strength && <><span className="sep">·</span><span>{strength === 'lingered' ? 'Lingered' : 'Brief'}</span></>}
+          {confPct != null && <><span className="sep">·</span><span>{confPct}% conf</span></>}
+        </div>
+        {/* Inline expand detail */}
+        <div className="jr-expand-paper">
+          {sorted.length > 0 && (
+            <div className="jr-snaps-paper">
+              {sorted.map((ev, i) => (
+                <div key={i} className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`} onClick={e => e.stopPropagation()}>
+                  {ev.url && <img src={ev.url} alt="evidence" loading="lazy" />}
+                  <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
+                  {ev.taken_at && <span className="snt">{fmtTime(ev.taken_at)}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          <dl className="jr-kv-paper" onClick={e => e.stopPropagation()}>
+            <dt>Raw plate</dt><dd>{v.raw_plate || v.plate_text || '—'}</dd>
+            {v.last_seen_at && <><dt>Last seen</dt><dd>{fmtTime(v.last_seen_at)}</dd></>}
+            {v.exit_seen_at && <><dt>Exit</dt><dd>{fmtTime(v.exit_seen_at)}</dd></>}
+          </dl>
+          <div className="jr-actions-paper" onClick={e => e.stopPropagation()}>
+            <button
+              className="btn-paper"
+              disabled={anyActing}
+              onClick={e => handleDismiss(e, v._noRegId || v.id)}
+              style={{opacity: anyActing ? 0.6 : 1}}
+            >{isActing ? '…' : 'Dismiss'}</button>
+            <button
+              className="btn-paper primary"
+              disabled={anyActing}
+              onClick={e => handleTow(e, v._noRegId || v.id)}
+              style={{opacity: anyActing ? 0.6 : 1}}
+            >{isActing ? '…' : 'Mark Towed'}</button>
+          </div>
+        </div>
+      </div>
+    );
+  });
+}
+
 // ── Jobs tab (current violations) ─────────────────────────────
 function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, onAction, isOwner, deepLinkViolationId, user, onNavigate }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
@@ -4889,14 +5004,29 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
   }, [active]);
 
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState('all'); // all | urgent | nreg
+  const [filter, setFilter] = useState('all'); // all | nreg | overstays | open | handled
+
+  // Derived lists per filter
+  const overstayJobs = active.filter(v =>
+    (v.violation_type || '').toLowerCase().includes('overstay')
+  );
+  const openJobs = active.filter(v =>
+    !v._isNoReg && !(v.violation_type || '').toLowerCase().includes('overstay')
+  );
+  // "Handled today" = resolved/cleared/towed today
+  const todayStartMs = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+  const handledToday = allViolations.filter(v =>
+    ['resolved','cleared','departed','dismissed'].includes(v.status) &&
+    new Date(v.resolved_at || v.departed_at || v.cleared_at || v.detected_at).getTime() >= todayStartMs
+  );
 
   // Filter active jobs — nreg pill swaps in the no-reg rows instead of the standard active list
-  const baseList = filter === 'nreg' ? noRegRows : active;
+  const baseList = filter === 'nreg' ? noRegRows
+    : filter === 'overstays' ? overstayJobs
+    : filter === 'open' ? openJobs
+    : filter === 'handled' ? handledToday
+    : active; // 'all'
   const filteredActive = baseList.filter(v => {
-    if (filter === 'urgent') { const t = elapsed(v.detected_at); return t?.val >= 30; }
-    return true;
-  }).filter(v => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return (v.vehicle_color?.toLowerCase().includes(q)) ||
@@ -4970,23 +5100,36 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
       )}
 
       {/* Search and filter */}
-      {(active.length > 0 || noRegRows.length > 0) && (
+      {(active.length > 0 || noRegRows.length > 0 || handledToday.length > 0) && (
         <div className="search-bar">
           <div className="search-wrap">
             <SearchIcon />
             <input className="search-input" placeholder="Search color, type, lot…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <button className={`filter-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>All</button>
-          <button className={`filter-chip ${filter === 'urgent' ? 'active' : ''}`} onClick={() => setFilter('urgent')}>Urgent</button>
-          {noRegRows.length > 0 && (
-            <button
-              className={`filter-chip ${filter === 'nreg' ? 'active' : ''}`}
-              onClick={() => setFilter('nreg')}
-              aria-label="Filter: possible no parking pass"
-            >
-              Possible no parking pass{noRegRows.length > 0 ? ` (${noRegRows.length})` : ''}
-            </button>
-          )}
+        </div>
+      )}
+      {/* Filter pill row — brand-v2 style, horizontally scrollable */}
+      {(active.length > 0 || noRegRows.length > 0 || handledToday.length > 0) && (
+        <div className="filter-bar-paper" style={{marginBottom:8}}>
+          <button className={`filter-pill-paper${filter === 'all' ? ' active' : ''}`} onClick={() => setFilter('all')}>
+            All<span className="n">{active.length + handledToday.length}</span>
+          </button>
+          <button
+            className={`filter-pill-paper${filter === 'nreg' ? ' active' : ''}`}
+            onClick={() => setFilter('nreg')}
+            aria-label="Filter: possible no parking pass"
+          >
+            Possible no parking pass<span className="n">{noRegRows.length}</span>
+          </button>
+          <button className={`filter-pill-paper${filter === 'overstays' ? ' active' : ''}`} onClick={() => setFilter('overstays')}>
+            Overstays<span className="n">{overstayJobs.length}</span>
+          </button>
+          <button className={`filter-pill-paper${filter === 'open' ? ' active' : ''}`} onClick={() => setFilter('open')}>
+            Open jobs<span className="n">{openJobs.length}</span>
+          </button>
+          <button className={`filter-pill-paper${filter === 'handled' ? ' active' : ''}`} onClick={() => setFilter('handled')}>
+            Handled today<span className="n">{handledToday.length}</span>
+          </button>
         </div>
       )}
 
@@ -5095,8 +5238,14 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
 
       {/* Active jobs */}
       <div className="section-header">
-        <div className="section-title">{filter === 'nreg' ? 'Possible no parking pass' : 'Open Jobs'}</div>
-        <div className="section-count">{filteredActive.length} {filter === 'nreg' ? 'flagged' : 'active'}</div>
+        <div className="section-title">
+          {filter === 'nreg' ? 'Possible no parking pass'
+            : filter === 'overstays' ? 'Overstays'
+            : filter === 'open' ? 'Open Jobs'
+            : filter === 'handled' ? 'Handled Today'
+            : 'All Jobs'}
+        </div>
+        <div className="section-count">{filteredActive.length}</div>
       </div>
 
       {filteredActive.length === 0 && active.length > 0 ? (
@@ -5143,6 +5292,33 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
             </div>
           )}
         </div>
+      ) : filter === 'nreg' ? (
+        /* Brand-v2 expandable rows for the Possible no parking pass filter */
+        <JobNoRegRows rows={filteredActive} onRefresh={() => {
+          // Re-fetch the noRegRows by re-triggering the effect
+          setNoRegRows([]);
+          if (!user) return;
+          db._getPropertyIds(user.id, user._role).then(propIds => {
+            if (!propIds.length) return;
+            Promise.all(
+              propIds.map(pid =>
+                apiFetch(`/no-reg-violations?property_id=${pid}&status=flagged`)
+                  .then(rows => (Array.isArray(rows) ? rows.map(r => ({
+                    ...r, _isNoReg: true, detected_at: r.first_seen_at || r.created_at,
+                    status: 'alerted', _origStatus: r.status, lot_id: null,
+                    _lot_name: r._property_name || pid.slice(0, 8),
+                    plate_text: r.raw_plate || r.normalized_plate || '—',
+                    violation_type: 'no_parking_pass', _noRegId: r.id,
+                  })) : []))
+                  .catch(() => [])
+              )
+            ).then(arrays => {
+              const flat = arrays.flat();
+              flat.sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
+              setNoRegRows(flat);
+            });
+          }).catch(() => {});
+        }} addToast={addToast} />
       ) : (
         filteredActive.map((v, idx) => {
           const lot = lotMap[v.lot_id];
@@ -5157,6 +5333,20 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
             ? 'overtime' : 'default';
           return (
             <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''} ${(v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) ? 'departed' : ''}`} style={{position:'relative'}}>
+              {/* Lifecycle stripe for ALPR / no-reg rows — left-edge color indicator */}
+              {(v._isNoReg || v._isALPR) && (() => {
+                const stripeColor = v._isNoReg
+                  ? (v._origStatus === 'flagged' ? 'var(--red-paper)' : 'var(--amber-paper)')
+                  : (v._origStatus === 'pending' || v._origStatus === 'dispatched' ? 'var(--amber-paper)'
+                    : v._origStatus === 'resolved' ? 'var(--green-paper)'
+                    : 'var(--ink-4-paper)');
+                return (
+                  <div aria-hidden="true" style={{
+                    position:'absolute', left:0, top:8, bottom:8,
+                    width:4, borderRadius:'0 4px 4px 0', background:stripeColor, zIndex:2,
+                  }} />
+                );
+              })()}
               {/* Owner delete X */}
               {isOwner && (
                 <button
@@ -5418,8 +5608,8 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
         })
       )}
 
-      {/* Recent completed */}
-      {recent.length > 0 && (
+      {/* Recent completed — hidden when the 'handled' filter pill is active to avoid duplication */}
+      {recent.length > 0 && filter !== 'handled' && (
         <>
           <div className="section-header" style={{marginTop: 24}}>
             <div className="section-title">Handled Today</div>
