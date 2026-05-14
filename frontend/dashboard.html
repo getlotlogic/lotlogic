@@ -10362,7 +10362,7 @@ function RegisteredDrill({ propertyId, propertyName, onBack }) {
             </div>
             <div className="reg-time-paper">
               <span className="reg-live-paper">● ACTIVE</span>
-              {row.starts_at && <span style={{fontSize:11}}>Since {fmtTime(row.starts_at)}</span>}
+              {row.starts_at && <span style={{fontSize:11}}>Since {new Date(row.starts_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
             </div>
           </div>
         ))}
@@ -10478,7 +10478,9 @@ function ALPRPropertiesPage({ user }) {
     <div className="page-enter">
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
         <div style={{fontSize:16,fontWeight:800,color:'var(--text-primary)'}}>Lots</div>
-        <button onClick={() => setShowAdd(!showAdd)} style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{showAdd ? 'Cancel' : '+ Add Lot'}</button>
+        {user?._role !== 'partner' && (
+          <button onClick={() => setShowAdd(!showAdd)} style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{showAdd ? 'Cancel' : '+ Add Lot'}</button>
+        )}
       </div>
 
       {showAdd && (
@@ -10578,7 +10580,7 @@ function ALPRPropertiesPage({ user }) {
                 </div>
 
                 <div className="lot-foot-paper">
-                  <button onClick={() => setSelectedId(p.id)}>View cameras <span className="arr">›</span></button>
+                  <button onClick={() => setSelectedId(p.id)}>{user?._role === 'partner' ? 'View parking passes' : 'View cameras'} <span className="arr">›</span></button>
                 </div>
               </article>
             );
