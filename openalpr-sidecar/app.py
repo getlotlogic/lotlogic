@@ -140,7 +140,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.0.0",
+    version="3.1.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -196,7 +196,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.0.0",
+        "version": "3.1.0",
         "detector_loaded": detector is not None,
         "ocr_loaded": ocr_reader is not None,
         "easyocr_fallback": easyocr_reader is not None,
