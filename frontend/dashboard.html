@@ -67,6 +67,23 @@
       --grain-overlay: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.96  0 0 0 0 0.96  0 0 0 0 0.94  0 0 0 0.05 0'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
       /* Road-stripe — for section dividers, recalls actual lane markings */
       --road-stripe: repeating-linear-gradient(90deg, var(--accent) 0 22px, transparent 22px 36px);
+      /* Brand-v2 palette — used by the SC211 no-reg / lots-redesign surfaces */
+      --bg-paper: #F2EAD8;
+      --card-paper: #FAF5E8;
+      --border-paper: #E1D5B8;
+      --border-strong-paper: #C9B891;
+      --ink-paper: #1F1B14;
+      --ink-2-paper: #3D3528;
+      --ink-3-paper: #6F6450;
+      --ink-4-paper: #968B73;
+      --red-paper: #B14535;
+      --red-bg-paper: #F4DDD3;
+      --amber-paper: #D97706;
+      --amber-bg-paper: #F8E6C3;
+      --green-paper: #4A7A48;
+      --green-bg-paper: #DEE9D7;
+      --terra-paper: #C97A4A;
+      --shadow-paper: 0 1px 0 rgba(31,27,20,.04), 0 1px 3px rgba(31,27,20,.06);
     }
     .theme-light {
       --bg-primary: #F6F4EE;
@@ -1853,6 +1870,283 @@
     }
     .theme-light .nreg-btn-dismiss { background: #f3f4f6; border-color: #e5e7eb; color: #6b7280; }
     .theme-light .nreg-pill-strength-brief { background: #f3f4f6; border-color: #e5e7eb; color: #6b7280; }
+
+    /* ── Brand-v2 KPI tiles (lots redesign) ── */
+    .kpis-paper{display:grid;grid-template-columns:1fr 1fr}
+    .kpi-paper{
+      padding:18px 16px 16px;
+      border-right:1px solid var(--border-paper);
+      border-bottom:1px solid var(--border-paper);
+      cursor:pointer;display:block;text-decoration:none;color:inherit;
+      background:var(--card-paper);
+      transition:background 120ms;position:relative;
+    }
+    .kpi-paper:nth-child(2n){border-right:none}
+    .kpi-paper:nth-last-child(-n+2){border-bottom:none}
+    .kpi-paper:active,.kpi-paper:hover{background:#EFE4CA}
+    .kpi-paper .top-row{display:flex;align-items:baseline;justify-content:space-between}
+    .kpi-paper .val{
+      font-size:34px;font-weight:800;letter-spacing:-.03em;line-height:1;
+      font-variant-numeric:tabular-nums;color:var(--ink-paper);
+    }
+    .kpi-paper .chev{color:var(--ink-4-paper);font-size:18px}
+    .kpi-paper .label{margin-top:8px;font-size:12px;font-weight:600;color:var(--ink-3-paper)}
+    .kpi-paper.red .val{color:var(--red-paper)}
+    .kpi-paper.amber .val{color:var(--amber-paper)}
+    .kpi-paper.green .val{color:var(--green-paper)}
+    .kpi-paper.calm .val{color:var(--ink-3-paper)}
+
+    /* ── Brand-v2 lot card ── */
+    .lot-card-paper{
+      background:var(--card-paper);
+      border:1px solid var(--border-paper);
+      border-radius:14px;overflow:hidden;
+      margin-bottom:14px;
+      box-shadow:var(--shadow-paper);
+    }
+    .lot-head-paper{
+      padding:16px 18px 14px;
+      display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+      border-bottom:1px solid var(--border-paper);
+    }
+    .lot-name-paper{font-size:18px;font-weight:700;letter-spacing:-.01em;line-height:1.2;color:var(--ink-paper)}
+    .lot-addr-paper{font-size:13px;color:var(--ink-3-paper);margin-top:3px;font-weight:500}
+    .lot-foot-paper{
+      display:flex;border-top:1px solid var(--border-paper);
+    }
+    .lot-foot-paper button{
+      flex:1;padding:14px 12px;text-align:center;background:none;border:none;
+      font-size:14px;font-weight:600;color:var(--ink-paper);
+      border-right:1px solid var(--border-paper);
+      display:flex;align-items:center;justify-content:center;gap:6px;
+      cursor:pointer;font-family:inherit;
+    }
+    .lot-foot-paper button:last-child{border-right:none}
+    .lot-foot-paper button:active{background:#EFE4CA}
+    .lot-foot-paper .arr{color:var(--ink-3-paper);font-weight:500}
+    .lot-pill-paper{
+      flex-shrink:0;
+      font-size:11px;font-weight:700;letter-spacing:.02em;
+      padding:5px 10px;border-radius:999px;
+      display:inline-flex;align-items:center;gap:6px;
+      white-space:nowrap;
+    }
+    .lot-pill-paper .dot{width:7px;height:7px;border-radius:50%}
+    .lot-pill-paper.red{background:var(--red-bg-paper);color:var(--red-paper)}
+    .lot-pill-paper.red .dot{background:var(--red-paper)}
+    .lot-pill-paper.amber{background:var(--amber-bg-paper);color:var(--amber-paper)}
+    .lot-pill-paper.amber .dot{background:var(--amber-paper)}
+    .lot-pill-paper.green{background:var(--green-bg-paper);color:var(--green-paper)}
+    .lot-pill-paper.green .dot{background:var(--green-paper)}
+
+    /* ── Brand-v2 drill-down panels ── */
+    .drill-paper{
+      background:var(--card-paper);
+      border:1px solid var(--border-paper);
+      border-radius:14px;overflow:hidden;
+      box-shadow:var(--shadow-paper);
+      margin-bottom:16px;
+    }
+    .drill-head-paper{
+      padding:16px 18px;
+      border-bottom:1px solid var(--border-paper);
+      display:flex;align-items:center;justify-content:space-between;
+    }
+    .drill-head-paper .title{font-size:15px;font-weight:700;color:var(--ink-paper)}
+    .drill-head-paper .back{
+      font-size:13px;color:var(--ink-3-paper);font-weight:600;
+      background:none;border:none;cursor:pointer;font-family:inherit;
+      display:inline-flex;align-items:center;gap:4px;
+    }
+    .drill-head-paper .back:active{opacity:.7}
+
+    /* No-reg drill-down rows */
+    .nr-row-paper{
+      padding:14px 16px 14px 20px;
+      border-bottom:1px solid var(--border-paper);
+      position:relative;
+    }
+    .nr-row-paper:last-child{border-bottom:none}
+    .nr-row-paper::before{
+      content:'';position:absolute;left:0;top:0;bottom:0;
+      width:4px;
+    }
+    .nr-row-paper.stage-flagged::before{background:var(--red-paper)}
+    .nr-row-paper.stage-pending::before{background:var(--amber-paper)}
+    .nr-row-paper.stage-resolved::before{background:var(--green-paper)}
+    .nr-row-paper.stage-dismissed::before{background:var(--ink-4-paper)}
+    .nr-row-top-paper{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+    }
+    .plate-tag-paper{
+      font-family:ui-monospace,"SF Mono",Menlo,monospace;
+      font-size:16px;font-weight:700;letter-spacing:.04em;
+      padding:6px 10px;
+      background:var(--ink-paper);color:var(--card-paper);border-radius:6px;
+    }
+    .nr-times-paper{
+      font-size:12.5px;color:var(--ink-3-paper);
+      display:flex;flex-direction:column;align-items:flex-end;font-weight:500;
+      font-variant-numeric:tabular-nums;
+    }
+    .nr-times-paper .age{color:var(--red-paper);font-weight:700;font-size:14px}
+    .nr-meta-paper{
+      margin-top:10px;
+      font-size:12.5px;color:var(--ink-3-paper);
+      display:flex;gap:10px;flex-wrap:wrap;font-weight:500;
+    }
+    .nr-meta-paper .badge{
+      padding:3px 8px;border-radius:999px;background:var(--bg-paper);
+      font-size:11px;font-weight:700;letter-spacing:.02em;color:var(--ink-3-paper);
+    }
+    .nr-meta-paper .badge.lingered{background:var(--red-bg-paper);color:var(--red-paper)}
+    .nr-snaps-paper{
+      margin-top:12px;
+      display:grid;grid-template-columns:repeat(4,1fr);gap:6px;
+    }
+    .nr-snap-paper{
+      aspect-ratio:4/3;border-radius:6px;background:#0a0a0b;
+      position:relative;overflow:hidden;
+      background-image:repeating-linear-gradient(45deg,#1a1a1c,#1a1a1c 6px,#0a0a0b 6px,#0a0a0b 12px);
+      display:flex;align-items:flex-end;
+    }
+    .nr-snap-paper img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0}
+    .nr-snap-paper .snt{
+      width:100%;font-size:9.5px;font-weight:600;color:#fff;
+      background:linear-gradient(transparent,rgba(0,0,0,.7));
+      padding:8px 6px 4px;text-align:right;font-variant-numeric:tabular-nums;
+      position:relative;z-index:1;
+    }
+    .nr-snap-paper .snc{
+      position:absolute;top:4px;left:4px;
+      font-size:9px;font-weight:700;color:#fff;
+      background:rgba(0,0,0,.55);padding:2px 5px;border-radius:3px;
+      font-variant-numeric:tabular-nums;z-index:1;
+    }
+    .nr-snap-paper.best{outline:2px solid var(--red-paper);outline-offset:-2px}
+    .nr-snap-paper.best::after{
+      content:'BEST';position:absolute;top:4px;right:4px;
+      font-size:8.5px;font-weight:800;letter-spacing:.06em;
+      background:var(--red-paper);color:#fff;padding:2px 5px;border-radius:3px;z-index:1;
+    }
+    .nr-actions-paper{
+      margin-top:14px;display:flex;gap:8px;
+    }
+    .btn-paper{
+      flex:1;padding:11px 12px;border-radius:8px;
+      font-size:14px;font-weight:700;
+      text-align:center;cursor:pointer;
+      border:1px solid var(--border-strong-paper);background:var(--card-paper);color:var(--ink-paper);
+      font-family:inherit;transition:background 120ms;
+    }
+    .btn-paper:active{background:#EFE4CA}
+    .btn-paper.primary{background:var(--red-paper);color:var(--card-paper);border-color:var(--red-paper)}
+    .btn-paper.primary:active{background:#8E3528}
+
+    /* Registered drill-down rows */
+    .reg-row-paper{
+      padding:13px 16px;border-bottom:1px solid var(--border-paper);
+      display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
+    }
+    .reg-row-paper:last-child{border-bottom:none}
+    .reg-name-paper{font-size:15px;font-weight:600;color:var(--ink-paper)}
+    .reg-detail-paper{font-size:12.5px;color:var(--ink-3-paper);margin-top:2px;font-weight:500}
+    .reg-time-paper{
+      font-size:12px;color:var(--ink-3-paper);text-align:right;font-weight:500;
+      font-variant-numeric:tabular-nums;display:flex;flex-direction:column;align-items:flex-end;gap:2px;
+    }
+    .reg-live-paper{color:var(--green-paper);font-weight:700;font-size:11px;letter-spacing:.04em}
+
+    /* ── Brand-v2 filter pills (All Jobs) ── */
+    .filter-bar-paper{
+      display:flex;gap:6px;padding:14px 0 4px;overflow-x:auto;
+      -webkit-overflow-scrolling:touch;scrollbar-width:none;
+    }
+    .filter-bar-paper::-webkit-scrollbar{display:none}
+    .filter-pill-paper{
+      flex-shrink:0;padding:7px 13px;border-radius:999px;
+      font-size:13px;font-weight:600;letter-spacing:-.005em;
+      border:1px solid var(--border-strong-paper);background:var(--card-paper);color:var(--ink-2-paper);
+      cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+      white-space:nowrap;font-family:inherit;transition:background 120ms,color 120ms;
+    }
+    .filter-pill-paper:active{background:#EFE4CA}
+    .filter-pill-paper.active{background:var(--ink-paper);color:var(--card-paper);border-color:var(--ink-paper)}
+    .filter-pill-paper .n{
+      font-variant-numeric:tabular-nums;
+      font-size:11.5px;padding:1px 6px;border-radius:999px;
+      background:var(--bg-paper);color:var(--ink-3-paper);font-weight:700;
+    }
+    .filter-pill-paper.active .n{background:rgba(250,245,232,.18);color:var(--card-paper)}
+
+    /* ── Brand-v2 job rows (All Jobs) ── */
+    .job-row-paper{
+      background:var(--card-paper);border:1px solid var(--border-paper);border-radius:12px;
+      padding:14px 14px 12px 18px;margin-bottom:10px;box-shadow:var(--shadow-paper);
+      position:relative;cursor:pointer;
+    }
+    .job-row-paper::before{
+      content:'';position:absolute;left:0;top:8px;bottom:8px;
+      width:4px;border-radius:0 4px 4px 0;background:var(--ink-4-paper);
+    }
+    .job-row-paper.stage-flagged::before{background:var(--red-paper)}
+    .job-row-paper.stage-pending::before{background:var(--amber-paper)}
+    .job-row-paper.stage-resolved::before,.job-row-paper.stage-handled::before{background:var(--green-paper)}
+    .job-row-paper.stage-dismissed::before{background:var(--ink-4-paper)}
+    .job-row-paper:active{background:#F4ECD7}
+    .jr-top-paper{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .jr-type-paper{
+      font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+      padding:3px 8px;border-radius:999px;
+    }
+    .jr-type-paper.nreg{background:var(--red-bg-paper);color:var(--red-paper)}
+    .jr-type-paper.over{background:var(--amber-bg-paper);color:var(--amber-paper)}
+    .jr-type-paper.viol{background:var(--amber-bg-paper);color:var(--amber-paper)}
+    .jr-type-paper.done{background:var(--green-bg-paper);color:var(--green-paper)}
+    .jr-stage-paper{
+      font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+      margin-left:8px;color:var(--ink-3-paper);font-variant-numeric:tabular-nums;
+    }
+    .job-row-paper.stage-flagged .jr-stage-paper{color:var(--red-paper)}
+    .job-row-paper.stage-pending .jr-stage-paper{color:var(--amber-paper)}
+    .job-row-paper.stage-resolved .jr-stage-paper,.job-row-paper.stage-handled .jr-stage-paper{color:var(--green-paper)}
+    .jr-age-paper{
+      font-size:13px;font-weight:700;color:var(--ink-3-paper);font-variant-numeric:tabular-nums;
+      display:flex;align-items:center;gap:2px;
+    }
+    .jr-age-paper.urgent{color:var(--red-paper)}
+    .jr-chev-paper{
+      color:var(--ink-3-paper);font-size:18px;line-height:1;
+      transition:transform 200ms ease;display:inline-block;margin-left:4px;
+    }
+    .jr-mid-paper{display:flex;align-items:center;gap:10px;margin-top:11px}
+    .jr-mid-paper .where{
+      font-size:14px;font-weight:600;color:var(--ink-paper);letter-spacing:-.005em;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    }
+    .jr-bot-paper{
+      margin-top:9px;font-size:12.5px;color:var(--ink-3-paper);font-weight:500;
+      display:flex;gap:10px;flex-wrap:wrap;
+    }
+    .jr-bot-paper .sep{color:var(--border-strong-paper)}
+    .jr-expand-paper{
+      overflow:hidden;max-height:0;
+      transition:max-height 260ms ease;
+      border-top:0 solid transparent;
+    }
+    .job-row-paper.open .jr-expand-paper{
+      max-height:600px;border-top:1px solid var(--border-paper);
+      margin-top:12px;padding-top:12px;
+    }
+    .jr-snaps-paper{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px}
+    .jr-actions-paper{display:flex;gap:8px;margin-bottom:8px}
+    .jr-actions-paper .btn-paper{font-size:13.5px;padding:10px 12px}
+    .jr-kv-paper{
+      display:grid;grid-template-columns:auto 1fr;gap:6px 14px;
+      font-size:13px;font-weight:500;color:var(--ink-2-paper);margin-bottom:12px;
+    }
+    .jr-kv-paper dt{color:var(--ink-3-paper);font-weight:600}
+    .jr-kv-paper dd{color:var(--ink-paper);font-variant-numeric:tabular-nums}
   </style>
 </head>
 <body>
@@ -4273,6 +4567,121 @@ function LoginPage({ onLogin }) {
   );
 }
 
+// ── JobNoRegRows — brand-v2 expandable row list for Possible no parking pass filter ──
+// Renders no-reg violations as job-row-paper cards with inline expand detail,
+// lifecycle stripe, and Dismiss / Mark Towed actions.
+function JobNoRegRows({ rows, onRefresh, addToast }) {
+  const [expanded, setExpanded] = useState({}); // { [id]: bool }
+  const [acting, setActing] = useState(null);
+
+  function toggle(id) {
+    setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  async function handleDismiss(e, id) {
+    e.stopPropagation();
+    if (acting) return;
+    setActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/dismiss`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'operator dismissed' }),
+      });
+      addToast('Dismissed', 'success');
+      if (onRefresh) onRefresh();
+    } catch (err) { addToast('Dismiss failed: ' + (err.message || ''), 'error'); }
+    finally { setActing(null); }
+  }
+
+  async function handleTow(e, id) {
+    e.stopPropagation();
+    if (acting) return;
+    setActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/tow`, { method: 'POST' });
+      addToast('Marked towed', 'success');
+      if (onRefresh) onRefresh();
+    } catch (err) { addToast('Mark towed failed: ' + (err.message || ''), 'error'); }
+    finally { setActing(null); }
+  }
+
+  if (!rows.length) return null;
+
+  return rows.map(v => {
+    const isOpen = !!expanded[v._noRegId || v.id];
+    const isActing = acting === (v._noRegId || v.id);
+    const anyActing = !!acting;
+    // Lifecycle stripe: flagged = red, pending/alerted = amber
+    const stageClass = v._origStatus === 'flagged' || v.status === 'alerted' ? 'stage-flagged'
+      : v._origStatus === 'pending' ? 'stage-pending'
+      : 'stage-dismissed';
+    const ageMins = v.detected_at ? Math.round((Date.now() - new Date(v.detected_at)) / 60000) : null;
+    const strength = (v.presence_strength || '').toLowerCase();
+    // Evidence
+    const evidence = Array.isArray(v.evidence) ? v.evidence : [];
+    const bestConf = v.best_confidence;
+    const sorted = evidence.slice().sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 4);
+    const bestIdx = sorted.findIndex(e => e.confidence === bestConf);
+    const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
+
+    return (
+      <div key={v._noRegId || v.id} className={`job-row-paper ${stageClass}${isOpen ? ' open' : ''}`} onClick={() => toggle(v._noRegId || v.id)}>
+        <div className="jr-top-paper">
+          <span className="jr-type-paper nreg">Possible no parking pass<span className="jr-stage-paper">
+            · {v._origStatus === 'flagged' ? 'Flagged' : v._origStatus === 'pending' ? 'In grace' : 'Flagged'}
+          </span></span>
+          <span className={`jr-age-paper${ageMins != null && ageMins >= 45 ? ' urgent' : ''}`}>
+            {ageMins != null ? ageMins + ' min' : '—'}
+            <span className="jr-chev-paper">›</span>
+          </span>
+        </div>
+        <div className="jr-mid-paper">
+          <span className="plate-tag-paper" style={{fontSize:14,padding:'5px 9px'}}>{(v.plate_text || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+          <span className="where">{v._lot_name || '—'}</span>
+        </div>
+        <div className="jr-bot-paper">
+          {v.detected_at && <span>First seen {fmtTime(v.detected_at)}</span>}
+          {strength && <><span className="sep">·</span><span>{strength === 'lingered' ? 'Lingered' : 'Brief'}</span></>}
+          {confPct != null && <><span className="sep">·</span><span>{confPct}% conf</span></>}
+        </div>
+        {/* Inline expand detail */}
+        <div className="jr-expand-paper">
+          {sorted.length > 0 && (
+            <div className="jr-snaps-paper">
+              {sorted.map((ev, i) => (
+                <div key={i} className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`} onClick={e => e.stopPropagation()}>
+                  {ev.url && <img src={ev.url} alt="evidence" loading="lazy" />}
+                  <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
+                  {ev.taken_at && <span className="snt">{fmtTime(ev.taken_at)}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          <dl className="jr-kv-paper" onClick={e => e.stopPropagation()}>
+            <dt>Raw plate</dt><dd>{v.raw_plate || v.plate_text || '—'}</dd>
+            {v.last_seen_at && <><dt>Last seen</dt><dd>{fmtTime(v.last_seen_at)}</dd></>}
+            {v.exit_seen_at && <><dt>Exit</dt><dd>{fmtTime(v.exit_seen_at)}</dd></>}
+          </dl>
+          <div className="jr-actions-paper" onClick={e => e.stopPropagation()}>
+            <button
+              className="btn-paper"
+              disabled={anyActing}
+              onClick={e => handleDismiss(e, v._noRegId || v.id)}
+              style={{opacity: anyActing ? 0.6 : 1}}
+            >{isActing ? '…' : 'Dismiss'}</button>
+            <button
+              className="btn-paper primary"
+              disabled={anyActing}
+              onClick={e => handleTow(e, v._noRegId || v.id)}
+              style={{opacity: anyActing ? 0.6 : 1}}
+            >{isActing ? '…' : 'Mark Towed'}</button>
+          </div>
+        </div>
+      </div>
+    );
+  });
+}
+
 // ── Jobs tab (current violations) ─────────────────────────────
 function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, onAction, isOwner, deepLinkViolationId, user, onNavigate }) {
   const lotMap = Object.fromEntries(lots.map(l => [l.id, l]));
@@ -4595,14 +5004,29 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
   }, [active]);
 
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState('all'); // all | urgent | nreg
+  const [filter, setFilter] = useState('all'); // all | nreg | overstays | open | handled
+
+  // Derived lists per filter
+  const overstayJobs = active.filter(v =>
+    (v.violation_type || '').toLowerCase().includes('overstay')
+  );
+  const openJobs = active.filter(v =>
+    !v._isNoReg && !(v.violation_type || '').toLowerCase().includes('overstay')
+  );
+  // "Handled today" = resolved/cleared/towed today
+  const todayStartMs = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+  const handledToday = allViolations.filter(v =>
+    ['resolved','cleared','departed','dismissed'].includes(v.status) &&
+    new Date(v.resolved_at || v.departed_at || v.cleared_at || v.detected_at).getTime() >= todayStartMs
+  );
 
   // Filter active jobs — nreg pill swaps in the no-reg rows instead of the standard active list
-  const baseList = filter === 'nreg' ? noRegRows : active;
+  const baseList = filter === 'nreg' ? noRegRows
+    : filter === 'overstays' ? overstayJobs
+    : filter === 'open' ? openJobs
+    : filter === 'handled' ? handledToday
+    : active; // 'all'
   const filteredActive = baseList.filter(v => {
-    if (filter === 'urgent') { const t = elapsed(v.detected_at); return t?.val >= 30; }
-    return true;
-  }).filter(v => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return (v.vehicle_color?.toLowerCase().includes(q)) ||
@@ -4676,23 +5100,36 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
       )}
 
       {/* Search and filter */}
-      {(active.length > 0 || noRegRows.length > 0) && (
+      {(active.length > 0 || noRegRows.length > 0 || handledToday.length > 0) && (
         <div className="search-bar">
           <div className="search-wrap">
             <SearchIcon />
             <input className="search-input" placeholder="Search color, type, lot…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <button className={`filter-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>All</button>
-          <button className={`filter-chip ${filter === 'urgent' ? 'active' : ''}`} onClick={() => setFilter('urgent')}>Urgent</button>
-          {noRegRows.length > 0 && (
-            <button
-              className={`filter-chip ${filter === 'nreg' ? 'active' : ''}`}
-              onClick={() => setFilter('nreg')}
-              aria-label="Filter: possible no parking pass"
-            >
-              Possible no parking pass{noRegRows.length > 0 ? ` (${noRegRows.length})` : ''}
-            </button>
-          )}
+        </div>
+      )}
+      {/* Filter pill row — brand-v2 style, horizontally scrollable */}
+      {(active.length > 0 || noRegRows.length > 0 || handledToday.length > 0) && (
+        <div className="filter-bar-paper" style={{marginBottom:8}}>
+          <button className={`filter-pill-paper${filter === 'all' ? ' active' : ''}`} onClick={() => setFilter('all')}>
+            All<span className="n">{active.length + handledToday.length}</span>
+          </button>
+          <button
+            className={`filter-pill-paper${filter === 'nreg' ? ' active' : ''}`}
+            onClick={() => setFilter('nreg')}
+            aria-label="Filter: possible no parking pass"
+          >
+            Possible no parking pass<span className="n">{noRegRows.length}</span>
+          </button>
+          <button className={`filter-pill-paper${filter === 'overstays' ? ' active' : ''}`} onClick={() => setFilter('overstays')}>
+            Overstays<span className="n">{overstayJobs.length}</span>
+          </button>
+          <button className={`filter-pill-paper${filter === 'open' ? ' active' : ''}`} onClick={() => setFilter('open')}>
+            Open jobs<span className="n">{openJobs.length}</span>
+          </button>
+          <button className={`filter-pill-paper${filter === 'handled' ? ' active' : ''}`} onClick={() => setFilter('handled')}>
+            Handled today<span className="n">{handledToday.length}</span>
+          </button>
         </div>
       )}
 
@@ -4801,8 +5238,14 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
 
       {/* Active jobs */}
       <div className="section-header">
-        <div className="section-title">{filter === 'nreg' ? 'Possible no parking pass' : 'Open Jobs'}</div>
-        <div className="section-count">{filteredActive.length} {filter === 'nreg' ? 'flagged' : 'active'}</div>
+        <div className="section-title">
+          {filter === 'nreg' ? 'Possible no parking pass'
+            : filter === 'overstays' ? 'Overstays'
+            : filter === 'open' ? 'Open Jobs'
+            : filter === 'handled' ? 'Handled Today'
+            : 'All Jobs'}
+        </div>
+        <div className="section-count">{filteredActive.length}</div>
       </div>
 
       {filteredActive.length === 0 && active.length > 0 ? (
@@ -4849,6 +5292,33 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
             </div>
           )}
         </div>
+      ) : filter === 'nreg' ? (
+        /* Brand-v2 expandable rows for the Possible no parking pass filter */
+        <JobNoRegRows rows={filteredActive} onRefresh={() => {
+          // Re-fetch the noRegRows by re-triggering the effect
+          setNoRegRows([]);
+          if (!user) return;
+          db._getPropertyIds(user.id, user._role).then(propIds => {
+            if (!propIds.length) return;
+            Promise.all(
+              propIds.map(pid =>
+                apiFetch(`/no-reg-violations?property_id=${pid}&status=flagged`)
+                  .then(rows => (Array.isArray(rows) ? rows.map(r => ({
+                    ...r, _isNoReg: true, detected_at: r.first_seen_at || r.created_at,
+                    status: 'alerted', _origStatus: r.status, lot_id: null,
+                    _lot_name: r._property_name || pid.slice(0, 8),
+                    plate_text: r.raw_plate || r.normalized_plate || '—',
+                    violation_type: 'no_parking_pass', _noRegId: r.id,
+                  })) : []))
+                  .catch(() => [])
+              )
+            ).then(arrays => {
+              const flat = arrays.flat();
+              flat.sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
+              setNoRegRows(flat);
+            });
+          }).catch(() => {});
+        }} addToast={addToast} />
       ) : (
         filteredActive.map((v, idx) => {
           const lot = lotMap[v.lot_id];
@@ -4863,6 +5333,20 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
             ? 'overtime' : 'default';
           return (
             <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''} ${(v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) ? 'departed' : ''}`} style={{position:'relative'}}>
+              {/* Lifecycle stripe for ALPR / no-reg rows — left-edge color indicator */}
+              {(v._isNoReg || v._isALPR) && (() => {
+                const stripeColor = v._isNoReg
+                  ? (v._origStatus === 'flagged' ? 'var(--red-paper)' : 'var(--amber-paper)')
+                  : (v._origStatus === 'pending' || v._origStatus === 'dispatched' ? 'var(--amber-paper)'
+                    : v._origStatus === 'resolved' ? 'var(--green-paper)'
+                    : 'var(--ink-4-paper)');
+                return (
+                  <div aria-hidden="true" style={{
+                    position:'absolute', left:0, top:8, bottom:8,
+                    width:4, borderRadius:'0 4px 4px 0', background:stripeColor, zIndex:2,
+                  }} />
+                );
+              })()}
               {/* Owner delete X */}
               {isOwner && (
                 <button
@@ -5124,8 +5608,8 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
         })
       )}
 
-      {/* Recent completed */}
-      {recent.length > 0 && (
+      {/* Recent completed — hidden when the 'handled' filter pill is active to avoid duplication */}
+      {recent.length > 0 && filter !== 'handled' && (
         <>
           <div className="section-header" style={{marginTop: 24}}>
             <div className="section-title">Handled Today</div>
@@ -9327,92 +9811,76 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </>
       )}
 
-      {/* SC211: Possible no parking pass — plates seen in lot past grace with no active pass */}
+      {/* SC211: Possible no parking pass — brand-v2 drill-down panel, inline within property detail */}
       {noRegViolations.length > 0 && (() => {
         const flaggedCount = noRegViolations.filter(r => r.status === 'flagged').length;
         return (
-          <>
+          <div style={{marginBottom:16}}>
             <div className="pd-section-head">
               <div style={{display:'flex',alignItems:'baseline',gap:6}}>
                 <span className="pd-section-title">Possible no parking pass</span>
                 {flaggedCount > 0 && <span className="nreg-badge-count">{flaggedCount} flagged</span>}
               </div>
-              <div className="pd-section-meta" style={{color:'#ef8070'}}>No pass found</div>
+              <div className="pd-section-meta" style={{color:'var(--red-paper)'}}>No pass found</div>
             </div>
-            <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:16}}>
+            <div className="drill-paper">
               {noRegViolations.map(row => {
                 const isActing = noRegActing === row.id;
                 const anyActing = !!noRegActing;
-                // Presence strength
                 const strength = (row.presence_strength || '').toLowerCase();
-                const stripeClass = row.status === 'flagged' ? 'nreg-flagged'
-                  : row.status === 'pending' ? 'nreg-pending'
-                  : row.status === 'dismissed' ? 'nreg-dismissed'
-                  : 'nreg-resolved';
-                // Grace countdown for pending rows
+                const stageClass = row.status === 'flagged' ? 'stage-flagged'
+                  : row.status === 'pending' ? 'stage-pending'
+                  : row.status === 'dismissed' ? 'stage-dismissed'
+                  : 'stage-resolved';
                 let graceLabel = null;
-                if (row.status === 'pending' && row.flagged_at) {
-                  const minsLeft = Math.max(0, Math.ceil((new Date(row.flagged_at) - Date.now()) / 60000));
+                if (row.status === 'pending' && row.grace_until) {
+                  const minsLeft = Math.max(0, Math.ceil((new Date(row.grace_until) - Date.now()) / 60000));
                   graceLabel = minsLeft > 0 ? `In grace (${minsLeft} min left)` : 'Grace expired';
                 }
-                // Evidence snapshots (up to 4), sorted by confidence desc
                 const evidence = Array.isArray(row.evidence) ? row.evidence : [];
                 const bestConf = row.best_confidence;
-                const sorted = evidence
-                  .slice()
-                  .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-                  .slice(0, 4);
-                const bestIdx = sorted.findIndex(e => e.confidence === bestConf) ?? 0;
-                // Confidence display
+                const sorted = evidence.slice().sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 4);
+                const bestIdx = sorted.findIndex(e => e.confidence === bestConf);
                 const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
+                const firstSeen = row.first_seen_at || row.created_at;
+                const ageMins = firstSeen ? Math.round((Date.now() - new Date(firstSeen)) / 60000) : null;
                 return (
-                  <div key={row.id} className={`nreg-row ${stripeClass}`}>
-                    {/* Row header */}
-                    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                      <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{row.raw_plate || row.normalized_plate || '—'}</span>
-                      {strength === 'lingered' ? (
-                        <span className="nreg-pill-strength-lingered">Lingered</span>
-                      ) : strength === 'brief' ? (
-                        <span className="nreg-pill-strength-brief">Brief</span>
-                      ) : null}
-                      {row.status === 'flagged' && (
-                        <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'2px 8px',borderRadius:20,background:'rgba(177,69,53,.15)',color:'#ef8070',border:'1px solid rgba(177,69,53,.3)'}}>Flagged</span>
-                      )}
-                      {graceLabel && (
-                        <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:20,background:'rgba(217,119,6,.15)',color:'#fbbf24',border:'1px solid rgba(217,119,6,.3)'}}>{graceLabel}</span>
-                      )}
-                      {confPct != null && (
-                        <span style={{fontSize:11,color:'var(--text-faint)'}}>{confPct}% conf</span>
-                      )}
+                  <div key={row.id} className={`nr-row-paper ${stageClass}`}>
+                    <div className="nr-row-top-paper">
+                      <span className="plate-tag-paper">{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+                      <div className="nr-times-paper">
+                        {ageMins != null && <span className="age">{ageMins} min ago</span>}
+                        {firstSeen && <span>First seen {fmtTime(firstSeen)}</span>}
+                      </div>
                     </div>
-                    {/* Timestamps */}
-                    <div style={{fontSize:11,color:'var(--text-muted)',display:'flex',gap:12,flexWrap:'wrap'}}>
-                      {row.first_seen_at && <span>First seen: {new Date(row.first_seen_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
-                      {row.last_seen_at && <span>Last seen: {new Date(row.last_seen_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
-                      {row.exit_seen_at && <span style={{color:'#4ade80'}}>Exited: {new Date(row.exit_seen_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
+                    <div className="nr-meta-paper">
+                      {strength === 'lingered' ? <span className="badge lingered">Lingered</span> : strength === 'brief' ? <span className="badge">Brief</span> : null}
+                      {row.status === 'flagged' && <span className="badge lingered">Flagged</span>}
+                      {graceLabel && <span className="badge" style={{background:'var(--amber-bg-paper)',color:'var(--amber-paper)'}}>{graceLabel}</span>}
+                      {confPct != null && <span>{confPct}% confidence</span>}
+                      {row.last_seen_at && <span>Last seen {fmtTime(row.last_seen_at)}</span>}
+                      {row.exit_seen_at && <span style={{color:'var(--green-paper)'}}>Exited {fmtTime(row.exit_seen_at)}</span>}
                     </div>
-                    {/* Snapshot strip */}
                     {sorted.length > 0 && (
-                      <div className="nreg-snap-strip">
+                      <div className="nr-snaps-paper">
                         {sorted.map((ev, i) => (
-                          <div key={i} className="nreg-snap-wrap">
-                            <img src={ev.url} alt="evidence" loading="lazy" />
-                            {(bestIdx === i) && <span className="nreg-snap-badge">BEST</span>}
-                            {ev.taken_at && <span className="nreg-snap-time">{fmtTime(ev.taken_at)}</span>}
+                          <div key={i} className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`}>
+                            {ev.url && <img src={ev.url} alt="evidence frame" loading="lazy" />}
+                            <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
+                            {ev.taken_at && <span className="snt">{fmtTime(ev.taken_at)}</span>}
                           </div>
                         ))}
                       </div>
                     )}
-                    {/* Actions */}
-                    <div className="nreg-actions">
+                    <div className="nr-actions-paper">
                       <button
-                        className="nreg-btn-dismiss"
+                        className="btn-paper"
                         disabled={anyActing}
                         onClick={() => handleNoRegDismiss(row.id)}
                         style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
                       >{isActing ? '…' : 'Dismiss'}</button>
                       <button
-                        className="nreg-btn-tow"
+                        className="btn-paper primary"
                         disabled={anyActing}
                         onClick={() => handleNoRegTow(row.id)}
                         style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
@@ -9422,7 +9890,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                 );
               })}
             </div>
-          </>
+          </div>
         );
       })()}
 
@@ -9690,6 +10158,219 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   );
 }
 
+// ── NoRegDrill — Possible no parking pass drill-down ─────────────────────────
+// Lists flagged + pending no-reg violations for a single property.
+// Each row shows plate, presence chip, timestamps, confidence, snapshot strip,
+// and Dismiss / Mark Towed actions. Left-edge lifecycle stripe colors by status.
+function NoRegDrill({ propertyId, propertyName, onBack }) {
+  const { addToast } = useToast();
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [acting, setActing] = useState(null); // id being acted on
+
+  const load = useCallback(async () => {
+    if (!propertyId) return;
+    setLoading(true);
+    try {
+      const [flagged, pending] = await Promise.all([
+        apiFetch(`/no-reg-violations?property_id=${propertyId}&status=flagged`).catch(() => []),
+        apiFetch(`/no-reg-violations?property_id=${propertyId}&status=pending`).catch(() => []),
+      ]);
+      const all = [...(Array.isArray(flagged) ? flagged : []), ...(Array.isArray(pending) ? pending : [])];
+      all.sort((a, b) => {
+        if (a.status === 'flagged' && b.status !== 'flagged') return -1;
+        if (b.status === 'flagged' && a.status !== 'flagged') return 1;
+        return new Date(b.flagged_at || b.created_at) - new Date(a.flagged_at || a.created_at);
+      });
+      setRows(all);
+    } finally { setLoading(false); }
+  }, [propertyId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleDismiss(id) {
+    if (acting) return;
+    setActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/dismiss`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'operator dismissed' }),
+      });
+      addToast('Dismissed', 'success');
+      setRows(prev => prev.filter(r => r.id !== id));
+    } catch (err) { addToast('Dismiss failed: ' + (err.message || ''), 'error'); }
+    finally { setActing(null); }
+  }
+
+  async function handleTow(id) {
+    if (acting) return;
+    setActing(id);
+    try {
+      await apiFetch(`/no-reg-violations/${id}/tow`, { method: 'POST' });
+      addToast('Marked towed', 'success');
+      setRows(prev => prev.filter(r => r.id !== id));
+    } catch (err) { addToast('Mark towed failed: ' + (err.message || ''), 'error'); }
+    finally { setActing(null); }
+  }
+
+  return (
+    <div className="page-enter">
+      <div className="drill-paper">
+        <header className="drill-head-paper">
+          <div className="title">Possible no parking pass{propertyName ? ` · ${propertyName}` : ''}</div>
+          <button className="back" onClick={onBack}>‹ Back</button>
+        </header>
+
+        {loading ? (
+          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>No flagged or pending violations</div>
+        ) : rows.map(row => {
+          const isActing = acting === row.id;
+          const anyActing = !!acting;
+          const strength = (row.presence_strength || '').toLowerCase();
+          const stageClass = row.status === 'flagged' ? 'stage-flagged'
+            : row.status === 'pending' ? 'stage-pending'
+            : row.status === 'dismissed' ? 'stage-dismissed'
+            : 'stage-resolved';
+          // Grace countdown for pending rows
+          let graceLabel = null;
+          if (row.status === 'pending' && row.grace_until) {
+            const minsLeft = Math.max(0, Math.ceil((new Date(row.grace_until) - Date.now()) / 60000));
+            graceLabel = minsLeft > 0 ? `In grace (${minsLeft} min left)` : 'Grace expired';
+          }
+          // Evidence strip — up to 4 frames, sorted by confidence desc
+          const evidence = Array.isArray(row.evidence) ? row.evidence : [];
+          const bestConf = row.best_confidence;
+          const sorted = evidence.slice().sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 4);
+          const bestIdx = sorted.findIndex(e => e.confidence === bestConf);
+          const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
+          // First-seen age
+          const firstSeen = row.first_seen_at || row.created_at;
+          const ageMins = firstSeen ? Math.round((Date.now() - new Date(firstSeen)) / 60000) : null;
+
+          return (
+            <div key={row.id} className={`nr-row-paper ${stageClass}`}>
+              <div className="nr-row-top-paper">
+                <span className="plate-tag-paper">{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+                <div className="nr-times-paper">
+                  {ageMins != null && <span className="age">{ageMins} min ago</span>}
+                  {firstSeen && <span>First seen {fmtTime(firstSeen)}</span>}
+                </div>
+              </div>
+
+              <div className="nr-meta-paper">
+                {strength === 'lingered' ? (
+                  <span className="badge lingered">Lingered</span>
+                ) : strength === 'brief' ? (
+                  <span className="badge">Brief</span>
+                ) : null}
+                {row.status === 'flagged' && <span className="badge lingered">Flagged</span>}
+                {graceLabel && <span className="badge" style={{background:'var(--amber-bg-paper)',color:'var(--amber-paper)'}}>{graceLabel}</span>}
+                {confPct != null && <span>{confPct}% confidence</span>}
+                {row.last_seen_at && <span>Last seen {fmtTime(row.last_seen_at)}</span>}
+                {row.exit_seen_at && <span style={{color:'var(--green-paper)'}}>Exited {fmtTime(row.exit_seen_at)}</span>}
+              </div>
+
+              {sorted.length > 0 && (
+                <div className="nr-snaps-paper">
+                  {sorted.map((ev, i) => (
+                    <div key={i} className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`}>
+                      {ev.url && <img src={ev.url} alt="evidence frame" loading="lazy" />}
+                      <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
+                      {ev.taken_at && <span className="snt">{fmtTime(ev.taken_at)}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="nr-actions-paper">
+                <button
+                  className="btn-paper"
+                  disabled={anyActing}
+                  onClick={() => handleDismiss(row.id)}
+                  style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
+                >{isActing ? '…' : 'Dismiss'}</button>
+                <button
+                  className="btn-paper primary"
+                  disabled={anyActing}
+                  onClick={() => handleTow(row.id)}
+                  style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
+                >{isActing ? '…' : 'Mark Towed'}</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── RegisteredDrill — Active parking passes drill-down ───────────────────────
+// Lists active parking passes for a property from GET /lots/<id>/registered.
+// Shows plate, holder name, duration info (no "Permanent"/"Temporary" labels),
+// space number if present, and a green ACTIVE indicator.
+function RegisteredDrill({ propertyId, propertyName, onBack }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const nowTick = useNowTick(60000);
+
+  useEffect(() => {
+    if (!propertyId) return;
+    setLoading(true);
+    apiFetch(`/lots/${propertyId}/registered`)
+      .then(data => { setRows(Array.isArray(data) ? data : []); })
+      .catch(() => { setRows([]); })
+      .finally(() => { setLoading(false); });
+  }, [propertyId]);
+
+  // Compute human-readable pass duration without "Permanent"/"Temporary" labels.
+  // API returns pass_type 'Permanent' | 'Temporary' — we intentionally ignore it
+  // and derive display text from the expiry timestamp only.
+  function passExpiryLabel(row) {
+    if (!row.expires_at) return 'No expiry';
+    const ms = new Date(row.expires_at) - Date.now();
+    if (ms <= 0) return 'Expired';
+    const totalMins = Math.ceil(ms / 60000);
+    if (totalMins < 60) return `Expires in ${totalMins}m`;
+    const h = Math.floor(totalMins / 60);
+    const m = totalMins % 60;
+    return `Expires in ${h}h${m > 0 ? ` ${m}m` : ''}`;
+  }
+
+  return (
+    <div className="page-enter">
+      <div className="drill-paper">
+        <header className="drill-head-paper">
+          <div className="title">Registered{propertyName ? ` · ${propertyName}` : ''}</div>
+          <button className="back" onClick={onBack}>‹ Back</button>
+        </header>
+
+        {loading ? (
+          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>No active parking passes</div>
+        ) : rows.map((row, i) => (
+          <div key={row.id || i} className="reg-row-paper">
+            <span className="plate-tag-paper" style={{fontSize:13,padding:'5px 9px'}}>{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+            <div>
+              <div className="reg-name-paper">{row.driver_name || row.holder_name || 'Unknown'}</div>
+              <div className="reg-detail-paper">
+                {passExpiryLabel(row)}{row.space_number ? ` · Space #${row.space_number}` : ''}
+              </div>
+            </div>
+            <div className="reg-time-paper">
+              <span className="reg-live-paper">● ACTIVE</span>
+              {row.starts_at && <span style={{fontSize:11}}>Since {fmtTime(row.starts_at)}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ALPRPropertiesPage({ user }) {
   const { addToast } = useToast();
   const [properties, setProperties] = useState([]);
@@ -9698,8 +10379,10 @@ function ALPRPropertiesPage({ user }) {
   const [newProp, setNewProp] = useState({ name: '', address: '', property_type: 'apartment' });
   const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
-  // SC211: flagged no-reg counts per property_id
-  const [noRegCounts, setNoRegCounts] = useState({}); // { [propertyId]: number }
+  // KPI counts per property_id — { [propId]: { openJobs, noReg, overstays, registered } }
+  const [kpiCounts, setKpiCounts] = useState({});
+  // Drill-down state: { propId, drill: 'noreg' | 'registered' }
+  const [drillState, setDrillState] = useState(null); // { propId, drill }
 
   useEffect(() => {
     if (!user) return;
@@ -9707,19 +10390,45 @@ function ALPRPropertiesPage({ user }) {
     db.getProperties(user.id, user._role).then(p => { setProperties(p); setLoading(false); }).catch(() => setLoading(false));
   }, [user]);
 
-  // Fetch flagged no-reg counts for all visible properties (best-effort, non-blocking)
+  // Fetch all 4 KPI counts for every visible property (best-effort, non-blocking)
   useEffect(() => {
     if (!properties.length) return;
     Promise.all(
-      properties.map(p =>
-        apiFetch(`/no-reg-violations?property_id=${p.id}&status=flagged`)
-          .then(rows => [p.id, Array.isArray(rows) ? rows.length : 0])
-          .catch(() => [p.id, 0])
-      )
+      properties.map(async p => {
+        const [noRegRows, openRows, overstayRows, registeredRows] = await Promise.all([
+          apiFetch(`/no-reg-violations?property_id=${p.id}&status=flagged`)
+            .catch(() => []),
+          supabase
+            ? supabase.from('alpr_violations')
+                .select('id', { count: 'exact', head: true })
+                .eq('property_id', p.id)
+                .in('status', ['pending', 'dispatched'])
+                .then(r => ({ count: r.count || 0 }))
+                .catch(() => ({ count: 0 }))
+            : Promise.resolve({ count: 0 }),
+          supabase
+            ? supabase.from('alpr_violations')
+                .select('id', { count: 'exact', head: true })
+                .eq('property_id', p.id)
+                .ilike('violation_type', '%overstay%')
+                .in('status', ['pending', 'dispatched'])
+                .then(r => ({ count: r.count || 0 }))
+                .catch(() => ({ count: 0 }))
+            : Promise.resolve({ count: 0 }),
+          apiFetch(`/lots/${p.id}/registered`)
+            .catch(() => []),
+        ]);
+        return [p.id, {
+          noReg: Array.isArray(noRegRows) ? noRegRows.length : 0,
+          openJobs: openRows.count,
+          overstays: overstayRows.count,
+          registered: Array.isArray(registeredRows) ? registeredRows.length : 0,
+        }];
+      })
     ).then(pairs => {
       const counts = {};
-      pairs.forEach(([id, n]) => { if (n > 0) counts[id] = n; });
-      setNoRegCounts(counts);
+      pairs.forEach(([id, kpi]) => { counts[id] = kpi; });
+      setKpiCounts(counts);
     });
   }, [properties]);
 
@@ -9745,6 +10454,25 @@ function ALPRPropertiesPage({ user }) {
   if (selectedId) return <ErrorBoundary label="this property"><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} user={user} /></ErrorBoundary>;
 
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading properties...</div></div>;
+
+  // If a drill-down is open, render it on top
+  if (drillState) {
+    const prop = properties.find(p => p.id === drillState.propId);
+    if (drillState.drill === 'noreg') {
+      return (
+        <ErrorBoundary label="no-pass drill-down">
+          <NoRegDrill propertyId={drillState.propId} propertyName={prop?.name || ''} onBack={() => setDrillState(null)} />
+        </ErrorBoundary>
+      );
+    }
+    if (drillState.drill === 'registered') {
+      return (
+        <ErrorBoundary label="registered drill-down">
+          <RegisteredDrill propertyId={drillState.propId} propertyName={prop?.name || ''} onBack={() => setDrillState(null)} />
+        </ErrorBoundary>
+      );
+    }
+  }
 
   return (
     <div className="page-enter">
@@ -9786,24 +10514,75 @@ function ALPRPropertiesPage({ user }) {
           <div style={{fontSize:12,marginTop:4}}>Add a lot to start managing parking passes</div>
         </div>
       ) : (
-        <div style={{display:'flex',flexDirection:'column',gap:8}}>
-          {properties.map(p => (
-            <div key={p.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <button onClick={() => setSelectedId(p.id)} style={{background:'none',border:'none',cursor:'pointer',textAlign:'left',flex:1,padding:0}}>
-                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                  <span style={{fontSize:15,fontWeight:700,color:'var(--text-primary)'}}>{p.name}</span>
-                  {noRegCounts[p.id] > 0 && (
-                    <span className="nreg-badge-count">{noRegCounts[p.id]} no-pass {noRegCounts[p.id] === 1 ? 'flag' : 'flags'}</span>
-                  )}
+        <div>
+          {properties.map(p => {
+            const kpi = kpiCounts[p.id] || {};
+            const openJobs = kpi.openJobs || 0;
+            const noReg = kpi.noReg || 0;
+            const overstays = kpi.overstays || 0;
+            const registered = kpi.registered || 0;
+            // Lot-level status pill
+            const pillCls = noReg > 0 ? 'red' : openJobs > 0 ? 'amber' : 'green';
+            const pillLabel = noReg > 0 ? 'Needs attention' : openJobs > 0 ? `${openJobs} open job${openJobs !== 1 ? 's' : ''}` : 'All clear';
+            return (
+              <article key={p.id} className="lot-card-paper">
+                <div className="lot-head-paper">
+                  <div style={{minWidth:0,flex:1}}>
+                    <div className="lot-name-paper">{p.name}</div>
+                    <div className="lot-addr-paper">{p.address || 'No address'}</div>
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}}>
+                    <span className={`lot-pill-paper ${pillCls}`}>
+                      <span className="dot"></span>{pillLabel}
+                    </span>
+                    <button
+                      onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete "' + p.name + '"? This removes all its plates, cameras, and passes.')) return; try { await db.deleteProperty(p.id); setProperties(properties.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to delete. ' + (err.message || ''), 'error'); } }}
+                      style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700,cursor:'pointer'}}
+                    >Delete</button>
+                  </div>
                 </div>
-                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{p.address || 'No address'}</div>
-              </button>
-              <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                <button onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete property "' + p.name + '"? This will remove all its plates, cameras, and passes.')) return; try { await db.deleteProperty(p.id); setProperties(properties.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to delete. ' + (err.message || ''), 'error'); } }} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'4px 10px',fontSize:11,fontWeight:700,cursor:'pointer'}}>Delete</button>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-              </div>
-            </div>
-          ))}
+
+                <div className="kpis-paper">
+                  <button
+                    className={`kpi-paper ${openJobs > 0 ? 'amber' : 'calm'}`}
+                    onClick={() => setSelectedId(p.id)}
+                    aria-label={`Open jobs for ${p.name}`}
+                  >
+                    <div className="top-row"><div className="val">{openJobs}</div><div className="chev">›</div></div>
+                    <div className="label">Open Jobs</div>
+                  </button>
+                  <button
+                    className={`kpi-paper ${noReg > 0 ? 'red' : 'calm'}`}
+                    onClick={() => setDrillState({ propId: p.id, drill: 'noreg' })}
+                    aria-label={`Possible no parking pass for ${p.name}`}
+                  >
+                    <div className="top-row"><div className="val">{noReg}</div><div className="chev">›</div></div>
+                    <div className="label">Possible No Pass</div>
+                  </button>
+                  <button
+                    className={`kpi-paper ${overstays > 0 ? 'amber' : 'calm'}`}
+                    onClick={() => setSelectedId(p.id)}
+                    aria-label={`Overstays for ${p.name}`}
+                  >
+                    <div className="top-row"><div className="val">{overstays}</div><div className="chev">›</div></div>
+                    <div className="label">Overstays</div>
+                  </button>
+                  <button
+                    className="kpi-paper green"
+                    onClick={() => setDrillState({ propId: p.id, drill: 'registered' })}
+                    aria-label={`Registered parking passes for ${p.name}`}
+                  >
+                    <div className="top-row"><div className="val">{registered}</div><div className="chev">›</div></div>
+                    <div className="label">Registered</div>
+                  </button>
+                </div>
+
+                <div className="lot-foot-paper">
+                  <button onClick={() => setSelectedId(p.id)}>View cameras <span className="arr">›</span></button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
     </div>
