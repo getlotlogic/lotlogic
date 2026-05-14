@@ -98,3 +98,53 @@ Deno.test("insertViolation: inserts with provided fields and returns the row", a
   assertEquals(captured.args.status, "pending");
   assertEquals(captured.args.first_seen_at, "2026-05-14T08:14:03.000Z");
 });
+
+import { EVIDENCE_CAP, updateViolation } from "./no_reg_violations.ts";
+
+function stubUpdateDb(currentRow: any, captured: { patch?: any }) {
+  return {
+    from(_table: string) {
+      const builder: any = {
+        select() { return builder; },
+        eq(_c: string, _v: any) { return builder; },
+        single() { return Promise.resolve({ data: currentRow, error: null }); },
+        update(patch: any) {
+          captured.patch = patch;
+          return { eq: () => Promise.resolve({ data: null, error: null }) };
+        },
+      };
+      return builder;
+    },
+  } as any;
+}
+
+Deno.test("updateViolation: appends evidence and caps at EVIDENCE_CAP", async () => {
+  const existing = Array.from({ length: EVIDENCE_CAP - 1 }, (_, i) => ({
+    url: `https://r2/old-${i}.jpg`, taken_at: "2026-05-14T08:00:00Z",
+    confidence: 0.5, camera_id: "cam_s1", source: "sidecar" as const,
+  }));
+  const currentRow = { id: "v1", evidence: existing, weak_read_ids: [], best_confidence: 0.5,
+                       last_seen_at: "2026-05-14T08:00:00Z", presence_strength: "brief", exit_seen_at: null };
+  const captured: any = {};
+  const db = stubUpdateDb(currentRow, captured);
+
+  const newItems = [
+    { url: "https://r2/new-a.jpg", taken_at: "2026-05-14T08:15:00Z", confidence: 0.9, camera_id: "cam_s1", source: "sidecar" as const },
+    { url: "https://r2/new-b.jpg", taken_at: "2026-05-14T08:15:02Z", confidence: 0.92, camera_id: "cam_s1", source: "sidecar" as const },
+  ];
+
+  await updateViolation(db, "v1", { evidence_append: newItems });
+
+  assertEquals(captured.patch.evidence.length, EVIDENCE_CAP);
+  assertEquals(captured.patch.evidence[EVIDENCE_CAP - 1].url, "https://r2/new-b.jpg");
+  assertEquals(captured.patch.evidence[0].url, "https://r2/old-1.jpg");
+});
+
+Deno.test("updateViolation: sets exit_seen_at when provided", async () => {
+  const currentRow = { id: "v1", evidence: [], weak_read_ids: [], best_confidence: 0.5,
+                       last_seen_at: "2026-05-14T08:00:00Z", presence_strength: "brief", exit_seen_at: null };
+  const captured: any = {};
+  const db = stubUpdateDb(currentRow, captured);
+  await updateViolation(db, "v1", { exit_seen_at: new Date("2026-05-14T09:00:00Z") });
+  assertEquals(captured.patch.exit_seen_at, "2026-05-14T09:00:00.000Z");
+});

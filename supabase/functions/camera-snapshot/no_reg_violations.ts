@@ -100,14 +100,42 @@ export async function insertViolation(db: SupabaseClient, args: {
   return data as NoRegViolationRow;
 }
 
-export async function updateViolation(_db: SupabaseClient, _id: string, _patch: {
+export async function updateViolation(db: SupabaseClient, id: string, patch: {
   last_seen_at?: Date;
   exit_seen_at?: Date | null;
   presence_strength?: "brief" | "lingered";
   best_confidence?: number;
   evidence_append?: EvidenceItem[];
   weak_read_ids_append?: string[];
-}): Promise<void> { throw new Error("not implemented"); }
+}): Promise<void> {
+  const { data: current, error: fetchErr } = await db
+    .from("no_registration_violations")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (fetchErr) throw fetchErr;
+
+  const update: Record<string, unknown> = {};
+  if (patch.last_seen_at) update.last_seen_at = patch.last_seen_at.toISOString();
+  if (patch.exit_seen_at !== undefined) {
+    update.exit_seen_at = patch.exit_seen_at ? patch.exit_seen_at.toISOString() : null;
+  }
+  if (patch.presence_strength) update.presence_strength = patch.presence_strength;
+  if (patch.best_confidence !== undefined) update.best_confidence = patch.best_confidence;
+  if (patch.evidence_append) {
+    const merged = [...(current.evidence ?? []), ...patch.evidence_append];
+    update.evidence = merged.slice(Math.max(0, merged.length - EVIDENCE_CAP));
+  }
+  if (patch.weak_read_ids_append) {
+    update.weak_read_ids = [...(current.weak_read_ids ?? []), ...patch.weak_read_ids_append];
+  }
+
+  const { error: updErr } = await db
+    .from("no_registration_violations")
+    .update(update)
+    .eq("id", id);
+  if (updErr) throw updErr;
+}
 
 export function bundleEvidence(claimedRows: Array<{
   id: string;
