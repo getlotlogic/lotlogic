@@ -148,7 +148,7 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.13.3",
+    version="3.13.4",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
@@ -286,9 +286,12 @@ def _ensure_yolos_loaded() -> None:
         return
     _yolos_load_attempted = True
     try:
-        from transformers import YolosImageProcessor, YolosForObjectDetection
-        yolos_processor = YolosImageProcessor.from_pretrained(YOLOS_MODEL_NAME)
-        yolos_model = YolosForObjectDetection.from_pretrained(YOLOS_MODEL_NAME)
+        # Use Auto* classes — transformers 4.44 doesn't export YolosImageProcessor
+        # at the top level. AutoImageProcessor + AutoModelForObjectDetection
+        # detect the right concrete class from the model's config.json.
+        from transformers import AutoImageProcessor, AutoModelForObjectDetection
+        yolos_processor = AutoImageProcessor.from_pretrained(YOLOS_MODEL_NAME)
+        yolos_model = AutoModelForObjectDetection.from_pretrained(YOLOS_MODEL_NAME)
         yolos_model.eval()
         print(f"[lazy] YOLOS loaded: {YOLOS_MODEL_NAME}", flush=True)
     except Exception as e:
@@ -324,7 +327,7 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.13.3",
+        "version": "3.13.4",
         "detector_loaded": detector is not None,
         "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
         "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
@@ -719,10 +722,12 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
         out: List[PlateCandidate] = []
         if not full_results or not full_results[0]:
             return out
-        # Reject anything whose bbox center sits in the top 10% of frame —
+        # Reject anything whose bbox center sits in the top 15% of frame —
         # that's where SC211 + TS4467 cameras put their timestamp overlay
-        # ("2026-05-14 12:45:31" → paddle reads HHMMSS fragments → false positive plate).
-        top_strip_y = img_h * 0.10
+        # ("2026-05-14 12:45:31" → paddle reads HHMMSS fragments → false
+        # positive plate). 10% wasn't enough — Milesight cameras sometimes
+        # place the overlay slightly below it.
+        top_strip_y = img_h * 0.15
         for entry in full_results[0]:
             try:
                 bbox_poly = entry[0]
@@ -749,6 +754,13 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
             # Reject pure-numeric strings that look like time HHMMSS
             # patterns even outside the overlay strip (defensive).
             if cleaned.isdigit() and len(cleaned) == 6 and int(cleaned[0:2]) < 24:
+                continue
+            # Reject pure-numeric short reads (4 chars). Almost no real
+            # vehicle plate is exactly 4 digits with no letters; these
+            # match timestamp fragments (e.g. "4530" from "...:45:30").
+            # Real plates 4 chars or shorter are rare and would still
+            # need to match a registered pass to do anything.
+            if cleaned.isdigit() and len(cleaned) <= 4:
                 continue
             out.append(PlateCandidate(plate=cleaned, confidence=round(conf, 4)))
         return out
