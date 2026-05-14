@@ -21,6 +21,9 @@ port = 54323
 [functions.cron-sessions-sweep]
 verify_jwt = false
 
+[functions.cron-no-reg-sweep]
+verify_jwt = false
+
 [functions.camera-snapshot]
 verify_jwt = false
 

@@ -547,3 +547,246 @@ Deno.test("hammingDistance: full byte difference returns 8", () => {
 Deno.test("hammingDistance: length mismatch returns max", () => {
   assertEquals(hammingDistance("00", "0000"), 64);
 });
+
+// ---------------------------------------------------------------------------
+// flushGroup — no-reg: unmatched burst inserts a violation row
+// ---------------------------------------------------------------------------
+
+import { flushGroup } from "./weak_plate_reads.ts";
+
+// Minimal hand-rolled Supabase stub that routes table calls to separate
+// handlers.  Each handler is a function that receives the full builder
+// interaction and returns { data, error }.  Only the tables accessed by the
+// no-reg path need to be modelled.
+function makeNoRegDb(opts: {
+  claimedRows: Array<{
+    id: string;
+    camera_id: string;
+    raw_plate: string;
+    normalized_plate: string;
+    confidence: number;
+    image_url: string | null;
+    seen_at: string;
+  }>;
+  openViolation?: Record<string, unknown> | null;
+  onInsertViolation: (row: Record<string, unknown>) => void;
+}): any {
+  const insertedViolation = {
+    id: "viol-new-1",
+    property_id: "prop-1",
+    normalized_plate: opts.claimedRows[0]?.normalized_plate ?? "",
+    raw_plate: opts.claimedRows[0]?.raw_plate ?? "",
+    best_confidence: opts.claimedRows[0]?.confidence ?? 0,
+    presence_strength: "brief",
+    first_seen_at: opts.claimedRows[0]?.seen_at ?? "",
+    last_seen_at: opts.claimedRows[opts.claimedRows.length - 1]?.seen_at ?? "",
+    exit_seen_at: null,
+    status: "pending",
+    flagged_at: null,
+    resolved_at: null,
+    resolved_reason: null,
+    evidence: [],
+    weak_read_ids: [],
+    acted_at: null,
+    action: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  return {
+    from(table: string) {
+      // ── weak_plate_reads: UPDATE claim ──────────────────────────────────
+      if (table === "weak_plate_reads") {
+        const builder: any = {
+          update(_patch: unknown) { return builder; },
+          eq(_col: string, _val: unknown) { return builder; },
+          is(_col: string, _val: unknown) { return builder; },
+          select(_cols: string) {
+            return Promise.resolve({ data: opts.claimedRows, error: null });
+          },
+        };
+        return builder;
+      }
+
+      // ── properties: tow_company_id lookup ──────────────────────────────
+      if (table === "properties") {
+        const builder: any = {
+          select(_cols: string) { return builder; },
+          eq(_col: string, _val: unknown) { return builder; },
+          maybeSingle() {
+            return Promise.resolve({ data: { tow_company_id: null }, error: null });
+          },
+        };
+        return builder;
+      }
+
+      // ── visitor_passes: active-pass fuzzy search ────────────────────────
+      if (table === "visitor_passes") {
+        const builder: any = {
+          select(_cols: string) { return builder; },
+          eq(_col: string, _val: unknown) { return builder; },
+          is(_col: string, _val: unknown) { return builder; },
+          order(_col: string, _opts: unknown) { return builder; },
+          limit(_n: number) {
+            return Promise.resolve({ data: [], error: null });
+          },
+        };
+        return builder;
+      }
+
+      // ── no_registration_violations ──────────────────────────────────────
+      if (table === "no_registration_violations") {
+        // The builder needs to support both a SELECT chain (findOpenViolation)
+        // and an INSERT chain (insertViolation).
+        let _pendingInsert: Record<string, unknown> | null = null;
+
+        const queryBuilder: any = {
+          _rows: opts.openViolation != null ? [opts.openViolation] : [],
+          select(_cols: string) { return queryBuilder; },
+          eq(_col: string, _val: unknown) {
+            // narrow rows for findOpenViolation-style queries
+            return queryBuilder;
+          },
+          in(_col: string, _vals: unknown[]) { return queryBuilder; },
+          gt(_col: string, _val: unknown) { return queryBuilder; },
+          order(_col: string, _opts: unknown) { return queryBuilder; },
+          limit(_n: number) {
+            return Promise.resolve({ data: queryBuilder._rows, error: null });
+          },
+          single() {
+            // Used by insertViolation after .select()
+            if (_pendingInsert) {
+              opts.onInsertViolation(_pendingInsert);
+              return Promise.resolve({ data: insertedViolation, error: null });
+            }
+            // Used by updateViolation SELECT fetch
+            return Promise.resolve({ data: queryBuilder._rows[0] ?? null, error: null });
+          },
+        };
+
+        const insertBuilder: any = {
+          select(_cols: string) { return queryBuilder; },
+        };
+
+        return {
+          select(_cols: string) { return queryBuilder; },
+          insert(row: Record<string, unknown>) {
+            _pendingInsert = row;
+            return insertBuilder;
+          },
+          update(_patch: unknown) {
+            return {
+              eq(_col: string, _val: unknown) {
+                return Promise.resolve({ data: null, error: null });
+              },
+            };
+          },
+        };
+      }
+
+      throw new Error(`no-reg stub: unexpected table "${table}"`);
+    },
+  };
+}
+
+Deno.test("no-reg: unmatched burst with ≥10s span creates lingered violation row", async () => {
+  // Two reads 15 seconds apart — span of 15 000 ms ≥ LINGER_MS (10 000 ms).
+  const t0 = "2026-05-14T10:00:00.000Z";
+  const t1 = "2026-05-14T10:00:15.000Z";
+  const claimedRows = [
+    {
+      id: "wr-1",
+      camera_id: "cam-sc211",
+      raw_plate: "XYZ789",
+      normalized_plate: "XYZ789",
+      confidence: 0.72,
+      image_url: "https://cdn.example.com/snap1.jpg",
+      seen_at: t0,
+    },
+    {
+      id: "wr-2",
+      camera_id: "cam-sc211",
+      raw_plate: "XYZ789",
+      normalized_plate: "XYZ789",
+      confidence: 0.85,
+      image_url: "https://cdn.example.com/snap2.jpg",
+      seen_at: t1,
+    },
+  ];
+
+  const capturedInserts: Record<string, unknown>[] = [];
+  const db = makeNoRegDb({
+    claimedRows,
+    openViolation: null,
+    onInsertViolation: (row) => capturedInserts.push(row),
+  });
+
+  const result = await flushGroup({
+    db,
+    propertyId: "prop-1",
+    groupKey: "cam-sc211|XYZ789",
+    now: new Date("2026-05-14T10:00:20.000Z"),
+    prToken: "",    // empty → skip PR Cloud call
+    prApiUrl: "",
+  });
+
+  // Outcome must be the new variant.
+  assertEquals(result.outcome, "no_registration_recorded");
+  if (result.outcome === "no_registration_recorded") {
+    assertEquals(result.row_state, "created");
+    assertEquals(result.reads_consumed, 2);
+    assertEquals(result.violation_id, "viol-new-1");
+  }
+
+  // Exactly one insert was captured, and it must be "lingered".
+  assertEquals(capturedInserts.length, 1);
+  assertEquals(capturedInserts[0].presence_strength, "lingered");
+  assertEquals(capturedInserts[0].normalized_plate, "XYZ789");
+  assertEquals(capturedInserts[0].property_id, "prop-1");
+});
+
+Deno.test("no-reg: unmatched burst <10s span creates brief violation row", async () => {
+  // Two reads 3 seconds apart — span of 3 000 ms < LINGER_MS.
+  const t0 = "2026-05-14T11:00:00.000Z";
+  const t1 = "2026-05-14T11:00:03.000Z";
+  const claimedRows = [
+    {
+      id: "wr-a",
+      camera_id: "cam-sc211",
+      raw_plate: "AAA111",
+      normalized_plate: "AAA111",
+      confidence: 0.55,
+      image_url: "https://cdn.example.com/a1.jpg",
+      seen_at: t0,
+    },
+    {
+      id: "wr-b",
+      camera_id: "cam-sc211",
+      raw_plate: "AAA111",
+      normalized_plate: "AAA111",
+      confidence: 0.60,
+      image_url: "https://cdn.example.com/a2.jpg",
+      seen_at: t1,
+    },
+  ];
+
+  const capturedInserts: Record<string, unknown>[] = [];
+  const db = makeNoRegDb({
+    claimedRows,
+    openViolation: null,
+    onInsertViolation: (row) => capturedInserts.push(row),
+  });
+
+  const result = await flushGroup({
+    db,
+    propertyId: "prop-1",
+    groupKey: "cam-sc211|AAA111",
+    now: new Date("2026-05-14T11:00:05.000Z"),
+    prToken: "",
+    prApiUrl: "",
+  });
+
+  assertEquals(result.outcome, "no_registration_recorded");
+  assertEquals(capturedInserts.length, 1);
+  assertEquals(capturedInserts[0].presence_strength, "brief");
+});

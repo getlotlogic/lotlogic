@@ -71,7 +71,7 @@ const LOG_REJECTED = (Deno.env.get("DIAGNOSTIC_LOG_REJECTED") ?? "false").toLowe
 const OPENALPR_SIDECAR_URL = Deno.env.get("OPENALPR_SIDECAR_URL") ?? "";
 const OPENALPR_SIDECAR_TOKEN = Deno.env.get("OPENALPR_SIDECAR_TOKEN") ?? "";
 const OPENALPR_MIN_CONFIDENCE = Number(Deno.env.get("OPENALPR_MIN_CONFIDENCE") ?? "0.80");
-const OPENALPR_TIMEOUT_MS = Number(Deno.env.get("OPENALPR_TIMEOUT_MS") ?? "4000");
+const OPENALPR_TIMEOUT_MS = Number(Deno.env.get("OPENALPR_TIMEOUT_MS") ?? "6000");
 // Per-camera rotation map. Cameras physically mounted at a 90°/180°
 // rotation must have their frames rotated upright BEFORE being handed to
 // Plate Recognizer or the USDOT/ParkPow OCR fallback — neither has a
@@ -274,11 +274,13 @@ Deno.serve(async (req: Request) => {
           lastSidecarDetections = sc.rawDetectionCount ?? 0;
           lastSidecarTopPlate = sc.topReadPlate ?? null;
           lastSidecarTopConf = sc.topReadConfidence ?? 0;
-          if (!sc.ok) return null;
-          const plate = sc.bestPlate ?? sc.topReadPlate;
-          const conf = sc.bestPlate ? sc.bestConfidence : sc.topReadConfidence;
-          if (!plate) return null;
-          return { plate, confidence: conf };
+          // Sidecar's plate text is unreliable on IR night frames — ignore
+          // it. Use only the binary signal "is this frame worth a PR call".
+          // Drop only on clean empty_scene (sidecar ran, saw zero content).
+          // Errors/timeouts → buffer (don't lose plates to transient issues).
+          const cleanEmpty = sc.ok && sc.reason === "empty_scene";
+          if (cleanEmpty) return null;
+          return { plate: "", confidence: 0 };
         } : undefined,
       });
       // Always include the reason on drops so we can distinguish healthy
