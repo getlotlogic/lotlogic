@@ -15,3 +15,45 @@ Deno.test("bundleEvidence: maps weak_plate_reads rows to evidence items", () => 
   assertEquals(out[0], { url: "https://r2/a.jpg", taken_at: "2026-05-14T08:14:03Z", confidence: 0.78, camera_id: "cam_s1", source: "sidecar" });
   assertEquals(out[1], { url: "https://r2/b.jpg", taken_at: "2026-05-14T08:14:07Z", confidence: 0.94, camera_id: "cam_s1", source: "pr_cloud" });
 });
+
+import { findOpenViolation } from "./no_reg_violations.ts";
+
+function stubDb(rows: any[]) {
+  return {
+    from(table: string) {
+      if (table !== "no_registration_violations") throw new Error(`unexpected table: ${table}`);
+      const builder: any = {
+        _rows: [...rows],
+        select() { return builder; },
+        eq(c: string, v: any) { builder._rows = builder._rows.filter((r: any) => r[c] === v); return builder; },
+        in(c: string, vs: any[]) { builder._rows = builder._rows.filter((r: any) => vs.includes(r[c])); return builder; },
+        gt(c: string, v: any) { builder._rows = builder._rows.filter((r: any) => new Date(r[c]) > new Date(v)); return builder; },
+        order(_c: string, _o: any) { return builder; },
+        limit(n: number) { return Promise.resolve({ data: builder._rows.slice(0, n), error: null }); },
+      };
+      return builder;
+    },
+  } as any;
+}
+
+Deno.test("findOpenViolation: returns most recent open row within window", async () => {
+  // Use Date.now()-relative timestamps to avoid time-drift failures
+  const recent = new Date(Date.now() - 30 * 60_000).toISOString();    // 30 min ago
+  const older  = new Date(Date.now() - 90 * 60_000).toISOString();    // 90 min ago
+  const db = stubDb([
+    { id: "v1", property_id: "p1", normalized_plate: "ABC123", status: "flagged",
+      last_seen_at: recent },
+    { id: "v2", property_id: "p1", normalized_plate: "ABC123", status: "pending",
+      last_seen_at: older },
+    { id: "v3", property_id: "p1", normalized_plate: "XYZ", status: "flagged",
+      last_seen_at: recent },
+  ]);
+  const r = await findOpenViolation(db, { property_id: "p1", normalized_plate: "ABC123", within_hours: 24 });
+  assertEquals(r?.id, "v1");
+});
+
+Deno.test("findOpenViolation: returns null when nothing matches", async () => {
+  const db = stubDb([]);
+  const r = await findOpenViolation(db, { property_id: "p1", normalized_plate: "ABC123", within_hours: 24 });
+  assertEquals(r, null);
+});

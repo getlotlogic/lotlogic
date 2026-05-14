@@ -49,11 +49,24 @@ export type NoRegViolationRow = {
 };
 
 // Function signatures — implementations follow.
-export async function findOpenViolation(_db: SupabaseClient, _args: {
+export async function findOpenViolation(db: SupabaseClient, args: {
   property_id: string;
   normalized_plate: string;
   within_hours: number;
-}): Promise<NoRegViolationRow | null> { throw new Error("not implemented"); }
+}): Promise<NoRegViolationRow | null> {
+  const cutoff = new Date(Date.now() - args.within_hours * 3600_000).toISOString();
+  const { data, error } = await db
+    .from("no_registration_violations")
+    .select("*")
+    .eq("property_id", args.property_id)
+    .eq("normalized_plate", args.normalized_plate)
+    .in("status", ["pending", "flagged"])
+    .gt("last_seen_at", cutoff)
+    .order("last_seen_at", { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  return (data?.[0] as NoRegViolationRow) ?? null;
+}
 
 export async function insertViolation(_db: SupabaseClient, _args: {
   property_id: string;
