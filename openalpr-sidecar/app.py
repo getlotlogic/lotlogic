@@ -140,19 +140,20 @@ ENABLE_EASYOCR_FALLBACK = os.environ.get("ENABLE_EASYOCR_FALLBACK", "false").low
 app = FastAPI(
     title="LotLogic ALPR sidecar",
     description="YOLOv9 detector + fast-plate-ocr — purpose-built plate reader.",
-    version="3.1.0",
+    version="3.2.0",
 )
 
 # Lazy-initialized at startup. Holds the heavy ONNX models so every
 # request reuses them instead of paying load cost per call.
 detector: Optional[LicensePlateDetector] = None
+detector_fallback: Optional[LicensePlateDetector] = None
 ocr_reader: Optional[LicensePlateRecognizer] = None
 easyocr_reader = None  # only loaded if ENABLE_EASYOCR_FALLBACK=true
 
 
 @app.on_event("startup")
 def on_startup() -> None:
-    global detector, ocr_reader, easyocr_reader
+    global detector, detector_fallback, ocr_reader, easyocr_reader
     if DETECTOR_MODEL_PATH:
         # Custom Charlotte-trained model. Conf threshold here is a coarse
         # pre-filter; the existing DETECTOR_MIN_CONF gate runs again per crop
@@ -162,6 +163,15 @@ def on_startup() -> None:
             imgsz=DETECTOR_IMGSZ,
             conf_thresh=DETECTOR_MIN_CONF,
         )
+        # Bundled detector as fallback — runs when the custom model finds
+        # nothing. Lets us see whether dark-frame misses are a custom-model
+        # weakness or a fundamental low-light/exposure issue.
+        try:
+            detector_fallback = LicensePlateDetector(detection_model=DETECTOR_MODEL)
+            print(f"[startup] fallback detector loaded: {DETECTOR_MODEL}", flush=True)
+        except Exception as e:
+            print(f"[startup] fallback detector load failed: {e}", flush=True)
+            detector_fallback = None
     else:
         detector = LicensePlateDetector(detection_model=DETECTOR_MODEL)
     ocr_reader = LicensePlateRecognizer(OCR_MODEL)
@@ -196,8 +206,14 @@ class RecognizeResponse(BaseModel):
 def health() -> dict:
     return {
         "ok": True,
-        "version": "3.1.0",
+        "version": "3.2.0",
         "detector_loaded": detector is not None,
+        "detector_type": "custom" if DETECTOR_MODEL_PATH else "bundled",
+        "detector_model": DETECTOR_MODEL_PATH or DETECTOR_MODEL,
+        "detector_min_conf": DETECTOR_MIN_CONF,
+        "alpr_min_confidence": ALPR_MIN_CONFIDENCE,
+        "auto_equalize": ENABLE_AUTO_EQUALIZE,
+        "auto_equalize_luma_threshold": AUTO_EQUALIZE_LUMA_THRESHOLD,
         "ocr_loaded": ocr_reader is not None,
         "easyocr_fallback": easyocr_reader is not None,
     }
@@ -386,8 +402,16 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
     # Stage 1: plate detection. Returns a list of detection objects with
     # bounding box + confidence. End-to-end NMS is baked into the model,
     # so duplicates are already suppressed.
+    used_fallback = False
     if isinstance(detector, CustomYoloDetector):
         det_results = detector.predict(img, conf_thresh=detector_floor)
+        # Fallback path: if the custom model misses entirely, retry with the
+        # bundled wide-trained detector. Catches the case where the small
+        # Charlotte-trained set doesn't generalize to a new vehicle type or
+        # an underexposed frame.
+        if len(det_results) == 0 and detector_fallback is not None:
+            det_results = detector_fallback.predict(img)
+            used_fallback = True
     else:
         det_results = detector.predict(img)
     raw_detection_count = len(det_results)
@@ -398,7 +422,7 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
             plates=[],
             raw_detection_count=0,
             processing_time_ms=(time.monotonic() - started) * 1000,
-            reason="empty_scene",
+            reason="empty_scene_both" if used_fallback else "empty_scene",
         )
 
     # Stage 2: OCR each crop. Skip crops below the per-camera detector

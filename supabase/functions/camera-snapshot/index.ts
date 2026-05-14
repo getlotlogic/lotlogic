@@ -239,6 +239,14 @@ Deno.serve(async (req: Request) => {
     if (propQ.error) throw propQ.error;
     const propertyType = (propQ.data?.property_type as string | null) ?? null;
     if (propertyType === "truck_plaza") {
+      // Capture sidecar's own reason + detection count so we can see in
+      // diag whether YOLO returned nothing (empty_scene), found candidates
+      // but OCR failed (no_plate_shaped_text), or gate-rejected by aspect
+      // ratio. Set inside the sidecarRead closure, read on drop.
+      let lastSidecarReason: string | null = null;
+      let lastSidecarDetections = 0;
+      let lastSidecarTopPlate: string | null = null;
+      let lastSidecarTopConf = 0;
       const r = await handleTruckPlazaExit({
         db,
         camera: {
@@ -262,6 +270,10 @@ Deno.serve(async (req: Request) => {
         prApiUrl: PR_SDK_URL || "https://api.platerecognizer.com/v1/plate-reader/",
         sidecarRead: OPENALPR_SIDECAR_URL ? async (bytes, cameraId) => {
           const sc = await callOpenAlprSidecar(bytes, cameraId);
+          lastSidecarReason = sc.reason ?? null;
+          lastSidecarDetections = sc.rawDetectionCount ?? 0;
+          lastSidecarTopPlate = sc.topReadPlate ?? null;
+          lastSidecarTopConf = sc.topReadConfidence ?? 0;
           if (!sc.ok) return null;
           const plate = sc.bestPlate ?? sc.topReadPlate;
           const conf = sc.bestPlate ? sc.bestConfidence : sc.topReadConfidence;
@@ -302,7 +314,11 @@ Deno.serve(async (req: Request) => {
           extra: { camera_id: camera.id, has_onboard: extracted.onboardLpr != null,
                    onboard_plate: extracted.onboardLpr?.plate ?? null,
                    debug_url: debugUrl,
-                   keys: milesightKeys },
+                   keys: milesightKeys,
+                   sidecar_reason: lastSidecarReason,
+                   sidecar_detections: lastSidecarDetections,
+                   sidecar_top_plate: lastSidecarTopPlate,
+                   sidecar_top_conf: lastSidecarTopConf },
         }).then(() => {});
       }
       return json(200, { ok: true, fn: "truck_plaza_exit", ...r });
