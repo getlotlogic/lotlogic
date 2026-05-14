@@ -10578,7 +10578,7 @@ function ALPRPropertiesPage({ user }) {
                 </div>
 
                 <div className="lot-foot-paper">
-                  <button onClick={() => setSelectedId(p.id)}>View cameras <span className="arr">›</span></button>
+                  <button onClick={() => setSelectedId(p.id)}>{user?._role === 'partner' ? 'View parking passes' : 'View cameras'} <span className="arr">›</span></button>
                 </div>
               </article>
             );
