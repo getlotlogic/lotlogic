@@ -292,23 +292,44 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
   // 2) Pick the highest-confidence row as the "best frame".
   const best = claimed.reduce((a, b) => (b.confidence > a.confidence ? b : a));
 
-  // 3) PR pass over the best snapshot. Use upload_url so we don't have to
-  //    re-fetch the bytes ourselves. Fall back to sidecar plate if PR
-  //    returns nothing or the URL isn't present.
+  // 3) PR pass. Try the sidecar-best first; if the sidecar is unreliable
+  //    (best confidence < 0.5 OR empty plate), ALSO try up to 2 additional
+  //    recent frames from the burst. The sidecar (free Railway OpenALPR)
+  //    misses plates on hard conditions (night exposure, headlight glare,
+  //    partial framing) that PR Cloud can read — but only if we let it look.
+  //    Without this fallback, a burst where every sidecar score is 0 means
+  //    PR Cloud never sees a clear-plate frame at all.
+  //
+  //    Cost: at most 3x PR calls per burst, and only when the sidecar
+  //    returned no useful signal. Trivial vs the value of catching missed
+  //    plates.
   let plateForMatch = best.normalized_plate;
   let prUsed = false;
   let prPlateRaw: string | null = null;
   let prConfidence: number | null = null;
-  if (best.image_url && prToken && prApiUrl) {
-    const pr = await callPrViaUrl(best.image_url, prToken, prApiUrl);
-    if (pr) {
+  let prFrameWinner = best;
+  if (prToken && prApiUrl) {
+    const framesToTry: typeof claimed = [];
+    if (best.image_url) framesToTry.push(best);
+    const sidecarUnreliable = best.confidence < 0.5 || !best.normalized_plate;
+    if (sidecarUnreliable) {
+      const additional = claimed
+        .filter((r) => r.id !== best.id && r.image_url)
+        .sort((a, b) => new Date(b.seen_at).getTime() - new Date(a.seen_at).getTime())
+        .slice(0, 2);
+      framesToTry.push(...additional);
+    }
+    for (const frame of framesToTry) {
+      const pr = await callPrViaUrl(frame.image_url!, prToken, prApiUrl);
+      if (!pr) continue;
       const norm = normalizePlate(pr.plate);
-      if (norm.length >= 4) {
-        plateForMatch = norm;
-        prUsed = true;
-        prPlateRaw = pr.plate;
-        prConfidence = pr.confidence;
-      }
+      if (norm.length < 4) continue;
+      plateForMatch = norm;
+      prUsed = true;
+      prPlateRaw = pr.plate;
+      prConfidence = pr.confidence;
+      prFrameWinner = frame;
+      break;
     }
   }
 
@@ -339,6 +360,12 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
     const towFrame = claimed.find((r) => r.normalized_plate === towPlate);
     if (towFrame) chosenFrame = towFrame;
     plateForMatch = towPlate;
+  }
+  // If PR Cloud succeeded on a frame other than the sidecar's best, that
+  // frame's snapshot is the right one to associate with the plate_event —
+  // it's what visually shows the plate the operator will see.
+  if (!tow && prUsed && prFrameWinner.id !== best.id) {
+    chosenFrame = prFrameWinner;
   }
   const pass = tow ? null : await findActiveUnexitedPassFuzzy(db, propertyId, plateForMatch, now);
 
@@ -439,6 +466,7 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
       sidecar_best_confidence: best.confidence,
       pr_used: prUsed && !tow,
       pr_confidence: prConfidence,
+      pr_rescued_from_non_best_frame: !tow && prUsed && prFrameWinner.id !== best.id,
       tow_matched_on_non_best_frame: tow ? chosenFrame.id !== best.id : false,
     },
     match_status: matchStatus,
