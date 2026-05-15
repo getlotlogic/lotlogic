@@ -4741,7 +4741,13 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     ...av,
     _isALPR: true,
     detected_at: av.created_at,
-    status: av.status === 'pending' ? 'alerted' : av.status === 'dispatched' ? 'acknowledged' : 'resolved',
+    // status mapping: 'pending' = newly fired, 'dispatched' = sent to partner & waiting,
+    // 'acknowledged' = partner replied. Don't conflate dispatched with acknowledged —
+    // the partner hasn't acted yet on a dispatched row.
+    status: av.status === 'pending' ? 'alerted'
+          : av.status === 'dispatched' ? 'dispatched'
+          : av.status === 'acknowledged' ? 'acknowledged'
+          : 'resolved',
     _origStatus: av.status,
     lot_id: null,
     _lot_name: av.properties?.name || 'Unknown Property',
@@ -4761,14 +4767,21 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     our_revenue: 0, gross_revenue: 0,
     sms_sent_at: null, sms_delivered: null, reminder_sent_at: null,
     resolved_at: av.resolved_at || null, departed_at: null, cleared_at: null,
-    action_taken: av._origStatus === 'dispatched' ? 'tow' : av._origStatus === 'resolved' ? 'dismissed' : null,
+    // Carry the actual DB action_taken through verbatim. Do NOT infer from status —
+    // a 'dispatched' row hasn't been acted on yet (action_taken is genuinely null).
+    action_taken: av.action_taken ?? null,
   }));
   const allViolations = [...violations, ...mappedAlpr];
 
-  // Active jobs = only actionable violations (alerted/acknowledged)
-  // Departed/pending are excluded — departed goes to "Handled Today"
+  // Active jobs = actionable violations (alerted/dispatched/acknowledged). Rows that
+  // are still in the partner-awaiting state (alerted/dispatched without action_channel)
+  // are rendered separately in the "X dispatches awaiting your response" block above,
+  // so we exclude them here to avoid showing the same row twice on the page.
+  const isPartnerAwaiting = (v) =>
+    !v.action_channel && ['alerted', 'dispatched'].includes(v._origStatus || v.status);
   const active = allViolations
-    .filter(v => ['alerted', 'acknowledged'].includes(v.status))
+    .filter(v => ['alerted', 'dispatched', 'acknowledged'].includes(v.status))
+    .filter(v => !(user?._role === 'partner' && isPartnerAwaiting(v)))
     .sort((a, b) => new Date(a.detected_at) - new Date(b.detected_at));
 
   // Recent = resolved/cleared today (calendar day)
@@ -4811,9 +4824,10 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
 
   // Status badge config for dedup state machine
   const statusBadge = {
-    alerted:      { label: 'Active',       color: '#ef4444', bg: 'rgba(239,68,68,.12)', icon: '🔴' },
-    pending:      { label: 'Active',       color: '#ef4444', bg: 'rgba(239,68,68,.12)', icon: '🔴' },
-    acknowledged: { label: 'Acknowledged', color: '#f59e0b', bg: 'rgba(245,158,11,.12)', icon: '🟡' },
+    alerted:      { label: 'Active',         color: '#ef4444', bg: 'rgba(239,68,68,.12)',  icon: '🔴' },
+    pending:      { label: 'Active',         color: '#ef4444', bg: 'rgba(239,68,68,.12)',  icon: '🔴' },
+    dispatched:   { label: 'Awaiting tow co', color: '#fbbf24', bg: 'rgba(251,191,36,.14)', icon: '🟠' },
+    acknowledged: { label: 'Acknowledged',   color: '#f59e0b', bg: 'rgba(245,158,11,.12)', icon: '🟡' },
     cleared:      { label: 'Cleared',      color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
     resolved:     { label: 'Resolved',     color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
     departed:     { label: 'Cancelled — Vehicle Left', color: '#6b7280', bg: 'rgba(107,114,128,.12)', icon: '🚫' },
@@ -5332,7 +5346,13 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
             ? 'overtime' : v.violation_type?.toLowerCase().includes('overstay')
             ? 'overtime' : 'default';
           return (
-            <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''} ${(v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) ? 'departed' : ''}`} style={{position:'relative'}}>
+            <div key={v.id} className={`job-card card-animated ${urgent ? 'urgent' : ''} ${(v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) ? 'departed' : ''}`} style={{position:'relative', cursor:'pointer'}} onClick={(e) => {
+              // Open the detail modal when the card body is tapped. Action
+              // buttons inside the card stopPropagation themselves so this
+              // only fires on non-button areas.
+              if (e.target.closest('button') || e.target.closest('a')) return;
+              setSelectedViol(v);
+            }}>
               {/* Lifecycle stripe for ALPR / no-reg rows — left-edge color indicator */}
               {(v._isNoReg || v._isALPR) && (() => {
                 const stripeColor = v._isNoReg
@@ -5505,7 +5525,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                   <div className="job-lot-name" style={{fontSize:14, display:'flex', alignItems:'center', gap:8}}>
                     {v._isNoReg ? v._lot_name : v._isALPR ? v._lot_name : (lot?.name || 'Unknown Lot')}
                     {v._isNoReg && <span style={{fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:6, background:'rgba(177,69,53,.15)', color:'#ef8070', whiteSpace:'nowrap'}}>NO PASS</span>}
-                    {!v._isNoReg && v._isALPR && <span style={{fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:6, background:'rgba(167,139,250,.15)', color:'#a78bfa', whiteSpace:'nowrap'}}>PARKING PASS</span>}
+                    {!v._isNoReg && v._isALPR && <span style={{fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:6, background:'rgba(177,69,53,.15)', color:'#ef8070', whiteSpace:'nowrap'}}>NO PASS</span>}
                     {/* Status badge */}
                     {(() => {
                       const badge = statusBadge[v.status] || statusBadge.pending;
