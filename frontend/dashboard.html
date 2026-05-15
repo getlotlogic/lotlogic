@@ -10312,8 +10312,11 @@ function NoRegDrill({ propertyId, propertyName, onBack }) {
 // Shows plate, holder name, duration info (no "Permanent"/"Temporary" labels),
 // space number if present, and a green ACTIVE indicator.
 function RegisteredDrill({ propertyId, propertyName, onBack }) {
+  const { addToast } = useToast();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [confirmId, setConfirmId] = useState(null);
+  const [acting, setActing] = useState(null);
   const nowTick = useNowTick(60000);
 
   useEffect(() => {
@@ -10339,6 +10342,28 @@ function RegisteredDrill({ propertyId, propertyName, onBack }) {
     return `Expires in ${h}h${m > 0 ? ` ${m}m` : ''}`;
   }
 
+  async function removeRow(row) {
+    setActing(row.id);
+    try {
+      // Temporary → visitor_passes; Permanent → resident_plates. Both soft-cancel.
+      const path = row.pass_type === 'Temporary'
+        ? `/visitor_passes/${row.id}/cancel`
+        : `/resident_plates/${row.id}/cancel`;
+      await apiFetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'operator removed via dashboard' }),
+      });
+      setRows(prev => prev.filter(r => r.id !== row.id));
+      addToast('Parking pass removed', 'success');
+    } catch (e) {
+      addToast('Remove failed: ' + (e?.message || ''), 'error');
+    } finally {
+      setActing(null);
+      setConfirmId(null);
+    }
+  }
+
   return (
     <div className="page-enter">
       <div className="drill-paper">
@@ -10351,21 +10376,37 @@ function RegisteredDrill({ propertyId, propertyName, onBack }) {
           <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>Loading…</div>
         ) : rows.length === 0 ? (
           <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>No active parking passes</div>
-        ) : rows.map((row, i) => (
-          <div key={row.id || i} className="reg-row-paper">
-            <span className="plate-tag-paper" style={{fontSize:13,padding:'5px 9px'}}>{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
-            <div>
-              <div className="reg-name-paper">{row.driver_name || row.holder_name || 'Unknown'}</div>
-              <div className="reg-detail-paper">
-                {passExpiryLabel(row)}{row.space_number ? ` · Space #${row.space_number}` : ''}
+        ) : rows.map((row, i) => {
+          const isConfirming = confirmId === row.id;
+          const isActing = acting === row.id;
+          return (
+            <div key={row.id || i} className="reg-row-paper">
+              <span className="plate-tag-paper" style={{fontSize:13,padding:'5px 9px'}}>{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+              <div>
+                <div className="reg-name-paper">{row.driver_name || row.holder_name || 'Unknown'}</div>
+                <div className="reg-detail-paper">
+                  {passExpiryLabel(row)}{row.space_number ? ` · Space #${row.space_number}` : ''}
+                </div>
+              </div>
+              <div className="reg-time-paper" style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}}>
+                {isConfirming ? (
+                  <div style={{display:'flex',gap:6}}>
+                    <button onClick={() => removeRow(row)} disabled={isActing} aria-label="Confirm remove" style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--red-paper)',background:'var(--red-paper)',color:'var(--card-paper)',cursor:isActing?'wait':'pointer',letterSpacing:'.02em'}}>{isActing ? '…' : 'Confirm'}</button>
+                    <button onClick={() => setConfirmId(null)} disabled={isActing} aria-label="Keep" style={{fontSize:11,fontWeight:600,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border-strong-paper)',background:'var(--card-paper)',color:'var(--ink-paper)',cursor:'pointer'}}>Keep</button>
+                  </div>
+                ) : (
+                  <>
+                    <span className="reg-live-paper">● ACTIVE</span>
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      {row.starts_at && <span style={{fontSize:11,color:'var(--ink-3-paper)'}}>Since {new Date(row.starts_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
+                      <button onClick={() => setConfirmId(row.id)} aria-label="Remove parking pass" style={{fontSize:11,fontWeight:600,padding:'4px 9px',borderRadius:6,border:'1px solid var(--border-strong-paper)',background:'transparent',color:'var(--red-paper)',cursor:'pointer',letterSpacing:'.02em'}}>Remove</button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
-            <div className="reg-time-paper">
-              <span className="reg-live-paper">● ACTIVE</span>
-              {row.starts_at && <span style={{fontSize:11}}>Since {new Date(row.starts_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
