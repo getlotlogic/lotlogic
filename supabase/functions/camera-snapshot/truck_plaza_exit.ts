@@ -238,6 +238,20 @@ export async function handleTruckPlazaExit(args: {
   // best plate above the sidecar's own internal threshold (or null).
   // truck_plaza_exit applies its own SC211_SIDECAR_FLOOR on top.
   sidecarRead?: (bytes: Uint8Array, cameraId: string) => Promise<SidecarRead>;
+  // When true, skip the sidecar gate AND skip the weak_plate_reads
+  // buffer. Call PR Cloud synchronously on every frame and treat the
+  // result like an onboard plate. No row is written for PR-empty
+  // results. Used for cameras whose plates are too small/low-res for
+  // the sidecar's text detector to find (C4467 at ~30-40px plates),
+  // where the buffer flow produced thousands of useless empty weak
+  // rows. Configured per-MAC via SKIP_SIDECAR_MACS env var in index.ts.
+  bypassSidecarGate?: boolean;
+  // Called fire-and-forget after we successfully claim a "left before
+  // tow" stamp on an already-dispatched overstay violation. index.ts
+  // wires this to tow-dispatch-email with notification_kind set, so
+  // the partner gets a "vehicle already gone — stand down" follow-up
+  // instead of rolling a truck to an empty space.
+  notifyLeftBeforeTow?: (violationId: string) => void;
 }): Promise<TruckPlazaResult> {
   const { db, camera, payload, now } = args;
   const onboard = payload.onboardLpr;
@@ -252,7 +266,27 @@ export async function handleTruckPlazaExit(args: {
     }
   }
 
-  // 2. SC211 (no onboard plate) flow: sidecar is the "is this frame worth
+  // 2a. Bypass flow: skip the sidecar gate AND skip weak_plate_reads
+  //     buffering. Call PR Cloud synchronously on this exact frame and
+  //     treat the result like an onboard read. No row is written for
+  //     empty PR results — these cameras (e.g. C4467 with small plates)
+  //     produced thousands of useless weak rows under the buffer flow,
+  //     and the burst-flush delay swallowed plates we'd rather see
+  //     immediately. Configured per-MAC via SKIP_SIDECAR_MACS in index.ts.
+  if (!resolved && args.bypassSidecarGate) {
+    const prResult = await callPlateRecognizerCloud(args.prToken, args.prApiUrl, payload.bytes);
+    if (!prResult || !prResult.plate) {
+      return { outcome: "dropped", reason: "pr_empty" };
+    }
+    const prNorm = normalizePlate(prResult.plate);
+    if (prNorm.length < 4) {
+      return { outcome: "dropped", reason: "pr_plate_too_short" };
+    }
+    resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr" };
+    // Fall through to section 3 (tow truck + pass matching).
+  }
+
+  // 2b. SC211 (no onboard plate) flow: sidecar is the "is this frame worth
   //    saving" gate ONLY. We ignore its plate text (too noisy on dark IR
   //    frames — returns "E", "R", "11" from the timestamp banner). When
   //    sidecar returns nothing → empty_scene → drop. When it returns
@@ -274,9 +308,9 @@ export async function handleTruckPlazaExit(args: {
       }
       return { outcome: "dropped", reason: "sidecar_empty" };
     }
-    // Sidecar saw IR-lit content. Buffer the frame for PR — but we do NOT
-    // trust the plate text it produced. raw_plate stays empty so flushGroup
-    // relies entirely on PR's read of the buffered image.
+    // Sidecar saw IR-lit content. Buffer the frame for PR — raw_plate
+    // stays empty so flushGroup relies entirely on PR's read of the
+    // buffered image.
     const dateStr = now.toISOString().slice(0, 10);
     const r2Key = `${camera.property_id}/${dateStr}/weak-${camera.api_key}-${now.getTime()}.jpg`;
     const imageUrl = await args.uploadJpeg(payload.bytes, r2Key);
@@ -313,10 +347,17 @@ export async function handleTruckPlazaExit(args: {
   // as an authoritative second opinion. If PR returns a plate, we use
   // it for EXACT-only matching (no fuzzy fallback). If PR also fails,
   // we drop the read entirely rather than trust the bad onboard.
+  //
+  // Scope: this rescue only applies to ONBOARD-sourced reads. PR-sourced
+  // reads (from bypassSidecarGate cameras like C4467) skip the rescue
+  // entirely — calling PR again on the same image would just produce
+  // the same answer, and we want fuzzy matching enabled for PR so
+  // single-char OCR drift (B↔8, O↔0, I↔1, etc.) can still match the
+  // registered plate.
   const ONBOARD_CONF_FLOOR = 0.25;
   const PR_RESOLVE_FLOOR = 0.40; // PR cloud's own confidence floor
   let lowConfPath = false;
-  if (resolved && resolved.confidence !== null && resolved.confidence < ONBOARD_CONF_FLOOR) {
+  if (resolved && resolved.source === "onboard" && resolved.confidence !== null && resolved.confidence < ONBOARD_CONF_FLOOR) {
     lowConfPath = true;
     const prResult = await callPlateRecognizerCloud(
       args.prToken,
@@ -352,13 +393,13 @@ export async function handleTruckPlazaExit(args: {
 
   // 4. No usable read = drop. Nothing to upload, nothing to insert.
   if (!resolved) return { outcome: "dropped", reason: onboardRaw ? "plate_too_short" : "no_plate" };
-  if (!tow && !pass) {
-    return { outcome: "dropped", reason: "no_match_onboard" };
-  }
 
-  // 5. Matched — upload snapshot + insert plate_event for evidence.
+  // 5. Always upload + insert plate_event for evidence — even when no tow
+  //    and no pass match. Unmatched reads are stored so a later visitor_pass
+  //    registration for the same plate can backfill the row as the
+  //    "first seen on lot" image on the pass profile.
   const dateStr = now.toISOString().slice(0, 10);
-  const kind = tow ? "tow" : "exit";
+  const kind = tow ? "tow" : (pass ? "exit" : "unmatched");
   const r2Key = `${camera.property_id}/${dateStr}/${kind}-${camera.api_key}-${now.getTime()}-${resolved.normalized}.jpg`;
   const imageUrl = await args.uploadJpeg(payload.bytes, r2Key);
 
@@ -367,7 +408,9 @@ export async function handleTruckPlazaExit(args: {
   const fuzzyHit = pass?.fuzzy ?? false;
   const matchStatus = tow
     ? "partner_truck"
-    : (overstay ? "overstay" : (fuzzyHit ? "visitor_pass_fuzzy" : "visitor_pass"));
+    : pass
+    ? (overstay ? "overstay" : (fuzzyHit ? "visitor_pass_fuzzy" : "visitor_pass"))
+    : "unmatched";
 
   const evIns = await db.from("plate_events").insert({
     property_id: camera.property_id,
@@ -390,6 +433,14 @@ export async function handleTruckPlazaExit(args: {
   }).select("id").single();
   if (evIns.error) throw evIns.error;
   const plateEventId = evIns.data.id as string;
+
+  // 5b. No tow + no pass → return the drop, but the plate_event row above
+  //     is now durable. Later visitor_pass registrations at this property
+  //     can backfill it as the "first seen on lot" image when their
+  //     normalized plate matches (exact or fuzzy).
+  if (!tow && !pass) {
+    return { outcome: "dropped", reason: "no_match_onboard" };
+  }
 
   // 6a. Tow-truck branch: record the sighting and return. tow-confirm's
   //     correlator picks up the sighting on later violation matching.
@@ -421,25 +472,50 @@ export async function handleTruckPlazaExit(args: {
   let overstayViolationId: string | null = pass!.overstay_violation_id ?? null;
   if (overstay && overstayViolationId) {
     // Cron sweep already filed this overstay — link the camera evidence
-    // onto its row instead of inserting a duplicate.
-    const vUpd = await db.from("alpr_violations")
+    // onto its row AND atomically claim the "left before tow" state.
+    // The .is("left_before_tow_at", null) guard ensures only ONE
+    // claimant wins (across concurrent camera reads + this path racing
+    // with cron's own auto-cancel). Status flips to dismissed so the
+    // partner queue stops showing it as active, and the dispatcher
+    // skips it on retry.
+    const claim = await db.from("alpr_violations")
       .update({
         plate_event_id: plateEventId,
-        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via camera (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late). Originally fired by overstay sweep.`,
+        left_before_tow_at: now.toISOString(),
+        status: "dismissed",
+        action_taken: "no_tow",
+        action_channel: "auto_left_before_tow",
+        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via camera (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late). Auto-cancelled — vehicle left before tow.`,
       })
-      .eq("id", overstayViolationId);
-    if (vUpd.error) throw vUpd.error;
+      .eq("id", overstayViolationId)
+      .is("left_before_tow_at", null)
+      .select("id, sms_sent_at")
+      .maybeSingle();
+    if (claim.error) throw claim.error;
+    // If sms_sent_at was set on the claimed row, the partner already
+    // got the dispatch email — fire a follow-up "stand down" notice
+    // so they don't roll a truck. If null, no one was notified yet
+    // and there's nothing to cancel.
+    if (claim.data?.sms_sent_at) {
+      args.notifyLeftBeforeTow?.(overstayViolationId);
+    }
   } else if (overstay) {
     // No prior overstay row. Race-safe insert: INSERT then conditionally
     // claim the pass; if cron got there first (between our SELECT and
     // our claim), delete the duplicate and adopt the cron's violation id.
+    // Camera caught the exit before cron ever fired. No partner email
+    // was sent for this row, so insert it pre-cancelled — left_before_tow
+    // state up front, status=dismissed so the dispatcher skips it.
     const vIns = await db.from("alpr_violations").insert({
       property_id: camera.property_id,
       plate_event_id: plateEventId,
       plate_text: resolved.raw.toUpperCase(),
-      status: "pending",
+      status: "dismissed",
       violation_type: "overstay",
-      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late)`,
+      left_before_tow_at: now.toISOString(),
+      action_taken: "no_tow",
+      action_channel: "auto_left_before_tow",
+      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} (${Math.round((now.getTime() - new Date(pass!.valid_until).getTime()) / 60000)} min late). Vehicle left before tow — auto-cancelled at violation creation.`,
     }).select("id").single();
     if (vIns.error) throw vIns.error;
     const candidateId = vIns.data.id as string;
@@ -459,14 +535,27 @@ export async function handleTruckPlazaExit(args: {
         .eq("id", pass!.id)
         .single();
       overstayViolationId = (reread.data?.overstay_violation_id as string | null) ?? null;
-      // Best-effort: link the camera evidence onto the winning row.
+      // Best-effort: link the camera evidence onto the winning row AND
+      // atomically claim left_before_tow state (same as the linked path
+      // above). If partner already got the dispatch email, fire the
+      // stand-down follow-up.
       if (overstayViolationId) {
-        await db.from("alpr_violations")
+        const raceClaim = await db.from("alpr_violations")
           .update({
             plate_event_id: plateEventId,
-            notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via camera (race-loser path).`,
+            left_before_tow_at: now.toISOString(),
+            status: "dismissed",
+            action_taken: "no_tow",
+            action_channel: "auto_left_before_tow",
+            notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via camera (race-loser path). Auto-cancelled — vehicle left before tow.`,
           })
-          .eq("id", overstayViolationId);
+          .eq("id", overstayViolationId)
+          .is("left_before_tow_at", null)
+          .select("id, sms_sent_at")
+          .maybeSingle();
+        if (raceClaim.data?.sms_sent_at) {
+          args.notifyLeftBeforeTow?.(overstayViolationId);
+        }
       }
     } else {
       overstayViolationId = candidateId;

@@ -115,17 +115,27 @@ serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
   );
 
-  let body: { violation_id?: string };
+  let body: { violation_id?: string; notification_kind?: "dispatch" | "left_before_tow" };
   try { body = await req.json(); } catch { return json({ error: "Invalid JSON body" }, 400); }
   const violationId = body.violation_id;
   if (!violationId) return json({ error: "violation_id is required" }, 400);
+  const notificationKind = body.notification_kind ?? "dispatch";
 
   const { data: violation, error: vErr } = await supabase
     .from("alpr_violations")
-    .select("id, property_id, plate_event_id, plate_text, status, sms_sent_at, created_at, violation_type")
+    .select("id, property_id, plate_event_id, plate_text, status, sms_sent_at, created_at, violation_type, left_before_tow_at")
     .eq("id", violationId)
     .single();
   if (vErr || !violation) return json({ error: "Violation not found", detail: vErr?.message }, 404);
+
+  // left_before_tow follow-up has its own flow: short "stand down" email,
+  // no action buttons, no sms_sent_at gate (the dispatch email already
+  // fired — that's why we're sending the cancellation). Bail out here
+  // before the dispatch-path setup.
+  if (notificationKind === "left_before_tow") {
+    return await sendLeftBeforeTowEmail(supabase, violation, resendKey, fromEmail);
+  }
+
   if (violation.sms_sent_at) {
     return json({ status: "already_sent", sms_sent_at: violation.sms_sent_at }, 200);
   }
@@ -520,6 +530,92 @@ serve(async (req) => {
     200,
   );
 });
+
+// Short "vehicle left before tow — stand down" follow-up email. Sent
+// when truck_plaza_exit detects a camera read on a plate whose
+// overstay violation was already dispatched. The partner gets one
+// line + plate + time so they can cancel before rolling a truck. No
+// action buttons — the violation is already auto-resolved server-side.
+async function sendLeftBeforeTowEmail(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  violation: {
+    id: string;
+    property_id: string;
+    plate_text: string;
+    left_before_tow_at: string | null;
+  },
+  resendKey: string,
+  fromEmail: string,
+): Promise<Response> {
+  const { data: property } = await supabase
+    .from("properties")
+    .select("id, name, address, tow_company_id")
+    .eq("id", violation.property_id)
+    .single();
+  if (!property?.tow_company_id) {
+    return json({ error: "Property has no tow_company_id", violation_id: violation.id }, 409);
+  }
+
+  const { data: partner } = await supabase
+    .from("enforcement_partners")
+    .select("id, company_name, email, active")
+    .eq("id", property.tow_company_id)
+    .single();
+  if (!partner?.email || !partner.active) {
+    return json({ error: "Tow company unavailable", violation_id: violation.id }, 409);
+  }
+
+  const leftAt = formatLocal(violation.left_before_tow_at);
+  const propertyName = property.name || "LotLogic property";
+  const subject = `🟢 STAND DOWN · ${violation.plate_text} · ${propertyName}`;
+  const preheader = `Vehicle left before tow at ${leftAt} — no action needed`;
+  const textBody = [
+    `LOTVIEW STAND DOWN`,
+    `${propertyName}${property.address ? ` — ${property.address}` : ""}`,
+    ``,
+    `PLATE      ${violation.plate_text}`,
+    `LEFT AT    ${leftAt}`,
+    ``,
+    `Vehicle was caught on camera leaving the lot after the dispatch email`,
+    `was sent. No tow needed — the violation is auto-resolved.`,
+    ``,
+    `Open LotView dashboard → https://lotlogicparking.com/app`,
+  ].join("\n");
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(subject)}</title></head>
+<body style="margin:0; background:#F2EAD8; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; color:#1F1B14;">
+<div style="display:none; opacity:0; max-height:0; overflow:hidden;">${escapeHtml(preheader)}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2EAD8; padding:40px 16px;">
+  <tr><td align="center">
+    <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px; background:#FAF6EB; border:1.5px solid #1F1B14;">
+      <tr><td style="padding:28px 28px 8px;">
+        <div style="font-family:'DM Mono',ui-monospace,monospace; font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:#3D7B4A;">Stand down</div>
+        <div style="margin-top:8px; font-family:'Fraunces',Georgia,serif; font-size:30px; font-weight:600; color:#1F1B14; letter-spacing:-.01em;">${escapeHtml(violation.plate_text)}</div>
+        <div style="margin-top:6px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:14px; color:#3D3528;">${escapeHtml(propertyName)}</div>
+      </td></tr>
+      <tr><td style="padding:8px 28px 4px;">
+        <p style="margin:14px 0 0; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:15px; line-height:1.55; color:#1F1B14;">
+          Vehicle was caught on camera <strong>leaving the lot</strong> after our dispatch went out.
+          <strong>No tow needed</strong> — the violation is auto-resolved.
+        </p>
+        <p style="margin:18px 0 0; font-family:'DM Mono',ui-monospace,monospace; font-size:12px; color:#6F6450;">
+          Left at ${escapeHtml(leftAt)}
+        </p>
+      </td></tr>
+      <tr><td style="padding:24px 28px 28px;">
+        <a href="https://lotlogicparking.com/app" style="font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#1F1B14;">Open LotView dashboard →</a>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>`;
+  const sendResult = await sendViaResend(resendKey, fromEmail, partner.email, [], subject, textBody, html);
+  if (!sendResult.ok) {
+    return json({ error: "send_failed", violation_id: violation.id, detail: sendResult.body }, 502);
+  }
+  return json({ status: "stand_down_sent", violation_id: violation.id, to: partner.email, message_id: sendResult.messageId ?? null }, 200);
+}
 
 type SendResult =
   | { ok: true; provider: "resend"; messageId: string | null }

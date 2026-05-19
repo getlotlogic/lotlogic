@@ -72,6 +72,16 @@ const OPENALPR_SIDECAR_URL = Deno.env.get("OPENALPR_SIDECAR_URL") ?? "";
 const OPENALPR_SIDECAR_TOKEN = Deno.env.get("OPENALPR_SIDECAR_TOKEN") ?? "";
 const OPENALPR_MIN_CONFIDENCE = Number(Deno.env.get("OPENALPR_MIN_CONFIDENCE") ?? "0.80");
 const OPENALPR_TIMEOUT_MS = Number(Deno.env.get("OPENALPR_TIMEOUT_MS") ?? "6000");
+// Per-camera sidecar bypass. Cameras in this set skip the sidecar's
+// empty-scene gate in the truck_plaza_exit path — every frame buffers
+// straight to weak_plate_reads and gets a PR Cloud read. Use for
+// cameras whose plates are below the sidecar's text-detection threshold
+// (e.g. C4467 PTZ at small pixel sizes, where the gate is a 100% drop).
+// Format: comma-separated MACs (camera.api_key values).
+const SKIP_SIDECAR_MACS: Set<string> = new Set(
+  (Deno.env.get("SKIP_SIDECAR_MACS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean),
+);
 // Per-camera rotation map. Cameras physically mounted at a 90°/180°
 // rotation must have their frames rotated upright BEFORE being handed to
 // Plate Recognizer or the USDOT/ParkPow OCR fallback — neither has a
@@ -282,6 +292,21 @@ Deno.serve(async (req: Request) => {
           if (cleanEmpty) return null;
           return { plate: "", confidence: 0 };
         } : undefined,
+        bypassSidecarGate: SKIP_SIDECAR_MACS.has(camera.api_key),
+        notifyLeftBeforeTow: (violationId) => {
+          // Fire-and-forget. Partner gets a follow-up "stand down" email
+          // because we already dispatched a tow that's no longer needed.
+          fetch(`${SUPABASE_URL}/functions/v1/tow-dispatch-email`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ violation_id: violationId, notification_kind: "left_before_tow" }),
+          }).catch((e) => {
+            console.warn(`tow-dispatch-email cancel fire-and-forget failed violation=${violationId} err=${e instanceof Error ? e.message : String(e)}`);
+          });
+        },
       });
       // Always include the reason on drops so we can distinguish healthy
       // "no driver registered" patterns from broken "sidecar returning 0
