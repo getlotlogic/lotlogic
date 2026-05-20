@@ -5432,6 +5432,11 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
               </div>
               <div className="section-count">{awaiting.length}</div>
             </div>
+            <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:8,lineHeight:1.4}}>
+              LotLogic spotted a vehicle without a valid parking pass and sent it to your team.
+              Tap <b>Tow</b> to dispatch a truck, or <b>No-tow</b> to skip. The job will then move
+              into the In&nbsp;Progress list below until our cameras confirm the outcome.
+            </div>
             <div style={{display:'flex', flexDirection:'column', gap:8}}>
               {awaiting.map(v => {
                 const isActing = acting === v.id;
@@ -5492,10 +5497,34 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
             : filter === 'overstays' ? 'Overstays'
             : filter === 'open' ? 'Open Jobs'
             : filter === 'handled' ? 'Handled Today'
-            : 'All Jobs'}
+            : (user?._role === 'partner' ? 'In progress' : 'All Jobs')}
         </div>
         <div className="section-count">{filteredActive.length}</div>
       </div>
+      {filter === 'all' && (
+        <div style={{fontSize:12,color:'var(--text-muted)',margin:'0 0 10px',lineHeight:1.4}}>
+          {user?._role === 'partner' ? (
+            <>Dispatches your team has already responded to. They'll auto-close once our cameras confirm the tow or the vehicle leaves. This list does <b>not</b> include items still awaiting your Tow / No-tow decision — those live above.</>
+          ) : (
+            <>Active violations at your lots that haven't been resolved yet. Includes dispatches in flight to your tow partner plus anything that hasn't been acted on.</>
+          )}
+        </div>
+      )}
+      {filter === 'open' && (
+        <div style={{fontSize:12,color:'var(--text-muted)',margin:'0 0 10px',lineHeight:1.4}}>
+          Active jobs that aren't overstays and don't fall under <i>Possible no parking pass</i>.
+        </div>
+      )}
+      {filter === 'overstays' && (
+        <div style={{fontSize:12,color:'var(--text-muted)',margin:'0 0 10px',lineHeight:1.4}}>
+          Vehicles that had a parking pass but stayed past <code>valid_until</code>.
+        </div>
+      )}
+      {filter === 'handled' && (
+        <div style={{fontSize:12,color:'var(--text-muted)',margin:'0 0 10px',lineHeight:1.4}}>
+          Resolved, cleared, departed, or dismissed today.
+        </div>
+      )}
 
       {filteredActive.length === 0 && active.length > 0 ? (
         <div className="empty-state" style={{marginBottom: 28, padding:'30px 20px'}}>
@@ -5506,7 +5535,11 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
         <div className="empty-state" style={{marginBottom: 28}}>
           <div style={{width:48, height:48, borderRadius:12, background:'rgba(74,222,128,.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22}}>✓</div>
           <div className="empty-title">All clear</div>
-          <div className="empty-body">No violations pending at your lots right now</div>
+          <div className="empty-body">
+            {user?._role === 'partner'
+              ? "No in-progress jobs right now. New dispatches will show above when LotLogic sends them."
+              : "No violations pending at your lots right now"}
+          </div>
           {/* Partner-only orientation mini-explainer. Owners see the existing empty state unchanged. */}
           {user?._role === 'partner' && (
             <div style={{
