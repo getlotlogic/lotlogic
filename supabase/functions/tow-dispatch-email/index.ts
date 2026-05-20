@@ -159,9 +159,34 @@ serve(async (req) => {
 
   const { data: triggerEvent } = await supabase
     .from("plate_events")
-    .select("id, image_url, confidence, created_at")
+    .select("id, image_url, confidence, created_at, raw_data, camera_id")
     .eq("id", violation.plate_event_id)
     .maybeSingle();
+
+  // Exit-detection guard. If the trigger plate read is an EXIT — Milesight
+  // reported direction="Away" — the truck is already crossing the gate out
+  // of the lot. Dispatching a tow truck for a vehicle that's leaving is
+  // wasted partner time and confusing to operators. Skip the email and log
+  // why so the dashboard can show it as auto-dismissed if we wire that up.
+  const triggerDirection = (() => {
+    const d1 = triggerEvent?.raw_data?.milesight_lpr?.direction;
+    const d2 = triggerEvent?.raw_data?.onboardLpr?.direction;
+    return (d1 ?? d2 ?? "").toString();
+  })();
+  if (triggerDirection === "Away") {
+    console.log(JSON.stringify({
+      skipped_dispatch: true,
+      reason: "vehicle_exiting",
+      violation_id: violation.id,
+      plate_text: violation.plate_text,
+      trigger_event_id: triggerEvent?.id,
+    }));
+    return json({
+      ok: true,
+      skipped: "vehicle_exiting",
+      message: "Trigger read shows vehicle leaving (direction=Away); not dispatching.",
+    });
+  }
 
   // Find the earliest plate read of THIS vehicle within the last 24h, tolerant
   // of OCR drift across frames. Exact-only match by plate_text picked up the
@@ -380,11 +405,11 @@ serve(async (req) => {
   past pass expiry &middot; ${escapeHtml(formatLocal(lastPass?.valid_until))}
 </div>
 <div style="margin-top:10px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:12px; color:#6F6450;">
-  First seen on lot ${escapeHtml(firstSeenAgo)} ago &middot; ${escapeHtml(formatLocal(firstSeen))}
+  Vehicle arrived ${escapeHtml(firstSeenAgo)} ago &middot; ${escapeHtml(formatLocal(firstSeen))}
 </div>`
     : `
 <div style="margin-top:12px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#3D3528;">
-  On property <strong style="color:#9A5530;">${escapeHtml(firstSeenAgo)}</strong> &middot; since ${escapeHtml(formatLocal(firstSeen))}
+  Parked on property for <strong style="color:#9A5530;">${escapeHtml(firstSeenAgo)}</strong> &middot; arrived ${escapeHtml(formatLocal(firstSeen))}
 </div>`;
 
   const html = `<!doctype html>
