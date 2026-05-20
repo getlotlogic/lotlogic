@@ -6701,6 +6701,79 @@ function EvidenceThumb({ src, plate, label, onOpen, timestamp, mobile }) {
   );
 }
 
+// "Seen on camera before registering" evidence block. Shows the snapshot
+// inline (objectFit:contain so nothing is cropped) and opens a fullscreen
+// overlay on click for the full uncropped frame. Esc / outside-click closes.
+function FirstSeenEvidence({ plate, imageUrl, firstSeenAt, registeredAt, compact }) {
+  const [open, setOpen] = useState(false);
+  const leadMs = firstSeenAt && registeredAt
+    ? new Date(registeredAt).getTime() - new Date(firstSeenAt).getTime()
+    : 0;
+  const leadMin = Math.max(0, Math.round(leadMs / 60000));
+  const leadLabel = leadMin >= 60 ? `${Math.floor(leadMin/60)}h ${leadMin%60}m` : `${leadMin} min`;
+  const whenLabel = firstSeenAt
+    ? new Date(firstSeenAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : '';
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+  return (
+    <div style={{
+      border: '1px solid rgba(245,158,11,.45)',
+      background: 'rgba(245,158,11,.08)',
+      borderRadius: 10, padding: compact ? 8 : 10,
+      display: 'flex', flexDirection: 'column', gap: compact ? 6 : 8,
+    }}>
+      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+        <span style={{fontSize: compact ? 10 : 11,fontWeight:800,padding:'3px 8px',borderRadius:12,background:'#f59e0b',color:'#fff',textTransform:'uppercase',letterSpacing:'.06em'}}>
+          Seen on camera before registering
+        </span>
+        <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:600}}>
+          {leadMin > 0 ? `${leadLabel} earlier · ` : ''}{whenLabel}
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        aria-label={`Enlarge pre-registration snapshot for ${plate || 'unknown plate'}`}
+        title="Click to see full image"
+        style={{display:'block',width:'100%',padding:0,border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',background:'#000',cursor:'zoom-in'}}
+      >
+        <img
+          src={imageUrl}
+          alt={`${plate || ''} pre-registration snapshot`}
+          loading="lazy"
+          style={{display:'block',width:'100%',height: compact ? 140 : 180,objectFit:'contain',background:'#000'}}
+        />
+      </button>
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pre-registration snapshot"
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:1200,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{maxWidth:'min(1200px, 98vw)',maxHeight:'94vh',display:'flex',flexDirection:'column',gap:8,alignItems:'center'}}>
+            <img src={imageUrl} alt={plate || 'snapshot'} style={{maxWidth:'100%',maxHeight:'82vh',objectFit:'contain',borderRadius:6,border:'1px solid rgba(255,255,255,.12)',background:'#000'}} />
+            <div style={{display:'flex',justifyContent:'space-between',gap:12,width:'100%',color:'#e5e7eb',fontSize:13,fontWeight:600}}>
+              <span>{plate || 'snapshot'} · {whenLabel}</span>
+              <div style={{display:'flex',gap:8}}>
+                <a href={imageUrl} download target="_blank" rel="noopener noreferrer"
+                   style={{color:'#fbbf24',textDecoration:'none',fontWeight:700,padding:'4px 10px',borderRadius:6,border:'1px solid rgba(251,191,36,.5)'}}>Open in new tab</a>
+                <button onClick={() => setOpen(false)} style={{background:'rgba(255,255,255,.12)',color:'#fff',border:'1px solid rgba(255,255,255,.25)',borderRadius:6,padding:'4px 12px',fontWeight:700,cursor:'pointer'}}>Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Full-screen image viewer. Reuses the focus-trap + ESC handling from PR #75
 // via the shared useFocusTrap hook so keyboard users can dismiss the overlay
 // the same way they dismiss ConfirmActionModal.
@@ -8917,37 +8990,17 @@ function ActivePassTracker({ propertyId }) {
         </div>
 
         {/* Pre-registration camera capture — proof the vehicle was already on
-            the lot before the driver opened the QR form. Backfilled by the
-            backend when a camera read the plate in the 2h before registration. */}
-        {p.first_seen_image_url && (() => {
-          const leadMs = p.first_seen_at && p.created_at
-            ? new Date(p.created_at).getTime() - new Date(p.first_seen_at).getTime()
-            : 0;
-          const leadMin = Math.max(0, Math.round(leadMs / 60000));
-          const leadLabel = leadMin >= 60 ? `${Math.floor(leadMin/60)}h ${leadMin%60}m` : `${leadMin} min`;
-          return (
-            <div style={{
-              border: '1px solid rgba(245,158,11,.45)',
-              background: 'rgba(245,158,11,.08)',
-              borderRadius: 10, padding: 8,
-              display: 'flex', flexDirection: 'column', gap: 6,
-            }}>
-              <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                <span style={{fontSize:10,fontWeight:800,padding:'3px 8px',borderRadius:10,background:'#f59e0b',color:'#fff',textTransform:'uppercase',letterSpacing:'.06em'}}>
-                  Seen on camera before registering
-                </span>
-                <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:600}}>
-                  {leadMin > 0 ? `${leadLabel} earlier · ` : ''}{fmtAbsolute(p.first_seen_at)}
-                </span>
-              </div>
-              <a href={p.first_seen_image_url} target="_blank" rel="noopener noreferrer"
-                 style={{display:'block',borderRadius:6,overflow:'hidden',border:'1px solid var(--border)'}}>
-                <img src={p.first_seen_image_url} alt={`${p.plate_text} pre-registration`} loading="lazy"
-                     style={{display:'block',width:'100%',height:120,objectFit:'cover',background:'#000'}} />
-              </a>
-            </div>
-          );
-        })()}
+            the lot before the driver opened the QR form. Click to see the
+            full uncropped image. */}
+        {p.first_seen_image_url && (
+          <FirstSeenEvidence
+            plate={p.plate_text}
+            imageUrl={p.first_seen_image_url}
+            firstSeenAt={p.first_seen_at}
+            registeredAt={p.created_at}
+            compact
+          />
+        )}
 
         <div style={{paddingTop:10,borderTop:`1px dashed ${accentBorder}`,display:'flex',alignItems:'baseline',gap:12,flexWrap:'wrap'}}>
           <div style={{fontSize: expiring ? 20 : 16,fontWeight:800,color:plateColor,letterSpacing:'-.01em'}}>
@@ -9692,46 +9745,16 @@ function TruckParkingLog({ propertyId }) {
                 {/* First seen on lot — pre-registration camera snapshot.
                     Backfilled by the backend when a camera read the plate
                     in the 2h before the driver registered. This proves the
-                    vehicle was already on the lot when they registered. */}
-                {r.first_seen_image_url && (() => {
-                  const leadMs = r.first_seen_at && r.created_at
-                    ? new Date(r.created_at).getTime() - new Date(r.first_seen_at).getTime()
-                    : 0;
-                  const leadMin = Math.max(0, Math.round(leadMs / 60000));
-                  const leadLabel = leadMin >= 60
-                    ? `${Math.floor(leadMin / 60)}h ${leadMin % 60}m`
-                    : `${leadMin} min`;
-                  return (
-                    <div style={{
-                      border:'1px solid rgba(245,158,11,.45)',
-                      background:'rgba(245,158,11,.06)',
-                      borderRadius:10, padding:10,
-                      display:'flex', flexDirection:'column', gap:8,
-                    }}>
-                      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                        <span style={{fontSize:11,fontWeight:800,padding:'3px 8px',borderRadius:12,background:'#f59e0b',color:'#fff',textTransform:'uppercase',letterSpacing:'.06em'}}>
-                          Seen on camera before registering
-                        </span>
-                        <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:600}}>
-                          {leadMin > 0 ? `${leadLabel} earlier · ` : ''}{fmtDateTime(r.first_seen_at)}
-                        </span>
-                      </div>
-                      <a
-                        href={r.first_seen_image_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={`First seen on lot at ${fmtDateTime(r.first_seen_at)}`}
-                        style={{display:'block',position:'relative',borderRadius:8,overflow:'hidden',border:'1px solid var(--border)'}}
-                      >
-                        <img
-                          src={r.first_seen_image_url}
-                          alt={`${r.plate_text} first seen on lot`}
-                          style={{display:'block',width:'100%',height:160,objectFit:'cover',background:'var(--bg-inset)'}}
-                        />
-                      </a>
-                    </div>
-                  );
-                })()}
+                    vehicle was already on the lot when they registered.
+                    Click the image to see the full uncropped frame. */}
+                {r.first_seen_image_url && (
+                  <FirstSeenEvidence
+                    plate={r.plate_text}
+                    imageUrl={r.first_seen_image_url}
+                    firstSeenAt={r.first_seen_at}
+                    registeredAt={r.created_at}
+                  />
+                )}
 
                 {/* Time range */}
                 <div style={{display:'grid',gridTemplateColumns: r.exited_at ? '1fr auto 1fr auto 1fr' : '1fr auto 1fr',alignItems:'center',gap:10,padding:'10px 12px',background:'var(--bg-inset)',borderRadius:8,fontSize:11}}>
