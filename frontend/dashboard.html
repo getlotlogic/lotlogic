@@ -8624,11 +8624,43 @@ function ActivePassTracker({ propertyId }) {
   // company-name (when known) + violation-type pill (Overstay or
   // No Registration). Click anywhere on the card to expand and see all
   // info plus the camera image.
+  const [removingKey, setRemovingKey] = useState(null);
+  async function removeItem(item) {
+    if (!window.confirm(`Remove ${item.plate_text} from the list?`)) return;
+    setRemovingKey(item.key);
+    try {
+      let path;
+      if (item.kind === 'overstay' && item.pass) {
+        path = `/visitor_passes/${item.pass.id}/cancel`;
+      } else if ((item.kind === 'no_registration' || item.kind === 'cooldown') && item.alpr) {
+        path = `/violations/${item.alpr.id}/mark-no-tow`;
+      } else {
+        throw new Error('Unknown card type');
+      }
+      await apiFetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'operator dismissed via dashboard' }),
+      });
+      // Optimistically remove from the local list — the realtime channel
+      // will reconcile on the next push.
+      if (item.kind === 'overstay') {
+        setPasses(prev => prev.filter(p => p.id !== item.pass.id));
+      } else {
+        setAlprViols(prev => prev.filter(v => v.id !== item.alpr.id));
+      }
+    } catch (e) {
+      window.alert('Remove failed: ' + (e?.message || 'unknown error'));
+    } finally {
+      setRemovingKey(null);
+    }
+  }
   function ViolationCard({ item }) {
     const isExpanded = expandedKey === item.key;
     const imgEntry = imageCache[item.key];
     const pass = item.pass;
     const alpr = item.alpr;
+    const isRemoving = removingKey === item.key;
     const typeLabel = item.kind === 'overstay' ? 'Overstay'
       : item.kind === 'cooldown' ? 'Cooldown'
       : 'No Registration';
@@ -8645,11 +8677,13 @@ function ActivePassTracker({ propertyId }) {
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpand(item); } }}
         aria-expanded={isExpanded}
         style={{
+          position: 'relative',
           background: 'rgba(239,68,68,.08)',
           border: `1px solid ${accentBorder}`,
           borderLeft: '8px solid #ef4444',
           borderRadius: 14,
           padding: 18,
+          paddingRight: 44,
           display: 'flex',
           flexDirection: 'column',
           gap: isExpanded ? 14 : 10,
@@ -8660,6 +8694,36 @@ function ActivePassTracker({ propertyId }) {
         onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 22px rgba(239,68,68,.16)'; }}
         onMouseLeave={(e) => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 2px 14px rgba(0,0,0,.06)'; }}
       >
+        {/* Remove (X) — operator dismiss. Hits visitor_passes/{id}/cancel for
+            overstays, violations/{id}/mark-no-tow for ALPR rows. Backend
+            allows partners (NMLD) to dismiss for their own lots. */}
+        <button
+          onClick={(e) => { e.stopPropagation(); removeItem(item); }}
+          disabled={isRemoving}
+          aria-label={`Remove ${item.plate_text}`}
+          title="Remove from list"
+          style={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            width: 28,
+            height: 28,
+            borderRadius: '50%',
+            border: '1px solid rgba(239,68,68,.4)',
+            background: isRemoving ? 'rgba(239,68,68,.3)' : 'rgba(255,255,255,.85)',
+            color: '#dc2626',
+            fontSize: 16,
+            fontWeight: 800,
+            lineHeight: 1,
+            cursor: isRemoving ? 'wait' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            boxShadow: '0 1px 4px rgba(0,0,0,.1)',
+            opacity: isRemoving ? .6 : 1,
+          }}
+        >{isRemoving ? '…' : '×'}</button>
         {/* COLLAPSED row: plate + violation type pill (always visible) */}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10,flexWrap:'wrap'}}>
           <div style={{
