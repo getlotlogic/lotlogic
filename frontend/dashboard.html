@@ -4976,7 +4976,11 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     _detections: null,
     plate_text: av.plate_text,
     vehicle_color: null, vehicle_type: null, vehicle_make: null, vehicle_model: null,
-    violation_type: 'parking_pass',
+    // Preserve the real DB violation_type so the Jobs-tab filters (Overstays /
+    // Open Jobs) can split alpr_violations rows correctly. Forcing
+    // 'parking_pass' here masked 'overstay' and 'cooldown', funneling everything
+    // into Open Jobs and emptying the Overstays pill.
+    violation_type: av.violation_type || 'parking_pass',
     zone_id: null, space_number: null,
     camera_id: av.plate_events?.camera_id || null,
     _camera_name: av.plate_events?.alpr_cameras?.name || null,
