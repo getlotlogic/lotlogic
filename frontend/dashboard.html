@@ -5072,12 +5072,27 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     if (actingRef.current) return;
     actingRef.current = true;
     setSelectedViol(null);
-    // Backend is the authority on tenant scope (returns 404 if the violation
-    // doesn't belong to the caller). We used to do a client-side check against
-    // the legacy `violations` + `lots` arrays here, but it false-rejected ALPR
-    // dispatches (which live in alprViolations + properties, not lots).
     setActing(violId);
     try {
+      // ALPR dispatches and legacy YOLO violations live in different tables.
+      // The merged list marks ALPR rows with _isALPR — route them through the
+      // dedicated alpr_violations updaters; falling back to db.recordAction
+      // would silently update zero rows in the legacy `violations` table.
+      const target = allViolations.find(v => v.id === violId);
+      const isAlpr = !!target?._isALPR;
+      if (isAlpr) {
+        if (action === 'tow') {
+          await db.dispatchALPRViolation(violId);
+        } else {
+          // Everything else from this surface (No-tow, dismiss, already_gone,
+          // no_action) collapses to no_tow on the ALPR row.
+          await db.dismissALPRViolation(violId, `Operator action: ${action}`);
+        }
+        addToast(`${actionLabels[action] || action} recorded`, 'success');
+        if (onAction) onAction();
+        return;
+      }
+
       const extra = {};
       // Pass fee schedule for revenue calculation on boot/tow
       if ((action === 'boot' || action === 'tow') && user) {
