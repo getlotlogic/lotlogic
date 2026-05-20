@@ -163,14 +163,42 @@ serve(async (req) => {
     .eq("id", violation.plate_event_id)
     .maybeSingle();
 
-  const { data: firstEvent } = await supabase
+  // Find the earliest plate read of THIS vehicle within the last 24h, tolerant
+  // of OCR drift across frames. Exact-only match by plate_text picked up the
+  // most recent OCR VARIANT, not the actual first time the truck appeared
+  // (e.g. truck read as VX7434 12h ago + PK7434 5 min ago → email said "first
+  // seen 5 min ago" which was wrong). The fuzzy gate mirrors the ≤1-edit
+  // length-guarded rule we use elsewhere (camera-snapshot, public_registration).
+  const lookbackMs = 24 * 60 * 60_000;
+  const since = new Date(Date.now() - lookbackMs).toISOString();
+  const { data: recentReads } = await supabase
     .from("plate_events")
-    .select("created_at")
+    .select("created_at, normalized_plate")
     .eq("property_id", violation.property_id)
-    .eq("plate_text", violation.plate_text)
+    .gte("created_at", since)
     .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .limit(500);
+  const target = (violation.plate_text ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const lev1 = (a: string, b: string): boolean => {
+    if (a === b) return true;
+    if (Math.abs(a.length - b.length) > 1) return false;
+    if (target.length < 5) return false;
+    let i = 0, j = 0, edits = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) { i++; j++; continue; }
+      edits++;
+      if (edits > 1) return false;
+      if (a.length === b.length) { i++; j++; }
+      else if (a.length > b.length) i++;
+      else j++;
+    }
+    return edits + (a.length - i) + (b.length - j) <= 1;
+  };
+  const firstMatch = (recentReads ?? []).find(r => {
+    const p = (r.normalized_plate ?? "").toUpperCase();
+    return p === target || lev1(p, target);
+  });
+  const firstEvent = firstMatch ? { created_at: firstMatch.created_at } : null;
 
   // Match either front (plate_text) or back (normalized_back_plate). The
   // violation row carries whichever plate the camera actually read, so a
