@@ -8384,11 +8384,21 @@ function ActivePassTracker({ propertyId }) {
   const [loading, setLoading] = useState(true);
   const [expandedKey, setExpandedKey] = useState(null); // e.g. "pass:UUID" or "alpr:UUID"
   const [imageCache, setImageCache] = useState({});    // expandedKey -> {url, loading, error, capturedAt, cameraName}
+  // Bulk-select state. When selectMode is on, clicking a card toggles selection
+  // rather than expanding. Checkboxes appear on each card and a floating action
+  // bar offers "Remove N selected".
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+  const [batchRemoving, setBatchRemoving] = useState(false);
   const nowTick = useNowTick();
 
+  // Only show the full-page spinner on the FIRST load. Realtime refetches
+  // shouldn't replace the card grid with a loader — that scrolls the user
+  // back to the top every time anything changes.
+  const initialLoadedRef = useRef(false);
   const load = useCallback(async () => {
     if (!propertyId) return;
-    setLoading(true);
+    if (!initialLoadedRef.current) setLoading(true);
     try {
       const [all, alpr] = await Promise.all([
         db.getVisitorPasses(propertyId, { limit: 200 }),
@@ -8399,6 +8409,7 @@ function ActivePassTracker({ propertyId }) {
     } catch (e) {
       // swallow; empty state will show
     }
+    initialLoadedRef.current = true;
     setLoading(false);
   }, [propertyId]);
 
@@ -8622,35 +8633,69 @@ function ActivePassTracker({ propertyId }) {
   // No Registration). Click anywhere on the card to expand and see all
   // info plus the camera image.
   const [removingKey, setRemovingKey] = useState(null);
-  async function removeItem(item) {
-    if (!window.confirm(`Remove ${item.plate_text} from the list?`)) return;
-    setRemovingKey(item.key);
+  // Removes a single item (no confirm dialog — callers gate on intent). Returns
+  // { ok: true } on success or { ok: false, error } so callers can aggregate
+  // batch results without a try/catch tax per item.
+  async function removeOne(item) {
+    let path;
+    if (item.kind === 'overstay' && item.pass) {
+      path = `/visitor_passes/${item.pass.id}/cancel`;
+    } else if ((item.kind === 'no_registration' || item.kind === 'cooldown') && item.alpr) {
+      path = `/violations/${item.alpr.id}/mark-no-tow`;
+    } else {
+      return { ok: false, error: 'Unknown card type' };
+    }
     try {
-      let path;
-      if (item.kind === 'overstay' && item.pass) {
-        path = `/visitor_passes/${item.pass.id}/cancel`;
-      } else if ((item.kind === 'no_registration' || item.kind === 'cooldown') && item.alpr) {
-        path = `/violations/${item.alpr.id}/mark-no-tow`;
-      } else {
-        throw new Error('Unknown card type');
-      }
       await apiFetch(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'operator dismissed via dashboard' }),
       });
-      // Optimistically remove from the local list — the realtime channel
-      // will reconcile on the next push.
       if (item.kind === 'overstay') {
         setPasses(prev => prev.filter(p => p.id !== item.pass.id));
       } else {
         setAlprViols(prev => prev.filter(v => v.id !== item.alpr.id));
       }
+      return { ok: true };
     } catch (e) {
-      window.alert('Remove failed: ' + (e?.message || 'unknown error'));
-    } finally {
-      setRemovingKey(null);
+      return { ok: false, error: e?.message || 'unknown error' };
     }
+  }
+  async function removeItem(item) {
+    if (!window.confirm(`Remove ${item.plate_text} from the list?`)) return;
+    setRemovingKey(item.key);
+    const r = await removeOne(item);
+    if (!r.ok) window.alert('Remove failed: ' + r.error);
+    setRemovingKey(null);
+  }
+  async function removeSelected() {
+    if (!selectedKeys.size) return;
+    if (!window.confirm(`Remove ${selectedKeys.size} item${selectedKeys.size === 1 ? '' : 's'} from the list?`)) return;
+    setBatchRemoving(true);
+    // Resolve the items to remove by key against the current violationColumn.
+    const itemsToRemove = violationColumn.filter(it => selectedKeys.has(it.key));
+    const results = await Promise.all(itemsToRemove.map(it => removeOne(it)));
+    const failed = results.filter(r => !r.ok).length;
+    setBatchRemoving(false);
+    setSelectedKeys(new Set());
+    setSelectMode(false);
+    if (failed > 0) {
+      window.alert(`${itemsToRemove.length - failed} removed, ${failed} failed.`);
+    }
+  }
+  function toggleSelect(key) {
+    setSelectedKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function selectAll() {
+    setSelectedKeys(new Set(violationColumn.map(it => it.key)));
+  }
+  function clearSelection() {
+    setSelectedKeys(new Set());
   }
   function ViolationCard({ item }) {
     const isExpanded = expandedKey === item.key;
@@ -8658,6 +8703,7 @@ function ActivePassTracker({ propertyId }) {
     const pass = item.pass;
     const alpr = item.alpr;
     const isRemoving = removingKey === item.key;
+    const isSelected = selectedKeys.has(item.key);
     const typeLabel = item.kind === 'overstay' ? 'Overstay'
       : item.kind === 'cooldown' ? 'Cooldown'
       : 'No Registration';
@@ -8668,16 +8714,17 @@ function ActivePassTracker({ propertyId }) {
 
     return (
       <div
-        onClick={() => toggleExpand(item)}
+        onClick={() => selectMode ? toggleSelect(item.key) : toggleExpand(item)}
         role="button"
         tabIndex={0}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpand(item); } }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectMode ? toggleSelect(item.key) : toggleExpand(item); } }}
         aria-expanded={isExpanded}
+        aria-selected={selectMode ? isSelected : undefined}
         style={{
           position: 'relative',
-          background: 'rgba(239,68,68,.08)',
-          border: `1px solid ${accentBorder}`,
-          borderLeft: '8px solid #ef4444',
+          background: isSelected ? 'rgba(59,130,246,.12)' : 'rgba(239,68,68,.08)',
+          border: `1px solid ${isSelected ? 'rgba(59,130,246,.55)' : accentBorder}`,
+          borderLeft: `8px solid ${isSelected ? '#3b82f6' : '#ef4444'}`,
           borderRadius: 14,
           padding: 18,
           paddingRight: 44,
@@ -8686,41 +8733,53 @@ function ActivePassTracker({ propertyId }) {
           gap: isExpanded ? 14 : 10,
           cursor: 'pointer',
           boxShadow: '0 2px 14px rgba(0,0,0,.06)',
-          transition: 'transform .12s ease, box-shadow .12s ease',
+          transition: 'transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease',
         }}
         onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 22px rgba(239,68,68,.16)'; }}
         onMouseLeave={(e) => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 2px 14px rgba(0,0,0,.06)'; }}
       >
-        {/* Remove (X) — operator dismiss. Hits visitor_passes/{id}/cancel for
-            overstays, violations/{id}/mark-no-tow for ALPR rows. Backend
-            allows partners (NMLD) to dismiss for their own lots. */}
-        <button
-          onClick={(e) => { e.stopPropagation(); removeItem(item); }}
-          disabled={isRemoving}
-          aria-label={`Remove ${item.plate_text}`}
-          title="Remove from list"
-          style={{
-            position: 'absolute',
-            top: 8,
-            right: 8,
-            width: 28,
-            height: 28,
-            borderRadius: '50%',
-            border: '1px solid rgba(239,68,68,.4)',
-            background: isRemoving ? 'rgba(239,68,68,.3)' : 'rgba(255,255,255,.85)',
-            color: '#dc2626',
-            fontSize: 16,
-            fontWeight: 800,
-            lineHeight: 1,
-            cursor: isRemoving ? 'wait' : 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 0,
-            boxShadow: '0 1px 4px rgba(0,0,0,.1)',
-            opacity: isRemoving ? .6 : 1,
-          }}
-        >{isRemoving ? '…' : '×'}</button>
+        {/* Top-right control: either a checkbox (select mode) or the X. */}
+        {selectMode ? (
+          <div
+            aria-hidden="true"
+            style={{
+              position:'absolute',top:8,right:8,width:28,height:28,borderRadius:6,
+              border:`2px solid ${isSelected ? '#3b82f6' : 'rgba(148,163,184,.5)'}`,
+              background: isSelected ? '#3b82f6' : 'rgba(255,255,255,.85)',
+              color:'#fff',fontSize:18,fontWeight:900,lineHeight:1,
+              display:'flex',alignItems:'center',justifyContent:'center',
+              boxShadow:'0 1px 4px rgba(0,0,0,.1)',
+            }}
+          >{isSelected ? '✓' : ''}</div>
+        ) : (
+          <button
+            onClick={(e) => { e.stopPropagation(); removeItem(item); }}
+            disabled={isRemoving}
+            aria-label={`Remove ${item.plate_text}`}
+            title="Remove from list"
+            style={{
+              position: 'absolute',
+              top: 8,
+              right: 8,
+              width: 28,
+              height: 28,
+              borderRadius: '50%',
+              border: '1px solid rgba(239,68,68,.4)',
+              background: isRemoving ? 'rgba(239,68,68,.3)' : 'rgba(255,255,255,.85)',
+              color: '#dc2626',
+              fontSize: 16,
+              fontWeight: 800,
+              lineHeight: 1,
+              cursor: isRemoving ? 'wait' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              boxShadow: '0 1px 4px rgba(0,0,0,.1)',
+              opacity: isRemoving ? .6 : 1,
+            }}
+          >{isRemoving ? '…' : '×'}</button>
+        )}
         {/* COLLAPSED row: plate + violation type pill (always visible) */}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10,flexWrap:'wrap'}}>
           <div style={{
@@ -8852,11 +8911,41 @@ function ActivePassTracker({ propertyId }) {
           )}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:12,minWidth:0}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
-            <div style={{fontSize:14,fontWeight:800,color:'#dc2626',letterSpacing:'.04em',textTransform:'uppercase'}}>
-              Violations
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+            <div style={{display:'flex',alignItems:'baseline',gap:10}}>
+              <div style={{fontSize:14,fontWeight:800,color:'#dc2626',letterSpacing:'.04em',textTransform:'uppercase'}}>
+                Violations
+              </div>
+              <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{violationColumn.length}</div>
             </div>
-            <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{violationColumn.length}</div>
+            {violationColumn.length > 0 && (
+              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                {selectMode && (
+                  <>
+                    <button
+                      onClick={selectedKeys.size === violationColumn.length ? clearSelection : selectAll}
+                      style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
+                    >
+                      {selectedKeys.size === violationColumn.length ? 'Clear' : 'Select all'}
+                    </button>
+                    <button
+                      onClick={() => { setSelectMode(false); setSelectedKeys(new Set()); }}
+                      style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-muted)',cursor:'pointer'}}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
+                {!selectMode && (
+                  <button
+                    onClick={() => setSelectMode(true)}
+                    style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
+                  >
+                    Select
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           {violationColumn.length === 0 ? (
             <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
@@ -8867,6 +8956,30 @@ function ActivePassTracker({ propertyId }) {
           )}
         </div>
       </div>
+      {/* Floating batch-action bar. Anchored bottom-right, only visible when
+          at least one card is selected. Stays above the bottom nav. */}
+      {selectMode && selectedKeys.size > 0 && (
+        <div style={{
+          position:'fixed', bottom:80, right:16, zIndex:50,
+          display:'flex',alignItems:'center',gap:10,
+          padding:'10px 14px',borderRadius:999,
+          background:'#dc2626',color:'#fff',
+          boxShadow:'0 8px 28px rgba(220,38,38,.4)',
+        }}>
+          <span style={{fontSize:13,fontWeight:800}}>{selectedKeys.size} selected</span>
+          <button
+            onClick={removeSelected}
+            disabled={batchRemoving}
+            style={{
+              fontSize:13,fontWeight:800,padding:'7px 14px',borderRadius:999,
+              border:'1px solid rgba(255,255,255,.4)',
+              background:batchRemoving ? 'rgba(255,255,255,.2)' : 'rgba(255,255,255,.95)',
+              color:batchRemoving ? '#fff' : '#dc2626',
+              cursor:batchRemoving ? 'wait' : 'pointer',
+            }}
+          >{batchRemoving ? 'Removing…' : 'Remove selected'}</button>
+        </div>
+      )}
     </div>
   );
 }
