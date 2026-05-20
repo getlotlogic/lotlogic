@@ -4661,8 +4661,24 @@ function CrossCameraSightings({ plate, propertyId, when, excludeCameraIds = [], 
 function JobNoRegRows({ rows, onRefresh, addToast }) {
   const [expanded, setExpanded] = useState({}); // { [id]: bool }
   const [acting, setActing] = useState(null);
+  // Locally-hidden rows so dismiss/tow doesn't have to re-fetch the parent
+  // list (which scrolls the page back to the top). The parent eventually
+  // reconciles via its own polling, but this gives instant feedback.
+  const [hidden, setHidden] = useState(() => new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [batching, setBatching] = useState(false);
 
   function toggle(id) {
+    if (selectMode) {
+      setSelected(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      return;
+    }
     setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
   }
 
@@ -4675,8 +4691,8 @@ function JobNoRegRows({ rows, onRefresh, addToast }) {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ reason: 'operator dismissed' }),
       });
+      setHidden(prev => { const n = new Set(prev); n.add(id); return n; });
       addToast('Dismissed', 'success');
-      if (onRefresh) onRefresh();
     } catch (err) { addToast('Dismiss failed: ' + (err.message || ''), 'error'); }
     finally { setActing(null); }
   }
@@ -4687,13 +4703,36 @@ function JobNoRegRows({ rows, onRefresh, addToast }) {
     setActing(id);
     try {
       await apiFetch(`/no-reg-violations/${id}/tow`, { method: 'POST' });
+      setHidden(prev => { const n = new Set(prev); n.add(id); return n; });
       addToast('Marked towed', 'success');
-      if (onRefresh) onRefresh();
     } catch (err) { addToast('Mark towed failed: ' + (err.message || ''), 'error'); }
     finally { setActing(null); }
   }
 
-  if (!rows.length) return null;
+  async function dismissSelected() {
+    if (!selected.size) return;
+    setBatching(true);
+    const ids = Array.from(selected);
+    const results = await Promise.all(ids.map(id =>
+      apiFetch(`/no-reg-violations/${id}/dismiss`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'operator dismissed (bulk)' }),
+      }).then(() => ({ id, ok: true })).catch(err => ({ id, ok: false, err }))
+    ));
+    const okIds = results.filter(r => r.ok).map(r => r.id);
+    if (okIds.length) {
+      setHidden(prev => { const n = new Set(prev); okIds.forEach(i => n.add(i)); return n; });
+    }
+    const failed = results.length - okIds.length;
+    if (failed > 0) addToast(`${okIds.length} dismissed, ${failed} failed`, 'error');
+    else addToast(`${okIds.length} dismissed`, 'success');
+    setSelected(new Set());
+    setSelectMode(false);
+    setBatching(false);
+  }
+
+  const visibleRows = rows.filter(r => !hidden.has(r._noRegId || r.id));
+  if (!visibleRows.length) return null;
 
   // "May 20, 2:11 PM" — Date and time together. Without the date the operator
   // can't tell if a sighting is from today or last week.
@@ -4701,7 +4740,8 @@ function JobNoRegRows({ rows, onRefresh, addToast }) {
     if (!iso) return '';
     return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   };
-  return rows.map(v => {
+
+  const cards = visibleRows.map(v => {
     const isOpen = !!expanded[v._noRegId || v.id];
     const isActing = acting === (v._noRegId || v.id);
     const anyActing = !!acting;
@@ -4718,13 +4758,23 @@ function JobNoRegRows({ rows, onRefresh, addToast }) {
     const bestIdx = sorted.findIndex(e => e.confidence === bestConf);
     const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
 
+    const rowId = v._noRegId || v.id;
+    const isSelected = selected.has(rowId);
     return (
-      <div key={v._noRegId || v.id} className={`job-row-paper ${stageClass}${isOpen ? ' open' : ''}`} onClick={() => toggle(v._noRegId || v.id)}>
+      <div
+        key={rowId}
+        className={`job-row-paper ${stageClass}${isOpen && !selectMode ? ' open' : ''}`}
+        onClick={() => toggle(rowId)}
+        style={isSelected ? { outline: '2px solid #3b82f6', outlineOffset: 2 } : undefined}
+      >
         <div className="jr-top-paper">
           <span className="jr-type-paper nreg">Possible no parking pass<span className="jr-stage-paper">
             · {v._origStatus === 'flagged' ? 'Flagged' : v._origStatus === 'pending' ? 'In grace' : 'Flagged'}
           </span></span>
           <span className={`jr-age-paper${ageMins != null && ageMins >= 45 ? ' urgent' : ''}`}>
+            {selectMode && (
+              <span aria-hidden="true" style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:20,height:20,marginRight:6,borderRadius:4,border:`2px solid ${isSelected ? '#3b82f6' : '#94a3b8'}`,background:isSelected ? '#3b82f6' : 'transparent',color:'#fff',fontSize:12,fontWeight:900,lineHeight:1,verticalAlign:'middle'}}>{isSelected ? '✓' : ''}</span>
+            )}
             {ageMins != null ? ageMins + ' min' : '—'}
             <span className="jr-chev-paper">›</span>
           </span>
@@ -4787,6 +4837,60 @@ function JobNoRegRows({ rows, onRefresh, addToast }) {
       </div>
     );
   });
+
+  return (
+    <>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,padding:'4px 2px 10px',flexWrap:'wrap'}}>
+        <div style={{fontSize:11,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',color:'#7c2d12'}}>
+          {visibleRows.length} pending
+        </div>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
+          {selectMode ? (
+            <>
+              <button
+                onClick={() => selected.size === visibleRows.length
+                  ? setSelected(new Set())
+                  : setSelected(new Set(visibleRows.map(r => r._noRegId || r.id)))}
+                style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
+              >{selected.size === visibleRows.length ? 'Clear' : 'Select all'}</button>
+              <button
+                onClick={() => { setSelectMode(false); setSelected(new Set()); }}
+                style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-muted)',cursor:'pointer'}}
+              >Cancel</button>
+            </>
+          ) : (
+            <button
+              onClick={() => setSelectMode(true)}
+              style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
+            >Select</button>
+          )}
+        </div>
+      </div>
+      {cards}
+      {selectMode && selected.size > 0 && (
+        <div style={{
+          position:'fixed', bottom:80, right:16, zIndex:50,
+          display:'flex',alignItems:'center',gap:10,
+          padding:'10px 14px',borderRadius:999,
+          background:'#dc2626',color:'#fff',
+          boxShadow:'0 8px 28px rgba(220,38,38,.4)',
+        }}>
+          <span style={{fontSize:13,fontWeight:800}}>{selected.size} selected</span>
+          <button
+            onClick={dismissSelected}
+            disabled={batching}
+            style={{
+              fontSize:13,fontWeight:800,padding:'7px 14px',borderRadius:999,
+              border:'1px solid rgba(255,255,255,.4)',
+              background:batching ? 'rgba(255,255,255,.2)' : 'rgba(255,255,255,.95)',
+              color:batching ? '#fff' : '#dc2626',
+              cursor:batching ? 'wait' : 'pointer',
+            }}
+          >{batching ? 'Dismissing…' : 'Dismiss selected'}</button>
+        </div>
+      )}
+    </>
+  );
 }
 
 // ── Jobs tab (current violations) ─────────────────────────────
