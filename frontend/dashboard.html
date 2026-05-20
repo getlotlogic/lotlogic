@@ -3212,11 +3212,22 @@ const db = {
   },
   async getVisitorPasses(propertyId, opts = {}) {
     if (supabase) {
-      let q = supabase.from('visitor_passes').select('*').eq('property_id', propertyId);
+      // Pull the joined first-seen plate_event so the Active Pass Tracker can
+      // show the camera snapshot of the vehicle BEFORE registration.
+      let q = supabase.from('visitor_passes')
+        .select('*, first_seen_event:plate_events!visitor_passes_first_seen_event_id_fkey(image_url, created_at)')
+        .eq('property_id', propertyId);
       if (opts.status) q = q.eq('status', opts.status);
       q = q.order('created_at', { ascending: false }).limit(opts.limit || 100);
       const { data, error } = await q;
-      if (!error && data) return data;
+      if (!error && data) {
+        // Flatten the join so callers can read p.first_seen_image_url like
+        // they do on the parking-log endpoint response.
+        return data.map(p => ({
+          ...p,
+          first_seen_image_url: p.first_seen_event?.image_url || null,
+        }));
+      }
     }
     return [];
   },
@@ -8905,6 +8916,39 @@ function ActivePassTracker({ propertyId }) {
           {p.placard_color && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',display:'inline-flex',alignItems:'center',fontWeight:700}}>{placardSwatch(p.placard_color)}<span style={{textTransform:'capitalize'}}>{p.placard_color} placard</span></span>}
         </div>
 
+        {/* Pre-registration camera capture — proof the vehicle was already on
+            the lot before the driver opened the QR form. Backfilled by the
+            backend when a camera read the plate in the 2h before registration. */}
+        {p.first_seen_image_url && (() => {
+          const leadMs = p.first_seen_at && p.created_at
+            ? new Date(p.created_at).getTime() - new Date(p.first_seen_at).getTime()
+            : 0;
+          const leadMin = Math.max(0, Math.round(leadMs / 60000));
+          const leadLabel = leadMin >= 60 ? `${Math.floor(leadMin/60)}h ${leadMin%60}m` : `${leadMin} min`;
+          return (
+            <div style={{
+              border: '1px solid rgba(245,158,11,.45)',
+              background: 'rgba(245,158,11,.08)',
+              borderRadius: 10, padding: 8,
+              display: 'flex', flexDirection: 'column', gap: 6,
+            }}>
+              <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                <span style={{fontSize:10,fontWeight:800,padding:'3px 8px',borderRadius:10,background:'#f59e0b',color:'#fff',textTransform:'uppercase',letterSpacing:'.06em'}}>
+                  Seen on camera before registering
+                </span>
+                <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:600}}>
+                  {leadMin > 0 ? `${leadLabel} earlier · ` : ''}{fmtAbsolute(p.first_seen_at)}
+                </span>
+              </div>
+              <a href={p.first_seen_image_url} target="_blank" rel="noopener noreferrer"
+                 style={{display:'block',borderRadius:6,overflow:'hidden',border:'1px solid var(--border)'}}>
+                <img src={p.first_seen_image_url} alt={`${p.plate_text} pre-registration`} loading="lazy"
+                     style={{display:'block',width:'100%',height:120,objectFit:'cover',background:'#000'}} />
+              </a>
+            </div>
+          );
+        })()}
+
         <div style={{paddingTop:10,borderTop:`1px dashed ${accentBorder}`,display:'flex',alignItems:'baseline',gap:12,flexWrap:'wrap'}}>
           <div style={{fontSize: expiring ? 20 : 16,fontWeight:800,color:plateColor,letterSpacing:'-.01em'}}>
             ⏱ {fmtRemaining(new Date(p.valid_until).getTime(), nowTick)}
@@ -9647,25 +9691,47 @@ function TruckParkingLog({ propertyId }) {
 
                 {/* First seen on lot — pre-registration camera snapshot.
                     Backfilled by the backend when a camera read the plate
-                    in the 2h before the driver registered. */}
-                {r.first_seen_image_url && (
-                  <a
-                    href={r.first_seen_image_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={`First seen on lot at ${fmtDateTime(r.first_seen_at)}`}
-                    style={{display:'block',position:'relative',borderRadius:8,overflow:'hidden',border:'1px solid var(--border)'}}
-                  >
-                    <img
-                      src={r.first_seen_image_url}
-                      alt={`${r.plate_text} first seen on lot`}
-                      style={{display:'block',width:'100%',height:140,objectFit:'cover',background:'var(--bg-inset)'}}
-                    />
-                    <div style={{position:'absolute',top:6,left:6,padding:'3px 8px',borderRadius:12,background:'rgba(0,0,0,.72)',color:'#fff',fontSize:10,fontWeight:700,letterSpacing:'.05em',textTransform:'uppercase'}}>
-                      First seen · {fmtDaysAgo(r.first_seen_at)}
+                    in the 2h before the driver registered. This proves the
+                    vehicle was already on the lot when they registered. */}
+                {r.first_seen_image_url && (() => {
+                  const leadMs = r.first_seen_at && r.created_at
+                    ? new Date(r.created_at).getTime() - new Date(r.first_seen_at).getTime()
+                    : 0;
+                  const leadMin = Math.max(0, Math.round(leadMs / 60000));
+                  const leadLabel = leadMin >= 60
+                    ? `${Math.floor(leadMin / 60)}h ${leadMin % 60}m`
+                    : `${leadMin} min`;
+                  return (
+                    <div style={{
+                      border:'1px solid rgba(245,158,11,.45)',
+                      background:'rgba(245,158,11,.06)',
+                      borderRadius:10, padding:10,
+                      display:'flex', flexDirection:'column', gap:8,
+                    }}>
+                      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                        <span style={{fontSize:11,fontWeight:800,padding:'3px 8px',borderRadius:12,background:'#f59e0b',color:'#fff',textTransform:'uppercase',letterSpacing:'.06em'}}>
+                          Seen on camera before registering
+                        </span>
+                        <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:600}}>
+                          {leadMin > 0 ? `${leadLabel} earlier · ` : ''}{fmtDateTime(r.first_seen_at)}
+                        </span>
+                      </div>
+                      <a
+                        href={r.first_seen_image_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`First seen on lot at ${fmtDateTime(r.first_seen_at)}`}
+                        style={{display:'block',position:'relative',borderRadius:8,overflow:'hidden',border:'1px solid var(--border)'}}
+                      >
+                        <img
+                          src={r.first_seen_image_url}
+                          alt={`${r.plate_text} first seen on lot`}
+                          style={{display:'block',width:'100%',height:160,objectFit:'cover',background:'var(--bg-inset)'}}
+                        />
+                      </a>
                     </div>
-                  </a>
-                )}
+                  );
+                })()}
 
                 {/* Time range */}
                 <div style={{display:'grid',gridTemplateColumns: r.exited_at ? '1fr auto 1fr auto 1fr' : '1fr auto 1fr',alignItems:'center',gap:10,padding:'10px 12px',background:'var(--bg-inset)',borderRadius:8,fontSize:11}}>
