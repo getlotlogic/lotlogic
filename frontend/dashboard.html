@@ -3819,6 +3819,13 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
+// "May 20, 2:11 PM" — date + time together. Used wherever an operator needs
+// to disambiguate today vs a past day at a glance.
+function fmtDateTime(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
 function mapsLink(address) {
   return `https://maps.google.com/?q=${encodeURIComponent(address)}`;
 }
