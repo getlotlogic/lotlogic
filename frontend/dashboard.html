@@ -9845,11 +9845,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         {(() => {
           const chips = [
             { id: 'all',     label: 'All' },
+            { id: 'noreg',   label: 'No Registration Evidence Package' },
             ...(isTruckPlaza ? [{ id: 'tracker', label: 'Active + Violations' }] : []),
             ...(isTruckPlaza ? [{ id: 'log',     label: 'Parking Log' }] : [{ id: 'log', label: 'Parking Passes' }]),
             ...(isOwner ? [{ id: 'plates',  label: isTruckPlaza ? 'Employees' : 'Plates' }] : []),
-            { id: 'cameras', label: 'Cameras' },
-            { id: 'noreg',   label: 'No-Reg' },
           ];
           return chips.map(c => {
             const active = sectionFilter === c.id;
