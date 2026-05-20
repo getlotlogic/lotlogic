@@ -6197,7 +6197,7 @@ function EarningsPage({ violations, lots, isOwner, user, onNavigate }) {
 //   • Invoices            → QB lifecycle (drafts, emails, send to QB)
 //   • Confirmation review → per-violation billing_status queues + operator
 //                           overrides (force-bill / no-tow / pause / resume).
-function InvoicesPage({ lots, partners: partnersProp, user, isOwner = true }) {
+function InvoicesPage({ lots, partners: partnersProp, user, isOwner = true, isPlatformAdmin = false }) {
   // Partners don't get the QuickBooks invoice-sending surface (that's an
   // owner-only server flow). They land straight on the Confirmation
   // Review sub-tab, which already scopes server-side via tow_company_id.
@@ -6215,6 +6215,17 @@ function InvoicesPage({ lots, partners: partnersProp, user, isOwner = true }) {
     },
   }, label);
 
+  let body;
+  if (subTab === 'tow-activity' && isPlatformAdmin) {
+    body = React.createElement(ErrorBoundary, { label: 'tow activity' },
+      React.createElement(AdminTowActivityPage));
+  } else if (isOwner && subTab === 'invoices') {
+    body = React.createElement(BillingQuickBooksView, { partnersProp, lots });
+  } else {
+    body = React.createElement(ErrorBoundary, { label: 'confirmation review' },
+      React.createElement(ConfirmationReviewView, { user, lots, partnersProp }));
+  }
+
   return React.createElement('div', { className: 'page-enter' },
     // Hide the sub-tab nav entirely for partners — they only see
     // confirmation review, no QB surface to switch to.
@@ -6226,12 +6237,9 @@ function InvoicesPage({ lots, partners: partnersProp, user, isOwner = true }) {
     },
       tabBtn('invoices', 'Invoices'),
       tabBtn('review', 'Confirmation review'),
+      isPlatformAdmin && tabBtn('tow-activity', 'Tow Activity'),
     ),
-    (isOwner && subTab === 'invoices')
-      ? React.createElement(BillingQuickBooksView, { partnersProp, lots })
-      : React.createElement(ErrorBoundary, { label: 'confirmation review' },
-          React.createElement(ConfirmationReviewView, { user, lots, partnersProp }),
-        ),
+    body,
   );
 }
 
@@ -9697,6 +9705,12 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   // SC211: Possible no parking pass violations
   const [noRegViolations, setNoRegViolations] = useState([]);
   const [noRegActing, setNoRegActing] = useState(null); // id of row being acted on
+  // Bulk-select state for the No Registration Evidence Package surface.
+  const [noRegSelectMode, setNoRegSelectMode] = useState(false);
+  const [noRegSelected, setNoRegSelected] = useState(() => new Set());
+  const [noRegBatching, setNoRegBatching] = useState(false);
+  // Per-row expand toggle. Cross-camera sightings only load when expanded.
+  const [noRegExpanded, setNoRegExpanded] = useState(() => new Set());
   const nowTick = useNowTick();
   const tempQrRef = useRef(null);
   const permQrRef = useRef(null);
@@ -9792,6 +9806,40 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
     } catch (err) {
       addToast('Mark towed failed: ' + (err.message || ''), 'error');
     } finally { setNoRegActing(null); }
+  }
+
+  async function dismissSelectedNoReg() {
+    if (!noRegSelected.size) return;
+    setNoRegBatching(true);
+    const ids = Array.from(noRegSelected);
+    const results = await Promise.all(ids.map(id =>
+      apiFetch(`/no-reg-violations/${id}/dismiss`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'operator dismissed (bulk)' }),
+      }).then(() => ({ id, ok: true })).catch(err => ({ id, ok: false, err }))
+    ));
+    const okIds = new Set(results.filter(r => r.ok).map(r => r.id));
+    setNoRegViolations(prev => prev.filter(r => !okIds.has(r.id)));
+    const failed = results.length - okIds.size;
+    if (failed > 0) addToast(`${okIds.size} dismissed, ${failed} failed`, 'error');
+    else addToast(`${okIds.size} dismissed`, 'success');
+    setNoRegSelected(new Set());
+    setNoRegSelectMode(false);
+    setNoRegBatching(false);
+  }
+  function toggleNoRegSelect(id) {
+    setNoRegSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function toggleNoRegExpand(id) {
+    setNoRegExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   }
 
   // Render the Temporary + Permanent QR codes once we know the property
@@ -10338,12 +10386,34 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                 <span className="pd-section-title">Possible no parking pass</span>
                 {flaggedCount > 0 && <span className="nreg-badge-count">{flaggedCount} flagged</span>}
               </div>
-              <div className="pd-section-meta" style={{color:'var(--red-paper)'}}>No pass found</div>
+              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                {noRegSelectMode ? (
+                  <>
+                    <button
+                      onClick={() => noRegSelected.size === noRegViolations.length
+                        ? setNoRegSelected(new Set())
+                        : setNoRegSelected(new Set(noRegViolations.map(r => r.id)))}
+                      style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
+                    >{noRegSelected.size === noRegViolations.length ? 'Clear' : 'Select all'}</button>
+                    <button
+                      onClick={() => { setNoRegSelectMode(false); setNoRegSelected(new Set()); }}
+                      style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-muted)',cursor:'pointer'}}
+                    >Cancel</button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setNoRegSelectMode(true)}
+                    style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
+                  >Select</button>
+                )}
+              </div>
             </div>
             <div className="drill-paper">
               {noRegViolations.map(row => {
                 const isActing = noRegActing === row.id;
                 const anyActing = !!noRegActing;
+                const isSelected = noRegSelected.has(row.id);
+                const isExpanded = noRegExpanded.has(row.id);
                 const strength = (row.presence_strength || '').toLowerCase();
                 const stageClass = row.status === 'flagged' ? 'stage-flagged'
                   : row.status === 'pending' ? 'stage-pending'
@@ -10361,13 +10431,25 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                 const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
                 const firstSeen = row.first_seen_at || row.created_at;
                 const ageMins = firstSeen ? Math.round((Date.now() - new Date(firstSeen)) / 60000) : null;
+                const excludeCams = evidence.map(e => e.camera_id).filter(Boolean);
                 return (
-                  <div key={row.id} className={`nr-row-paper ${stageClass}`}>
+                  <div
+                    key={row.id}
+                    className={`nr-row-paper ${stageClass}`}
+                    onClick={() => {
+                      if (noRegSelectMode) toggleNoRegSelect(row.id);
+                      else toggleNoRegExpand(row.id);
+                    }}
+                    style={isSelected ? { outline: '2px solid #3b82f6', outlineOffset: 2, cursor: 'pointer' } : { cursor: 'pointer' }}
+                  >
                     <div className="nr-row-top-paper">
                       <span className="plate-tag-paper">{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
                       <div className="nr-times-paper">
+                        {noRegSelectMode && (
+                          <span aria-hidden="true" style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:20,height:20,marginRight:6,borderRadius:4,border:`2px solid ${isSelected ? '#3b82f6' : '#94a3b8'}`,background:isSelected ? '#3b82f6' : 'transparent',color:'#fff',fontSize:12,fontWeight:900,lineHeight:1}}>{isSelected ? '✓' : ''}</span>
+                        )}
                         {ageMins != null && <span className="age">{ageMins} min ago</span>}
-                        {firstSeen && <span>First seen {fmtTime(firstSeen)}</span>}
+                        {firstSeen && <span>First seen {fmtDateTime(firstSeen)}</span>}
                       </div>
                     </div>
                     <div className="nr-meta-paper">
@@ -10375,21 +10457,30 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                       {row.status === 'flagged' && <span className="badge lingered">Flagged</span>}
                       {graceLabel && <span className="badge" style={{background:'var(--amber-bg-paper)',color:'var(--amber-paper)'}}>{graceLabel}</span>}
                       {confPct != null && <span>{confPct}% confidence</span>}
-                      {row.last_seen_at && <span>Last seen {fmtTime(row.last_seen_at)}</span>}
-                      {row.exit_seen_at && <span style={{color:'var(--green-paper)'}}>Exited {fmtTime(row.exit_seen_at)}</span>}
+                      {row.last_seen_at && <span>Last seen {fmtDateTime(row.last_seen_at)}</span>}
+                      {row.exit_seen_at && <span style={{color:'var(--green-paper)'}}>Exited {fmtDateTime(row.exit_seen_at)}</span>}
                     </div>
                     {sorted.length > 0 && (
                       <div className="nr-snaps-paper">
                         {sorted.map((ev, i) => (
-                          <div key={i} className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`}>
+                          <div key={i} className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`} onClick={e => e.stopPropagation()}>
                             {ev.url && <img src={ev.url} alt="evidence frame" loading="lazy" />}
                             <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
-                            {ev.taken_at && <span className="snt">{fmtTime(ev.taken_at)}</span>}
+                            {ev.taken_at && <span className="snt">{fmtDateTime(ev.taken_at)}</span>}
                           </div>
                         ))}
                       </div>
                     )}
-                    <div className="nr-actions-paper">
+                    {isExpanded && firstSeen && (
+                      <CrossCameraSightings
+                        plate={row.raw_plate || row.normalized_plate}
+                        propertyId={propertyId}
+                        when={firstSeen}
+                        excludeCameraIds={excludeCams}
+                        fmtDateTime={fmtDateTime}
+                      />
+                    )}
+                    <div className="nr-actions-paper" onClick={e => e.stopPropagation()}>
                       <button
                         className="btn-paper"
                         disabled={anyActing}
@@ -10407,6 +10498,28 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                 );
               })}
             </div>
+            {noRegSelectMode && noRegSelected.size > 0 && (
+              <div style={{
+                position:'fixed', bottom:80, right:16, zIndex:50,
+                display:'flex',alignItems:'center',gap:10,
+                padding:'10px 14px',borderRadius:999,
+                background:'#dc2626',color:'#fff',
+                boxShadow:'0 8px 28px rgba(220,38,38,.4)',
+              }}>
+                <span style={{fontSize:13,fontWeight:800}}>{noRegSelected.size} selected</span>
+                <button
+                  onClick={dismissSelectedNoReg}
+                  disabled={noRegBatching}
+                  style={{
+                    fontSize:13,fontWeight:800,padding:'7px 14px',borderRadius:999,
+                    border:'1px solid rgba(255,255,255,.4)',
+                    background:noRegBatching ? 'rgba(255,255,255,.2)' : 'rgba(255,255,255,.95)',
+                    color:noRegBatching ? '#fff' : '#dc2626',
+                    cursor:noRegBatching ? 'wait' : 'pointer',
+                  }}
+                >{noRegBatching ? 'Dismissing…' : 'Dismiss selected'}</button>
+              </div>
+            )}
           </div>
         );
       })()}
@@ -12511,7 +12624,6 @@ function App() {
     { id: 'training', label: 'Training', badge: trainingBadge },
     { id: 'earnings', label: 'Earnings', badge: 0 },
     { id: 'invoices', label: 'Billing',  badge: 0 },
-    ...(isPlatformAdmin ? [{ id: 'towactivity', label: 'Tow Activity', badge: 0 }] : []),
     { id: 'account',  label: 'Account',  badge: 0 },
   ] : [
     // Partner navigation. Earnings + Billing/Invoices are owner-only
@@ -12660,8 +12772,7 @@ function App() {
           {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
           {tab === 'earnings' && isOwner && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
-          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} />}
-          {tab === 'towactivity' && isPlatformAdmin && <AdminTowActivityPage />}
+          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} isPlatformAdmin={isPlatformAdmin} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
