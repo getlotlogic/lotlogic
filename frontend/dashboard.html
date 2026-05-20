@@ -4576,6 +4576,85 @@ function LoginPage({ onLogin }) {
   );
 }
 
+// ── CrossCameraSightings ──
+// Renders plate_events from cameras OTHER than the ones that fed the
+// no-reg evidence package, within ±2 min of the first-seen time. Same
+// time-window correlation we used in the audit cross-tab — surfaces the
+// vehicle's path between gates (e.g. exited north gate, parked at south
+// lot) so the operator can confirm the truck is the same physical vehicle
+// even when OCR drift split the plate across cameras.
+function CrossCameraSightings({ plate, propertyId, when, excludeCameraIds = [], fmtDateTime }) {
+  const [rows, setRows] = useState([]);
+  const [cameraNames, setCameraNames] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!supabase || !propertyId || !when) { setLoading(false); return; }
+    let cancelled = false;
+    const t = new Date(when).getTime();
+    const lo = new Date(t - 2 * 60 * 1000).toISOString();
+    const hi = new Date(t + 2 * 60 * 1000).toISOString();
+    setLoading(true);
+    (async () => {
+      // Pull every plate_event in the window for this property, then drop the
+      // cameras already represented in the no-reg evidence array.
+      const { data } = await supabase
+        .from('plate_events')
+        .select('id, created_at, normalized_plate, plate_text, confidence, image_url, camera_id')
+        .eq('property_id', propertyId)
+        .gte('created_at', lo)
+        .lte('created_at', hi)
+        .order('created_at', { ascending: true });
+      if (cancelled) return;
+      const exclude = new Set(excludeCameraIds.filter(Boolean));
+      const filtered = (data || []).filter(r => !exclude.has(r.camera_id));
+      setRows(filtered);
+      // Resolve camera names for label chips.
+      const ids = [...new Set(filtered.map(r => r.camera_id).filter(Boolean))];
+      if (ids.length) {
+        const { data: cams } = await supabase
+          .from('alpr_cameras').select('id, name').in('id', ids);
+        if (!cancelled) {
+          setCameraNames(Object.fromEntries((cams || []).map(c => [c.id, c.name])));
+        }
+      }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [propertyId, when, JSON.stringify(excludeCameraIds)]);
+
+  if (loading) return null;
+  if (!rows.length) return null;
+  return (
+    <div onClick={e => e.stopPropagation()} style={{margin:'8px 0 4px',padding:'10px 12px',background:'rgba(0,0,0,.03)',border:'1px solid rgba(0,0,0,.08)',borderRadius:8}}>
+      <div style={{fontSize:11,fontWeight:800,letterSpacing:'.05em',textTransform:'uppercase',color:'#7c2d12',marginBottom:6}}>
+        Other-camera sightings near {fmtDateTime(when)} ({rows.length})
+      </div>
+      <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4}}>
+        {rows.map(r => {
+          const delta = Math.round((new Date(r.created_at).getTime() - new Date(when).getTime()) / 1000);
+          const sign = delta >= 0 ? '+' : '−';
+          return (
+            <a key={r.id} href={r.image_url || '#'} target="_blank" rel="noopener noreferrer"
+               style={{flex:'0 0 auto',width:120,textDecoration:'none',color:'inherit',borderRadius:6,overflow:'hidden',border:'1px solid rgba(0,0,0,.12)',background:'#000'}}>
+              {r.image_url ? (
+                <img src={r.image_url} alt={r.normalized_plate} loading="lazy" style={{width:'100%',height:80,objectFit:'cover',display:'block'}} />
+              ) : (
+                <div style={{width:'100%',height:80,background:'#222'}} />
+              )}
+              <div style={{padding:'4px 6px',background:'#fff'}}>
+                <div style={{fontFamily:"'Courier New',monospace",fontSize:11,fontWeight:800,color:'#7c2d12',letterSpacing:'.04em'}}>{r.normalized_plate || '—'}</div>
+                <div style={{fontSize:9,color:'#6b7280',marginTop:1}}>{cameraNames[r.camera_id] || 'camera'} · {sign}{Math.abs(delta)}s</div>
+                <div style={{fontSize:9,color:'#6b7280'}}>{fmtDateTime(r.created_at)}</div>
+              </div>
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── JobNoRegRows — brand-v2 expandable row list for Possible no parking pass filter ──
 // Renders no-reg violations as job-row-paper cards with inline expand detail,
 // lifecycle stripe, and Dismiss / Mark Towed actions.
@@ -4616,6 +4695,12 @@ function JobNoRegRows({ rows, onRefresh, addToast }) {
 
   if (!rows.length) return null;
 
+  // "May 20, 2:11 PM" — Date and time together. Without the date the operator
+  // can't tell if a sighting is from today or last week.
+  const fmtDateTime = (iso) => {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  };
   return rows.map(v => {
     const isOpen = !!expanded[v._noRegId || v.id];
     const isActing = acting === (v._noRegId || v.id);
@@ -4649,7 +4734,7 @@ function JobNoRegRows({ rows, onRefresh, addToast }) {
           <span className="where">{v._lot_name || '—'}</span>
         </div>
         <div className="jr-bot-paper">
-          {v.detected_at && <span>First seen {fmtTime(v.detected_at)}</span>}
+          {v.detected_at && <span>First seen {fmtDateTime(v.detected_at)}</span>}
           {strength && <><span className="sep">·</span><span>{strength === 'lingered' ? 'Lingered' : 'Brief'}</span></>}
           {confPct != null && <><span className="sep">·</span><span>{confPct}% conf</span></>}
         </div>
@@ -4661,15 +4746,28 @@ function JobNoRegRows({ rows, onRefresh, addToast }) {
                 <div key={i} className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`} onClick={e => e.stopPropagation()}>
                   {ev.url && <img src={ev.url} alt="evidence" loading="lazy" />}
                   <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
-                  {ev.taken_at && <span className="snt">{fmtTime(ev.taken_at)}</span>}
+                  {ev.taken_at && <span className="snt">{fmtDateTime(ev.taken_at)}</span>}
                 </div>
               ))}
             </div>
           )}
+          {/* Cross-camera sightings — pulls plate_events on the same property
+              from any OTHER camera within ±2min of detected_at. Same logic as
+              the audit cross-tab from the session — helps the operator see the
+              vehicle's path between gates. */}
+          {isOpen && v.detected_at && v._property_id && (
+            <CrossCameraSightings
+              plate={v.plate_text}
+              propertyId={v._property_id}
+              when={v.detected_at}
+              excludeCameraIds={evidence.map(e => e.camera_id).filter(Boolean)}
+              fmtDateTime={fmtDateTime}
+            />
+          )}
           <dl className="jr-kv-paper" onClick={e => e.stopPropagation()}>
             <dt>Raw plate</dt><dd>{v.raw_plate || v.plate_text || '—'}</dd>
-            {v.last_seen_at && <><dt>Last seen</dt><dd>{fmtTime(v.last_seen_at)}</dd></>}
-            {v.exit_seen_at && <><dt>Exit</dt><dd>{fmtTime(v.exit_seen_at)}</dd></>}
+            {v.last_seen_at && <><dt>Last seen</dt><dd>{fmtDateTime(v.last_seen_at)}</dd></>}
+            {v.exit_seen_at && <><dt>Exit</dt><dd>{fmtDateTime(v.exit_seen_at)}</dd></>}
           </dl>
           <div className="jr-actions-paper" onClick={e => e.stopPropagation()}>
             <button
@@ -4722,6 +4820,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
               plate_text: r.raw_plate || r.normalized_plate || '—',
               violation_type: 'no_parking_pass',
               _noRegId: r.id,
+              _property_id: r.property_id || pid,
             })) : []))
             .catch(() => [])
         )
@@ -5328,7 +5427,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                     status: 'alerted', _origStatus: r.status, lot_id: null,
                     _lot_name: r._property_name || pid.slice(0, 8),
                     plate_text: r.raw_plate || r.normalized_plate || '—',
-                    violation_type: 'no_parking_pass', _noRegId: r.id,
+                    violation_type: 'no_parking_pass', _noRegId: r.id, _property_id: r.property_id || pid,
                   })) : []))
                   .catch(() => [])
               )
