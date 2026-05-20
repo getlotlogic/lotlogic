@@ -4862,13 +4862,10 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     if (actingRef.current) return;
     actingRef.current = true;
     setSelectedViol(null);
-    // Verify violation belongs to this user's lots before executing
-    const viol = violations.find(v => v.id === violId);
-    if (!viol || !lots.some(l => l.id === viol.lot_id)) {
-      addToast('Action denied: violation not in your lots', 'error');
-      actingRef.current = false;
-      return;
-    }
+    // Backend is the authority on tenant scope (returns 404 if the violation
+    // doesn't belong to the caller). We used to do a client-side check against
+    // the legacy `violations` + `lots` arrays here, but it false-rejected ALPR
+    // dispatches (which live in alprViolations + properties, not lots).
     setActing(violId);
     try {
       const extra = {};
