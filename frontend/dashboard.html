@@ -3123,10 +3123,19 @@ const db = {
     if (!userId) return [];
     if (supabase) {
       let q = supabase.from('properties').select('*');
-      if (role === 'partner') {
-        q = q.eq('tow_company_id', userId);
-      } else {
-        q = q.eq('owner_id', userId);
+      // Platform admins (is_platform_admin in JWT) see every property; RLS still
+      // gates non-admins via owner_id / tow_company_id policies.
+      const isAdmin = (() => {
+        try {
+          const tok = JSON.parse(localStorage.getItem('lotlogic_session') || '{}')._token;
+          if (!tok) return false;
+          const p = JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+          return !!p.is_platform_admin;
+        } catch { return false; }
+      })();
+      if (!isAdmin) {
+        if (role === 'partner') q = q.eq('tow_company_id', userId);
+        else q = q.eq('owner_id', userId);
       }
       q = q.order('created_at', { ascending: false });
       const { data, error } = await q;
