@@ -11,10 +11,12 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const GRACE_MS = 15 * 60_000;
-// Flagged rows can sit for days when the driver registers late but the cron
-// hadn't run during the window where the pass landed. Look back 7 days so
-// a late-registered pass still auto-resolves the prior flag.
-const FLAGGED_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
+// Flagged rows older than this stop being re-checked for late-arriving passes.
+// 24h is the operator-useful horizon: a driver who registers within a day of
+// being spotted is almost certainly the same trip, and after 24h there's no
+// real cleanup left to do — the row is either truly a missed pass or the
+// driver is long gone. Bounded to keep the cron query fast.
+const FLAGGED_LOOKBACK_MS = 24 * 60 * 60_000;
 const PRE_BOOK_WINDOW_MS = 30 * 60_000;
 const POST_LAST_SEEN_WINDOW_MS = 60 * 60_000;
 // When re-checking a flagged row, look back BEFORE flagged_at as well — the
