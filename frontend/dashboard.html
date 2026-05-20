@@ -8516,6 +8516,23 @@ function ActivePassTracker({ propertyId }) {
     return new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
+  // The DB stores `stay_days` as a ceil(stay_hours/24) integer (1 or 2 for the
+  // 12/24/36/48 hour options). Rendering "{stay_days}d" makes a 12h pass and a
+  // 24h pass both display as "1d", which is the bug Frank flagged. Compute the
+  // real duration from valid_from→valid_until and show hours unless it's an
+  // exact multiple of 24.
+  function stayLabel(p) {
+    if (!p?.valid_from || !p?.valid_until) {
+      // Fallback for legacy rows missing one timestamp.
+      if (p?.stay_days) return `${p.stay_days * 24}h`;
+      return null;
+    }
+    const hrs = Math.round((new Date(p.valid_until) - new Date(p.valid_from)) / 3600000);
+    if (hrs <= 0) return null;
+    if (hrs % 24 === 0) return `${hrs / 24}d`;
+    return `${hrs}h`;
+  }
+
   function placardSwatch(color) {
     if (!color) return null;
     const hex = ({ red: '#ef4444', orange: '#f97316', yellow: '#eab308', green: '#22c55e', blue: '#3b82f6', purple: '#a855f7', pink: '#ec4899', white: '#f8fafc', black: '#0f172a' })[String(color).toLowerCase()] || null;
@@ -8614,7 +8631,7 @@ function ActivePassTracker({ propertyId }) {
 
         <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
           {p.parking_spot && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Spot</span>{p.parking_spot}</span>}
-          {p.stay_days && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Stay</span>{p.stay_days}d</span>}
+          {stayLabel(p) && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Stay</span>{stayLabel(p)}</span>}
           {p.placard_color && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',display:'inline-flex',alignItems:'center',fontWeight:700}}>{placardSwatch(p.placard_color)}<span style={{textTransform:'capitalize'}}>{p.placard_color} placard</span></span>}
         </div>
 
@@ -8819,7 +8836,7 @@ function ActivePassTracker({ propertyId }) {
                   {pass.phone && <div style={{fontSize:14,color:'var(--text-primary)'}}><span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Phone</span>📞 {pass.phone}</div>}
                   <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                     {pass.parking_spot && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Spot</span>{pass.parking_spot}</span>}
-                    {pass.stay_days && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Stay</span>{pass.stay_days}d</span>}
+                    {stayLabel(pass) && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Stay</span>{stayLabel(pass)}</span>}
                     {pass.placard_color && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',display:'inline-flex',alignItems:'center',fontWeight:700}}>{placardSwatch(pass.placard_color)}<span style={{textTransform:'capitalize'}}>{pass.placard_color} placard</span></span>}
                   </div>
                   <div style={{fontSize:12,color:'#dc2626',fontWeight:700}}>
@@ -9270,7 +9287,15 @@ function TruckParkingLog({ propertyId }) {
             const driverLine = [r.visitor_name, r.company_name].filter(Boolean).join(' · ') || '—';
             const detailChips = [];
             if (r.parking_spot) detailChips.push({ label: 'Spot', value: r.parking_spot });
-            if (r.stay_days) detailChips.push({ label: 'Stay', value: `${r.stay_days}d` });
+            // Derive stay from real timestamps; fall back to stay_days*24 if missing.
+            // 12/24/36/48 hour passes ALL got stored as stay_days=1 or 2 due to ceil math,
+            // so showing "Xd" misleads — render hours unless it's an exact multiple of 24.
+            {
+              const hrs = r.valid_from && r.valid_until
+                ? Math.round((new Date(r.valid_until) - new Date(r.valid_from)) / 3600000)
+                : (r.stay_days ? r.stay_days * 24 : null);
+              if (hrs && hrs > 0) detailChips.push({ label: 'Stay', value: hrs % 24 === 0 ? `${hrs/24}d` : `${hrs}h` });
+            }
             if (r.placard_color) detailChips.push({ label: 'Placard', value: r.placard_color, swatch: true });
             return (
               <div key={r.id} style={{
@@ -9473,6 +9498,17 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   const permQrRef = useRef(null);
 
   const isTruckPlaza = property?.property_type === 'truck_plaza';
+
+  // Top-of-page section filter. Lets the operator focus on one surface
+  // (tracker, log, plates, cameras) instead of scrolling past everything.
+  // Persists across reloads.
+  const [sectionFilter, setSectionFilter] = useState(() => {
+    try { return localStorage.getItem('lotlogic_pd_section') || 'all'; } catch { return 'all'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('lotlogic_pd_section', sectionFilter); } catch {}
+  }, [sectionFilter]);
+  const showSection = (key) => sectionFilter === 'all' || sectionFilter === key;
 
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
@@ -9796,6 +9832,47 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </div>
       </div>
 
+      {/* Top section filter — pick what's visible below. Sticks to the top of
+          the property page; default "All" shows everything. */}
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 30,
+        display: 'flex', gap: 6, flexWrap: 'wrap',
+        padding: '10px 4px',
+        background: 'var(--bg-page, var(--bg-card))',
+        marginBottom: 12,
+        borderBottom: '1px solid var(--border-subtle, transparent)',
+      }}>
+        {(() => {
+          const chips = [
+            { id: 'all',     label: 'All' },
+            ...(isTruckPlaza ? [{ id: 'tracker', label: 'Active + Violations' }] : []),
+            ...(isTruckPlaza ? [{ id: 'log',     label: 'Parking Log' }] : [{ id: 'log', label: 'Parking Passes' }]),
+            ...(isOwner ? [{ id: 'plates',  label: isTruckPlaza ? 'Employees' : 'Plates' }] : []),
+            { id: 'cameras', label: 'Cameras' },
+            { id: 'noreg',   label: 'No-Reg' },
+          ];
+          return chips.map(c => {
+            const active = sectionFilter === c.id;
+            return (
+              <button key={c.id}
+                onClick={() => setSectionFilter(c.id)}
+                style={{
+                  fontSize: 12, fontWeight: 800,
+                  padding: '6px 12px', borderRadius: 999,
+                  border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                  background: active ? 'var(--accent)' : 'var(--bg-card)',
+                  color: active ? '#fff' : 'var(--text-primary)',
+                  cursor: 'pointer',
+                  letterSpacing: '.02em',
+                  whiteSpace: 'nowrap',
+                  transition: 'background .12s ease, border-color .12s ease',
+                }}
+              >{c.label}</button>
+            );
+          });
+        })()}
+      </div>
+
       {showSettings && settingsDraft && (
         <form onSubmit={handleSaveSettings} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:16,display:'flex',flexDirection:'column',gap:8}}>
           <label style={{fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Property Type</label>
@@ -9860,7 +9937,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
       {/* Permanent Plates (Employees) — owner-only. Partners only need to
           see the truck parking log; the employee allowlist is internal
           property management. */}
-      {isOwner && (() => {
+      {showSection('plates') && isOwner && (() => {
         const pendingCount = plates.filter(p => p.status === 'pending').length;
         const label = isTruckPlaza ? 'Approved Plates (Employees)' : 'Approved Plates';
         return (
@@ -9929,12 +10006,12 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
       {/* Active Pass Tracker — primary on-site plate-matching surface for
           truck plazas. Above the historical log so it's the first thing the
           eye sees on entry. */}
-      {isTruckPlaza && (
+      {showSection('tracker') && isTruckPlaza && (
         <ErrorBoundary label="active pass tracker"><ActivePassTracker propertyId={propertyId} /></ErrorBoundary>
       )}
 
       {/* Temporary Passes / Truck Parking Log — variant depends on property_type */}
-      {isTruckPlaza ? (
+      {showSection('log') && (isTruckPlaza ? (
         <>
           <div className="pd-section-head">
             <div style={{display:'flex',alignItems:'baseline',gap:8}}>
@@ -10002,10 +10079,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             </div>
           </>
         );
-      })()}
+      })())}
 
       {/* Cameras — owner-only. Partners don't manage hardware. */}
-      {isOwner && (
+      {showSection('cameras') && isOwner && (
         <>
           <div className="pd-section-head">
             <div style={{display:'flex',alignItems:'baseline',gap:8}}>
@@ -10050,7 +10127,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
       )}
 
       {/* SC211: Possible no parking pass — brand-v2 drill-down panel, inline within property detail */}
-      {noRegViolations.length > 0 && (() => {
+      {showSection('noreg') && noRegViolations.length > 0 && (() => {
         const flaggedCount = noRegViolations.filter(r => r.status === 'flagged').length;
         return (
           <div style={{marginBottom:16}}>
