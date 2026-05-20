@@ -8679,7 +8679,9 @@ function ActivePassTracker({ propertyId }) {
     }
   }
   async function removeItem(item) {
-    if (!window.confirm(`Remove ${item.plate_text} from the list?`)) return;
+    // No confirm dialog — operators asked to remove the friction. Cancel is a
+    // soft action (pass moves to cancelled status, ALPR row moves to no_tow);
+    // both can be re-issued or re-flagged if needed.
     setRemovingKey(item.key);
     const r = await removeOne(item);
     if (!r.ok) window.alert('Remove failed: ' + r.error);
@@ -8687,7 +8689,6 @@ function ActivePassTracker({ propertyId }) {
   }
   async function removeSelected() {
     if (!selectedKeys.size) return;
-    if (!window.confirm(`Remove ${selectedKeys.size} item${selectedKeys.size === 1 ? '' : 's'} from the list?`)) return;
     setBatchRemoving(true);
     // Resolve the items to remove by key against the current violationColumn.
     const itemsToRemove = violationColumn.filter(it => selectedKeys.has(it.key));
@@ -9848,7 +9849,6 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             { id: 'noreg',   label: 'No Registration Evidence Package' },
             ...(isTruckPlaza ? [{ id: 'tracker', label: 'Active + Violations' }] : []),
             ...(isTruckPlaza ? [{ id: 'log',     label: 'Parking Log' }] : [{ id: 'log', label: 'Parking Passes' }]),
-            ...(isOwner ? [{ id: 'plates',  label: isTruckPlaza ? 'Employees' : 'Plates' }] : []),
           ];
           return chips.map(c => {
             const active = sectionFilter === c.id;
