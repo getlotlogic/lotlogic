@@ -3870,7 +3870,33 @@ function fmtDateTime(iso) {
 // Returns bundles in a shape compatible with the existing no_registration_
 // violations row UI: { id, raw_plate, first_seen_at, last_seen_at, evidence,
 // presence_strength, ... } so the rendering code doesn't have to change.
-function bundleVehicleEvents(plateEvents) {
+function bundleVehicleEvents(plateEvents, verifiedPairs = []) {
+  // verifiedPairs: { plate_a, plate_b } rows from inferred_plate_pairs
+  // where verified_at IS NOT NULL AND dismissed_at IS NULL. These are
+  // operator-confirmed identities — two plate strings that belong to
+  // the SAME physical vehicle. Because license plates are unique vehicle
+  // IDs, two reads of the two plates in a verified pair within any
+  // reasonable parking-stay window can only be the same truck. So we
+  // merge them aggressively (4-hour window) without the FP risk that
+  // unverified-pair merging would carry.
+  const synonymOf = new Map(); // plate -> Set<plate>
+  for (const { plate_a, plate_b } of verifiedPairs) {
+    if (!plate_a || !plate_b) continue;
+    if (!synonymOf.has(plate_a)) synonymOf.set(plate_a, new Set([plate_a]));
+    if (!synonymOf.has(plate_b)) synonymOf.set(plate_b, new Set([plate_b]));
+    synonymOf.get(plate_a).add(plate_b);
+    synonymOf.get(plate_b).add(plate_a);
+  }
+  function platesAreSynonyms(p1, p2) {
+    if (!p1 || !p2 || p1 === p2) return p1 === p2;
+    return synonymOf.get(p1)?.has(p2) === true;
+  }
+  // 4 hours covers a typical short truck-plaza stay end-to-end (driver
+  // pulls in → registers → eats / sleeps → drives out). Reads of the
+  // two plates of a verified pair within this window collapse to one
+  // vehicle event.
+  const SYNONYM_WINDOW_SEC = 4 * 60 * 60;
+
   function lev(a, b) {
     if (!a || !b) return Math.max((a || '').length, (b || '').length);
     if (a === b) return 0;
@@ -3904,17 +3930,26 @@ function bundleVehicleEvents(plateEvents) {
     const evTs = new Date(ev.created_at).getTime() / 1000;
     const plate = ev.normalized_plate || '';
     let placed = false;
-    // Look at last 30 bundles only — cheaper than scanning all
-    for (let i = bundles.length - 1; i >= Math.max(0, bundles.length - 30); i--) {
+    // Scan back through recent bundles. The verified-synonym window
+    // (4h) means we may need to merge into a bundle several hours old,
+    // so the lookback has to cover that. 200 bundles ≈ 5h at Charlotte
+    // traffic (~40 transits/hr), comfortably past the synonym window.
+    for (let i = bundles.length - 1; i >= Math.max(0, bundles.length - 200); i--) {
       const b = bundles[i];
       const lastInCam = b.cams[ev.camera_id];
       const lastAny = Math.max(...Object.values(b.cams));
       const plateMatch = plate && [...b.plates].some(p => similar(plate, p));
+      // Verified-pair synonym match — operator-confirmed same vehicle.
+      // Safe even with a wide window because a plate is a unique
+      // vehicle ID; two reads of (plate_a, plate_b) within 4 hours
+      // can only be the same physical truck.
+      const synonymMatch = plate && [...b.plates].some(p => platesAreSynonyms(plate, p));
 
       // Same-camera continuation: short gap OR plate-similar within 60s
+      // OR verified synonym within the longer window.
       if (lastInCam !== undefined) {
         const gap = evTs - lastInCam;
-        if (gap <= 5 || (gap <= 60 && plateMatch)) {
+        if (gap <= 5 || (gap <= 60 && plateMatch) || (gap <= SYNONYM_WINDOW_SEC && synonymMatch)) {
           b.events.push(ev);
           if (plate) b.plates.add(plate);
           b.cams[ev.camera_id] = evTs;
@@ -3922,9 +3957,10 @@ function bundleVehicleEvents(plateEvents) {
           break;
         }
       }
-      // Cross-camera: this event is on a camera the bundle hasn't seen yet,
-      // and another camera's read is within 10s.
-      else if (lastAny !== undefined && (evTs - lastAny) <= 10) {
+      // Cross-camera: a camera this bundle hasn't seen yet, with another
+      // camera's read within 10s — OR within the longer window if the
+      // plates are a verified synonym pair.
+      else if (lastAny !== undefined && ((evTs - lastAny) <= 10 || ((evTs - lastAny) <= SYNONYM_WINDOW_SEC && synonymMatch))) {
         b.events.push(ev);
         if (plate) b.plates.add(plate);
         b.cams[ev.camera_id] = evTs;
@@ -9880,15 +9916,25 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
     if (!propertyId || !supabase) return;
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const { data, error } = await supabase
-        .from('plate_events')
-        .select('id, camera_id, normalized_plate, plate_text, confidence, image_url, match_status, created_at, raw_data')
-        .eq('property_id', propertyId)
-        .gte('created_at', since)
-        .order('created_at', { ascending: true })
-        .limit(2000);
-      if (error) throw error;
-      const bundles = bundleVehicleEvents(data || []);
+      const [eventsRes, pairsRes] = await Promise.all([
+        supabase
+          .from('plate_events')
+          .select('id, camera_id, normalized_plate, plate_text, confidence, image_url, match_status, created_at, raw_data')
+          .eq('property_id', propertyId)
+          .gte('created_at', since)
+          .order('created_at', { ascending: true })
+          .limit(2000),
+        // Operator-VERIFIED pairs only — heuristic-confidence pairs
+        // would carry FP risk in this wider time window.
+        supabase
+          .from('inferred_plate_pairs')
+          .select('plate_a, plate_b')
+          .eq('property_id', propertyId)
+          .not('verified_at', 'is', null)
+          .is('dismissed_at', null),
+      ]);
+      if (eventsRes.error) throw eventsRes.error;
+      const bundles = bundleVehicleEvents(eventsRes.data || [], pairsRes.data || []);
       const evidence = filterEvidencePackages(bundles)
         .sort((a, b) => new Date(b.first_seen_at) - new Date(a.first_seen_at));
       setNoRegViolations(evidence);
