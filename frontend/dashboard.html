@@ -10226,51 +10226,26 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
 
   useEffect(() => { loadNoReg(); }, [loadNoReg]);
 
-  // SC211: dismiss a no-reg violation
-  async function handleNoRegDismiss(id) {
-    if (noRegActing) return;
-    setNoRegActing(id);
-    try {
-      await apiFetch(`/no-reg-violations/${id}/dismiss`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reason: 'operator dismissed' }),
-      });
-      addToast('Dismissed', 'success');
-      setNoRegViolations(prev => prev.filter(r => r.id !== id));
-    } catch (err) {
-      addToast('Dismiss failed: ' + (err.message || ''), 'error');
-    } finally { setNoRegActing(null); }
+  // Evidence packages are FYI — dismiss is purely local (hide from operator
+  // view). No backend mutation, no notifications. Bundles also auto-clear
+  // after 24h as plate_events age out of the bundling window.
+  function handleNoRegDismiss(id) {
+    setNoRegViolations(prev => prev.filter(r => r.id !== id));
+    addToast('Hidden', 'success');
   }
 
-  // SC211: mark towed
-  async function handleNoRegTow(id) {
-    if (noRegActing) return;
-    setNoRegActing(id);
-    try {
-      await apiFetch(`/no-reg-violations/${id}/tow`, { method: 'POST' });
-      addToast('Marked towed', 'success');
-      setNoRegViolations(prev => prev.filter(r => r.id !== id));
-    } catch (err) {
-      addToast('Mark towed failed: ' + (err.message || ''), 'error');
-    } finally { setNoRegActing(null); }
-  }
+  // Mark Towed was a legacy enforcement action that doesn't apply — these
+  // are informational evidence packages, not tow-actionable violations.
+  // Stub kept so the existing render block compiles; the button itself is
+  // removed below.
+  function handleNoRegTow() {}
 
-  async function dismissSelectedNoReg() {
+  function dismissSelectedNoReg() {
     if (!noRegSelected.size) return;
     setNoRegBatching(true);
-    const ids = Array.from(noRegSelected);
-    const results = await Promise.all(ids.map(id =>
-      apiFetch(`/no-reg-violations/${id}/dismiss`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reason: 'operator dismissed (bulk)' }),
-      }).then(() => ({ id, ok: true })).catch(err => ({ id, ok: false, err }))
-    ));
-    const okIds = new Set(results.filter(r => r.ok).map(r => r.id));
-    setNoRegViolations(prev => prev.filter(r => !okIds.has(r.id)));
-    const failed = results.length - okIds.size;
-    if (failed > 0) addToast(`${okIds.size} dismissed, ${failed} failed`, 'error');
-    else addToast(`${okIds.size} dismissed`, 'success');
+    const ids = new Set(noRegSelected);
+    setNoRegViolations(prev => prev.filter(r => !ids.has(r.id)));
+    addToast(`${ids.size} hidden`, 'success');
     setNoRegSelected(new Set());
     setNoRegSelectMode(false);
     setNoRegBatching(false);
@@ -10941,13 +10916,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                         disabled={anyActing}
                         onClick={() => handleNoRegDismiss(row.id)}
                         style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
-                      >{isActing ? '…' : 'Dismiss'}</button>
-                      <button
-                        className="btn-paper primary"
-                        disabled={anyActing}
-                        onClick={() => handleNoRegTow(row.id)}
-                        style={{opacity: anyActing ? 0.6 : 1, cursor: anyActing ? 'wait' : 'pointer'}}
-                      >{isActing ? '…' : 'Mark Towed'}</button>
+                      >{isActing ? '…' : 'Hide'}</button>
                     </div>
                   </div>
                 );
