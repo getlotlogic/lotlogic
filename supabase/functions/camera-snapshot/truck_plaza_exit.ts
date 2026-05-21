@@ -165,6 +165,67 @@ async function findActiveUnexitedPass(
   return null;
 }
 
+// Cross-camera vehicle unification. When this camera's read didn't match
+// any active pass directly, look at the OTHER camera's plate_events at
+// this property within ±60s. If any of those reads matches an active pass
+// (exact OR fuzzy), treat this read as the same vehicle.
+//
+// At Charlotte, the same exiting truck triggers TS4467 (south lot) then
+// C4467 (north gate) within ~30s. Each camera sees a DIFFERENT physical
+// placard — TS4467 typically gets the front grille placard, C4467 gets
+// the rear license plate. Without this unification, the camera that
+// missed the registered placard never closes the pass.
+//
+// Safety constraints:
+//   - Time window: ±60s. Two unrelated vehicles passing both cameras
+//     within 60s is rare at a truck stop, but pick the CLOSEST in time
+//     to minimize cross-vehicle bleed.
+//   - Confidence floor: 0.4 on the cross-camera read. Lower noise.
+//   - Returns the BEST candidate (smallest |delta|, then highest confidence).
+async function findCrossCameraPassMatch(
+  db: SupabaseClient,
+  propertyId: string,
+  sourceCameraId: string,
+  eventTime: Date,
+): Promise<{ pass: PassMatch; sourceCameraId: string; sourcePlate: string; deltaSec: number } | null> {
+  const lo = new Date(eventTime.getTime() - 60_000).toISOString();
+  const hi = new Date(eventTime.getTime() + 60_000).toISOString();
+  const { data: otherReads, error } = await db
+    .from("plate_events")
+    .select("normalized_plate, created_at, confidence, camera_id")
+    .eq("property_id", propertyId)
+    .neq("camera_id", sourceCameraId)
+    .gte("created_at", lo)
+    .lte("created_at", hi)
+    .gte("confidence", 0.4)
+    .order("created_at", { ascending: true })
+    .limit(30);
+  if (error || !otherReads || otherReads.length === 0) return null;
+
+  // Sort candidates by |delta| ascending — closest in time first.
+  const ranked = otherReads
+    .filter((r) => r.normalized_plate && r.normalized_plate.length >= 4)
+    .map((r) => ({
+      plate: r.normalized_plate as string,
+      cameraId: r.camera_id as string,
+      delta: Math.abs(new Date(r.created_at as string).getTime() - eventTime.getTime()),
+    }))
+    .sort((a, b) => a.delta - b.delta);
+
+  for (const cand of ranked) {
+    const pass = await findActiveUnexitedPass(db, propertyId, cand.plate, eventTime, { exactOnly: false });
+    if (pass) {
+      return {
+        pass: { ...pass, fuzzy: true }, // tag as fuzzy — operator can review
+        sourceCameraId: cand.cameraId,
+        sourcePlate: cand.plate,
+        deltaSec: Math.round(cand.delta / 1000),
+      };
+    }
+  }
+  return null;
+}
+
 // Tow-truck sighting candidate. property.tow_company_id points at the
 // enforcement_partner whose tow_truck_plates array is consulted. Plates
 // in the array are stored raw — normalize them client-side, then compare
@@ -378,6 +439,7 @@ export async function handleTruckPlazaExit(args: {
 
   let tow: { partner_id: string } | null = null;
   let pass: PassMatch | null = null;
+  let crossCameraUnification: { sourceCameraId: string; sourcePlate: string; deltaSec: number } | null = null;
   if (resolved) {
     tow = await findTowTruckMatch(db, camera.property_id, resolved.normalized);
     if (!tow) {
@@ -388,6 +450,27 @@ export async function handleTruckPlazaExit(args: {
         db, camera.property_id, resolved.normalized, now,
         { exactOnly: lowConfPath },
       );
+      // CROSS-CAMERA UNIFICATION. If this camera's read didn't match any
+      // pass directly, a truck still might be exiting — the OTHER camera
+      // may have just read its other placard (front grille vs rear plate)
+      // and that read might match a pass. At Charlotte the same vehicle
+      // crosses TS4467 (south lot) then C4467 (north gate) within seconds
+      // and each camera sees a different physical plate. Without this
+      // unification, the pass never closes via the camera that missed
+      // the registered placard.
+      if (!pass) {
+        const xMatch = await findCrossCameraPassMatch(
+          db, camera.property_id, camera.id, now,
+        );
+        if (xMatch) {
+          pass = xMatch.pass;
+          crossCameraUnification = {
+            sourceCameraId: xMatch.sourceCameraId,
+            sourcePlate: xMatch.sourcePlate,
+            deltaSec: xMatch.deltaSec,
+          };
+        }
+      }
     }
   }
 
@@ -425,6 +508,10 @@ export async function handleTruckPlazaExit(args: {
       direction: onboard?.direction ?? null,
       pass_id: pass?.id ?? null,
       pass_match_fuzzy: fuzzyHit,
+      // Audit: was the pass match found via cross-camera unification?
+      // If yes, this stores the other camera's plate + delta so the
+      // dashboard can show "matched via other camera read X seconds away".
+      cross_camera_match: crossCameraUnification,
       overstay,
       ...(payload.rawMeta ?? {}),
     },
