@@ -140,6 +140,50 @@ serve(async (req) => {
     return json({ status: "already_sent", sms_sent_at: violation.sms_sent_at }, 200);
   }
 
+  // Last-line lifecycle guard: never dispatch a tow truck for a vehicle
+  // that has already exited (status='dismissed' from the auto-cancel path,
+  // or the linked visitor_pass already has exited_at stamped). The
+  // cron-sessions-sweep checks both before queueing, but a camera read
+  // landing between the cron's SELECT and this email send would slip
+  // through without this. Per truck-plaza pass lifecycle memory: "if we
+  // see him leave after we send a dispatch, we cancel it" — apply the
+  // same logic before sending so we never roll on a ghost.
+  if (violation.status === "dismissed") {
+    console.log(JSON.stringify({
+      skipped_dispatch: true, reason: "violation_dismissed", violation_id: violationId,
+    }));
+    return json({ ok: true, skipped: "violation_dismissed" });
+  }
+  {
+    const { data: linkedPass } = await supabase
+      .from("visitor_passes")
+      .select("exited_at, status, cancelled_at")
+      .eq("overstay_violation_id", violationId)
+      .maybeSingle();
+    if (linkedPass?.exited_at || linkedPass?.cancelled_at) {
+      console.log(JSON.stringify({
+        skipped_dispatch: true,
+        reason: "pass_exited_or_cancelled",
+        violation_id: violationId,
+        pass_exited_at: linkedPass.exited_at,
+        pass_cancelled_at: linkedPass.cancelled_at,
+        pass_status: linkedPass.status,
+      }));
+      // Mark the violation dismissed so the dispatch queue stops retrying.
+      await supabase.from("alpr_violations").update({
+        status: "dismissed",
+        action_taken: "no_tow",
+        action_channel: "auto_left_before_tow",
+        action_at: new Date().toISOString(),
+        resolved_at: new Date().toISOString(),
+        left_before_tow_at: linkedPass.exited_at ?? linkedPass.cancelled_at,
+        sms_sent_at: new Date().toISOString(),
+        left_before_tow_email_sent_at: new Date().toISOString(),
+      }).eq("id", violationId).is("sms_sent_at", null);
+      return json({ ok: true, skipped: "pass_exited_or_cancelled" });
+    }
+  }
+
   const { data: property, error: pErr } = await supabase
     .from("properties")
     .select("id, name, address, tow_company_id")
@@ -601,6 +645,26 @@ async function sendLeftBeforeTowEmail(
   resendKey: string,
   fromEmail: string,
 ): Promise<Response> {
+  // Atomic idempotency claim. Multiple invocations of this function can
+  // race (camera's fire-and-forget + the cron sweep retry, or two camera
+  // double-reads). Only the first invocation that flips
+  // left_before_tow_email_sent_at from NULL → now() wins the right to
+  // actually send the email. Everyone else returns already_sent.
+  const claimTs = new Date().toISOString();
+  const claim = await supabase
+    .from("alpr_violations")
+    .update({ left_before_tow_email_sent_at: claimTs })
+    .eq("id", violation.id)
+    .is("left_before_tow_email_sent_at", null)
+    .select("id")
+    .maybeSingle();
+  if (claim.error) {
+    return json({ error: "claim_failed", violation_id: violation.id, detail: claim.error.message }, 500);
+  }
+  if (!claim.data) {
+    return json({ status: "already_sent", violation_id: violation.id, message: "stand-down already dispatched by a concurrent invocation" }, 200);
+  }
+
   const { data: property } = await supabase
     .from("properties")
     .select("id, name, address, tow_company_id")
@@ -665,6 +729,15 @@ async function sendLeftBeforeTowEmail(
 </body></html>`;
   const sendResult = await sendViaResend(resendKey, fromEmail, partner.email, [], subject, textBody, html);
   if (!sendResult.ok) {
+    // Roll the claim back so the cron sweep can re-claim on the next tick.
+    // Without this, a failed Resend call leaves the column populated and
+    // NMLD never gets the stand-down — exactly the silent-failure mode
+    // this whole flow was designed to prevent.
+    await supabase
+      .from("alpr_violations")
+      .update({ left_before_tow_email_sent_at: null })
+      .eq("id", violation.id)
+      .eq("left_before_tow_email_sent_at", claimTs);
     return json({ error: "send_failed", violation_id: violation.id, detail: sendResult.body }, 502);
   }
   return json({ status: "stand_down_sent", violation_id: violation.id, to: partner.email, message_id: sendResult.messageId ?? null }, 200);

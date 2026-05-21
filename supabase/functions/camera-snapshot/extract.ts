@@ -56,6 +56,12 @@ export async function extractFromRequest(req: Request): Promise<Extracted | null
     if (lpr) return lpr;
     const legacy = extractMilesightPayload(obj);
     if (legacy) return legacy;
+    // Permissive fallback for unknown Milesight JSON shapes (e.g. C4467 PTZ
+    // HTTP Notification with Snapshot-attached). Walks the object looking for
+    // any base64 string that decodes to a JPEG, validated by FF D8 FF magic
+    // bytes. Camera identity falls back to the URL path's api_key.
+    const generic = extractGenericJsonPayload(obj);
+    if (generic) return generic;
     return null;
   }
 
@@ -293,6 +299,96 @@ export function extractMilesightLprPayload(obj: Record<string, unknown>): Extrac
       vehicleBrand: strOrNull("vehicle_brand"),
       detectionRegion: strOrNull("detection_region_name") || strOrNull("detection_region"),
       eventType: strOrNull("event_type"),
+    },
+  };
+}
+
+// Permissive JSON image extraction. Walks a JSON object (root + up to 3 levels
+// deep) looking for a string field that decodes from base64 to a JPEG. Used as
+// a fallback for unknown Milesight HTTP Notification payload shapes (e.g.
+// C4467 PTZ — exact schema varies by camera model and firmware). Validates
+// hits via JPEG SOI magic bytes (FF D8 FF) so random base64-looking strings
+// like auth tokens or session IDs don't get misinterpreted as images.
+function tryDecodeBase64Jpeg(s: string): Uint8Array | null {
+  // Strip data URI prefix if present (handles "data:image/jpeg;base64,..." too).
+  const m = s.match(/^data:image\/\w+;base64,(.+)$/);
+  const b64Raw = m ? m[1] : s;
+  // Cheap pre-filter — base64 chars only, length plausible for a JPEG.
+  if (b64Raw.length < 1024) return null;
+  if (!/^[A-Za-z0-9+/=\r\n\s]+$/.test(b64Raw.slice(0, 256))) return null;
+  let bytes: Uint8Array;
+  try {
+    const bin = atob(b64Raw.replace(/\s+/g, ""));
+    bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  } catch {
+    return null;
+  }
+  if (bytes.byteLength < 1024) return null;
+  // JPEG SOI: every JPEG starts with FF D8 FF.
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) return null;
+  return bytes;
+}
+
+function findMacInObject(obj: Record<string, unknown>): string | null {
+  for (const key of [
+    "mac_address", "macAddress", "mac", "MAC",
+    "device_mac", "deviceMac", "devMac",
+    "device_id", "deviceId", "sn", "serial", "serialNumber",
+  ]) {
+    const v = obj[key];
+    if (typeof v === "string" && v.length >= 6) {
+      const hex = v.toLowerCase().replace(/[^a-f0-9]/g, "");
+      // Full 12-hex MAC (with or without separators in source) — truncate
+      // anything longer (some cameras embed MAC into a longer device ID).
+      if (hex.length >= 12) return hex.slice(0, 12);
+    }
+  }
+  return null;
+}
+
+export function extractGenericJsonPayload(obj: Record<string, unknown>): Extracted | null {
+  // Depth-first walk, return first base64-decoded JPEG.
+  function walk(node: unknown, depth: number): Uint8Array | null {
+    if (depth > 3) return null;
+    if (typeof node === "string") return tryDecodeBase64Jpeg(node);
+    if (node && typeof node === "object") {
+      for (const key of Object.keys(node as Record<string, unknown>)) {
+        const hit = walk((node as Record<string, unknown>)[key], depth + 1);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+
+  const bytes = walk(obj, 0);
+  if (!bytes) return null;
+
+  // Camera identity: try root, then one level down.
+  let cameraHint = findMacInObject(obj);
+  if (!cameraHint) {
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        cameraHint = findMacInObject(v as Record<string, unknown>);
+        if (cameraHint) break;
+      }
+    }
+  }
+
+  // Preserve the JSON shape (keys only, no values) for forensics — next time
+  // we see this payload type we can add a dedicated handler keyed off these
+  // field names rather than relying on the permissive walker.
+  const rootKeys = Object.keys(obj);
+
+  return {
+    bytes,
+    cameraHint,
+    source: "milesight_json",
+    rawMeta: {
+      generic_json: {
+        root_keys: rootKeys,
+        image_bytes: bytes.byteLength,
+      },
     },
   };
 }

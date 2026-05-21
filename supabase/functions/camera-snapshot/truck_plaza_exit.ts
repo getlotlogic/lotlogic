@@ -568,11 +568,24 @@ export async function handleTruckPlazaExit(args: {
   // both cancelled AND camera-exited, confusing the dashboard and
   // breaking the close-clean flow. exited_at IS NULL is necessary too:
   // another flusher may have stamped exit already (e.g. weak_reads).
+  //
+  // STATUS TRANSITION: we now flip status='cancelled' on every camera
+  // exit per the truck-plaza pass lifecycle (see
+  // memory/project_truck_plaza_pass_lifecycle.md). The user-facing rule
+  // is "we cancel the parking pass when the camera sees them leave."
+  // Previously status stayed 'active' until pass_expiry.py noticed
+  // valid_until had passed — that left a window where downstream checks
+  // (cooldown, re-registration, pre-flight check-active) treated an
+  // exited truck as still on the lot. cancelled_by='camera_exit'
+  // distinguishes auto-cancels from operator overrides.
   const upd = await db.from("visitor_passes")
     .update({
       exited_at: now.toISOString(),
       exited_via_camera_id: camera.id,
       exited_via_plate_event_id: plateEventId,
+      status: "cancelled",
+      cancelled_at: now.toISOString(),
+      cancelled_by: "camera_exit",
       // overstay_violation_id already correct from the race-safe
       // branches above. Don't touch it here.
     })

@@ -59,6 +59,7 @@ Deno.serve(async (_req: Request) => {
     const passOverstay = await sweepUnexitedPassesForOverstay();
     const weakReads = await sweepWeakPlateReads();
     const dispatch = await dispatchPendingViolations();
+    const standDowns = await sweepPendingStandDowns();
     const closedRegistered = await closeRegistered();
     const closedResident = await closeResident();
     const closedExpired = await closeExpired();
@@ -72,6 +73,8 @@ Deno.serve(async (_req: Request) => {
       weak_reads_flushed: weakReads,
       dispatched: dispatch.dispatched,
       auto_no_tow_left_before_tow: dispatch.left_before_tow,
+      stand_downs_sent: standDowns.sent,
+      stand_downs_failed: standDowns.failed,
       closed_registered: closedRegistered,
       closed_resident: closedResident,
       closed_expired: closedExpired,
@@ -515,9 +518,15 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
   const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
 
   for (const v of pending) {
-    // The session_id-keyed exit_hinted_at suppression only applies to the
-    // legacy apartment session pipeline. Truck-plaza overstays (and other
-    // session-less violations) skip that step but MUST still dispatch.
+    // Two parallel "vehicle already left" signals — both suppress dispatch:
+    //   1. session_id → plate_sessions.exit_hinted_at  (legacy apartment pipeline)
+    //   2. session-less → visitor_passes.exited_at via overstay_violation_id
+    //      (truck-plaza overstays inserted by sweepUnexitedPassesForOverstay
+    //       have session_id IS NULL. Without this lookup, dispatch fires
+    //       for trucks that the camera stamped as exited during the 5-min
+    //       DISPATCH_HOLD window. Per the truck-plaza pass lifecycle
+    //       memory: "if we see him leave after we send a dispatch, we
+    //       cancel it" — same applies BEFORE dispatch sends.)
     let sessionExitHinted: string | null = null;
     if (v.session_id) {
       const { data: sess, error: sErr } = await db
@@ -528,11 +537,22 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
       if (sErr) { console.warn("dispatchPending session fetch failed:", sErr.message); continue; }
       sessionExitHinted = sess?.exit_hinted_at ?? null;
     }
+    let passExitedAt: string | null = null;
+    if (!sessionExitHinted) {
+      const { data: linkedPass } = await db
+        .from("visitor_passes")
+        .select("exited_at")
+        .eq("overstay_violation_id", v.id)
+        .maybeSingle();
+      passExitedAt = linkedPass?.exited_at ?? null;
+    }
 
-    if (sessionExitHinted) {
+    const exitSignal = sessionExitHinted ?? passExitedAt;
+    if (exitSignal) {
       // Truck was seen heading out during the post-violation hold —
       // they left before Frank would have rolled. Suppress the dispatch
-      // and stamp the audit flag.
+      // and stamp the audit flag. NO email fires here (dispatch never
+      // went out, so there's nothing to stand down).
       const upd = await db
         .from("alpr_violations")
         .update({
@@ -543,12 +563,15 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
           action_channel: "auto_left_before_tow",
           action_at: new Date().toISOString(),
           resolved_at: new Date().toISOString(),
+          // Pre-claim the stand-down slot so the stand-down sweep skips
+          // this row — nothing was dispatched, nothing to undispatch.
+          left_before_tow_email_sent_at: new Date().toISOString(),
         })
         .eq("id", v.id)
         .is("sms_sent_at", null);
       if (upd.error) console.warn(`auto-no-tow update failed for ${v.id}: ${upd.error.message}`);
       else {
-        console.log(`auto_no_tow violation=${v.id} session=${v.session_id} exit_hinted_at=${sessionExitHinted}`);
+        console.log(`auto_no_tow violation=${v.id} session=${v.session_id ?? "null"} signal=${sessionExitHinted ? "session_exit" : "pass_exited"} at=${exitSignal}`);
         leftBeforeTow++;
       }
       continue;
@@ -579,6 +602,62 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
 }
 
 // Increment dispatch_attempts; on cap-hit, stamp a sentinel sms_sent_at
+// Stand-down sweep — retries until claim.
+//
+// When the camera sees a truck exit AFTER a dispatch email already fired,
+// truck_plaza_exit.ts marks the violation status='dismissed' +
+// left_before_tow_at=now, and fires `notifyLeftBeforeTow` as fire-and-forget
+// to tow-dispatch-email. If that one-shot fetch failed (Resend 5xx,
+// cold-start timeout, network blip), NMLD never gets the stand-down and
+// rolls a truck on a ghost. This sweep is the safety net.
+//
+// Selects any violation where:
+//   - sms_sent_at IS NOT NULL          (original dispatch went out)
+//   - left_before_tow_at IS NOT NULL   (camera-confirmed exit)
+//   - left_before_tow_email_sent_at IS NULL  (stand-down email not yet acked)
+// Fires tow-dispatch-email with notification_kind=left_before_tow. The
+// edge function atomically claims left_before_tow_email_sent_at on success.
+// On failure, the column stays NULL and next tick retries.
+async function sweepPendingStandDowns(): Promise<{ sent: number; failed: number }> {
+  const { data: pending, error } = await db
+    .from("alpr_violations")
+    .select("id")
+    .not("sms_sent_at", "is", null)
+    .not("left_before_tow_at", "is", null)
+    .is("left_before_tow_email_sent_at", null)
+    .limit(50);
+  if (error) {
+    console.warn(`sweepPendingStandDowns select failed: ${error.message}`);
+    return { sent: 0, failed: 0 };
+  }
+  if (!pending || pending.length === 0) return { sent: 0, failed: 0 };
+
+  let sent = 0;
+  let failed = 0;
+  const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
+  for (const v of pending) {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/tow-dispatch-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${internalToken}` },
+        body: JSON.stringify({ violation_id: v.id, notification_kind: "left_before_tow" }),
+      });
+      if (res.ok) {
+        sent++;
+        console.log(`stand_down_sent violation=${v.id}`);
+      } else {
+        failed++;
+        const body = await res.text().catch(() => "");
+        console.warn(`stand_down_send failed violation=${v.id} status=${res.status} body=${body.slice(0, 200)}`);
+      }
+    } catch (err) {
+      failed++;
+      console.warn(`stand_down_send threw violation=${v.id} err=${String(err).slice(0, 200)}`);
+    }
+  }
+  return { sent, failed };
+}
+
 // + status='dispatch_failed' so the row stops being re-tried and shows
 // up in the operator dashboard for manual review.
 async function failDispatch(violationId: string, currentAttempts: number, errMsg: string): Promise<void> {
