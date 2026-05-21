@@ -226,6 +226,51 @@ async function findCrossCameraPassMatch(
   return null;
 }
 
+// Verified-pair exit. Last-resort fallback: when both direct match and
+// the ±60s cross-camera unification failed, check operator-VERIFIED pairs
+// in inferred_plate_pairs. If this read's plate is one side of a verified
+// pair and the OTHER side matches an active pass, close that pass.
+//
+// This is the consumption of the operator's training labels. A pair
+// becomes verified only when an operator visually confirmed in the
+// Training tab that the two plate strings are the same truck. Without
+// this branch, those labels are just stored — they don't close
+// anything.
+//
+// Safety: verified_at is required (not just high confidence). Operator
+// ground truth > heuristic confidence. Dismissed pairs are excluded by
+// the dismissed_at IS NULL filter (defense-in-depth — they're already
+// frozen by the upsert RPC, but never read them here either).
+async function findVerifiedPairPassMatch(
+  db: SupabaseClient,
+  propertyId: string,
+  plate: string,
+  eventTime: Date,
+): Promise<{ pass: PassMatch; pairedPlate: string; pairId: string; verifiedBy: string | null } | null> {
+  const { data: pairs, error } = await db
+    .from("inferred_plate_pairs")
+    .select("id, plate_a, plate_b, verified_at, verified_by")
+    .eq("property_id", propertyId)
+    .not("verified_at", "is", null)
+    .is("dismissed_at", null)
+    .or(`plate_a.eq.${plate},plate_b.eq.${plate}`);
+  if (error || !pairs || pairs.length === 0) return null;
+
+  for (const p of pairs) {
+    const partnerPlate = p.plate_a === plate ? p.plate_b : p.plate_a;
+    const pass = await findActiveUnexitedPass(db, propertyId, partnerPlate, eventTime, { exactOnly: true });
+    if (pass) {
+      return {
+        pass: { ...pass, fuzzy: true }, // tag fuzzy for audit; the link is the verified pair
+        pairedPlate: partnerPlate,
+        pairId: p.id,
+        verifiedBy: p.verified_by ?? null,
+      };
+    }
+  }
+  return null;
+}
+
 // Tow-truck sighting candidate. property.tow_company_id points at the
 // enforcement_partner whose tow_truck_plates array is consulted. Plates
 // in the array are stored raw — normalize them client-side, then compare
@@ -440,6 +485,7 @@ export async function handleTruckPlazaExit(args: {
   let tow: { partner_id: string } | null = null;
   let pass: PassMatch | null = null;
   let crossCameraUnification: { sourceCameraId: string; sourcePlate: string; deltaSec: number } | null = null;
+  let verifiedPairMatch: { pairedPlate: string; pairId: string; verifiedBy: string | null } | null = null;
   if (resolved) {
     tow = await findTowTruckMatch(db, camera.property_id, resolved.normalized);
     if (!tow) {
@@ -468,6 +514,25 @@ export async function handleTruckPlazaExit(args: {
             sourceCameraId: xMatch.sourceCameraId,
             sourcePlate: xMatch.sourcePlate,
             deltaSec: xMatch.deltaSec,
+          };
+        }
+      }
+      // VERIFIED-PAIR FALLBACK. The cross-camera ±60s window misses cases
+      // where the other camera fired more than a minute ago, OR didn't
+      // fire at all on this transit. If the operator has previously
+      // verified that this plate pairs with another (Training tab → ✓
+      // Same truck), and that paired plate matches an active pass, close
+      // it. Operator ground truth > time-window heuristics.
+      if (!pass) {
+        const vMatch = await findVerifiedPairPassMatch(
+          db, camera.property_id, resolved.normalized, now,
+        );
+        if (vMatch) {
+          pass = vMatch.pass;
+          verifiedPairMatch = {
+            pairedPlate: vMatch.pairedPlate,
+            pairId: vMatch.pairId,
+            verifiedBy: vMatch.verifiedBy,
           };
         }
       }
@@ -512,6 +577,11 @@ export async function handleTruckPlazaExit(args: {
       // If yes, this stores the other camera's plate + delta so the
       // dashboard can show "matched via other camera read X seconds away".
       cross_camera_match: crossCameraUnification,
+      // Audit: was the pass match found via an operator-verified pair?
+      // If yes, this stores the paired plate + pair id + verifier so the
+      // dashboard can show "matched via verified pair NH7016 ↔ DC41892
+      // (verified by victor@…)".
+      verified_pair_match: verifiedPairMatch,
       overstay,
       ...(payload.rawMeta ?? {}),
     },
@@ -665,6 +735,15 @@ export async function handleTruckPlazaExit(args: {
   // (cooldown, re-registration, pre-flight check-active) treated an
   // exited truck as still on the lot. cancelled_by='camera_exit'
   // distinguishes auto-cancels from operator overrides.
+  //
+  // If this exit was found via a verified pair, mark the pair as resolved
+  // so the dashboard can show "this verified pair closed a pass" — and
+  // future analytics can see how operator labels are paying off.
+  if (verifiedPairMatch) {
+    await db.from("inferred_plate_pairs")
+      .update({ resolved_pass_id: pass!.id, resolved_at: now.toISOString() })
+      .eq("id", verifiedPairMatch.pairId);
+  }
   const upd = await db.from("visitor_passes")
     .update({
       exited_at: now.toISOString(),
