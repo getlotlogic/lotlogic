@@ -38,7 +38,12 @@ const LOOKBACK_MS = 10 * 60 * 1000;
 // what the operator sees and what we learn from agree.
 const SAME_CAM_GAP_SEC = 5;
 const SAME_CAM_PLATE_SIMILAR_GAP_SEC = 60;
-const CROSS_CAM_GAP_SEC = 10;
+// 15s was empirically validated against 44 operator-labeled pairs: 30/32
+// pairs in this window were true positives (94% precision), capturing
+// 88% of verified pairs vs 68% at 10s and no additional false positives
+// vs 10s. Going to 20s reintroduces back-to-back-truck FPs (4 instead
+// of 2). See state-of-the-union notes 2026-05-21.
+const CROSS_CAM_GAP_SEC = 15;
 
 // Confidence floor on a single read before it's eligible to contribute to a
 // modal vote. Below this the read is mostly noise.
