@@ -10829,7 +10829,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               // Pick representative: prefer the highest-confidence non-suppressed
               // event (the canonical PR read), fall back to the most recent.
               const canonical = grp
-                .filter(e => e.match_status !== 'dedup_suppressed' && e.match_status !== 'sidecar_rejected')
+                .filter(e => e.match_status !== 'dedup_suppressed')
                 .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0]
                 || grp.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
               const groupCount = grp.length;
@@ -11316,14 +11316,6 @@ function AdminTowActivityPage() {
   );
 }
 
-// Two modes:
-//   "rejected" — sidecar-rejected frames. User confirms the gate was
-//     right (junk) or flags a missed plate (real_plate too aggressive).
-//   "detected" — frames where PR (or sidecar) returned a plate. User
-//     confirms it's actually a plate (real_plate) or flags a misread
-//     trailer number / decal / sign (false_positive).
-// Labels are written to raw_data.operator_label and feed the
-// training-curator agent which auto-tunes the sidecar gate.
 function TrainingPage({ user, isOwner }) {
   // Operator review of cross-camera plate pairs. The cron-plate-pair-learn
   // edge function populates inferred_plate_pairs every 60s from
