@@ -11432,6 +11432,15 @@ function TrainingPage({ user, isOwner }) {
   }, [filter]);
   useEffect(() => { load(); }, [load]);
 
+  // Auto-refresh every 60s to match cron-plate-pair-learn cadence. New
+  // pairs land in the table within ~1 minute of a truck transiting both
+  // cameras; this surface should show them without the operator having
+  // to reload.
+  useEffect(() => {
+    const t = setInterval(() => { load(); }, 60_000);
+    return () => clearInterval(t);
+  }, [load]);
+
   async function setPairState(id, patch, toastMsg) {
     if (!supabase) return;
     setActing(id);
