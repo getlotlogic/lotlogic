@@ -521,67 +521,11 @@ export async function handleTruckPlazaExit(args: {
   if (evIns.error) throw evIns.error;
   const plateEventId = evIns.data.id as string;
 
-  // 5b. No tow + no pass → also write/refresh a no_registration_violations row
-  //     so the dashboard's "No Registration Evidence Package" surface fills up.
-  //
-  //     Why this code exists: the bypassSidecarGate path (used at Charlotte)
-  //     skips the weak_plate_reads → flushGroup pipeline that normally creates
-  //     these rows. Without this branch, unmatched reads only land in
-  //     plate_events.match_status='unmatched' and the no-reg dashboard surface
-  //     stays permanently empty.
-  //
-  //     Behavior: find an open no_reg for this (property, normalized_plate)
-  //     within the last 60 min; if found, append evidence; otherwise insert
-  //     fresh with status='pending'. cron-no-reg-sweep transitions
-  //     pending → flagged after the 15-min grace window.
+  // 5b. No tow + no pass → return the drop, but the plate_event row above
+  //     is now durable. Later visitor_pass registrations at this property
+  //     can backfill it as the "first seen on lot" image when their
+  //     normalized plate matches (exact or fuzzy).
   if (!tow && !pass) {
-    try {
-      const lookback = new Date(now.getTime() - 60 * 60_000).toISOString();
-      const existing = await db.from("no_registration_violations")
-        .select("id, evidence, last_seen_at, best_confidence, presence_strength")
-        .eq("property_id", camera.property_id)
-        .eq("normalized_plate", resolved.normalized)
-        .in("status", ["pending", "flagged"])
-        .gt("last_seen_at", lookback)
-        .order("last_seen_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const evidenceItem = {
-        url: imageUrl,
-        taken_at: now.toISOString(),
-        confidence: resolved.confidence,
-        camera_id: camera.id,
-        source: resolved.source === "onboard" ? "sidecar" : "pr_cloud",
-      };
-      if (existing.data) {
-        // Same vehicle still on property — append evidence (cap at 20).
-        const prevEvidence = Array.isArray(existing.data.evidence) ? existing.data.evidence : [];
-        const merged = [...prevEvidence, evidenceItem].slice(-20);
-        const linger = (new Date(now).getTime() - new Date(existing.data.last_seen_at as string).getTime()) >= 10_000;
-        await db.from("no_registration_violations").update({
-          last_seen_at: now.toISOString(),
-          best_confidence: Math.max(existing.data.best_confidence ?? 0, resolved.confidence),
-          evidence: merged,
-          presence_strength: linger ? "lingered" : (existing.data.presence_strength ?? "brief"),
-        }).eq("id", existing.data.id);
-      } else {
-        await db.from("no_registration_violations").insert({
-          property_id: camera.property_id,
-          normalized_plate: resolved.normalized,
-          raw_plate: resolved.raw.toUpperCase(),
-          first_seen_at: now.toISOString(),
-          last_seen_at: now.toISOString(),
-          best_confidence: resolved.confidence,
-          presence_strength: "brief",
-          status: "pending",
-          evidence: [evidenceItem],
-          weak_read_ids: [],
-        });
-      }
-    } catch (e) {
-      // Best-effort: a failure here must not break the plate-events pipeline.
-      console.warn(`no_reg insert/update failed plate=${resolved.normalized}: ${e instanceof Error ? e.message : String(e)}`);
-    }
     return { outcome: "dropped", reason: "no_match_onboard" };
   }
 
