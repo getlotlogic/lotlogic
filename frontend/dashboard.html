@@ -5108,38 +5108,13 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
 
   const { addToast } = useToast();
 
-  // SC211: flagged no-reg violations mapped into job-row shape for the filter pill
+  // Legacy: this used to fetch /no-reg-violations across all properties to
+  // populate the JobsPage "Possible no parking pass" chip filter. The
+  // canonical evidence-package surface is now the property-detail page
+  // (vehicle-event bundling). Fetcher removed; setter kept because four
+  // legacy inline handlers below still reference it (they no-op safely on
+  // an empty list). Chip filter + inline rows are deleted in a follow-up.
   const [noRegRows, setNoRegRows] = useState([]);
-  useEffect(() => {
-    if (!user) return;
-    // Fetch flagged no-reg violations for all accessible properties
-    db._getPropertyIds(user.id, user._role).then(propIds => {
-      if (!propIds.length) return;
-      return Promise.all(
-        propIds.map(pid =>
-          apiFetch(`/no-reg-violations?property_id=${pid}&status=flagged`)
-            .then(rows => (Array.isArray(rows) ? rows.map(r => ({
-              ...r,
-              _isNoReg: true,
-              detected_at: r.first_seen_at || r.created_at,
-              status: 'alerted',
-              _origStatus: r.status,
-              lot_id: null,
-              _lot_name: r._property_name || pid.slice(0, 8),
-              plate_text: r.raw_plate || r.normalized_plate || '—',
-              violation_type: 'no_parking_pass',
-              _noRegId: r.id,
-              _property_id: r.property_id || pid,
-            })) : []))
-            .catch(() => [])
-        )
-      ).then(arrays => {
-        const flat = arrays.flat();
-        flat.sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
-        setNoRegRows(flat);
-      });
-    }).catch(() => {});
-  }, [user]);
 
   // Auto-select violation from SMS deep link
   useEffect(() => {
@@ -5773,32 +5748,12 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
           )}
         </div>
       ) : filter === 'nreg' ? (
-        /* Brand-v2 expandable rows for the Possible no parking pass filter */
-        <JobNoRegRows rows={filteredActive} onRefresh={() => {
-          // Re-fetch the noRegRows by re-triggering the effect
-          setNoRegRows([]);
-          if (!user) return;
-          db._getPropertyIds(user.id, user._role).then(propIds => {
-            if (!propIds.length) return;
-            Promise.all(
-              propIds.map(pid =>
-                apiFetch(`/no-reg-violations?property_id=${pid}&status=flagged`)
-                  .then(rows => (Array.isArray(rows) ? rows.map(r => ({
-                    ...r, _isNoReg: true, detected_at: r.first_seen_at || r.created_at,
-                    status: 'alerted', _origStatus: r.status, lot_id: null,
-                    _lot_name: r._property_name || pid.slice(0, 8),
-                    plate_text: r.raw_plate || r.normalized_plate || '—',
-                    violation_type: 'no_parking_pass', _noRegId: r.id, _property_id: r.property_id || pid,
-                  })) : []))
-                  .catch(() => [])
-              )
-            ).then(arrays => {
-              const flat = arrays.flat();
-              flat.sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
-              setNoRegRows(flat);
-            });
-          }).catch(() => {});
-        }} addToast={addToast} />
+        /* Legacy "Possible no parking pass" filter — empty by design now.
+           Evidence packages live on the property-detail page (vehicle-event
+           bundling). The chip + JobNoRegRows are being retired in a follow-up
+           commit; for now this branch renders an empty list rather than
+           re-fetching from the dead /no-reg-violations endpoint. */
+        <JobNoRegRows rows={[]} onRefresh={() => {}} addToast={addToast} />
       ) : (
         filteredActive.map((v, idx) => {
           const lot = lotMap[v.lot_id];
