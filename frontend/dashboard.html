@@ -4842,261 +4842,6 @@ function CrossCameraSightings({ plate, propertyId, when, excludeCameraIds = [], 
   );
 }
 
-// ── JobNoRegRows — brand-v2 expandable row list for Possible no parking pass filter ──
-// Renders no-reg violations as job-row-paper cards with inline expand detail,
-// lifecycle stripe, and Dismiss / Mark Towed actions.
-function JobNoRegRows({ rows, onRefresh, addToast }) {
-  const [expanded, setExpanded] = useState({}); // { [id]: bool }
-  const [acting, setActing] = useState(null);
-  // Locally-hidden rows so dismiss/tow doesn't have to re-fetch the parent
-  // list (which scrolls the page back to the top). The parent eventually
-  // reconciles via its own polling, but this gives instant feedback.
-  const [hidden, setHidden] = useState(() => new Set());
-  const [selectMode, setSelectMode] = useState(false);
-  const [selected, setSelected] = useState(() => new Set());
-  const [batching, setBatching] = useState(false);
-
-  function toggle(id) {
-    if (selectMode) {
-      setSelected(prev => {
-        const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      });
-      return;
-    }
-    setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
-  }
-
-  async function handleDismiss(e, id) {
-    e.stopPropagation();
-    if (acting) return;
-    setActing(id);
-    try {
-      await apiFetch(`/no-reg-violations/${id}/dismiss`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reason: 'operator dismissed' }),
-      });
-      setHidden(prev => { const n = new Set(prev); n.add(id); return n; });
-      addToast('Dismissed', 'success');
-    } catch (err) { addToast('Dismiss failed: ' + (err.message || ''), 'error'); }
-    finally { setActing(null); }
-  }
-
-  async function handleTow(e, id) {
-    e.stopPropagation();
-    if (acting) return;
-    setActing(id);
-    try {
-      await apiFetch(`/no-reg-violations/${id}/tow`, { method: 'POST' });
-      setHidden(prev => { const n = new Set(prev); n.add(id); return n; });
-      addToast('Marked towed', 'success');
-    } catch (err) { addToast('Mark towed failed: ' + (err.message || ''), 'error'); }
-    finally { setActing(null); }
-  }
-
-  async function dismissSelected() {
-    if (!selected.size) return;
-    setBatching(true);
-    const ids = Array.from(selected);
-    const results = await Promise.all(ids.map(id =>
-      apiFetch(`/no-reg-violations/${id}/dismiss`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reason: 'operator dismissed (bulk)' }),
-      }).then(() => ({ id, ok: true })).catch(err => ({ id, ok: false, err }))
-    ));
-    const okIds = results.filter(r => r.ok).map(r => r.id);
-    if (okIds.length) {
-      setHidden(prev => { const n = new Set(prev); okIds.forEach(i => n.add(i)); return n; });
-    }
-    const failed = results.length - okIds.length;
-    if (failed > 0) addToast(`${okIds.length} dismissed, ${failed} failed`, 'error');
-    else addToast(`${okIds.length} dismissed`, 'success');
-    setSelected(new Set());
-    setSelectMode(false);
-    setBatching(false);
-  }
-
-  const visibleRows = rows.filter(r => !hidden.has(r._noRegId || r.id));
-  if (!visibleRows.length) return null;
-
-  // "May 20, 2:11 PM" — Date and time together. Without the date the operator
-  // can't tell if a sighting is from today or last week.
-  const fmtDateTime = (iso) => {
-    if (!iso) return '';
-    return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  };
-
-  // Lightbox state shared across all cards in this list. { snaps, startIndex, plate }
-  const [snapLightbox, setSnapLightbox] = useState(null);
-
-  const cards = visibleRows.map(v => {
-    const isOpen = !!expanded[v._noRegId || v.id];
-    const isActing = acting === (v._noRegId || v.id);
-    const anyActing = !!acting;
-    // Lifecycle stripe: flagged = red, pending/alerted = amber
-    const stageClass = v._origStatus === 'flagged' || v.status === 'alerted' ? 'stage-flagged'
-      : v._origStatus === 'pending' ? 'stage-pending'
-      : 'stage-dismissed';
-    const ageMins = v.detected_at ? Math.round((Date.now() - new Date(v.detected_at)) / 60000) : null;
-    const strength = (v.presence_strength || '').toLowerCase();
-    // Evidence
-    const evidence = Array.isArray(v.evidence) ? v.evidence : [];
-    const bestConf = v.best_confidence;
-    const sorted = evidence.slice().sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, 4);
-    const bestIdx = sorted.findIndex(e => e.confidence === bestConf);
-    const confPct = bestConf != null ? Math.round(bestConf * (bestConf <= 1 ? 100 : 1)) : null;
-
-    const rowId = v._noRegId || v.id;
-    const isSelected = selected.has(rowId);
-    return (
-      <div
-        key={rowId}
-        className={`job-row-paper ${stageClass}${isOpen && !selectMode ? ' open' : ''}`}
-        onClick={() => toggle(rowId)}
-        style={isSelected ? { outline: '2px solid #3b82f6', outlineOffset: 2 } : undefined}
-      >
-        <div className="jr-top-paper">
-          <span className="jr-type-paper nreg">Possible no parking pass<span className="jr-stage-paper">
-            · {v._origStatus === 'flagged' ? 'Flagged' : v._origStatus === 'pending' ? 'In grace' : 'Flagged'}
-          </span></span>
-          <span className={`jr-age-paper${ageMins != null && ageMins >= 45 ? ' urgent' : ''}`}>
-            {selectMode && (
-              <span aria-hidden="true" style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:20,height:20,marginRight:6,borderRadius:4,border:`2px solid ${isSelected ? '#3b82f6' : '#94a3b8'}`,background:isSelected ? '#3b82f6' : 'transparent',color:'#fff',fontSize:12,fontWeight:900,lineHeight:1,verticalAlign:'middle'}}>{isSelected ? '✓' : ''}</span>
-            )}
-            {ageMins != null ? ageMins + ' min' : '—'}
-            <span className="jr-chev-paper">›</span>
-          </span>
-        </div>
-        <div className="jr-mid-paper">
-          <span className="plate-tag-paper" style={{fontSize:14,padding:'5px 9px'}}>{(v.plate_text || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
-          <span className="where">{v._lot_name || '—'}</span>
-        </div>
-        <div className="jr-bot-paper">
-          {v.detected_at && <span>First seen {fmtDateTime(v.detected_at)}</span>}
-          {strength && <><span className="sep">·</span><span>{strength === 'lingered' ? 'Lingered' : 'Brief'}</span></>}
-          {confPct != null && <><span className="sep">·</span><span>{confPct}% conf</span></>}
-        </div>
-        {/* Inline expand detail */}
-        <div className="jr-expand-paper">
-          {sorted.length > 0 && (
-            <div className="jr-snaps-paper">
-              {sorted.map((ev, i) => (
-                <div
-                  key={i}
-                  className={`nr-snap-paper${bestIdx === i ? ' best' : ''}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={e => { e.stopPropagation(); setSnapLightbox({ snaps: sorted, startIndex: i, plate: v.plate_text }); }}
-                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setSnapLightbox({ snaps: sorted, startIndex: i, plate: v.plate_text }); } }}
-                >
-                  {ev.url && <img src={ev.url} alt="evidence" loading="lazy" />}
-                  <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
-                  {ev.taken_at && <span className="snt">{fmtDateTime(ev.taken_at)}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-          {/* Cross-camera sightings — pulls plate_events on the same property
-              from any OTHER camera within ±2min of detected_at. Same logic as
-              the audit cross-tab from the session — helps the operator see the
-              vehicle's path between gates. */}
-          {isOpen && v.detected_at && v._property_id && (
-            <CrossCameraSightings
-              plate={v.plate_text}
-              propertyId={v._property_id}
-              when={v.detected_at}
-              excludeCameraIds={evidence.map(e => e.camera_id).filter(Boolean)}
-              fmtDateTime={fmtDateTime}
-            />
-          )}
-          <dl className="jr-kv-paper" onClick={e => e.stopPropagation()}>
-            <dt>Raw plate</dt><dd>{v.raw_plate || v.plate_text || '—'}</dd>
-            {v.last_seen_at && <><dt>Last seen</dt><dd>{fmtDateTime(v.last_seen_at)}</dd></>}
-            {v.exit_seen_at && <><dt>Exit</dt><dd>{fmtDateTime(v.exit_seen_at)}</dd></>}
-          </dl>
-          <div className="jr-actions-paper" onClick={e => e.stopPropagation()}>
-            <button
-              className="btn-paper"
-              disabled={anyActing}
-              onClick={e => handleDismiss(e, v._noRegId || v.id)}
-              style={{opacity: anyActing ? 0.6 : 1}}
-            >{isActing ? '…' : 'Dismiss'}</button>
-            <button
-              className="btn-paper primary"
-              disabled={anyActing}
-              onClick={e => handleTow(e, v._noRegId || v.id)}
-              style={{opacity: anyActing ? 0.6 : 1}}
-            >{isActing ? '…' : 'Mark Towed'}</button>
-          </div>
-        </div>
-      </div>
-    );
-  });
-
-  return (
-    <>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,padding:'4px 2px 10px',flexWrap:'wrap'}}>
-        <div style={{fontSize:11,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',color:'#7c2d12'}}>
-          {visibleRows.length} pending
-        </div>
-        <div style={{display:'flex',gap:6,alignItems:'center'}}>
-          {selectMode ? (
-            <>
-              <button
-                onClick={() => selected.size === visibleRows.length
-                  ? setSelected(new Set())
-                  : setSelected(new Set(visibleRows.map(r => r._noRegId || r.id)))}
-                style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
-              >{selected.size === visibleRows.length ? 'Clear' : 'Select all'}</button>
-              <button
-                onClick={() => { setSelectMode(false); setSelected(new Set()); }}
-                style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-muted)',cursor:'pointer'}}
-              >Cancel</button>
-            </>
-          ) : (
-            <button
-              onClick={() => setSelectMode(true)}
-              style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
-            >Select</button>
-          )}
-        </div>
-      </div>
-      {cards}
-      {snapLightbox && (
-        <SnapsLightbox
-          snaps={snapLightbox.snaps}
-          startIndex={snapLightbox.startIndex}
-          plate={snapLightbox.plate}
-          onClose={() => setSnapLightbox(null)}
-        />
-      )}
-      {selectMode && selected.size > 0 && (
-        <div style={{
-          position:'fixed', bottom:80, right:16, zIndex:50,
-          display:'flex',alignItems:'center',gap:10,
-          padding:'10px 14px',borderRadius:999,
-          background:'#dc2626',color:'#fff',
-          boxShadow:'0 8px 28px rgba(220,38,38,.4)',
-        }}>
-          <span style={{fontSize:13,fontWeight:800}}>{selected.size} selected</span>
-          <button
-            onClick={dismissSelected}
-            disabled={batching}
-            style={{
-              fontSize:13,fontWeight:800,padding:'7px 14px',borderRadius:999,
-              border:'1px solid rgba(255,255,255,.4)',
-              background:batching ? 'rgba(255,255,255,.2)' : 'rgba(255,255,255,.95)',
-              color:batching ? '#fff' : '#dc2626',
-              cursor:batching ? 'wait' : 'pointer',
-            }}
-          >{batching ? 'Dismissing…' : 'Dismiss selected'}</button>
-        </div>
-      )}
-    </>
-  );
-}
 
 // ── Jobs tab (current violations) ─────────────────────────────
 function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, onAction, isOwner, deepLinkViolationId, user, onNavigate }) {
@@ -5443,8 +5188,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
   );
 
   // Filter active jobs — nreg pill swaps in the no-reg rows instead of the standard active list
-  const baseList = filter === 'nreg' ? noRegRows
-    : filter === 'overstays' ? overstayJobs
+  const baseList = filter === 'overstays' ? overstayJobs
     : filter === 'open' ? openJobs
     : filter === 'handled' ? handledToday
     : active; // 'all'
@@ -5535,13 +5279,6 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
         <div className="filter-bar-paper" style={{marginBottom:8}}>
           <button className={`filter-pill-paper${filter === 'all' ? ' active' : ''}`} onClick={() => setFilter('all')}>
             All<span className="n">{active.length + handledToday.length}</span>
-          </button>
-          <button
-            className={`filter-pill-paper${filter === 'nreg' ? ' active' : ''}`}
-            onClick={() => setFilter('nreg')}
-            aria-label="Filter: possible no parking pass"
-          >
-            Possible no parking pass<span className="n">{noRegRows.length}</span>
           </button>
           <button className={`filter-pill-paper${filter === 'overstays' ? ' active' : ''}`} onClick={() => setFilter('overstays')}>
             Overstays<span className="n">{overstayJobs.length}</span>
@@ -5666,8 +5403,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
       {/* Active jobs */}
       <div className="section-header">
         <div className="section-title">
-          {filter === 'nreg' ? 'Possible no parking pass'
-            : filter === 'overstays' ? 'Overstays'
+          {filter === 'overstays' ? 'Overstays'
             : filter === 'open' ? 'Open Jobs'
             : filter === 'handled' ? 'Handled Today'
             : (user?._role === 'partner' ? 'In progress' : 'All Jobs')}
@@ -5747,13 +5483,6 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
             </div>
           )}
         </div>
-      ) : filter === 'nreg' ? (
-        /* Legacy "Possible no parking pass" filter — empty by design now.
-           Evidence packages live on the property-detail page (vehicle-event
-           bundling). The chip + JobNoRegRows are being retired in a follow-up
-           commit; for now this branch renders an empty list rather than
-           re-fetching from the dead /no-reg-violations endpoint. */
-        <JobNoRegRows rows={[]} onRefresh={() => {}} addToast={addToast} />
       ) : (
         filteredActive.map((v, idx) => {
           const lot = lotMap[v.lot_id];
@@ -5984,18 +5713,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
               </div>
               {/* Primary actions — hidden for departed violations (dismiss from banner instead) */}
               {!(v.status === 'departed' || v.departed_at || departedFlaggedRef.current.has(v.id)) && (<>
-              {v._isNoReg ? (
-              <>
-              <div className="job-actions-row" role="group" aria-label="Enforcement actions" style={{gap:8, padding:'10px 12px'}}>
-                <button className="action-btn tow" disabled={anyActing} onClick={async () => { setActing(v.id); try { await apiFetch(`/no-reg-violations/${v._noRegId}/tow`, { method: 'POST' }); addToast('Marked towed', 'success'); setNoRegRows(prev => prev.filter(r => r._noRegId !== v._noRegId)); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Mark towed" style={{padding:'12px 6px', fontSize:13}}>
-                  {isActing ? '…' : 'Mark Towed'}
-                </button>
-                <button className="action-btn dismiss" disabled={anyActing} onClick={async () => { setActing(v.id); try { await apiFetch(`/no-reg-violations/${v._noRegId}/dismiss`, { method: 'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({reason:'operator dismissed'}) }); addToast('Dismissed', 'success'); setNoRegRows(prev => prev.filter(r => r._noRegId !== v._noRegId)); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Dismiss" style={{padding:'12px 6px', fontSize:13}}>
-                  {isActing ? '…' : 'Dismiss'}
-                </button>
-              </div>
-              </>
-              ) : v._isALPR ? (
+              {v._isALPR ? (
               <>
               <div className="job-actions-row" role="group" aria-label="Enforcement actions" style={{gap:8, padding:'10px 12px'}}>
                 <button className="action-btn tow" disabled={anyActing} onClick={async () => { setActing(v.id); try { await db.dispatchALPRViolation(v.id); addToast('Tow dispatched', 'success'); if (onAction) onAction(); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Dispatch tow" style={{padding:'12px 6px', fontSize:13}}>
