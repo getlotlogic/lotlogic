@@ -11432,6 +11432,15 @@ function TrainingPage({ user, isOwner }) {
         <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 800, fontSize: 15, letterSpacing: 0.5 }}>{plate}</span>
           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{camName}{ev ? ` · conf ${Number(ev.confidence).toFixed(2)}` : ''}</span>
+          {ev?.created_at && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'ui-monospace, monospace' }}>
+              {new Date(ev.created_at).toLocaleString('en-US', {
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false,
+              })}
+            </span>
+          )}
         </div>
       </div>
     );
@@ -11554,7 +11563,13 @@ function TrainingPage({ user, isOwner }) {
             <img src={lightbox.url} alt={lightbox.plate} style={{ maxWidth: '90vw', maxHeight: '80vh', display: 'block', borderRadius: 8 }} />
             <div style={{ color: '#fff', marginTop: 12, fontSize: 14, textAlign: 'center' }}>
               <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 800, fontSize: 18, letterSpacing: 1 }}>{lightbox.plate}</span>
-              <span style={{ marginLeft: 12, color: '#aaa' }}>{lightbox.camera} · {fmtDateTime ? fmtDateTime(lightbox.ts) : new Date(lightbox.ts).toLocaleString()}</span>
+              <span style={{ marginLeft: 12, color: '#aaa', fontFamily: 'ui-monospace, monospace' }}>
+                {lightbox.camera} · {new Date(lightbox.ts).toLocaleString('en-US', {
+                  year: 'numeric', month: '2-digit', day: '2-digit',
+                  hour: '2-digit', minute: '2-digit', second: '2-digit',
+                  hour12: false,
+                })}
+              </span>
             </div>
           </div>
         </div>
