@@ -50,6 +50,26 @@ const READ_CONF_FLOOR = 0.4;
 // read by different cameras / sources, not front+back.
 const PAIR_DISTINCT_MIN_LEV = 2;
 
+// Plate-shape filter. We learn pairs ONLY for things that look like real
+// license plates — never for USDOT numbers, company decals, or vanity text
+// the OCR engines occasionally pick up. The PR / Milesight LPRs are tuned
+// for plates but still surface decal text like "SUPREM", "RAVENS",
+// "UCK1NGC0M" — those are not pair-able with anything.
+//
+// Rules (intentionally conservative; bias toward dropping ambiguous reads):
+//   - Length 5-8 (US plate range; trims partials and over-long OCR strings)
+//   - No DOT-/MC-prefix synthetic plates (those are USDOT/MC numbers, not
+//     line-of-sight plates, and registration handles them via dedicated columns)
+//   - No 5+ consecutive letters (catches vanity words while keeping 4-letter
+//     commercial prefixes like QZVH98 that some states actually issue)
+function isPlateLike(normalized: string): boolean {
+  if (!normalized) return false;
+  if (normalized.length < 5 || normalized.length > 8) return false;
+  if (/^(DOT|MC)\d+$/.test(normalized)) return false;
+  if (/[A-Z]{5,}/.test(normalized)) return false;
+  return true;
+}
+
 type PlateEvent = {
   id: string;
   property_id: string;
@@ -170,11 +190,11 @@ async function processCluster(
   // Group reads by camera, applying the confidence floor.
   const byCamera = new Map<string, Array<{ plate: string; confidence: number }>>();
   for (const ev of cluster.events) {
-    if (!ev.normalized_plate || ev.normalized_plate.length < 4) continue;
+    if (!isPlateLike(ev.normalized_plate ?? "")) continue;
     const conf = Number(ev.confidence ?? 0);
     if (conf < READ_CONF_FLOOR) continue;
     const arr = byCamera.get(ev.camera_id) ?? [];
-    arr.push({ plate: ev.normalized_plate, confidence: conf });
+    arr.push({ plate: ev.normalized_plate as string, confidence: conf });
     byCamera.set(ev.camera_id, arr);
   }
 
