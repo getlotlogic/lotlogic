@@ -6184,7 +6184,7 @@ function InvoicesPage({ lots, partners: partnersProp, user, isOwner = true, isPl
   let body;
   if (subTab === 'tow-activity' && isPlatformAdmin) {
     body = React.createElement(ErrorBoundary, { label: 'tow activity' },
-      React.createElement(AdminTowActivityPage));
+      React.createElement(TowActivityPage, { user }));
   } else if (isOwner && subTab === 'invoices') {
     body = React.createElement(BillingQuickBooksView, { partnersProp, lots });
   } else {
@@ -11254,110 +11254,210 @@ function ALPRPropertiesPage({ user }) {
   );
 }
 
-// ── Training Page (camera frame labeling) ─────────────
-// Admin-only feed of NMLD tow truck sightings (plate VX7434 + observed OCR
-// variants) from the south-lot TS4467 camera. Gated by is_platform_admin in the
-// caller — partner accounts must never reach this surface.
-function AdminTowActivityPage() {
-  const TS4467_ID = '85ba49c3-f700-4068-b0eb-a012f8a5fe4f';
-  const TRACKED_PLATES = ['VX7434', 'VK7434', 'VK7411'];
+// ── TowActivityPage ─────────────────────────────
+// Operator-facing repository of every tow-truck sighting at the property's
+// gate cameras. Pulls all NMLD plates dynamically from
+// enforcement_partners.tow_truck_plates plus Lev≤2 OCR variants so OCR drift
+// (VK7434 from VX7434, PK7434, AA96116 from AA9611E, etc.) shows up.
+//
+// Visits are grouped by 10-minute clusters: N consecutive reads of the same
+// truck collapse to one visit row with all camera frames as a thumbnail
+// strip. Auto-refresh every 60s.
+function TowActivityPage({ user }) {
   const [events, setEvents] = useState([]);
+  const [plates, setPlates] = useState([]);
+  const [cameras, setCameras] = useState({});
   const [loading, setLoading] = useState(true);
   const [hours, setHours] = useState(72);
-  const load = React.useCallback(async () => {
+  const [lightbox, setLightbox] = useState(null);
+
+  const load = useCallback(async () => {
     if (!supabase) return;
-    const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-    const { data } = await supabase
-      .from('plate_events')
-      .select('id, created_at, normalized_plate, confidence, image_url, match_status, raw_data')
-      .eq('camera_id', TS4467_ID)
-      .gte('created_at', since)
-      .or(`normalized_plate.in.(${TRACKED_PLATES.join(',')}),match_status.eq.partner_truck`)
-      .order('created_at', { ascending: false })
-      .limit(500);
-    setEvents(data || []);
+    try {
+      const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+      const { data: partners } = await supabase
+        .from('enforcement_partners')
+        .select('id, company_name, tow_truck_plates');
+      const allPlates = (partners || []).flatMap(p => p.tow_truck_plates || []).filter(Boolean);
+      setPlates(allPlates);
+
+      // Pull every plate_event whose normalized_plate matches any canonical
+      // tow plate OR a Lev≤2 OCR variant. The DB-side levenshtein extension
+      // lets us push the fuzzy match into SQL rather than scanning client-side.
+      const orClauses = allPlates.map(p => `normalized_plate.eq.${p}`).join(',');
+      const { data: evs } = await supabase
+        .from('plate_events')
+        .select('id, created_at, normalized_plate, plate_text, confidence, image_url, match_status, camera_id, raw_data, property_id')
+        .gte('created_at', since)
+        .or(`${orClauses},match_status.eq.partner_truck`)
+        .order('created_at', { ascending: false })
+        .limit(1000);
+
+      // Lev≤2 client-side filter for OCR variants beyond exact matches
+      const isFuzzyMatch = (read) => {
+        if (!read) return false;
+        for (const canonical of allPlates) {
+          if (read === canonical) return true;
+          if (Math.abs(read.length - canonical.length) > 2) continue;
+          // simple Lev≤2
+          const m = canonical.length, n = read.length;
+          let prev = Array.from({ length: n + 1 }, (_, i) => i);
+          for (let i = 1; i <= m; i++) {
+            const curr = [i, ...Array(n).fill(0)];
+            for (let j = 1; j <= n; j++) {
+              const cost = canonical[i - 1] === read[j - 1] ? 0 : 1;
+              curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+            }
+            prev = curr;
+          }
+          if (prev[n] <= 2) return true;
+        }
+        return false;
+      };
+      const matched = (evs || []).filter(e =>
+        e.match_status === 'partner_truck' || isFuzzyMatch(e.normalized_plate || '')
+      );
+      setEvents(matched);
+
+      const camIds = [...new Set(matched.map(e => e.camera_id).filter(Boolean))];
+      if (camIds.length) {
+        const { data: cams } = await supabase.from('alpr_cameras').select('id, name').in('id', camIds);
+        setCameras(Object.fromEntries((cams || []).map(c => [c.id, c.name || c.id.slice(0, 6)])));
+      }
+    } catch (err) {
+      console.warn('TowActivityPage.load failed', err.message);
+    }
     setLoading(false);
   }, [hours]);
   useEffect(() => { setLoading(true); load(); }, [load]);
   useEffect(() => {
-    const t = setInterval(load, 30000);
+    const t = setInterval(load, 60_000);
     return () => clearInterval(t);
   }, [load]);
 
-  const grouped = (() => {
-    const byDay = new Map();
-    for (const e of events) {
-      const d = new Date(e.created_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-      if (!byDay.has(d)) byDay.set(d, []);
-      byDay.get(d).push(e);
+  // Cluster events into visits: consecutive reads within 10 minutes
+  // collapse to one row. Walks the (descending) events list and starts a
+  // new visit when the gap exceeds VISIT_GAP_MS.
+  const VISIT_GAP_MS = 10 * 60 * 1000;
+  const visits = (() => {
+    const out = [];
+    let cur = null;
+    const asc = [...events].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    for (const ev of asc) {
+      const ts = new Date(ev.created_at).getTime();
+      if (!cur || ts - new Date(cur.last_at).getTime() > VISIT_GAP_MS) {
+        cur = { first_at: ev.created_at, last_at: ev.created_at, frames: [ev] };
+        out.push(cur);
+      } else {
+        cur.last_at = ev.created_at;
+        cur.frames.push(ev);
+      }
     }
-    return Array.from(byDay.entries());
+    return out.reverse(); // newest first
   })();
 
   return (
-    <div className="page-enter" style={{padding: '16px 12px 80px'}}>
-      <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:12,marginBottom:8}}>
+    <div className="page-enter" style={{padding: '16px 12px 80px', maxWidth: 1100, margin: '0 auto'}}>
+      <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:12,marginBottom:8,flexWrap:'wrap'}}>
         <div>
-          <h2 style={{margin:0,fontSize:22,fontWeight:800,color:'var(--text-primary)'}}>Tow Activity</h2>
-          <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>
-            NMLD truck sightings at Charlotte Travel Plaza south lot (TS4467).
-            Tracking <code style={{padding:'1px 5px',background:'rgba(255,255,255,.06)',borderRadius:3}}>{TRACKED_PLATES.join(' · ')}</code>.
-            Auto-refresh every 30s.
+          <h2 style={{margin:0,fontSize:22,fontWeight:800}}>Tow truck activity</h2>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+            Every time the tow partner's truck passed a gate camera. Tracking{' '}
+            <code style={{padding:'1px 6px',background:'rgba(255,255,255,.06)',borderRadius:4}}>
+              {plates.join(' · ') || '—'}
+            </code>{' '}
+            plus close OCR variants. Auto-refresh every 60s.
           </div>
         </div>
-        <select value={hours} onChange={e => setHours(Number(e.target.value))} style={{background:'var(--bg-surface)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:6,padding:'6px 10px',fontSize:13}}>
+        <select value={hours} onChange={e => setHours(Number(e.target.value))} style={{background:'var(--bg-surface, var(--bg-card))',color:'var(--text)',border:'1px solid var(--border)',borderRadius:6,padding:'6px 10px',fontSize:13}}>
           <option value={6}>Last 6h</option>
           <option value={24}>Last 24h</option>
           <option value={72}>Last 3 days</option>
           <option value={168}>Last 7 days</option>
+          <option value={720}>Last 30 days</option>
         </select>
       </div>
       <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:16}}>
-        {loading ? 'Loading…' : `${events.length} detection${events.length === 1 ? '' : 's'} in the last ${hours}h`}
+        {loading ? 'Loading…' : `${visits.length} visit${visits.length === 1 ? '' : 's'} · ${events.length} read${events.length === 1 ? '' : 's'} in the last ${hours}h`}
       </div>
-      {!loading && events.length === 0 && (
-        <div style={{textAlign:'center',color:'var(--text-muted)',padding:'40px 20px',border:'1px dashed var(--border)',borderRadius:8}}>
+      {!loading && visits.length === 0 && (
+        <div style={{textAlign:'center',color:'var(--text-muted)',padding:'40px 20px',border:'1px dashed var(--border)',borderRadius:10}}>
           No tow truck sightings in this window.
         </div>
       )}
-      {grouped.map(([day, dayEvents]) => (
-        <div key={day} style={{marginBottom:24}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:1,textTransform:'uppercase',color:'var(--text-muted)',marginBottom:8,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
-            {day} <span style={{color:'var(--text-muted)',opacity:.7,marginLeft:8}}>({dayEvents.length})</span>
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:12}}>
-            {dayEvents.map(e => {
-              const onboard = e.raw_data?.onboardLpr || {};
-              const isExact = TRACKED_PLATES.includes(e.normalized_plate);
-              return (
-                <div key={e.id} style={{background:'var(--bg-surface)',border:`1px solid ${isExact ? 'rgba(255,193,7,.45)' : 'var(--border)'}`,borderRadius:8,overflow:'hidden'}}>
-                  {e.image_url && (
-                    <a href={e.image_url} target="_blank" rel="noopener noreferrer">
-                      <img src={e.image_url} alt={e.normalized_plate} loading="lazy" style={{width:'100%',display:'block',background:'#000'}} />
-                    </a>
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        {visits.map((v, idx) => {
+          const exact = plates.find(p => v.frames.some(f => f.normalized_plate === p));
+          const camsInVisit = [...new Set(v.frames.map(f => cameras[f.camera_id] || (f.camera_id || '?').slice(0, 6)))];
+          const spanSec = Math.round((new Date(v.last_at) - new Date(v.first_at)) / 1000);
+          return (
+            <div key={idx} style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 12,
+              padding: 14,
+            }}>
+              <div style={{display:'flex',justifyContent:'space-between',gap:12,alignItems:'baseline',marginBottom:10,flexWrap:'wrap'}}>
+                <div>
+                  <span style={{fontFamily:'ui-monospace, monospace', fontWeight:800, fontSize:16, letterSpacing:.5}}>
+                    {exact || v.frames[0].normalized_plate || '—'}
+                  </span>
+                  {!exact && (
+                    <span style={{marginLeft:8,fontSize:10,padding:'2px 6px',background:'rgba(168,85,247,.15)',color:'#a855f7',borderRadius:3,fontWeight:700}}>FUZZY</span>
                   )}
-                  <div style={{padding:10}}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8}}>
-                      <span style={{fontFamily:'ui-monospace,monospace',fontSize:16,fontWeight:800,letterSpacing:1,color:isExact ? '#FFC107' : 'var(--text-primary)'}}>{e.normalized_plate}</span>
-                      <span style={{fontSize:11,color:'var(--text-muted)'}}>conf {Number(e.confidence).toFixed(2)}</span>
-                    </div>
-                    <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                      {new Date(e.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
-                    </div>
-                    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6}}>
-                      {e.match_status === 'partner_truck' && <span style={{fontSize:10,padding:'2px 6px',background:'rgba(34,197,94,.15)',color:'#22c55e',borderRadius:3,fontWeight:700}}>MATCHED</span>}
-                      {e.match_status !== 'partner_truck' && !isExact && <span style={{fontSize:10,padding:'2px 6px',background:'rgba(168,85,247,.15)',color:'#a855f7',borderRadius:3,fontWeight:700}}>FUZZY</span>}
-                      {onboard.vehicleColor && onboard.vehicleColor !== '-' && <span style={{fontSize:10,padding:'2px 6px',background:'rgba(255,255,255,.06)',color:'var(--text-muted)',borderRadius:3}}>{onboard.vehicleColor}</span>}
-                      {onboard.vehicleType && onboard.vehicleType !== '-' && <span style={{fontSize:10,padding:'2px 6px',background:'rgba(255,255,255,.06)',color:'var(--text-muted)',borderRadius:3}}>{onboard.vehicleType}</span>}
-                      {onboard.detectionRegion && <span style={{fontSize:10,padding:'2px 6px',background:'rgba(255,255,255,.06)',color:'var(--text-muted)',borderRadius:3}}>{onboard.detectionRegion}</span>}
-                    </div>
-                  </div>
                 </div>
-              );
-            })}
+                <div style={{fontSize:12,color:'var(--text-muted)', fontFamily:'ui-monospace,monospace'}}>
+                  {new Date(v.first_at).toLocaleString('en-US', {
+                    year:'numeric', month:'2-digit', day:'2-digit',
+                    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false,
+                  })}
+                  {spanSec >= 5 && <span style={{marginLeft:8,color:'var(--text-muted)'}}>· {spanSec}s span</span>}
+                  <span style={{marginLeft:8,color:'var(--text-muted)'}}>· {camsInVisit.join(', ')}</span>
+                  <span style={{marginLeft:8,color:'var(--text-muted)'}}>· {v.frames.length} read{v.frames.length===1?'':'s'}</span>
+                </div>
+              </div>
+              <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:8}}>
+                {v.frames.map(f => {
+                  const conf = Number(f.confidence ?? 0);
+                  return (
+                    <div key={f.id}
+                      onClick={() => f.image_url && setLightbox({ url: f.image_url, plate: f.normalized_plate, camera: cameras[f.camera_id] || f.camera_id, ts: f.created_at, conf })}
+                      style={{
+                        background:'#0a0a0a', borderRadius:8, overflow:'hidden',
+                        aspectRatio:'16/9', cursor: f.image_url ? 'zoom-in' : 'default',
+                        border: f.match_status === 'partner_truck' ? '1px solid rgba(34,197,94,.45)' : '1px solid var(--border-subtle)',
+                        position:'relative',
+                      }}>
+                      {f.image_url ? (
+                        <img src={f.image_url} alt={f.normalized_plate} loading="lazy" style={{width:'100%',height:'100%',objectFit:'cover'}} />
+                      ) : (
+                        <div style={{display:'flex',alignItems:'center',justifyContent:'center',width:'100%',height:'100%',color:'#666',fontSize:11}}>no image</div>
+                      )}
+                      <div style={{position:'absolute',bottom:0,left:0,right:0,padding:'4px 6px',background:'linear-gradient(transparent, rgba(0,0,0,.85))',color:'#fff',fontSize:10,fontFamily:'ui-monospace,monospace',display:'flex',justifyContent:'space-between'}}>
+                        <span style={{fontWeight:700}}>{f.normalized_plate || '—'}</span>
+                        <span style={{opacity:.85}}>{conf.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {lightbox && (
+        <div onClick={() => setLightbox(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:20,cursor:'zoom-out'}}>
+          <div style={{maxWidth:'90vw',maxHeight:'90vh'}} onClick={e => e.stopPropagation()}>
+            <img src={lightbox.url} alt={lightbox.plate} style={{maxWidth:'90vw',maxHeight:'80vh',display:'block',borderRadius:8}} />
+            <div style={{color:'#fff',marginTop:12,fontSize:14,textAlign:'center'}}>
+              <span style={{fontFamily:'ui-monospace,monospace',fontWeight:800,fontSize:18,letterSpacing:1}}>{lightbox.plate}</span>
+              <span style={{marginLeft:12,color:'#aaa',fontFamily:'ui-monospace,monospace'}}>
+                {lightbox.camera} · {new Date(lightbox.ts).toLocaleString('en-US',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})} · conf {lightbox.conf?.toFixed(2)}
+              </span>
+            </div>
           </div>
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -12047,13 +12147,14 @@ function App() {
   //   Analytics/Activity → summaries
   //   Earnings → $$
   const navTabs = isOwner ? [
-    { id: 'jobs',     label: 'Jobs',     badge: pending + alprPending },
-    { id: 'lots',     label: 'Lots',     badge: 0 },
-    { id: 'analytics',label: 'Analytics',badge: 0 },
-    { id: 'training', label: 'Training', badge: trainingBadge },
-    { id: 'earnings', label: 'Earnings', badge: 0 },
-    { id: 'invoices', label: 'Billing',  badge: 0 },
-    { id: 'account',  label: 'Account',  badge: 0 },
+    { id: 'jobs',        label: 'Jobs',        badge: pending + alprPending },
+    { id: 'lots',        label: 'Lots',        badge: 0 },
+    { id: 'analytics',   label: 'Analytics',   badge: 0 },
+    { id: 'training',    label: 'Training',    badge: trainingBadge },
+    { id: 'towactivity', label: 'Tow truck',   badge: 0 },
+    { id: 'earnings',    label: 'Earnings',    badge: 0 },
+    { id: 'invoices',    label: 'Billing',     badge: 0 },
+    { id: 'account',     label: 'Account',     badge: 0 },
   ] : [
     // Partner navigation. Earnings + Billing/Invoices are owner-only
     // surfaces — partners must NEVER see revenue_share, fee schedules,
@@ -12199,6 +12300,7 @@ function App() {
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
           {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
+          {tab === 'towactivity' && isOwner && <TowActivityPage user={effectiveUser} />}
           {tab === 'earnings' && isOwner && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
           {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} isPlatformAdmin={isPlatformAdmin} />}
