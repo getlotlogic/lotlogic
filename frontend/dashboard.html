@@ -11737,8 +11737,9 @@ function App() {
   }); // eslint-disable-line -- intentionally re-runs to capture latest handlePullRefresh/showPTR
 
   // Training tab badge — count of unlabeled sidecar-rejected frames.
-  // Refreshed on tab change and every 60s so the operator sees the
-  // queue grow live. Owner-only; partners never see this tab.
+  // Active inferred_plate_pairs count — drives the Training tab badge.
+  // Refreshed every 60s so it tracks the cron-plate-pair-learn output.
+  // Owner-only; partners never see this tab.
   const [trainingBadge, setTrainingBadge] = useState(0);
   useEffect(() => {
     if (!owner) return;
@@ -11746,10 +11747,9 @@ function App() {
     async function refreshTrainingBadge() {
       try {
         const { count, error } = await supabase
-          .from('plate_events')
+          .from('inferred_plate_pairs')
           .select('id', { count: 'exact', head: true })
-          .eq('match_status', 'sidecar_rejected')
-          .is('raw_data->>operator_label', null);
+          .is('dismissed_at', null);
         if (!error && !cancelled) setTrainingBadge(count || 0);
       } catch { /* ignore */ }
     }
