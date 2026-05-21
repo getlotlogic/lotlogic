@@ -11453,9 +11453,11 @@ function ALPRPropertiesPage({ user }) {
     if (!properties.length) return;
     Promise.all(
       properties.map(async p => {
+        // Per-property KPI counts. The no-reg count slot was wired to
+        // /no-reg-violations (now retired). Hardcode to [] until the KPI
+        // tile is either removed or rewired to query vehicle-event bundles.
         const [noRegRows, openRows, overstayRows, registeredRows] = await Promise.all([
-          apiFetch(`/no-reg-violations?property_id=${p.id}&status=flagged`)
-            .catch(() => []),
+          Promise.resolve([]),
           supabase
             ? supabase.from('alpr_violations')
                 .select('id', { count: 'exact', head: true })
@@ -11516,13 +11518,8 @@ function ALPRPropertiesPage({ user }) {
   // If a drill-down is open, render it on top
   if (drillState) {
     const prop = properties.find(p => p.id === drillState.propId);
-    if (drillState.drill === 'noreg') {
-      return (
-        <ErrorBoundary label="no-pass drill-down">
-          <NoRegDrill propertyId={drillState.propId} propertyName={prop?.name || ''} onBack={() => setDrillState(null)} />
-        </ErrorBoundary>
-      );
-    }
+    // 'noreg' drill-down removed — evidence packages live on the property
+    // detail page now (vehicle-event bundling).
     if (drillState.drill === 'registered') {
       return (
         <ErrorBoundary label="registered drill-down">
@@ -11610,14 +11607,6 @@ function ALPRPropertiesPage({ user }) {
                   >
                     <div className="top-row"><div className="val">{openJobs}</div><div className="chev">›</div></div>
                     <div className="label">Open Jobs</div>
-                  </button>
-                  <button
-                    className={`kpi-paper ${noReg > 0 ? 'red' : 'calm'}`}
-                    onClick={() => setDrillState({ propId: p.id, drill: 'noreg' })}
-                    aria-label={`Possible no parking pass for ${p.name}`}
-                  >
-                    <div className="top-row"><div className="val">{noReg}</div><div className="chev">›</div></div>
-                    <div className="label">Possible No Pass</div>
                   </button>
                   <button
                     className={`kpi-paper ${overstays > 0 ? 'amber' : 'calm'}`}
