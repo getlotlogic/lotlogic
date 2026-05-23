@@ -11770,18 +11770,20 @@ function App() {
     return () => window.removeEventListener('lotlogic:auth-expired', onAuthExpired);
   }, []);
 
-  // Self-heal stale sessions: cached session objects from before the
-  // is_admin / is_platform_admin fields were added to /auth/login won't
-  // have those flags. Pull them from /auth/me (server-fresh) and merge
-  // into the in-memory + cached session so admin gates work without
-  // requiring a logout/login.
+  // Self-heal stale sessions: always re-fetch admin flags from /auth/me
+  // on mount, so a user who was elevated to admin after their cached
+  // session was stamped (even with explicit `false`) gets the upgrade
+  // without having to log out + log in. The /auth/me lookup is cheap
+  // (one row) and only runs once per token change.
   useEffect(() => {
     if (!owner?._token) return;
-    if (owner.is_platform_admin !== undefined && owner.is_admin !== undefined) return;
     apiFetch('/auth/me').then(me => {
       if (!me || !me.email) return;
       setOwner(prev => {
         if (!prev) return prev;
+        if (prev.is_admin === !!me.is_admin && prev.is_platform_admin === !!me.is_platform_admin) {
+          return prev; // no change — avoid state churn / re-renders
+        }
         const merged = { ...prev, is_admin: !!me.is_admin, is_platform_admin: !!me.is_platform_admin };
         try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
         return merged;
