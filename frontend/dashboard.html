@@ -4723,6 +4723,13 @@ function LoginPage({ onLogin }) {
         email: base.email || trimmed,
         business_name: base.display_name,
         company_name: role === 'partner' ? base.display_name : undefined,
+        // Surface admin flags into the session at login time so the dashboard
+        // doesn't have to wait for the /auth/me self-heal to fire (which
+        // races against the first loadData call). Backend /auth/login
+        // returns these on the subject for owner accounts; partners always
+        // false.
+        is_admin: !!base.is_admin,
+        is_platform_admin: !!base.is_platform_admin,
         _role: role,
         _token: res.token,
         _expires_in: res.expires_in,
