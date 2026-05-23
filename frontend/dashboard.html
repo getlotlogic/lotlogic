@@ -3146,11 +3146,17 @@ const db = {
     if (!userId) return [];
     if (supabase) {
       let q = supabase.from('properties').select('*');
-      // Platform admins (is_platform_admin in JWT) see every property; RLS still
-      // gates non-admins via owner_id / tow_company_id policies.
+      // Platform admins see every property; RLS still gates non-admins via
+      // owner_id / tow_company_id policies. Read the flag from the live
+      // session object first (server-fresh from /auth/login or /auth/me)
+      // and fall back to JWT decoding for backward-compat with sessions
+      // cached before the flag was surfaced on the subject.
       const isAdmin = (() => {
         try {
-          const tok = JSON.parse(localStorage.getItem('lotlogic_session') || '{}')._token;
+          const session = JSON.parse(localStorage.getItem('lotlogic_session') || '{}');
+          if (session.is_platform_admin === true) return true;
+          if (session.is_platform_admin === false) return false;
+          const tok = session._token;
           if (!tok) return false;
           const p = JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
           return !!p.is_platform_admin;
@@ -11763,6 +11769,25 @@ function App() {
     window.addEventListener('lotlogic:auth-expired', onAuthExpired);
     return () => window.removeEventListener('lotlogic:auth-expired', onAuthExpired);
   }, []);
+
+  // Self-heal stale sessions: cached session objects from before the
+  // is_admin / is_platform_admin fields were added to /auth/login won't
+  // have those flags. Pull them from /auth/me (server-fresh) and merge
+  // into the in-memory + cached session so admin gates work without
+  // requiring a logout/login.
+  useEffect(() => {
+    if (!owner?._token) return;
+    if (owner.is_platform_admin !== undefined && owner.is_admin !== undefined) return;
+    apiFetch('/auth/me').then(me => {
+      if (!me || !me.email) return;
+      setOwner(prev => {
+        if (!prev) return prev;
+        const merged = { ...prev, is_admin: !!me.is_admin, is_platform_admin: !!me.is_platform_admin };
+        try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
+        return merged;
+      });
+    }).catch(() => { /* ignore — gate falls back to JWT decode */ });
+  }, [owner?._token]);
   // Parse deep link from SMS: /violations/{id} → open jobs tab and highlight
   const [deepLinkViolationId] = useState(() => {
     const path = window.location.pathname || '';
@@ -11808,6 +11833,11 @@ function App() {
   // partner-controlled state.
   const isPlatformAdmin = (() => {
     if (viewAs) return false;
+    // Prefer the in-memory owner object (server-fresh from /auth/login or
+    // the /auth/me self-heal above). Fall back to JWT-decode for the
+    // first render before the owner state is hydrated.
+    if (owner?.is_platform_admin === true) return true;
+    if (owner?.is_platform_admin === false) return false;
     try {
       const tok = JSON.parse(localStorage.getItem('lotlogic_session') || '{}')._token;
       if (!tok) return false;
