@@ -93,18 +93,6 @@ serve(async (req) => {
     return json({ error: "unauthorized" }, 401);
   }
 
-  // Operator kill-switch. Setting DISPATCH_EMAILS_DISABLED=true on this
-  // function suppresses ALL outbound email sends (dispatch and
-  // stand-down). The function logs the suppressed event, returns 200 so
-  // upstream callers don't retry-loop, but never hits Resend. Flip the
-  // env var to anything other than "true" (or unset it) to resume.
-  const dispatchDisabled = (Deno.env.get("DISPATCH_EMAILS_DISABLED") || "").toLowerCase() === "true";
-  if (dispatchDisabled) {
-    let body: unknown = null;
-    try { body = await req.json(); } catch { /* ignore */ }
-    console.log("tow-dispatch-email suppressed by DISPATCH_EMAILS_DISABLED", { body });
-    return json({ ok: true, suppressed: true, reason: "DISPATCH_EMAILS_DISABLED" });
-  }
 
   // Resend is the sole email provider (3K/mo free tier). SendGrid +
   // Twilio dependencies removed 2026-04-24 to zero out outbound-comms
@@ -769,6 +757,17 @@ async function sendViaResend(
   textBody: string,
   htmlBody: string,
 ): Promise<SendResult> {
+  // Operator kill-switch — runs the full dispatch state machine (load
+  // violation, exit check, atomic claim, compose subject/body, audit
+  // log) and stops only at the HTTP POST to Resend. Caller still gets
+  // ok:true so upstream marks the row as dispatched and the cron won't
+  // re-fire when emails resume. Resume by unsetting the env var.
+  if ((Deno.env.get("DISPATCH_EMAILS_DISABLED") || "").toLowerCase() === "true") {
+    console.log("sendViaResend suppressed by DISPATCH_EMAILS_DISABLED", {
+      to, cc, subject, fromEmail,
+    });
+    return { ok: true, provider: "resend", messageId: null };
+  }
   const payload: Record<string, unknown> = {
     from: fromEmail, to: [to], subject, html: htmlBody, text: textBody,
   };
