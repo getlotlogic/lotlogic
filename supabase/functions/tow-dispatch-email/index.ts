@@ -93,6 +93,19 @@ serve(async (req) => {
     return json({ error: "unauthorized" }, 401);
   }
 
+  // Operator kill-switch. Setting DISPATCH_EMAILS_DISABLED=true on this
+  // function suppresses ALL outbound email sends (dispatch and
+  // stand-down). The function logs the suppressed event, returns 200 so
+  // upstream callers don't retry-loop, but never hits Resend. Flip the
+  // env var to anything other than "true" (or unset it) to resume.
+  const dispatchDisabled = (Deno.env.get("DISPATCH_EMAILS_DISABLED") || "").toLowerCase() === "true";
+  if (dispatchDisabled) {
+    let body: unknown = null;
+    try { body = await req.json(); } catch { /* ignore */ }
+    console.log("tow-dispatch-email suppressed by DISPATCH_EMAILS_DISABLED", { body });
+    return json({ ok: true, suppressed: true, reason: "DISPATCH_EMAILS_DISABLED" });
+  }
+
   // Resend is the sole email provider (3K/mo free tier). SendGrid +
   // Twilio dependencies removed 2026-04-24 to zero out outbound-comms
   // billing surface. If Resend is unreachable we return 502 and the
