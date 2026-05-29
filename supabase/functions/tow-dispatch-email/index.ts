@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // Internal-only function — gated by INTERNAL_TOKEN, never called from a
 // browser, so no CORS preflight needed.
-function json(body: unknown, status: number) {
+function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -295,6 +295,16 @@ serve(async (req) => {
   const overstayMs = lastPass?.valid_until ? now - new Date(lastPass.valid_until).getTime() : 0;
   const overstayAgo = overstayMs > 0 ? humanDuration(overstayMs) : null;
 
+  // Overstay copy must NOT use firstSeen/"seen X ago". An overstay dispatch
+  // fires precisely because NO camera saw the vehicle leave — and for a
+  // cron-fired overstay there's no plate_event at all, so firstSeen collapses
+  // to violation.created_at (~the dispatch hold, "5 minutes ago"), which reads
+  // as a nonsensical "seen 5 minutes ago". Anchor overstay copy on the pass
+  // timeline instead: registered at valid_from, expired at valid_until,
+  // overstaying for overstayAgo.
+  const isOverstay = (violation.violation_type ?? "").toLowerCase() === "overstay";
+  const registeredAt = lastPass?.valid_from ?? null;
+
   const passLine = (() => {
     if (!lastPass) return "NONE (never registered)";
     const duration = lastPass.valid_from && lastPass.valid_until
@@ -351,8 +361,8 @@ serve(async (req) => {
         return {
           subjectReason: "Active overstay",
           badge: "Active overstay",
-          textStatus: `ACTIVE OVERSTAY (${firstSeenAgo})`,
-          preheaderLead: `Active overstay · ${firstSeenAgo} on property`,
+          textStatus: `ACTIVE OVERSTAY${overstayAgo ? ` (${overstayAgo} past expiry)` : ""}`,
+          preheaderLead: `Active overstay${overstayAgo ? ` · ${overstayAgo} past pass expiry` : ""}`,
         };
     }
   })();
@@ -373,7 +383,9 @@ serve(async (req) => {
     `PLATE        ${violation.plate_text}`,
     lastPass?.back_plate ? `TRAILER      ${lastPass.back_plate}` : null,
     `STATUS       ${reasonCopy.textStatus}`,
-    `FIRST SEEN   ${formatLocal(firstSeen)}`,
+    isOverstay
+      ? `REGISTERED   ${formatLocal(registeredAt)}  (pass expired ${formatLocal(lastPass?.valid_until)})`
+      : `FIRST SEEN   ${formatLocal(firstSeen)}`,
     triggerEvent?.confidence != null ? `READ CONF.   ${Math.round(triggerEvent.confidence * 100)}%` : null,
     `PASS         ${passLine}`,
     lastPass?.visitor_name ? `PASS HOLDER  ${lastPass.visitor_name}` : null,
@@ -438,9 +450,9 @@ serve(async (req) => {
 </tr>`;
 
   // Plate-card subtitle is violation-type-aware. Overstays foreground the
-  // overstay duration ("Overstayed 2h past 1:00 PM"); other types keep
-  // the simpler "on property since" framing.
-  const isOverstay = (violation.violation_type ?? "").toLowerCase() === "overstay";
+  // overstay duration and the pass timeline (registered → expired) — NOT a
+  // "seen X ago" line, because an overstay means we never saw the vehicle
+  // leave. Other types keep the camera-based "on property since" framing.
   const plateSubtitle = isOverstay && overstayAgo
     ? `
 <div style="margin-top:14px; font-family:'Fraunces',Georgia,serif; font-style:italic; font-size:20px; color:#9A5530; line-height:1.1;">
@@ -450,7 +462,7 @@ serve(async (req) => {
   past pass expiry &middot; ${escapeHtml(formatLocal(lastPass?.valid_until))}
 </div>
 <div style="margin-top:10px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:12px; color:#6F6450;">
-  Vehicle arrived ${escapeHtml(firstSeenAgo)} ago &middot; ${escapeHtml(formatLocal(firstSeen))}
+  Registered &middot; ${escapeHtml(formatLocal(registeredAt))}
 </div>`
     : `
 <div style="margin-top:12px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#3D3528;">
