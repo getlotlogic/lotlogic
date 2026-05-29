@@ -375,6 +375,14 @@ async function closeExpired(): Promise<number> {
 // that are leaving" reported on 2026-04-29.
 const DISPATCH_HOLD_MINUTES = Number(Deno.env.get("DISPATCH_HOLD_MINUTES") ?? "5");
 
+// Overstay recency cutoff. A pass that expired longer ago than this is too
+// stale to tow — the truck is almost certainly long gone, so dispatching now
+// would be a false tow. Stale overstays are still RECORDED (status='dismissed',
+// action_taken='no_tow') so they appear in the No-Tow log, but never
+// dispatched. Default 6h; tune via env. (Added 2026-05-29 with the C2 fix that
+// stopped the soft-expire status flip from silently dropping overstays.)
+const OVERSTAY_MAX_AGE_HOURS = Number(Deno.env.get("OVERSTAY_MAX_AGE_HOURS") ?? "6");
+
 // Truck-plaza proactive overstay sweep. Under the registration-as-entrance
 // model (handled by truck_plaza_exit.ts in camera-snapshot), an exit camera
 // stamps visitor_passes.exited_at + overstay_violation_id when it sees a
@@ -383,17 +391,33 @@ const DISPATCH_HOLD_MINUTES = Number(Deno.env.get("DISPATCH_HOLD_MINUTES") ?? "5
 // goes out without waiting for the eventual exit read.
 //
 // Matches: visitor_passes where valid_until < now, exited_at IS NULL,
-// overstay_violation_id IS NULL, status='active'. Per-property guard:
-// only properties whose property_type='truck_plaza' use this model.
+// overstay_violation_id IS NULL, status IN ('active','expired'). Per-property
+// guard: only properties whose property_type='truck_plaza' use this model.
+//
+// status IN ('active','expired') — NOT '=active' (fixed 2026-05-29, bug C2):
+// pass_expiry.py (every 5 min) and check-violations soft-expire passes
+// active→expired with no truck_plaza guard. The old `.eq("status","active")`
+// meant whichever ran first hid the pass from this sweep forever and the
+// overstay tow was silently lost. We key liveness off exited_at/
+// overstay_violation_id (durable) instead of status. 'cancelled'/'revoked'/
+// 'towed' are still excluded by the allowlist — never tow an operator-killed
+// or already-towed pass.
+//
+// Recency split: only passes that expired within OVERSTAY_MAX_AGE_HOURS get a
+// dispatchable (status='pending') overstay. Older expiries are recorded as
+// dismissed/no_tow ("missed overstay") so they show in the No-Tow log but
+// never page the partner for a truck that left long ago.
 async function sweepUnexitedPassesForOverstay(): Promise<number> {
-  const nowIso = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const staleCutoffIso = new Date(now.getTime() - OVERSTAY_MAX_AGE_HOURS * 3600 * 1000).toISOString();
   // Join via property_type filter — only truck_plaza properties participate.
   const { data: passes, error } = await db
     .from("visitor_passes")
-    .select("id, property_id, plate_text, properties!inner(property_type)")
+    .select("id, property_id, plate_text, valid_until, properties!inner(property_type)")
     .is("exited_at", null)
     .is("overstay_violation_id", null)
-    .eq("status", "active")
+    .in("status", ["active", "expired"])
     .lt("valid_until", nowIso)
     .eq("properties.property_type", "truck_plaza")
     .limit(200);
@@ -402,16 +426,30 @@ async function sweepUnexitedPassesForOverstay(): Promise<number> {
 
   let fired = 0;
   for (const p of passes) {
+    const stale = String((p as { valid_until: string }).valid_until) < staleCutoffIso;
     // Insert the violation. plate_event_id is null — there's no read; this
     // is a time-based fire. The eventual exit read in truck_plaza_exit will
     // backfill the actual exit camera + event ids onto the pass row.
-    const vIns = await db.from("alpr_violations").insert({
-      property_id: p.property_id,
-      plate_text: p.plate_text,
-      status: "pending",
-      violation_type: "overstay",
-      notes: `Pass valid_until passed without camera-detected exit. Fired by cron-sessions-sweep.`,
-    }).select("id").single();
+    // Recent → dispatchable 'pending'. Stale → 'dismissed'/'no_tow', logged
+    // only, never dispatched (vehicle presumed gone).
+    const row = stale
+      ? {
+          property_id: p.property_id,
+          plate_text: p.plate_text,
+          status: "dismissed",
+          action_taken: "no_tow",
+          action_channel: "auto_missed_stale",
+          violation_type: "overstay",
+          notes: `Pass valid_until passed >${OVERSTAY_MAX_AGE_HOURS}h ago without camera-detected exit. Logged as missed overstay; NOT dispatched (vehicle presumed gone). cron-sessions-sweep.`,
+        }
+      : {
+          property_id: p.property_id,
+          plate_text: p.plate_text,
+          status: "pending",
+          violation_type: "overstay",
+          notes: `Pass valid_until passed without camera-detected exit. Fired by cron-sessions-sweep.`,
+        };
+    const vIns = await db.from("alpr_violations").insert(row).select("id").single();
     if (vIns.error) {
       console.warn(`overstay_sweep: violation insert failed pass=${p.id}: ${vIns.error.message}`);
       continue;
@@ -436,7 +474,13 @@ async function sweepUnexitedPassesForOverstay(): Promise<number> {
       await db.from("alpr_violations").delete().eq("id", vIns.data.id);
       continue;
     }
-    fired++;
+    if (stale) {
+      // Recorded as dismissed/no_tow; not dispatched. overstay_violation_id is
+      // now stamped on the pass so this stale row is never reconsidered.
+      console.warn(`overstay_sweep: pass=${p.id} plate=${p.plate_text} expired >${OVERSTAY_MAX_AGE_HOURS}h ago — logged missed overstay, NOT dispatched`);
+    } else {
+      fired++;
+    }
   }
   return fired;
 }

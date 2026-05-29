@@ -121,7 +121,10 @@ async function findActiveUnexitedPass(
     .from("visitor_passes")
     .select("id,valid_until,valid_from,plate_text,back_plate,normalized_back_plate,overstay_violation_id")
     .eq("property_id", propertyId)
-    .eq("status", "active")
+    // active OR expired: pass_expiry.py may have soft-expired a pass before the
+    // camera caught the exit. We must still match it to close it out. cancelled/
+    // revoked/towed remain excluded (operator-killed passes never re-open).
+    .in("status", ["active", "expired"])
     .is("exited_at", null)
     .order("valid_from", { ascending: false })
     .limit(200);
@@ -720,11 +723,13 @@ export async function handleTruckPlazaExit(args: {
   }
 
   // Status filter is critical: between our SELECT and this UPDATE, an
-  // operator may have cancelled the pass. Without `.eq("status", "active")`
-  // we'd stamp exited_at on a cancelled pass — the pass would then show
-  // both cancelled AND camera-exited, confusing the dashboard and
-  // breaking the close-clean flow. exited_at IS NULL is necessary too:
-  // another flusher may have stamped exit already (e.g. weak_reads).
+  // operator may have cancelled the pass. We match `status IN
+  // ('active','expired')` — NOT just 'active' (widened 2026-05-29, bug C2):
+  // pass_expiry.py may have soft-expired the pass before the camera caught
+  // the exit, and we must still close it out. cancelled/revoked/towed stay
+  // excluded so we never stamp exited_at over an operator-killed pass. The
+  // exited_at IS NULL guard is necessary too: another flusher may have
+  // stamped exit already (e.g. weak_reads).
   //
   // STATUS TRANSITION: we now flip status='cancelled' on every camera
   // exit per the truck-plaza pass lifecycle (see
@@ -756,7 +761,7 @@ export async function handleTruckPlazaExit(args: {
       // branches above. Don't touch it here.
     })
     .eq("id", pass!.id)
-    .eq("status", "active")
+    .in("status", ["active", "expired"])
     .is("exited_at", null);
   if (upd.error) throw upd.error;
 

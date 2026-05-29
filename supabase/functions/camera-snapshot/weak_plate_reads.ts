@@ -225,7 +225,9 @@ async function findActiveUnexitedPassFuzzy(
     .from("visitor_passes")
     .select("id,valid_until,valid_from,plate_text,normalized_back_plate,overstay_violation_id")
     .eq("property_id", propertyId)
-    .eq("status", "active")
+    // active OR expired (C2, 2026-05-29): pass_expiry.py may soft-expire a pass
+    // before the SC211 buffer flushes its exit. cancelled/revoked/towed stay out.
+    .in("status", ["active", "expired"])
     .is("exited_at", null)
     .order("valid_from", { ascending: false })
     .limit(200);
@@ -498,22 +500,40 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
   //    safely claim the pass — cron may have stamped its own id between
   //    our SELECT and our claim; in that case delete our duplicate.
   let overstayViolationId: string | null = pass!.overstay_violation_id ?? null;
+  // C4 (2026-05-29): a weak-buffer exit IS a real camera exit. If an overstay
+  // violation already exists (cron fired it, possibly dispatched), atomically
+  // claim the left-before-tow state. Stamp-only — we never send the stand-down
+  // email here. The cron sweeps do it: dispatchPendingViolations suppresses a
+  // not-yet-sent dispatch (via the pass's exited_at), and sweepPendingStandDowns
+  // sends exactly one stand-down when a dispatch already went out. This avoids
+  // the same-tick double-send race. Mirrors truck_plaza_exit.ts.
   if (overstay && overstayViolationId) {
     const vUpd = await db.from("alpr_violations")
       .update({
         plate_event_id: plateEventId,
-        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads). Originally fired by overstay sweep.`,
+        left_before_tow_at: now.toISOString(),
+        status: "dismissed",
+        action_taken: "no_tow",
+        action_channel: "auto_left_before_tow",
+        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads). Vehicle left before tow — auto-cancelled.`,
       })
-      .eq("id", overstayViolationId);
+      .eq("id", overstayViolationId)
+      .is("left_before_tow_at", null);
     if (vUpd.error) throw vUpd.error;
   } else if (overstay) {
+    // Overstaying pass with no prior violation, but the camera just caught it
+    // leaving. Born dismissed/no_tow — the vehicle already left, so it must
+    // never be dispatched.
     const vIns = await db.from("alpr_violations").insert({
       property_id: propertyId,
       plate_event_id: plateEventId,
       plate_text: (prUsed && prPlateRaw && !tow ? prPlateRaw : chosenFrame.raw_plate).toUpperCase(),
-      status: "pending",
+      status: "dismissed",
+      action_taken: "no_tow",
+      action_channel: "auto_left_before_tow",
+      left_before_tow_at: now.toISOString(),
       violation_type: "overstay",
-      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads)`,
+      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads). Camera caught exit before tow — born no_tow.`,
     }).select("id").single();
     if (vIns.error) throw vIns.error;
     const candidateId = vIns.data.id as string;
@@ -525,6 +545,8 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
       .select("overstay_violation_id");
     if (claim.error) throw claim.error;
     if (!claim.data || claim.data.length === 0) {
+      // Lost the race — cron stamped its own (possibly dispatched) violation.
+      // Drop our duplicate and stand down the cron's row instead.
       await db.from("alpr_violations").delete().eq("id", candidateId);
       const reread = await db.from("visitor_passes")
         .select("overstay_violation_id")
@@ -535,24 +557,37 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
         await db.from("alpr_violations")
           .update({
             plate_event_id: plateEventId,
-            notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads, race-loser path).`,
+            left_before_tow_at: now.toISOString(),
+            status: "dismissed",
+            action_taken: "no_tow",
+            action_channel: "auto_left_before_tow",
+            notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads, race-loser path). Vehicle left before tow — auto-cancelled.`,
           })
-          .eq("id", overstayViolationId);
+          .eq("id", overstayViolationId)
+          .is("left_before_tow_at", null);
       }
     } else {
       overstayViolationId = candidateId;
     }
   }
 
+  // C4 (2026-05-29): flip status='cancelled'/cancelled_by='camera_exit' on the
+  // pass, same as truck_plaza_exit.ts — a weak-buffer exit is a real camera
+  // exit per the canonical lifecycle. Previously this path left status='active',
+  // so operators had to manually dismiss exited-but-active passes. The
+  // status IN ('active','expired') guard mirrors the C2 re-key.
   const upd = await db.from("visitor_passes")
     .update({
       exited_at: now.toISOString(),
       exited_via_camera_id: chosenFrame.camera_id,
       exited_via_plate_event_id: plateEventId,
       overstay_violation_id: overstayViolationId,
+      status: "cancelled",
+      cancelled_at: now.toISOString(),
+      cancelled_by: "camera_exit",
     })
     .eq("id", pass!.id)
-    .eq("status", "active")
+    .in("status", ["active", "expired"])
     .is("exited_at", null);
   if (upd.error) throw upd.error;
 
