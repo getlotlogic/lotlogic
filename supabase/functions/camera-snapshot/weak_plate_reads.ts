@@ -29,6 +29,19 @@ import {
   EXIT_GAP_MS,
 } from "./no_reg_violations.ts";
 
+// Plate-shape gate for no-registration violations. OCR off the side/back of a
+// truck routinely returns trailer brand names (WABASH, FREIGHTLINER), decals,
+// state names, and bare numbers — wrong-object detections, NOT weak plate
+// reads. Per Gabe (2026-05-29): OCR garbage must NOT be recognized/recorded as
+// a violation. Mirrors the SHAPE layer of isPlausiblePlate() in index.ts:
+// length 5-8 with at least one letter AND one digit. (normalizePlate only
+// strips punctuation, so pure-alpha brand words carry no digit → rejected.)
+const NO_REG_MIN_PLATE_LEN = Number(Deno.env.get("PR_MIN_PLATE_LEN") ?? "5");
+function looksLikePlate(normalized: string): boolean {
+  if (normalized.length < NO_REG_MIN_PLATE_LEN || normalized.length > 8) return false;
+  return /[A-Z]/.test(normalized) && /\d/.test(normalized);
+}
+
 export const BURST_WINDOW_MS = 30 * 1000;
 // Hard cap: if a group's OLDEST unprocessed read is older than this, force
 // a flush even if new reads keep arriving. Without this, a burst that
@@ -380,6 +393,14 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
     // Use plateForMatch (= PR's read when available, else best.normalized_plate)
     // — the weak_read's raw_plate is empty when buffered without sidecar OCR.
     if (!plateForMatch) {
+      return { outcome: "no_match", group_key: groupKey, chosen_plate: plateForMatch, reads_consumed: claimed.length };
+    }
+
+    // Reject OCR garbage (trailer brand text, decals, state names, bare
+    // numbers) before it becomes an operator-facing violation. This is a
+    // wrong-object detection, not a weak plate read.
+    if (!looksLikePlate(plateForMatch)) {
+      console.log(`weak_flush: skipped non-plate OCR text "${plateForMatch}" — no no-reg violation recorded (group=${groupKey})`);
       return { outcome: "no_match", group_key: groupKey, chosen_plate: plateForMatch, reads_consumed: claimed.length };
     }
 
