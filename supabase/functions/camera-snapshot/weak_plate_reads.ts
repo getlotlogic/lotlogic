@@ -19,7 +19,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
-import { plateSimilar, plateMatchesPartial } from "./sessions.ts";
+import { plateSimilar } from "./sessions.ts";
 import {
   findOpenViolation,
   insertViolation,
@@ -268,9 +268,12 @@ async function findActiveUnexitedPassFuzzy(
   for (const r of rows) {
     if (cands(r).some((p) => plateSimilar(p, normalized, true))) return wrap(r, true);
   }
-  for (const r of rows) {
-    if (cands(r).some((p) => plateMatchesPartial(normalized, p))) return wrap(r, true);
-  }
+  // Partial-substring tier REMOVED 2026-05-29 (smarter-matching). It was the
+  // path that mismatched 2R028 onto 24023 via a shared substring — the onboard
+  // matcher (findActiveUnexitedPass) dropped it for the same reason; this aligns
+  // the weak-buffer matcher with it. Exit-matching now stops at exact + ≤1-edit
+  // fuzzy; cross-camera/verified-pair tiers cover the "only saw part of it" case
+  // more safely.
   return null;
 }
 
