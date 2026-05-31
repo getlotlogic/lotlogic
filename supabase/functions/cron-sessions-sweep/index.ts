@@ -58,8 +58,11 @@ Deno.serve(async (_req: Request) => {
     const overstayExpired = await overstayExpiry();
     const passOverstay = await sweepUnexitedPassesForOverstay();
     const weakReads = await sweepWeakPlateReads();
-    const dispatch = await dispatchPendingViolations();
-    const standDowns = await sweepPendingStandDowns();
+    // Combined per-tick fan-out budget shared by dispatch + stand-downs so the
+    // two loops can't, together, burst the platform rate limiter (audit C1).
+    const fanoutBudget = { remaining: DISPATCH_FANOUT_MAX_PER_TICK };
+    const dispatch = await dispatchPendingViolations(fanoutBudget);
+    const standDowns = await sweepPendingStandDowns(fanoutBudget);
     const closedRegistered = await closeRegistered();
     const closedResident = await closeResident();
     const closedExpired = await closeExpired();
@@ -72,6 +75,7 @@ Deno.serve(async (_req: Request) => {
       pass_overstay_fired: passOverstay,
       weak_reads_flushed: weakReads,
       dispatched: dispatch.dispatched,
+      dispatch_rate_limited: dispatch.rate_limited,
       auto_no_tow_left_before_tow: dispatch.left_before_tow,
       stand_downs_sent: standDowns.sent,
       stand_downs_failed: standDowns.failed,
@@ -194,7 +198,7 @@ async function overstayExpiry(): Promise<number> {
     if (!pass?.valid_until) continue;
     if (new Date(pass.valid_until).getTime() >= graceCutoffMs) continue;
 
-    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "registered");
+    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "registered", "overstay");
     n++;
   }
   return n;
@@ -375,6 +379,14 @@ async function closeExpired(): Promise<number> {
 // that are leaving" reported on 2026-04-29.
 const DISPATCH_HOLD_MINUTES = Number(Deno.env.get("DISPATCH_HOLD_MINUTES") ?? "5");
 
+// Overstay recency cutoff. A pass that expired longer ago than this is too
+// stale to tow — the truck is almost certainly long gone, so dispatching now
+// would be a false tow. Stale overstays are still RECORDED (status='dismissed',
+// action_taken='no_tow') so they appear in the No-Tow log, but never
+// dispatched. Default 6h; tune via env. (Added 2026-05-29 with the C2 fix that
+// stopped the soft-expire status flip from silently dropping overstays.)
+const OVERSTAY_MAX_AGE_HOURS = Number(Deno.env.get("OVERSTAY_MAX_AGE_HOURS") ?? "6");
+
 // Truck-plaza proactive overstay sweep. Under the registration-as-entrance
 // model (handled by truck_plaza_exit.ts in camera-snapshot), an exit camera
 // stamps visitor_passes.exited_at + overstay_violation_id when it sees a
@@ -383,17 +395,33 @@ const DISPATCH_HOLD_MINUTES = Number(Deno.env.get("DISPATCH_HOLD_MINUTES") ?? "5
 // goes out without waiting for the eventual exit read.
 //
 // Matches: visitor_passes where valid_until < now, exited_at IS NULL,
-// overstay_violation_id IS NULL, status='active'. Per-property guard:
-// only properties whose property_type='truck_plaza' use this model.
+// overstay_violation_id IS NULL, status IN ('active','expired'). Per-property
+// guard: only properties whose property_type='truck_plaza' use this model.
+//
+// status IN ('active','expired') — NOT '=active' (fixed 2026-05-29, bug C2):
+// pass_expiry.py (every 5 min) and check-violations soft-expire passes
+// active→expired with no truck_plaza guard. The old `.eq("status","active")`
+// meant whichever ran first hid the pass from this sweep forever and the
+// overstay tow was silently lost. We key liveness off exited_at/
+// overstay_violation_id (durable) instead of status. 'cancelled'/'revoked'/
+// 'towed' are still excluded by the allowlist — never tow an operator-killed
+// or already-towed pass.
+//
+// Recency split: only passes that expired within OVERSTAY_MAX_AGE_HOURS get a
+// dispatchable (status='pending') overstay. Older expiries are recorded as
+// dismissed/no_tow ("missed overstay") so they show in the No-Tow log but
+// never page the partner for a truck that left long ago.
 async function sweepUnexitedPassesForOverstay(): Promise<number> {
-  const nowIso = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const staleCutoffIso = new Date(now.getTime() - OVERSTAY_MAX_AGE_HOURS * 3600 * 1000).toISOString();
   // Join via property_type filter — only truck_plaza properties participate.
   const { data: passes, error } = await db
     .from("visitor_passes")
-    .select("id, property_id, plate_text, properties!inner(property_type)")
+    .select("id, property_id, plate_text, valid_until, properties!inner(property_type)")
     .is("exited_at", null)
     .is("overstay_violation_id", null)
-    .eq("status", "active")
+    .in("status", ["active", "expired"])
     .lt("valid_until", nowIso)
     .eq("properties.property_type", "truck_plaza")
     .limit(200);
@@ -402,16 +430,30 @@ async function sweepUnexitedPassesForOverstay(): Promise<number> {
 
   let fired = 0;
   for (const p of passes) {
+    const stale = String((p as { valid_until: string }).valid_until) < staleCutoffIso;
     // Insert the violation. plate_event_id is null — there's no read; this
     // is a time-based fire. The eventual exit read in truck_plaza_exit will
     // backfill the actual exit camera + event ids onto the pass row.
-    const vIns = await db.from("alpr_violations").insert({
-      property_id: p.property_id,
-      plate_text: p.plate_text,
-      status: "pending",
-      violation_type: "overstay",
-      notes: `Pass valid_until passed without camera-detected exit. Fired by cron-sessions-sweep.`,
-    }).select("id").single();
+    // Recent → dispatchable 'pending'. Stale → 'dismissed'/'no_tow', logged
+    // only, never dispatched (vehicle presumed gone).
+    const row = stale
+      ? {
+          property_id: p.property_id,
+          plate_text: p.plate_text,
+          status: "dismissed",
+          action_taken: "no_tow",
+          action_channel: "auto_missed_stale",
+          violation_type: "overstay",
+          notes: `Pass valid_until passed >${OVERSTAY_MAX_AGE_HOURS}h ago without camera-detected exit. Logged as missed overstay; NOT dispatched (vehicle presumed gone). cron-sessions-sweep.`,
+        }
+      : {
+          property_id: p.property_id,
+          plate_text: p.plate_text,
+          status: "pending",
+          violation_type: "overstay",
+          notes: `Pass valid_until passed without camera-detected exit. Fired by cron-sessions-sweep.`,
+        };
+    const vIns = await db.from("alpr_violations").insert(row).select("id").single();
     if (vIns.error) {
       console.warn(`overstay_sweep: violation insert failed pass=${p.id}: ${vIns.error.message}`);
       continue;
@@ -436,7 +478,13 @@ async function sweepUnexitedPassesForOverstay(): Promise<number> {
       await db.from("alpr_violations").delete().eq("id", vIns.data.id);
       continue;
     }
-    fired++;
+    if (stale) {
+      // Recorded as dismissed/no_tow; not dispatched. overstay_violation_id is
+      // now stamped on the pass so this stale row is never reconsidered.
+      console.warn(`overstay_sweep: pass=${p.id} plate=${p.plate_text} expired >${OVERSTAY_MAX_AGE_HOURS}h ago — logged missed overstay, NOT dispatched`);
+    } else {
+      fired++;
+    }
   }
   return fired;
 }
@@ -494,27 +542,59 @@ async function sweepWeakPlateReads(): Promise<number> {
   return flushed;
 }
 
-// After this many failed dispatch attempts, the violation is moved out of
-// the pending queue by stamping a sentinel sms_sent_at + error message.
-// Operators see it in the dashboard as "dispatch failed — needs review"
-// instead of having the cron retry it every minute forever (e.g. when
-// the property's tow_company_id is missing → permanent 409).
+// After this many *non-rate-limit* failed dispatch attempts, the violation is
+// moved out of the pending queue (status='dispatch_failed') so the cron stops
+// retrying it every minute forever (e.g. when the property's tow_company_id is
+// missing → permanent 409). Rate-limit failures do NOT count toward this cap
+// (see failDispatch / isRateLimit) — they are transient platform backpressure,
+// not a dead row, and burning 3 attempts on them is exactly what stranded 120
+// real overstays in dispatch_failed (audit C1).
 const MAX_DISPATCH_ATTEMPTS = 3;
 
-async function dispatchPendingViolations(): Promise<{ dispatched: number; left_before_tow: number }> {
+// Throttle the dispatch + stand-down fan-out. dispatchPendingViolations and
+// sweepPendingStandDowns each used to fire up to 50 nested edge-function
+// invocations per tick, sequentially with no delay — ~100 combined. That trips
+// the Supabase per-trace platform rate limiter ("Rate limit exceeded for
+// trace … Retry after …ms"), which is what dropped the 120 overstays (audit
+// C1). Cap the COMBINED dispatch+stand-down sends per tick and space them out;
+// excess rolls over to the next minute's tick (the cron runs every 60s).
+const DISPATCH_FANOUT_MAX_PER_TICK = Number(Deno.env.get("DISPATCH_FANOUT_MAX_PER_TICK") ?? "8");
+const DISPATCH_FANOUT_DELAY_MS = Number(Deno.env.get("DISPATCH_FANOUT_DELAY_MS") ?? "300");
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// A dispatch failure is a (transient) rate-limit if the platform said so. These
+// must NOT count toward MAX_DISPATCH_ATTEMPTS and must NOT flip the row to
+// dispatch_failed — leave it pending so the next throttled tick retries it.
+function isRateLimit(status: number, errMsg: string): boolean {
+  if (status === 429) return true;
+  return /rate.?limit/i.test(errMsg) || /retry.?after/i.test(errMsg);
+}
+
+async function dispatchPendingViolations(budget: { remaining: number }): Promise<{ dispatched: number; left_before_tow: number; rate_limited: number }> {
   const cutoff = new Date(Date.now() - DISPATCH_HOLD_MINUTES * 60 * 1000).toISOString();
+  // Queue signal is dispatched_at IS NULL — NOT sms_sent_at IS NULL (audit C1).
+  // failDispatch used to stamp a sentinel sms_sent_at on cap-hit, so a
+  // dispatch_failed row matched neither "sms_sent_at IS NULL" nor
+  // "dispatch_attempts < 3" and was excluded from the queue forever. A row is
+  // genuinely un-dispatched iff dispatched_at IS NULL (tow-dispatch-email only
+  // stamps dispatched_at on a real send claim). We still exclude already-failed
+  // rows via the status filter so the operator-review queue isn't re-attempted.
   const { data: pending, error } = await db
     .from("alpr_violations")
     .select("id, session_id, violation_type, created_at, dispatch_attempts")
-    .is("sms_sent_at", null)
+    .is("dispatched_at", null)
+    .neq("status", "dispatch_failed")
+    .neq("status", "dismissed")
     .lt("dispatch_attempts", MAX_DISPATCH_ATTEMPTS)
     .lt("created_at", cutoff)
     .limit(50);
   if (error) throw error;
-  if (!pending || pending.length === 0) return { dispatched: 0, left_before_tow: 0 };
+  if (!pending || pending.length === 0) return { dispatched: 0, left_before_tow: 0, rate_limited: 0 };
 
   let dispatched = 0;
   let leftBeforeTow = 0;
+  let rateLimited = 0;
   const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
 
   for (const v of pending) {
@@ -552,12 +632,13 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
       // Truck was seen heading out during the post-violation hold —
       // they left before Frank would have rolled. Suppress the dispatch
       // and stamp the audit flag. NO email fires here (dispatch never
-      // went out, so there's nothing to stand down).
+      // went out, so there's nothing to stand down). This is a local DB
+      // write (no edge fan-out), so it does NOT consume the send budget.
       const upd = await db
         .from("alpr_violations")
         .update({
           left_before_tow_at: new Date().toISOString(),
-          sms_sent_at: new Date().toISOString(), // mark as "handled" so we don't retry
+          sms_sent_at: new Date().toISOString(), // legacy sentinel; status='dismissed' is the real queue exclusion now
           status: "dismissed",
           action_taken: "no_tow",
           action_channel: "auto_left_before_tow",
@@ -568,7 +649,7 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
           left_before_tow_email_sent_at: new Date().toISOString(),
         })
         .eq("id", v.id)
-        .is("sms_sent_at", null);
+        .is("dispatched_at", null);
       if (upd.error) console.warn(`auto-no-tow update failed for ${v.id}: ${upd.error.message}`);
       else {
         console.log(`auto_no_tow violation=${v.id} session=${v.session_id ?? "null"} signal=${sessionExitHinted ? "session_exit" : "pass_exited"} at=${exitSignal}`);
@@ -577,28 +658,54 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
       continue;
     }
 
+    // THROTTLE: each real send is one nested edge invocation. Stop once the
+    // combined per-tick budget is spent — remaining pending rows are picked up
+    // next tick. Without this cap the fan-out trips the platform rate limiter
+    // (audit C1).
+    if (budget.remaining <= 0) {
+      console.log(`dispatchPending: per-tick fan-out budget exhausted; ${pending.length} candidates this tick, remainder deferred to next cron`);
+      break;
+    }
+
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/tow-dispatch-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${internalToken}` },
         body: JSON.stringify({ violation_id: v.id }),
       });
+      budget.remaining--;
       if (!res.ok) {
         const body = await res.text().catch(() => "");
         const errMsg = `${res.status}: ${body.slice(0, 200)}`;
-        console.warn(`tow-dispatch-email failed for ${v.id}: ${errMsg}`);
-        await failDispatch(v.id, v.dispatch_attempts ?? 0, errMsg);
+        if (isRateLimit(res.status, errMsg)) {
+          // Transient platform backpressure — do NOT count it toward the cap
+          // and do NOT flip to dispatch_failed. Leave the row pending
+          // (dispatched_at stays NULL); the next throttled tick retries it.
+          rateLimited++;
+          console.warn(`tow-dispatch-email rate-limited for ${v.id} (left pending, not counted): ${errMsg}`);
+        } else {
+          console.warn(`tow-dispatch-email failed for ${v.id}: ${errMsg}`);
+          await failDispatch(v.id, v.dispatch_attempts ?? 0, errMsg);
+        }
       } else {
         dispatched++;
       }
     } catch (err) {
+      budget.remaining--;
       const errMsg = String(err).slice(0, 200);
-      console.warn(`tow-dispatch-email fetch failed for ${v.id}: ${errMsg}`);
-      await failDispatch(v.id, v.dispatch_attempts ?? 0, errMsg);
+      if (isRateLimit(0, errMsg)) {
+        rateLimited++;
+        console.warn(`tow-dispatch-email rate-limited (fetch) for ${v.id} (left pending, not counted): ${errMsg}`);
+      } else {
+        console.warn(`tow-dispatch-email fetch failed for ${v.id}: ${errMsg}`);
+        await failDispatch(v.id, v.dispatch_attempts ?? 0, errMsg);
+      }
     }
+    // Space out the fan-out so we don't burst the platform limiter.
+    if (budget.remaining > 0 && DISPATCH_FANOUT_DELAY_MS > 0) await sleep(DISPATCH_FANOUT_DELAY_MS);
   }
 
-  return { dispatched, left_before_tow: leftBeforeTow };
+  return { dispatched, left_before_tow: leftBeforeTow, rate_limited: rateLimited };
 }
 
 // Increment dispatch_attempts; on cap-hit, stamp a sentinel sms_sent_at
@@ -612,17 +719,24 @@ async function dispatchPendingViolations(): Promise<{ dispatched: number; left_b
 // rolls a truck on a ghost. This sweep is the safety net.
 //
 // Selects any violation where:
-//   - sms_sent_at IS NOT NULL          (original dispatch went out)
+//   - dispatched_at IS NOT NULL        (a tow email ACTUALLY went out)
 //   - left_before_tow_at IS NOT NULL   (camera-confirmed exit)
 //   - left_before_tow_email_sent_at IS NULL  (stand-down email not yet acked)
 // Fires tow-dispatch-email with notification_kind=left_before_tow. The
 // edge function atomically claims left_before_tow_email_sent_at on success.
 // On failure, the column stays NULL and next tick retries.
-async function sweepPendingStandDowns(): Promise<{ sent: number; failed: number }> {
+//
+// Gate is dispatched_at IS NOT NULL — NOT sms_sent_at IS NOT NULL (audit M3).
+// failDispatch and the auto-no-tow suppression both stamp sms_sent_at WITHOUT
+// ever sending a tow email. Keying the stand-down on that sentinel told the
+// partner to "STAND DOWN" on a tow that was never dispatched — a phantom
+// stand-down (manifested live). dispatched_at is set ONLY by tow-dispatch-email
+// on a real send claim, so it's the true "a dispatch went out" signal.
+async function sweepPendingStandDowns(budget: { remaining: number }): Promise<{ sent: number; failed: number }> {
   const { data: pending, error } = await db
     .from("alpr_violations")
     .select("id")
-    .not("sms_sent_at", "is", null)
+    .not("dispatched_at", "is", null)
     .not("left_before_tow_at", "is", null)
     .is("left_before_tow_email_sent_at", null)
     .limit(50);
@@ -636,12 +750,19 @@ async function sweepPendingStandDowns(): Promise<{ sent: number; failed: number 
   let failed = 0;
   const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
   for (const v of pending) {
+    // Shares the combined per-tick fan-out budget with dispatchPendingViolations
+    // (audit C1) — stand-down sends are nested edge invocations too.
+    if (budget.remaining <= 0) {
+      console.log(`sweepPendingStandDowns: per-tick fan-out budget exhausted; remainder deferred to next cron`);
+      break;
+    }
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/tow-dispatch-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${internalToken}` },
         body: JSON.stringify({ violation_id: v.id, notification_kind: "left_before_tow" }),
       });
+      budget.remaining--;
       if (res.ok) {
         sent++;
         console.log(`stand_down_sent violation=${v.id}`);
@@ -651,15 +772,24 @@ async function sweepPendingStandDowns(): Promise<{ sent: number; failed: number 
         console.warn(`stand_down_send failed violation=${v.id} status=${res.status} body=${body.slice(0, 200)}`);
       }
     } catch (err) {
+      budget.remaining--;
       failed++;
       console.warn(`stand_down_send threw violation=${v.id} err=${String(err).slice(0, 200)}`);
     }
+    if (budget.remaining > 0 && DISPATCH_FANOUT_DELAY_MS > 0) await sleep(DISPATCH_FANOUT_DELAY_MS);
   }
   return { sent, failed };
 }
 
-// + status='dispatch_failed' so the row stops being re-tried and shows
-// up in the operator dashboard for manual review.
+// On cap-hit, status='dispatch_failed' so the row stops being re-tried (the
+// dispatch queue filters status != 'dispatch_failed') and shows up in the
+// operator dashboard for manual review. Called ONLY for non-rate-limit
+// failures (audit C1) — rate-limit failures leave the row pending. Note: we no
+// longer rely on sms_sent_at as the queue sentinel (it conflated "sent" with
+// "gave up" and stranded the dispatch_failed rows out of any requeue — audit
+// C1); the status filter + dispatched_at IS NULL is the real gate. We still
+// stamp sms_sent_at for backward-compat with any consumer that reads it, but it
+// is NOT load-bearing for queueing.
 async function failDispatch(violationId: string, currentAttempts: number, errMsg: string): Promise<void> {
   const newCount = currentAttempts + 1;
   if (newCount >= MAX_DISPATCH_ATTEMPTS) {
@@ -668,7 +798,7 @@ async function failDispatch(violationId: string, currentAttempts: number, errMsg
       .update({
         dispatch_attempts: newCount,
         last_dispatch_error: errMsg,
-        sms_sent_at: nowIso,  // sentinel: removes from pending queue
+        sms_sent_at: nowIso,  // legacy compat only; status='dispatch_failed' is the queue exclusion
         status: "dispatch_failed",
       })
       .eq("id", violationId);
@@ -686,6 +816,7 @@ async function createViolationAndDispatch(
   entryPlateEventId: string,
   sessionId: string,
   expectedState: "grace" | "registered",
+  violationType: string,
 ): Promise<void> {
   // Guard against a concurrent cron tick having already transitioned this
   // session. Try to claim the transition first via a conditional UPDATE;
@@ -713,7 +844,13 @@ async function createViolationAndDispatch(
       plate_event_id: entryPlateEventId,
       plate_text: plateText,
       status: "pending",
-      violation_type: "alpr_unmatched",
+      // Thread the real type (audit L1). The sole live caller is overstayExpiry
+      // (a registered pass that expired), so hardcoding 'alpr_unmatched' made
+      // the dispatch email render "Unregistered vehicle / no pass on file" while
+      // the body showed the actual expired pass — self-contradictory. The
+      // grace-expiry path no longer fires violations (it discards), so there is
+      // no genuine unregistered caller here today.
+      violation_type: violationType,
       session_id: sessionId,
     })
     .select("id")

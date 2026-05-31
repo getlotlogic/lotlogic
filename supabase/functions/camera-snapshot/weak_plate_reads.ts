@@ -19,7 +19,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
-import { plateSimilar, plateMatchesPartial } from "./sessions.ts";
+import { plateSimilar } from "./sessions.ts";
 import {
   findOpenViolation,
   insertViolation,
@@ -28,6 +28,19 @@ import {
   LINGER_MS,
   EXIT_GAP_MS,
 } from "./no_reg_violations.ts";
+
+// Plate-shape gate for no-registration violations. OCR off the side/back of a
+// truck routinely returns trailer brand names (WABASH, FREIGHTLINER), decals,
+// state names, and bare numbers — wrong-object detections, NOT weak plate
+// reads. Per Gabe (2026-05-29): OCR garbage must NOT be recognized/recorded as
+// a violation. Mirrors the SHAPE layer of isPlausiblePlate() in index.ts:
+// length 5-8 with at least one letter AND one digit. (normalizePlate only
+// strips punctuation, so pure-alpha brand words carry no digit → rejected.)
+const NO_REG_MIN_PLATE_LEN = Number(Deno.env.get("PR_MIN_PLATE_LEN") ?? "5");
+function looksLikePlate(normalized: string): boolean {
+  if (normalized.length < NO_REG_MIN_PLATE_LEN || normalized.length > 8) return false;
+  return /[A-Z]/.test(normalized) && /\d/.test(normalized);
+}
 
 export const BURST_WINDOW_MS = 30 * 1000;
 // Hard cap: if a group's OLDEST unprocessed read is older than this, force
@@ -225,7 +238,9 @@ async function findActiveUnexitedPassFuzzy(
     .from("visitor_passes")
     .select("id,valid_until,valid_from,plate_text,normalized_back_plate,overstay_violation_id")
     .eq("property_id", propertyId)
-    .eq("status", "active")
+    // active OR expired (C2, 2026-05-29): pass_expiry.py may soft-expire a pass
+    // before the SC211 buffer flushes its exit. cancelled/revoked/towed stay out.
+    .in("status", ["active", "expired"])
     .is("exited_at", null)
     .order("valid_from", { ascending: false })
     .limit(200);
@@ -253,9 +268,12 @@ async function findActiveUnexitedPassFuzzy(
   for (const r of rows) {
     if (cands(r).some((p) => plateSimilar(p, normalized, true))) return wrap(r, true);
   }
-  for (const r of rows) {
-    if (cands(r).some((p) => plateMatchesPartial(normalized, p))) return wrap(r, true);
-  }
+  // Partial-substring tier REMOVED 2026-05-29 (smarter-matching). It was the
+  // path that mismatched 2R028 onto 24023 via a shared substring — the onboard
+  // matcher (findActiveUnexitedPass) dropped it for the same reason; this aligns
+  // the weak-buffer matcher with it. Exit-matching now stops at exact + ≤1-edit
+  // fuzzy; cross-camera/verified-pair tiers cover the "only saw part of it" case
+  // more safely.
   return null;
 }
 
@@ -381,6 +399,14 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
       return { outcome: "no_match", group_key: groupKey, chosen_plate: plateForMatch, reads_consumed: claimed.length };
     }
 
+    // Reject OCR garbage (trailer brand text, decals, state names, bare
+    // numbers) before it becomes an operator-facing violation. This is a
+    // wrong-object detection, not a weak plate read.
+    if (!looksLikePlate(plateForMatch)) {
+      console.log(`weak_flush: skipped non-plate OCR text "${plateForMatch}" — no no-reg violation recorded (group=${groupKey})`);
+      return { outcome: "no_match", group_key: groupKey, chosen_plate: plateForMatch, reads_consumed: claimed.length };
+    }
+
     const burst_min = claimed.reduce(
       (m, r) => (new Date(r.seen_at) < m ? new Date(r.seen_at) : m),
       new Date(claimed[0].seen_at),
@@ -498,22 +524,40 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
   //    safely claim the pass — cron may have stamped its own id between
   //    our SELECT and our claim; in that case delete our duplicate.
   let overstayViolationId: string | null = pass!.overstay_violation_id ?? null;
+  // C4 (2026-05-29): a weak-buffer exit IS a real camera exit. If an overstay
+  // violation already exists (cron fired it, possibly dispatched), atomically
+  // claim the left-before-tow state. Stamp-only — we never send the stand-down
+  // email here. The cron sweeps do it: dispatchPendingViolations suppresses a
+  // not-yet-sent dispatch (via the pass's exited_at), and sweepPendingStandDowns
+  // sends exactly one stand-down when a dispatch already went out. This avoids
+  // the same-tick double-send race. Mirrors truck_plaza_exit.ts.
   if (overstay && overstayViolationId) {
     const vUpd = await db.from("alpr_violations")
       .update({
         plate_event_id: plateEventId,
-        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads). Originally fired by overstay sweep.`,
+        left_before_tow_at: now.toISOString(),
+        status: "dismissed",
+        action_taken: "no_tow",
+        action_channel: "auto_left_before_tow",
+        notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads). Vehicle left before tow — auto-cancelled.`,
       })
-      .eq("id", overstayViolationId);
+      .eq("id", overstayViolationId)
+      .is("left_before_tow_at", null);
     if (vUpd.error) throw vUpd.error;
   } else if (overstay) {
+    // Overstaying pass with no prior violation, but the camera just caught it
+    // leaving. Born dismissed/no_tow — the vehicle already left, so it must
+    // never be dispatched.
     const vIns = await db.from("alpr_violations").insert({
       property_id: propertyId,
       plate_event_id: plateEventId,
       plate_text: (prUsed && prPlateRaw && !tow ? prPlateRaw : chosenFrame.raw_plate).toUpperCase(),
-      status: "pending",
+      status: "dismissed",
+      action_taken: "no_tow",
+      action_channel: "auto_left_before_tow",
+      left_before_tow_at: now.toISOString(),
       violation_type: "overstay",
-      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads)`,
+      notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads). Camera caught exit before tow — born no_tow.`,
     }).select("id").single();
     if (vIns.error) throw vIns.error;
     const candidateId = vIns.data.id as string;
@@ -525,6 +569,8 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
       .select("overstay_violation_id");
     if (claim.error) throw claim.error;
     if (!claim.data || claim.data.length === 0) {
+      // Lost the race — cron stamped its own (possibly dispatched) violation.
+      // Drop our duplicate and stand down the cron's row instead.
       await db.from("alpr_violations").delete().eq("id", candidateId);
       const reread = await db.from("visitor_passes")
         .select("overstay_violation_id")
@@ -535,24 +581,37 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
         await db.from("alpr_violations")
           .update({
             plate_event_id: plateEventId,
-            notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads, race-loser path).`,
+            left_before_tow_at: now.toISOString(),
+            status: "dismissed",
+            action_taken: "no_tow",
+            action_channel: "auto_left_before_tow",
+            notes: `Pass valid until ${pass!.valid_until}; exited at ${now.toISOString()} via SC211 burst flush (${claimed.length} reads, race-loser path). Vehicle left before tow — auto-cancelled.`,
           })
-          .eq("id", overstayViolationId);
+          .eq("id", overstayViolationId)
+          .is("left_before_tow_at", null);
       }
     } else {
       overstayViolationId = candidateId;
     }
   }
 
+  // C4 (2026-05-29): flip status='cancelled'/cancelled_by='camera_exit' on the
+  // pass, same as truck_plaza_exit.ts — a weak-buffer exit is a real camera
+  // exit per the canonical lifecycle. Previously this path left status='active',
+  // so operators had to manually dismiss exited-but-active passes. The
+  // status IN ('active','expired') guard mirrors the C2 re-key.
   const upd = await db.from("visitor_passes")
     .update({
       exited_at: now.toISOString(),
       exited_via_camera_id: chosenFrame.camera_id,
       exited_via_plate_event_id: plateEventId,
       overstay_violation_id: overstayViolationId,
+      status: "cancelled",
+      cancelled_at: now.toISOString(),
+      cancelled_by: "camera_exit",
     })
     .eq("id", pass!.id)
-    .eq("status", "active")
+    .in("status", ["active", "expired"])
     .is("exited_at", null);
   if (upd.error) throw upd.error;
 
@@ -561,3 +620,4 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
   }
   return { outcome: "exit_clean", pass_id: pass!.id, reads_consumed: claimed.length };
 }
+

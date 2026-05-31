@@ -309,7 +309,12 @@ async function notifyOwnerOfTruckArrival(
     timeStyle: "short",
   });
 
-  const fromEmail = Deno.env.get("FROM_EMAIL") || "noreply@lotlogic.com";
+  // Fall back to the SendGrid/Resend domain-authenticated sender (audit L2).
+  // The old "noreply@lotlogic.com" default is unauthenticated — DKIM/SPF fail
+  // for that domain, so if FROM_EMAIL ever got unset the owner's truck-arrival
+  // notification would silently land in spam. Matches tow-dispatch-email's
+  // fallback (dispatch@lotlogicparking.com).
+  const fromEmail = Deno.env.get("FROM_EMAIL") || "dispatch@lotlogicparking.com";
   const overrideTo = Deno.env.get("EMAIL_OVERRIDE_TO");
   const recipient = overrideTo || owner.email;
 

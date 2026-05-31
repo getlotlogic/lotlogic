@@ -52,11 +52,16 @@ export type TruckPlazaPayload = {
   rawMeta: Record<string, unknown> | null;
 };
 
+// plate / confidence are surfaced on every outcome that produced a durable
+// plate_event so the caller (index.ts) can fire tow-confirm exit-correlation
+// for the truck_plaza path (audit H1). truck_plaza returns before the legacy
+// path that used to fire tow-confirm, so without these the correlator never
+// ran — 47 sightings, 0 auto-confirmed tows.
 export type TruckPlazaResult =
   | { outcome: "dropped"; reason: string }
-  | { outcome: "exit_clean"; pass_id: string; plate_event_id: string }
-  | { outcome: "exit_overstay"; pass_id: string; plate_event_id: string; violation_id: string }
-  | { outcome: "partner_truck_sighting"; partner_id: string; plate_event_id: string; sighting_id: string }
+  | { outcome: "exit_clean"; pass_id: string; plate_event_id: string; plate: string; confidence: number }
+  | { outcome: "exit_overstay"; pass_id: string; plate_event_id: string; violation_id: string; plate: string; confidence: number }
+  | { outcome: "partner_truck_sighting"; partner_id: string; plate_event_id: string; sighting_id: string; plate: string; confidence: number }
   | { outcome: "buffered"; weak_read_id: string; opportunistic_flushed: number };
 
 type ResolvedPlate = { raw: string; normalized: string; confidence: number | null; source: "onboard" | "pr" };
@@ -67,6 +72,16 @@ type ResolvedPlate = { raw: string; normalized: string; confidence: number | nul
 // buffer everything the sidecar produces. Best-of-N over a burst window
 // will surface the strongest read across multiple frames anyway.
 export const SC211_SIDECAR_FLOOR = 0.0;
+
+// Minimum read confidence for a DIRECT FUZZY (≤1-edit OCR-confusable) match to
+// cancel a pass. Exact, cross-camera, and operator-verified-pair matches are
+// NOT gated — they cancel at ANY confidence (exact plate / ground truth, per
+// the canonical "any read = exit" rule). This guards ONLY the fuzzy tier so a
+// low-confidence garbage read can't fuzzy-cancel the wrong truck's pass.
+// 0.65 default chosen over 0.85: real fuzzy exits have been observed down to
+// ~0.63, and onboard reads <0.25 are already rescued to PR-exact upstream.
+// Env-tunable; log-and-retune as data accumulates.
+const TRUCK_FUZZY_CANCEL_MIN = Number(Deno.env.get("TRUCK_FUZZY_CANCEL_MIN") ?? "0.65");
 
 // Group key for burst dedup. SC211s at the same gate share a group so
 // the best frame across cameras gets chosen as the winning read.
@@ -121,7 +136,10 @@ async function findActiveUnexitedPass(
     .from("visitor_passes")
     .select("id,valid_until,valid_from,plate_text,back_plate,normalized_back_plate,overstay_violation_id")
     .eq("property_id", propertyId)
-    .eq("status", "active")
+    // active OR expired: pass_expiry.py may have soft-expired a pass before the
+    // camera caught the exit. We must still match it to close it out. cancelled/
+    // revoked/towed remain excluded (operator-killed passes never re-open).
+    .in("status", ["active", "expired"])
     .is("exited_at", null)
     .order("valid_from", { ascending: false })
     .limit(200);
@@ -256,19 +274,34 @@ async function findVerifiedPairPassMatch(
     .or(`plate_a.eq.${plate},plate_b.eq.${plate}`);
   if (error || !pairs || pairs.length === 0) return null;
 
+  // Collect EVERY verified-partner that resolves to an active pass. A plate can
+  // be verified-paired with more than one partner (a tractor that swaps
+  // trailers, or an operator mis-verify) — and the schema permits it.
+  const matches: { pass: PassMatch; pairedPlate: string; pairId: string; verifiedBy: string | null }[] = [];
   for (const p of pairs) {
     const partnerPlate = p.plate_a === plate ? p.plate_b : p.plate_a;
     const pass = await findActiveUnexitedPass(db, propertyId, partnerPlate, eventTime, { exactOnly: true });
     if (pass) {
-      return {
+      matches.push({
         pass: { ...pass, fuzzy: true }, // tag fuzzy for audit; the link is the verified pair
         pairedPlate: partnerPlate,
         pairId: p.id,
         verifiedBy: p.verified_by ?? null,
-      };
+      });
     }
   }
-  return null;
+  // Multi-partner SAFETY: if this plate's verified pairs point at MORE THAN ONE
+  // distinct active pass, we cannot know which truck actually left. Auto-closing
+  // an arbitrary one would cancel the wrong truck's pass (→ missed tow) and miss
+  // the real one (→ false tow). Surface for operator review instead of guessing.
+  const distinctPassIds = new Set(matches.map((m) => m.pass.id));
+  if (distinctPassIds.size > 1) {
+    console.warn(
+      `verified_pair: plate "${plate}" maps to ${distinctPassIds.size} distinct active passes — ambiguous, NOT auto-closing (operator review)`,
+    );
+    return null;
+  }
+  return matches[0] ?? null;
 }
 
 // Tow-truck sighting candidate. property.tow_company_id points at the
@@ -536,6 +569,23 @@ export async function handleTruckPlazaExit(args: {
           };
         }
       }
+      // CONFIDENCE GATE — fuzzy-direct tier ONLY. A direct ≤1-edit fuzzy match
+      // is the one tier that can mis-fire on a garbage read, so require the
+      // read's own confidence to clear TRUCK_FUZZY_CANCEL_MIN before it cancels
+      // a pass. Exact (pass.fuzzy=false), cross-camera (exact on the OTHER
+      // camera's read), and verified-pair (operator ground truth) are NOT
+      // gated — they cancel at any confidence. Keying on the tier (not the
+      // pass.fuzzy flag, which cross-camera + verified-pair also set true) is
+      // critical: gating those would refuse legitimate ground-truth exits.
+      if (
+        pass && pass.fuzzy && !crossCameraUnification && !verifiedPairMatch &&
+        (resolved.confidence ?? 0) < TRUCK_FUZZY_CANCEL_MIN
+      ) {
+        console.log(
+          `truck_plaza_exit: fuzzy match "${resolved.normalized}" → pass ${pass.id} REJECTED, read conf ${(resolved.confidence ?? 0).toFixed(2)} < ${TRUCK_FUZZY_CANCEL_MIN} (no cancel)`,
+        );
+        pass = null;
+      }
     }
   }
 
@@ -615,6 +665,8 @@ export async function handleTruckPlazaExit(args: {
       partner_id: tow.partner_id,
       plate_event_id: plateEventId,
       sighting_id: sIns.data.id as string,
+      plate: resolved.normalized,
+      confidence: resolved.confidence ?? 0,
     };
   }
 
@@ -646,14 +698,16 @@ export async function handleTruckPlazaExit(args: {
       })
       .eq("id", overstayViolationId)
       .is("left_before_tow_at", null)
-      .select("id, sms_sent_at")
+      .select("id, dispatched_at")
       .maybeSingle();
     if (claim.error) throw claim.error;
-    // If sms_sent_at was set on the claimed row, the partner already
-    // got the dispatch email — fire a follow-up "stand down" notice
-    // so they don't roll a truck. If null, no one was notified yet
-    // and there's nothing to cancel.
-    if (claim.data?.sms_sent_at) {
+    // Gate on dispatched_at — NOT sms_sent_at (audit M3). sms_sent_at is also
+    // stamped by failDispatch / auto-no-tow suppression WITHOUT a tow email
+    // ever going out, so keying the stand-down on it pages the partner to
+    // "STAND DOWN" on a tow that was never dispatched. dispatched_at is set
+    // only by tow-dispatch-email on a real send, so it's the true "they got
+    // the dispatch email" signal. If null, nothing was sent — nothing to cancel.
+    if (claim.data?.dispatched_at) {
       args.notifyLeftBeforeTow?.(overstayViolationId);
     }
   } else if (overstay) {
@@ -708,9 +762,10 @@ export async function handleTruckPlazaExit(args: {
           })
           .eq("id", overstayViolationId)
           .is("left_before_tow_at", null)
-          .select("id, sms_sent_at")
+          .select("id, dispatched_at")
           .maybeSingle();
-        if (raceClaim.data?.sms_sent_at) {
+        // Gate on dispatched_at (a real send) not sms_sent_at — audit M3.
+        if (raceClaim.data?.dispatched_at) {
           args.notifyLeftBeforeTow?.(overstayViolationId);
         }
       }
@@ -720,11 +775,13 @@ export async function handleTruckPlazaExit(args: {
   }
 
   // Status filter is critical: between our SELECT and this UPDATE, an
-  // operator may have cancelled the pass. Without `.eq("status", "active")`
-  // we'd stamp exited_at on a cancelled pass — the pass would then show
-  // both cancelled AND camera-exited, confusing the dashboard and
-  // breaking the close-clean flow. exited_at IS NULL is necessary too:
-  // another flusher may have stamped exit already (e.g. weak_reads).
+  // operator may have cancelled the pass. We match `status IN
+  // ('active','expired')` — NOT just 'active' (widened 2026-05-29, bug C2):
+  // pass_expiry.py may have soft-expired the pass before the camera caught
+  // the exit, and we must still close it out. cancelled/revoked/towed stay
+  // excluded so we never stamp exited_at over an operator-killed pass. The
+  // exited_at IS NULL guard is necessary too: another flusher may have
+  // stamped exit already (e.g. weak_reads).
   //
   // STATUS TRANSITION: we now flip status='cancelled' on every camera
   // exit per the truck-plaza pass lifecycle (see
@@ -739,11 +796,6 @@ export async function handleTruckPlazaExit(args: {
   // If this exit was found via a verified pair, mark the pair as resolved
   // so the dashboard can show "this verified pair closed a pass" — and
   // future analytics can see how operator labels are paying off.
-  if (verifiedPairMatch) {
-    await db.from("inferred_plate_pairs")
-      .update({ resolved_pass_id: pass!.id, resolved_at: now.toISOString() })
-      .eq("id", verifiedPairMatch.pairId);
-  }
   const upd = await db.from("visitor_passes")
     .update({
       exited_at: now.toISOString(),
@@ -756,16 +808,28 @@ export async function handleTruckPlazaExit(args: {
       // branches above. Don't touch it here.
     })
     .eq("id", pass!.id)
-    .eq("status", "active")
-    .is("exited_at", null);
+    .in("status", ["active", "expired"])
+    .is("exited_at", null)
+    .select("id");
   if (upd.error) throw upd.error;
+
+  // If this exit was found via a verified pair, mark the pair as resolved so
+  // the dashboard can show "this verified pair closed a pass" — but ONLY if the
+  // UPDATE actually closed a row. The UPDATE can no-op (operator cancelled the
+  // pass between our SELECT and here); stamping resolved_pass_id then would be
+  // a lie downstream consumers might trust.
+  if (verifiedPairMatch && upd.data && upd.data.length > 0) {
+    await db.from("inferred_plate_pairs")
+      .update({ resolved_pass_id: pass!.id, resolved_at: now.toISOString() })
+      .eq("id", verifiedPairMatch.pairId);
+  }
 
   // overstayViolationId can be null in the triple-race where cron deleted
   // its own duplicate violation between our claim-failed UPDATE and our
   // re-read. Return exit_clean rather than a misleading exit_overstay
   // with violation_id=undefined.
   if (overstay && overstayViolationId) {
-    return { outcome: "exit_overstay", pass_id: pass!.id, plate_event_id: plateEventId, violation_id: overstayViolationId };
+    return { outcome: "exit_overstay", pass_id: pass!.id, plate_event_id: plateEventId, violation_id: overstayViolationId, plate: resolved.normalized, confidence: resolved.confidence ?? 0 };
   }
-  return { outcome: "exit_clean", pass_id: pass!.id, plate_event_id: plateEventId };
+  return { outcome: "exit_clean", pass_id: pass!.id, plate_event_id: plateEventId, plate: resolved.normalized, confidence: resolved.confidence ?? 0 };
 }
