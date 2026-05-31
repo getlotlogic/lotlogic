@@ -6477,8 +6477,11 @@ function normalizeTruckPlate(s) {
 }
 
 // Mirrors v_violation_billing_status (migration 20260418011558_tow_confirmation.sql:55-66)
-// byte-for-byte — returns the RAW status string so any code that compares against
-// the DB view's output stays in lockstep. Do NOT collapse buckets here; that's
+// for all DB-backed buckets — returns the RAW status string so any code that
+// compares against the DB view's output stays in lockstep. One INTENTIONAL
+// divergence: the leading `cooldown` branch below is a client-only bucket the
+// live view does NOT emit (cooldown rows are segregated in the UI; the backend
+// billing query excludes them separately). Do NOT collapse buckets here; that's
 // render-time formatting, see displayBucketFor below.
 function computeBillingStatus(v) {
   const a = v.action_taken;
@@ -9866,6 +9869,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   const [passTotalCount, setPassTotalCount] = useState(0);
   const [openSessions, setOpenSessions] = useState([]);
   const [activeHolds, setActiveHolds] = useState([]);
+  // Stuck tows — overstay violations whose partner dispatch exhausted its
+  // retries (status='dispatch_failed'). These are invisible everywhere else
+  // and never auto-retry, so the operator needs an explicit queue.
+  const [stuckDispatch, setStuckDispatch] = useState([]);
   // SC211: Possible no parking pass violations
   const [noRegViolations, setNoRegViolations] = useState([]);
   const [noRegActing, setNoRegActing] = useState(null); // id of row being acted on
@@ -9957,6 +9964,22 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   }, [propertyId]);
 
   useEffect(() => { loadNoReg(); }, [loadNoReg]);
+
+  // Stuck tows: overstay violations the dispatch pipeline gave up on
+  // (status='dispatch_failed'). The partner was never paged and nothing
+  // retries, so without this surface they sit invisible forever. Read-only
+  // queue — the operator escalates manually; we don't auto-act from the UI.
+  const loadStuckDispatch = useCallback(async () => {
+    if (!propertyId) return;
+    try {
+      const rows = await db.getALPRViolations(propertyId, 'dispatch_failed');
+      setStuckDispatch(rows || []);
+    } catch (err) {
+      console.warn('stuck-dispatch load failed:', err.message);
+    }
+  }, [propertyId]);
+
+  useEffect(() => { loadStuckDispatch(); }, [loadStuckDispatch]);
 
   // Evidence packages are FYI — dismiss is purely local (hide from operator
   // view). No backend mutation, no notifications. Bundles also auto-clear
@@ -10327,6 +10350,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             <div className="pd-qr-url">{tempUrl}</div>
             <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast('Self-serve link copied', 'success'); }}>Copy link</button>
           </div>
+          {/* Long-term (owner-approved) QR is apartment-only. On a truck plaza
+              the /perm form short-circuits to a dead end, so don't surface the
+              tile — employees are added via the Approved Plates editor instead. */}
+          {!isTruckPlaza && (
           <div className="pd-qr-tile">
             <div className="pd-qr-head">
               <span className="pd-share-label" style={{color:'#4ade80'}}>Long-term pass</span>
@@ -10336,6 +10363,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             <div className="pd-qr-url">{permUrl}</div>
             <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(permUrl); addToast('Long-term link copied', 'success'); }}>Copy link</button>
           </div>
+          )}
         </div>
       )}
 
@@ -10513,19 +10541,42 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           )}
 
           <div style={{display:'flex',flexDirection:'column',gap:6}}>
-            {cameras.map(c => (
+            {cameras.map(c => {
+              // Health badge: a camera flagged active is only truly healthy if
+              // it has phoned home recently. last_seen_at is written by
+              // camera-snapshot on every accepted POST. A disabled camera shows
+              // a flat "Disabled"; an active one with no/old heartbeat surfaces
+              // the brownout (solar/RUT) so dead cameras stop showing green.
+              const seenMs = c.last_seen_at ? new Date(c.last_seen_at).getTime() : null;
+              const ageMin = seenMs ? (nowTick - seenMs) / 60000 : null;
+              let badge;
+              if (!c.active) {
+                badge = { label: 'Disabled', color: '#ef4444', bg: 'rgba(239,68,68,.12)' };
+              } else if (ageMin == null) {
+                badge = { label: 'No heartbeat', color: '#ef4444', bg: 'rgba(239,68,68,.12)' };
+              } else if (ageMin > 60) {
+                badge = { label: 'Stale', color: '#ef4444', bg: 'rgba(239,68,68,.12)' };
+              } else if (ageMin > 15) {
+                badge = { label: 'Delayed', color: '#fbbf24', bg: 'rgba(251,191,36,.12)' };
+              } else {
+                badge = { label: 'Active', color: '#4ade80', bg: 'rgba(74,222,128,.12)' };
+              }
+              return (
               <div key={c.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px'}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                   <div style={{fontWeight:700,fontSize:14,color:'var(--text-primary)'}}>{c.name}</div>
                   <div style={{display:'flex',gap:6,alignItems:'center'}}>
-                    <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:c.active?'rgba(74,222,128,.12)':'rgba(239,68,68,.12)',color:c.active?'#4ade80':'#ef4444'}}>{c.active ? 'Active' : 'Disabled'}</span>
+                    <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:6,background:badge.bg,color:badge.color}}>{badge.label}</span>
                     <button onClick={async () => { if (!confirm('Remove camera "' + c.name + '"?')) return; try { await db.removeALPRCamera(c.id); const cams = await db.getALPRCameras(propertyId); setCameras(cams); } catch (err) { addToast('Failed to remove camera. ' + (err.message || ''), 'error'); } }} style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700,cursor:'pointer'}}>Remove</button>
                   </div>
                 </div>
                 {c.location_description && <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{c.location_description}</div>}
-                {c.last_seen_at && <div style={{fontSize:11,color:'var(--text-faint)',marginTop:2}}>Last seen: {new Date(c.last_seen_at).toLocaleString()}</div>}
+                {c.last_seen_at
+                  ? <div style={{fontSize:11,color:'var(--text-faint)',marginTop:2}}>Last seen: {new Date(c.last_seen_at).toLocaleString()}</div>
+                  : c.active && <div style={{fontSize:11,color:'#ef4444',marginTop:2}}>No heartbeat received yet</div>}
               </div>
-            ))}
+              );
+            })}
             {cameras.length === 0 && <div className="pd-empty">No cameras registered</div>}
           </div>
         </>
@@ -10687,6 +10738,44 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           </div>
         );
       })()}
+
+      {/* Stuck Tows — overstay violations whose partner dispatch exhausted its
+          retries (status='dispatch_failed'). Nobody was paged and nothing
+          retries, so this is the only place they surface. Owner-only; read-only
+          escalation queue. */}
+      {isOwner && stuckDispatch.length > 0 && (
+        <>
+          <div className="pd-section-head">
+            <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+              <span className="pd-section-title">Stuck Tows</span>
+              <span className="pd-section-count">{stuckDispatch.length}</span>
+            </div>
+            <div className="pd-section-meta" style={{color:'#f87171'}}>Dispatch failed — partner not notified</div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:16}}>
+            {stuckDispatch.slice(0, 25).map(v => {
+              const ev = Array.isArray(v.plate_events) ? v.plate_events[0] : v.plate_events;
+              const camName = ev?.alpr_cameras?.name;
+              return (
+                <div key={v.id} style={{background:'var(--bg-card)',border:'1px solid rgba(248,113,113,.3)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
+                  {ev?.image_url && <img src={ev.image_url} alt="plate" loading="lazy" style={{width:60,height:46,objectFit:'cover',borderRadius:6,border:'1px solid var(--border-subtle)',flexShrink:0}} />}
+                  <div style={{minWidth:0,flex:1}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                      <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{v.plate_text}</span>
+                      <span style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',padding:'3px 8px',borderRadius:20,background:'rgba(248,113,113,.12)',color:'#f87171',border:'1px solid rgba(248,113,113,.4)'}}>Dispatch failed</span>
+                      {typeof v.dispatch_attempts === 'number' && <span style={{fontSize:11,color:'var(--text-faint)'}}>{v.dispatch_attempts} attempts</span>}
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text-muted)',marginTop:3}}>
+                      {camName ? camName + ' · ' : ''}{new Date(v.created_at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
+                    </div>
+                    {v.last_dispatch_error && <div style={{fontSize:10,color:'var(--text-faint)',marginTop:2,fontStyle:'italic',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{v.last_dispatch_error}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* Needs Review — match_status held for human decision before enforcement.
           Owner-only: partners don't approve flagged plate events. */}

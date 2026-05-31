@@ -672,24 +672,10 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const refId = (result.reference_id || '').toString().toUpperCase();
         showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot: null, placardColor, companyName});
       } catch (err) {
-        // Cooldown rejection — backend returns the raw trigger message which
-        // looks like "this plate is in 24-hour cooldown until 2026-05-01
-        // 02:06:00+00 UTC". Drivers can't parse the UTC ISO timestamp;
-        // reformat to local time and strip the "COOLDOWN:" prefix if present.
-        const msg = (err && err.message) || '';
-        const cooldownMatch = msg.match(/cooldown.*until\s+(\S+(?:\s+\S+)?)/i);
-        if (cooldownMatch) {
-          const isoLike = cooldownMatch[1].replace(/\+00\s*UTC/i, 'Z').replace(' ', 'T');
-          const d = new Date(isoLike);
-          const local = isFinite(d.getTime())
-            ? d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
-            : cooldownMatch[1];
-          errorDiv.innerHTML = '<div class="error">This plate is in a 24-hour cooldown. You can register again at ' + escapeHtml(local) + '. If you believe this is in error, please contact the property.</div>';
-          btn.disabled = false;
-          btn.textContent = 'Get parking pass';
-          submitting = false;
-          return;
-        }
+        // Cooldown is allow + flag as of 2026-05-31 — the DB trigger no longer
+        // blocks re-registration and the backend register endpoint no longer
+        // returns a 409, so there is nothing to special-case here. The
+        // pre-flight check above already surfaces an active cooldown advisory.
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
         btn.textContent = 'Get parking pass';
