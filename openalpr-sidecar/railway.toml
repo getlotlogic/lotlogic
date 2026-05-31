@@ -9,4 +9,8 @@ healthcheckPath = "/health"
 # easyocr-only v2 stack which needed 300s).
 healthcheckTimeout = 60
 restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 3
+# Was 3 — exhausted on 2026-05-15 when PaddleOCR full-frame segfaulted
+# repeatedly on the same input and the service stayed dead for 3 days
+# until manual redeploy. 10 gives ample headroom for transient crashes
+# while still avoiding crashloops on genuinely broken builds.
+restartPolicyMaxRetries = 10

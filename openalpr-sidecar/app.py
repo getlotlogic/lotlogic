@@ -164,6 +164,15 @@ easyocr_reader = None  # only loaded if ENABLE_EASYOCR_FALLBACK=true
 paddle_reader = None
 paddle_load_error: Optional[str] = None
 ENABLE_PADDLE_OCR = os.environ.get("ENABLE_PADDLE_OCR", "true").lower() == "true"
+# Paddle's full-frame OCR (called when YOLO finds nothing, or YOLO found
+# boxes but OCR produced no plates) segfaulted in PaddlePredictor's
+# native C++ on 2026-05-15 (dt_boxes=44 from a noisy frame). SIGSEGV
+# bypasses Python's try/except, kills the process. Railway exhausted
+# its restart retries hitting the same crash and the sidecar stayed
+# dead until manual redeploy. The per-crop Paddle path (`det=False`
+# on YOLO-bounded crops) is bounded and unaffected — only the
+# full-frame paths are gated by this flag.
+ENABLE_PADDLE_FULL_FRAME = os.environ.get("ENABLE_PADDLE_FULL_FRAME", "false").lower() == "true"
 
 # DETR plate detector (transformer-based). When enabled, runs alongside
 # YOLO and contributes detections from a different architecture family —
@@ -766,7 +775,7 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
         return out
 
     used_paddle_full_frame = False
-    if raw_detection_count == 0 and paddle_reader is not None:
+    if raw_detection_count == 0 and paddle_reader is not None and ENABLE_PADDLE_FULL_FRAME:
         try:
             full_results = paddle_reader.ocr(img, cls=False)
         except Exception:
@@ -856,7 +865,7 @@ def _run_pipeline(img: np.ndarray, camera_id: Optional[str] = None) -> Recognize
     # but OCR couldn't produce any usable plates, run paddle-on-full-frame
     # as a last resort. Uses the same plate-shape + camera-overlay filter
     # as the early fallback (rejects top-10% timestamp text + HHMMSS noise).
-    if not plates and paddle_reader is not None:
+    if not plates and paddle_reader is not None and ENABLE_PADDLE_FULL_FRAME:
         try:
             full_results = paddle_reader.ocr(img, cls=False)
         except Exception:
