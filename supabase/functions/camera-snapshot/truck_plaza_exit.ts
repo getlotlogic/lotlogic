@@ -52,11 +52,16 @@ export type TruckPlazaPayload = {
   rawMeta: Record<string, unknown> | null;
 };
 
+// plate / confidence are surfaced on every outcome that produced a durable
+// plate_event so the caller (index.ts) can fire tow-confirm exit-correlation
+// for the truck_plaza path (audit H1). truck_plaza returns before the legacy
+// path that used to fire tow-confirm, so without these the correlator never
+// ran — 47 sightings, 0 auto-confirmed tows.
 export type TruckPlazaResult =
   | { outcome: "dropped"; reason: string }
-  | { outcome: "exit_clean"; pass_id: string; plate_event_id: string }
-  | { outcome: "exit_overstay"; pass_id: string; plate_event_id: string; violation_id: string }
-  | { outcome: "partner_truck_sighting"; partner_id: string; plate_event_id: string; sighting_id: string }
+  | { outcome: "exit_clean"; pass_id: string; plate_event_id: string; plate: string; confidence: number }
+  | { outcome: "exit_overstay"; pass_id: string; plate_event_id: string; violation_id: string; plate: string; confidence: number }
+  | { outcome: "partner_truck_sighting"; partner_id: string; plate_event_id: string; sighting_id: string; plate: string; confidence: number }
   | { outcome: "buffered"; weak_read_id: string; opportunistic_flushed: number };
 
 type ResolvedPlate = { raw: string; normalized: string; confidence: number | null; source: "onboard" | "pr" };
@@ -660,6 +665,8 @@ export async function handleTruckPlazaExit(args: {
       partner_id: tow.partner_id,
       plate_event_id: plateEventId,
       sighting_id: sIns.data.id as string,
+      plate: resolved.normalized,
+      confidence: resolved.confidence ?? 0,
     };
   }
 
@@ -691,14 +698,16 @@ export async function handleTruckPlazaExit(args: {
       })
       .eq("id", overstayViolationId)
       .is("left_before_tow_at", null)
-      .select("id, sms_sent_at")
+      .select("id, dispatched_at")
       .maybeSingle();
     if (claim.error) throw claim.error;
-    // If sms_sent_at was set on the claimed row, the partner already
-    // got the dispatch email — fire a follow-up "stand down" notice
-    // so they don't roll a truck. If null, no one was notified yet
-    // and there's nothing to cancel.
-    if (claim.data?.sms_sent_at) {
+    // Gate on dispatched_at — NOT sms_sent_at (audit M3). sms_sent_at is also
+    // stamped by failDispatch / auto-no-tow suppression WITHOUT a tow email
+    // ever going out, so keying the stand-down on it pages the partner to
+    // "STAND DOWN" on a tow that was never dispatched. dispatched_at is set
+    // only by tow-dispatch-email on a real send, so it's the true "they got
+    // the dispatch email" signal. If null, nothing was sent — nothing to cancel.
+    if (claim.data?.dispatched_at) {
       args.notifyLeftBeforeTow?.(overstayViolationId);
     }
   } else if (overstay) {
@@ -753,9 +762,10 @@ export async function handleTruckPlazaExit(args: {
           })
           .eq("id", overstayViolationId)
           .is("left_before_tow_at", null)
-          .select("id, sms_sent_at")
+          .select("id, dispatched_at")
           .maybeSingle();
-        if (raceClaim.data?.sms_sent_at) {
+        // Gate on dispatched_at (a real send) not sms_sent_at — audit M3.
+        if (raceClaim.data?.dispatched_at) {
           args.notifyLeftBeforeTow?.(overstayViolationId);
         }
       }
@@ -819,7 +829,7 @@ export async function handleTruckPlazaExit(args: {
   // re-read. Return exit_clean rather than a misleading exit_overstay
   // with violation_id=undefined.
   if (overstay && overstayViolationId) {
-    return { outcome: "exit_overstay", pass_id: pass!.id, plate_event_id: plateEventId, violation_id: overstayViolationId };
+    return { outcome: "exit_overstay", pass_id: pass!.id, plate_event_id: plateEventId, violation_id: overstayViolationId, plate: resolved.normalized, confidence: resolved.confidence ?? 0 };
   }
-  return { outcome: "exit_clean", pass_id: pass!.id, plate_event_id: plateEventId };
+  return { outcome: "exit_clean", pass_id: pass!.id, plate_event_id: plateEventId, plate: resolved.normalized, confidence: resolved.confidence ?? 0 };
 }

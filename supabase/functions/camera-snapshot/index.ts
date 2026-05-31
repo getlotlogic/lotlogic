@@ -236,6 +236,20 @@ Deno.serve(async (req: Request) => {
       return json(200, { ok: false, reason: "unknown_camera", api_key: cameraApiKey });
     }
 
+    // Camera heartbeat (audit H6). Stamp last_seen_at on EVERY accepted POST —
+    // this runs before the truck_plaza/legacy branch split so it covers both.
+    // Fire-and-forget: a heartbeat write must never block or fail ingest. Until
+    // now last_seen_at was NULL for every camera (incl. the 2 live ones), so the
+    // dashboard "Last seen" line never rendered and a camera going dark (solar
+    // brownout, RUT down) was invisible — the blind spot behind the unnoticed
+    // Charlotte north outage.
+    db.from("alpr_cameras")
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq("id", camera.id)
+      .then(({ error }: { error: { message: string } | null }) => {
+        if (error) console.warn(`last_seen_at update failed camera=${camera.id}: ${error.message}`);
+      });
+
     // Property-type branch. Truck-plaza properties use the registration-
     // as-entrance model: visitor_passes is the source of truth for "on
     // property", cameras only detect EXITS of registered vehicles. The
@@ -315,6 +329,32 @@ Deno.serve(async (req: Request) => {
         : r.outcome === "buffered" ? ` weak_read_id=${r.weak_read_id} opportunistic_flushed=${r.opportunistic_flushed}`
         : "";
       console.log(`truck_plaza_exit camera=${camera.id} outcome=${r.outcome}${detail}`);
+
+      // tow-confirm exit-correlation (audit H1). The truck_plaza path returns
+      // here, BEFORE the legacy exit path that used to fire dispatchTowConfirm,
+      // so for truck_plaza properties the correlator never ran — 47 partner
+      // sightings recorded, 0 violations ever auto-confirmed. Charlotte treats
+      // EVERY camera read as an exit (register -> park -> drive out), so fire
+      // event_type='exit' on every read that produced a durable plate_event.
+      // tow-confirm is INTERNAL_TOKEN-gated and safely no-ops when the plate
+      // matches no open violation (a non-violating truck's exit) or no sighting
+      // is in-window. We do NOT fire event_type='entry': the
+      // partner_truck_sighting outcome already inserted the sighting directly,
+      // and an 'entry' call would double-insert it.
+      if (
+        (r.outcome === "exit_clean" || r.outcome === "exit_overstay" || r.outcome === "partner_truck_sighting") &&
+        r.plate_event_id && r.plate
+      ) {
+        dispatchTowConfirm({
+          plate_event_id: r.plate_event_id,
+          property_id: camera.property_id,
+          plate_text: r.plate,
+          event_type: "exit",
+          confidence: r.confidence ?? 0,
+          seen_at: new Date().toISOString(),
+        });
+      }
+
       if (r.outcome === "dropped") {
         // For sidecar-empty drops, push the frame to R2 so we can SEE what
         // the camera is sending. Capped at ~5 per minute per camera via the
