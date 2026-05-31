@@ -198,7 +198,7 @@ async function overstayExpiry(): Promise<number> {
     if (!pass?.valid_until) continue;
     if (new Date(pass.valid_until).getTime() >= graceCutoffMs) continue;
 
-    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "registered");
+    await createViolationAndDispatch(s.property_id, s.plate_text, s.entry_plate_event_id, s.id, "registered", "overstay");
     n++;
   }
   return n;
@@ -816,6 +816,7 @@ async function createViolationAndDispatch(
   entryPlateEventId: string,
   sessionId: string,
   expectedState: "grace" | "registered",
+  violationType: string,
 ): Promise<void> {
   // Guard against a concurrent cron tick having already transitioned this
   // session. Try to claim the transition first via a conditional UPDATE;
@@ -843,7 +844,13 @@ async function createViolationAndDispatch(
       plate_event_id: entryPlateEventId,
       plate_text: plateText,
       status: "pending",
-      violation_type: "alpr_unmatched",
+      // Thread the real type (audit L1). The sole live caller is overstayExpiry
+      // (a registered pass that expired), so hardcoding 'alpr_unmatched' made
+      // the dispatch email render "Unregistered vehicle / no pass on file" while
+      // the body showed the actual expired pass — self-contradictory. The
+      // grace-expiry path no longer fires violations (it discards), so there is
+      // no genuine unregistered caller here today.
+      violation_type: violationType,
       session_id: sessionId,
     })
     .select("id")
