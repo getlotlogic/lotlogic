@@ -9402,6 +9402,15 @@ function TruckParkingLog({ propertyId }) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  // PARITY FIX (2026-06-03): the backend /visitor_passes/parking-log
+  // endpoint silently filters out passes that the ActivePassTracker's
+  // direct Supabase query returns — operator searched a real active pass
+  // here, got 0 hits, towed it. To guarantee parity with what the Active
+  // list shows, we ALSO fetch directly from Supabase (same query the
+  // ActivePassTracker uses) and merge the union into the search pool.
+  // This means: if a pass appears in Active + Violations, it's
+  // guaranteed to appear in Parking Log search.
+  const [directPasses, setDirectPasses] = useState([]);
   // Backend-side filters: date range + status. Changes require an Apply because
   // they refetch from the server. Search text is separate state below and is
   // pure client-side (live filter on already-fetched rows).
@@ -9498,8 +9507,14 @@ function TruckParkingLog({ propertyId }) {
         page: 1,
         page_size: 500,
       });
-      setRows(res.rows || []);
-      setTotal(res.total ?? (res.rows?.length || 0));
+      // Backend returns `{ items, total, page, page_size }` per the docstring
+      // on db.getParkingLog. A prior refactor switched this to res.rows which
+      // is undefined, so `rows` was always [] and the search matched nothing
+      // even when `total` showed hundreds of passes. Accept both keys so the
+      // page stays correct if the backend response shape ever changes again.
+      const items = res.items || res.rows || [];
+      setRows(items);
+      setTotal(res.total ?? items.length);
     } catch (e) {
       setErr(e.message || 'Failed to load log');
     }
@@ -9509,6 +9524,29 @@ function TruckParkingLog({ propertyId }) {
 
   // Initial load + on filter / page changes via `load` identity.
   useIntervalFetch(load, 0, [load]);
+
+  // PARITY FETCH — direct Supabase, no date filter, same query the
+  // ActivePassTracker uses. The backend's parking-log endpoint has
+  // historically had silent filters that excluded active passes;
+  // pulling from Supabase too guarantees the search has at least
+  // everything the Active list does. Realtime keeps it fresh.
+  useEffect(() => {
+    if (!propertyId) return;
+    let cancelled = false;
+    const refresh = () => {
+      db.getVisitorPasses(propertyId, { limit: 500 })
+        .then(r => { if (!cancelled) setDirectPasses(r || []); })
+        .catch(() => { /* non-fatal — backend rows still drive the log */ });
+    };
+    refresh();
+    if (supabase) {
+      const ch = supabase.channel('parking-log-direct-' + propertyId + '-' + Math.random().toString(36).slice(2, 8))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'visitor_passes', filter: 'property_id=eq.' + propertyId }, refresh)
+        .subscribe();
+      return () => { cancelled = true; try { supabase.removeChannel(ch); } catch {} };
+    }
+    return () => { cancelled = true; };
+  }, [propertyId]);
 
   // Realtime subscription. New passes inserted (and exit/overstay updates)
   // refresh the log silently — filter + pagination state are preserved
@@ -9649,12 +9687,24 @@ function TruckParkingLog({ propertyId }) {
     return hex ? <span aria-hidden="true" style={{display:'inline-block',width:10,height:10,borderRadius:3,background:hex,border:'1px solid rgba(0,0,0,.25)',verticalAlign:'middle',marginRight:5}} /> : null;
   };
 
-  // Live filter: when there's a search query, narrow visitor passes to
-  // those that matched. Each entry carries the `matched` field list so
-  // we can show "matched: name" chips beside the result.
+  // Union the backend log (rows) with the direct Supabase pull
+  // (directPasses) so the search has everything the Active list does,
+  // even if the backend silently filters something out. Dedupe by id;
+  // backend wins on conflict because it carries the joined fields the
+  // direct query doesn't.
+  const allRowsMap = new Map();
+  for (const r of directPasses) allRowsMap.set(r.id, r);
+  for (const r of rows) allRowsMap.set(r.id, r);
+  const unionRows = Array.from(allRowsMap.values());
+
+  // Live filter: when there's a search query, narrow to matches across
+  // the union. Each entry carries the `matched` field list so we can
+  // show "matched: name" chips beside the result. When there's no
+  // search, show the backend-fetched rows only (respects the date
+  // range filter — adding the direct pull would dilute the view).
   const visitorMatches = hasSearch
-    ? rows.map(r => ({ row: r, matched: searchMatches(r, trimmedSearch) }))
-          .filter(x => x.matched.length > 0)
+    ? unionRows.map(r => ({ row: r, matched: searchMatches(r, trimmedSearch) }))
+               .filter(x => x.matched.length > 0)
     : rows.map(r => ({ row: r, matched: [] }));
 
   // Counts by derived status — drives the per-status pills above the grid.
