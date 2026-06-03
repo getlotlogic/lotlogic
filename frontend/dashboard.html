@@ -956,6 +956,10 @@
     @media (max-width: 520px) { .pd-qr-grid { grid-template-columns: 1fr; } }
     /* Hide desktop-only keyboard-shortcut hints on phones */
     @media (max-width: 600px), (pointer: coarse) { .kbd-hint { display: none; } }
+    /* Desktop-only: parking-log CSV export. Owners review on desktop;
+       operators on phones don't export from the field. */
+    .pd-csv-export-owner { display: inline-flex !important; }
+    @media (max-width: 768px), (pointer: coarse) { .pd-csv-export-owner { display: none !important; } }
     .pd-qr-tile {
       background: var(--bg-card); border: 1px solid var(--border);
       border-radius: 12px; padding: 14px; display: flex; flex-direction: column;
@@ -8870,7 +8874,15 @@ function ActivePassTracker({ propertyId }) {
       alpr: v,
       when: new Date(v.created_at).getTime(),
     }));
-  const violationColumn = [...overstayItems, ...noRegItems, ...cooldownItems].sort((a, b) => b.when - a.when);
+  // 24-hour cutoff: rows older than this drop out of the operator's
+  // working view. They are NOT deleted — they still live in the DB and
+  // surface in the Parking Log with an AUTO-CLEARED label. This stops
+  // the "50+ piled up" problem where stale rows drown out new ones.
+  const VIOLATION_AUTO_CLEAR_HOURS = 24;
+  const violationStaleCutoff = nowTick - VIOLATION_AUTO_CLEAR_HOURS * 3600 * 1000;
+  const allViolations = [...overstayItems, ...noRegItems, ...cooldownItems].sort((a, b) => b.when - a.when);
+  const violationColumn = allViolations.filter(it => !it.when || it.when >= violationStaleCutoff);
+  const hiddenStaleCount = allViolations.length - violationColumn.length;
 
   function fmtRemaining(targetMs, fromMs) {
     const ms = Math.max(0, targetMs - fromMs);
@@ -9408,6 +9420,20 @@ function ActivePassTracker({ propertyId }) {
               </div>
             )}
           </div>
+          {hiddenStaleCount > 0 && (
+            <div style={{
+              padding:'10px 12px',
+              background:'rgba(107,114,128,.08)',
+              border:'1px dashed rgba(107,114,128,.4)',
+              borderRadius:10,
+              fontSize:12,
+              color:'var(--text-muted)',
+              display:'flex', alignItems:'center', justifyContent:'space-between', gap:8,
+            }} title={`Auto-cleared after ${VIOLATION_AUTO_CLEAR_HOURS}h to keep this view focused. Camera didn't catch the truck leaving and no one marked it. Search the plate in Parking Log if you need to act on one.`}>
+              <span>ⓘ {hiddenStaleCount} auto-cleared (older than {VIOLATION_AUTO_CLEAR_HOURS}h)</span>
+              <span style={{fontSize:11,opacity:.75}}>view in Parking Log</span>
+            </div>
+          )}
           {violationColumn.length === 0 ? (
             <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
               No active violations
@@ -9445,7 +9471,7 @@ function ActivePassTracker({ propertyId }) {
   );
 }
 
-function TruckParkingLog({ propertyId }) {
+function TruckParkingLog({ propertyId, isOwner = false }) {
   const { addToast } = useToast();
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
@@ -9722,16 +9748,23 @@ function TruckParkingLog({ propertyId }) {
   const inputStyle = {padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit'};
   const labelStyle = {display:'flex',flexDirection:'column',gap:5,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase'};
   // Traffic-light coloring for on-site plate scanning:
-  //   RED     = expired / violation (window closed, may still be in lot)
+  //   RED     = expired / violation (window closed, may still be in lot, actionable)
   //   YELLOW  = expiring soon (active but < 3h to valid_until)
   //   GREEN   = active and >3h remaining
-  // The `expiring` state is derived at render time from valid_until vs now —
-  // the DB only knows active|expired|... and the 3h window is purely visual.
+  //   GREY    = auto-cleared (expired > 24h ago; no camera exit detected
+  //             and no operator action — archived for record, not actionable)
+  //
+  // `expiring` and `auto_cleared` are DERIVED at render time. The DB only
+  // knows active|expired|... — the time-windowed buckets are purely visual.
+  // Adding a new status = one row in each of the three maps below, and one
+  // entry in deriveStatus(). Everything downstream consumes from these maps.
   const EXPIRING_WINDOW_MS = 3 * 60 * 60 * 1000;
+  const AUTO_CLEAR_WINDOW_MS = 24 * 60 * 60 * 1000;
   const statusColor = {
     active: '#4ade80',
     expiring: '#facc15',
     expired: '#ef4444',
+    auto_cleared: '#6b7280',
     cancelled: 'var(--text-muted)',
     revoked: 'var(--text-muted)',
     towed: '#f59e0b',
@@ -9740,18 +9773,39 @@ function TruckParkingLog({ propertyId }) {
     active: 'Active',
     expiring: 'Expiring soon',
     expired: 'Violation',
+    auto_cleared: 'Auto-cleared',
     cancelled: 'Cancelled',
     revoked: 'Revoked',
     towed: 'Towed',
   };
-  const statusOrder = { expired: 0, expiring: 1, active: 2, towed: 3, cancelled: 4, revoked: 5 };
+  const statusOrder = { expired: 0, expiring: 1, active: 2, towed: 3, auto_cleared: 4, cancelled: 5, revoked: 6 };
+  // Explainer copy shown under the plate on each card. Operator's contract:
+  // what happened, why, and what to do about it. Only statuses where the
+  // "why" is non-obvious need an explainer — the rest leave this null.
+  const statusExplainer = {
+    auto_cleared: "Auto-cleared after 24h. Camera didn't catch the truck leaving and no one marked it. If this truck is still on the lot, tap Mark towed below.",
+  };
 
   function deriveStatus(r) {
     const raw = r.status || 'active';
-    if (raw !== 'active') return raw;
+    if (raw !== 'active') {
+      // Expired rows split by age: <24h is still actionable, ≥24h is
+      // archived. Same row, different visual + different operator urgency.
+      if (raw === 'expired' && r.valid_until) {
+        const expiredAgo = Date.now() - new Date(r.valid_until).getTime();
+        if (expiredAgo >= AUTO_CLEAR_WINDOW_MS) return 'auto_cleared';
+      }
+      return raw;
+    }
     if (!r.valid_until) return 'active';
     const remaining = new Date(r.valid_until).getTime() - Date.now();
-    if (remaining <= 0) return 'expired';
+    if (remaining <= 0) {
+      // Crossed the expiry boundary just now — still bucket by age so
+      // the 24h cut catches the case where status hasn't been flipped
+      // to 'expired' by the backend yet.
+      if (-remaining >= AUTO_CLEAR_WINDOW_MS) return 'auto_cleared';
+      return 'expired';
+    }
     if (remaining < EXPIRING_WINDOW_MS) return 'expiring';
     return 'active';
   }
@@ -9882,52 +9936,13 @@ function TruckParkingLog({ propertyId }) {
         )}
       </div>
 
-      {/* ── Date / Status filters (auto-apply on change, no button needed) ──
-          Operators expected the form to behave like the search — change a
-          value and see results update. The old "Apply dates" gate was
-          friction that meant some operators thought the page was broken
-          ("I changed the date and nothing happened"). Now everything is
-          live; the form just exists to expose the inputs. */}
-      <form onSubmit={(e) => e.preventDefault()} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:14,display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10,alignItems:'end'}}>
-        <label style={labelStyle}>From
-          <input
-            type="date"
-            value={filters.date_from}
-            onChange={e => setFilters({...filters, date_from: e.target.value})}
-            style={inputStyle}
-          />
-        </label>
-        <label style={labelStyle}>To
-          <input
-            type="date"
-            value={filters.date_to}
-            onChange={e => setFilters({...filters, date_to: e.target.value})}
-            style={inputStyle}
-          />
-        </label>
-        <label style={labelStyle}>Status
-          <select
-            value={filters.status}
-            onChange={e => setFilters({...filters, status: e.target.value})}
-            style={inputStyle}
-          >
-            <option value="">All</option>
-            <option value="expired">Violations</option>
-            <option value="active">Active</option>
-            <option value="cancelled">Cancelled</option>
-            <option value="towed">Towed</option>
-          </select>
-        </label>
-        <div style={{display:'flex',gap:8,alignSelf:'end',flexWrap:'wrap'}}>
-          <button
-            type="button"
-            onClick={handleExport}
-            disabled={exporting}
-            title="CSV reflects the date/status filters; the search box is not applied to CSV exports."
-            style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:exporting?'not-allowed':'pointer',opacity:exporting?.55:1,fontFamily:'inherit'}}
-          >{exporting ? 'Exporting…' : '↓ Export CSV'}</button>
-        </div>
-      </form>
+      {/* The date/status filter form used to live here. Removed in the
+          parking-pass simplification — the smart search box + tap-pills
+          (below) do the same job with less chrome. Default date window is
+          7 days; the "🔭 Search the last 90 days" button in the empty
+          state widens it on demand. CSV export moved behind the ⋯ overflow
+          next to the total count (owner desktop only — operators on phones
+          don't export from the field). */}
 
       {err && <div style={{padding:12,background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',fontSize:13}}>{err}</div>}
 
@@ -9935,12 +9950,34 @@ function TruckParkingLog({ propertyId }) {
       {!err && (
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <div style={{display:'flex',gap:14,alignItems:'baseline',flexWrap:'wrap'}}>
-            <div style={{fontSize:22,fontWeight:800,color:'var(--text-primary)',letterSpacing:'-.01em'}}>
-              {displayedTotal.toLocaleString()}<span style={{fontSize:13,fontWeight:600,color:'var(--text-muted)',marginLeft:6}}>{displayedTotal === 1 ? 'match' : (hasSearch ? 'matches' : 'passes')}</span>
+            <div style={{fontSize:22,fontWeight:800,color:'var(--text-primary)',letterSpacing:'-.01em',display:'flex',alignItems:'baseline',gap:6}}>
+              {displayedTotal.toLocaleString()}<span style={{fontSize:13,fontWeight:600,color:'var(--text-muted)'}}>{displayedTotal === 1 ? 'match' : (hasSearch ? 'matches' : 'passes')}</span>
+              {/* CSV export — owner only, lives next to the total count
+                  instead of in a chrome-heavy form. Hidden for partners and
+                  on phones (operators don't export CSVs in the field). */}
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  disabled={exporting}
+                  title="Download these results as CSV (date / status filters apply; smart search filter does not)."
+                  className="pd-csv-export-owner"
+                  style={{
+                    marginLeft:8,
+                    fontSize:11, fontWeight:700,
+                    padding:'4px 8px', borderRadius:6,
+                    border:'1px solid var(--border)',
+                    background:'transparent',
+                    color:'var(--text-muted)',
+                    cursor: exporting ? 'wait' : 'pointer',
+                    fontFamily:'inherit',
+                  }}
+                >{exporting ? 'Exporting…' : '↓ CSV'}</button>
+              )}
             </div>
             {Object.keys(statusCounts).length > 0 && (
               <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-                {['expired','expiring','active','towed','cancelled','revoked'].filter(s => statusCounts[s]).map(s => {
+                {['expired','expiring','active','towed','auto_cleared','cancelled','revoked'].filter(s => statusCounts[s]).map(s => {
                   const color = statusColor[s] || 'var(--text-muted)';
                   const isLoud = s === 'expired' || s === 'expiring';
                   const isActive = pillStatusFilter === s;
@@ -10034,6 +10071,7 @@ function TruckParkingLog({ propertyId }) {
             const isActive = (r.status || 'active') === 'active';
             const isViolation = s === 'expired';
             const isExpiring = s === 'expiring';
+            const isAutoCleared = s === 'auto_cleared';
             const driverLine = [r.visitor_name, r.company_name].filter(Boolean).join(' · ') || '—';
             const detailChips = [];
             if (r.parking_spot) detailChips.push({ label: 'Spot', value: r.parking_spot });
@@ -10049,8 +10087,8 @@ function TruckParkingLog({ propertyId }) {
             if (r.placard_color) detailChips.push({ label: 'Placard', value: r.placard_color, swatch: true });
             return (
               <div key={r.id} style={{
-                background: isViolation ? 'rgba(239,68,68,.06)' : isExpiring ? 'rgba(250,204,21,.06)' : 'var(--bg-card)',
-                border:`1px solid ${isViolation ? 'rgba(239,68,68,.4)' : isExpiring ? 'rgba(250,204,21,.4)' : 'var(--border)'}`,
+                background: isViolation ? 'rgba(239,68,68,.06)' : isExpiring ? 'rgba(250,204,21,.06)' : isAutoCleared ? 'rgba(107,114,128,.04)' : 'var(--bg-card)',
+                border:`1px solid ${isViolation ? 'rgba(239,68,68,.4)' : isExpiring ? 'rgba(250,204,21,.4)' : isAutoCleared ? 'rgba(107,114,128,.3)' : 'var(--border)'}`,
                 borderLeft:`${(isViolation || isExpiring) ? 6 : 3}px solid ${color}`,
                 borderRadius:12,
                 padding: (isViolation || isExpiring) ? 18 : 14,
@@ -10058,6 +10096,7 @@ function TruckParkingLog({ propertyId }) {
                 flexDirection:'column',
                 gap: (isViolation || isExpiring) ? 14 : 10,
                 position:'relative',
+                opacity: isAutoCleared ? 0.85 : 1,
                 boxShadow: isViolation ? '0 2px 18px rgba(239,68,68,.08)' : isExpiring ? '0 2px 18px rgba(250,204,21,.08)' : 'none',
               }}>
                 {/* Top row: plate + status pill */}
@@ -10105,6 +10144,23 @@ function TruckParkingLog({ propertyId }) {
                   <div style={{fontSize:13,color:'var(--text-primary)',fontWeight:600}}>{driverLine}</div>
                   {r.phone && <div style={{fontSize:12,color:'var(--text-muted)'}}>📞 {r.phone}</div>}
                 </div>
+
+                {/* Status explainer — only renders when the status carries
+                    one in `statusExplainer`. Today: just `auto_cleared`.
+                    Telling the operator what happened, why, and what to do. */}
+                {statusExplainer[s] && (
+                  <div style={{
+                    fontSize: 12, lineHeight: 1.45,
+                    padding: '8px 10px',
+                    background: 'rgba(107,114,128,.08)',
+                    borderLeft: '3px solid rgba(107,114,128,.5)',
+                    borderRadius: 6,
+                    color: 'var(--text-muted)',
+                    fontStyle: 'italic',
+                  }}>
+                    {statusExplainer[s]}
+                  </div>
+                )}
 
                 {/* Detail chips */}
                 {(detailChips.length > 0 || matched.length > 0 || r.policy_acknowledged_at) && (
@@ -10169,7 +10225,13 @@ function TruckParkingLog({ propertyId }) {
                 {(() => {
                   const violKey = normalizePlateForSearch(r.plate_text);
                   const openViolation = violationByPlate.get(violKey);
-                  const showTowActions = !!openViolation && s === 'expired';
+                  // Tow / No-tow buttons appear on both fresh violations
+                  // (s === 'expired') and on auto-cleared rows that still
+                  // have an open violation in the DB. Auto-cleared just
+                  // means we've hidden it from the live tracker — the
+                  // operator may still need to action it (e.g., they towed
+                  // and forgot to mark it).
+                  const showTowActions = !!openViolation && (s === 'expired' || s === 'auto_cleared');
                   if (!isActive && !showTowActions) return null;
                   return (
                     <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:-2,flexWrap:'wrap'}}>
@@ -10307,7 +10369,17 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   // (tracker, log, plates, cameras) instead of scrolling past everything.
   // Persists across reloads.
   const [sectionFilter, setSectionFilter] = useState(() => {
-    try { return localStorage.getItem('lotlogic_pd_section') || 'all'; } catch { return 'all'; }
+    try {
+      const saved = localStorage.getItem('lotlogic_pd_section') || 'all';
+      // Migration: 'tracker' is now owner-only. If a partner has it cached
+      // from a previous session, fall back to 'all' so they don't land on
+      // a non-rendering section.
+      const role = (() => {
+        try { return JSON.parse(localStorage.getItem('lotlogic_session') || 'null')?._role; } catch { return null; }
+      })();
+      if (saved === 'tracker' && role && role !== 'owner') return 'all';
+      return saved;
+    } catch { return 'all'; }
   });
   useEffect(() => {
     try { localStorage.setItem('lotlogic_pd_section', sectionFilter); } catch {}
@@ -10689,7 +10761,11 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           const chips = [
             { id: 'all',     label: 'All' },
             { id: 'noreg',   label: 'No Registration Evidence Package' },
-            ...(isTruckPlaza ? [{ id: 'tracker', label: 'Active + Violations' }] : []),
+            // Active+Violations is the owner's per-property health-check
+            // surface. Operators (partners) action from the Parking Log
+            // search-first view instead. Hide the chip for non-owners.
+            // Owner desktop keeps the legacy two-column view.
+            ...(isTruckPlaza && isOwner ? [{ id: 'tracker', label: 'Active + Violations' }] : []),
             ...(isTruckPlaza ? [{ id: 'log',     label: 'Parking Log' }] : [{ id: 'log', label: 'Parking Passes' }]),
           ];
           return chips.map(c => {
@@ -10869,7 +10945,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               Live
             </div>
           </div>
-          <ErrorBoundary label="truck parking log"><TruckParkingLog propertyId={propertyId} /></ErrorBoundary>
+          <ErrorBoundary label="truck parking log"><TruckParkingLog propertyId={propertyId} isOwner={isOwner} /></ErrorBoundary>
         </>
       ) : (() => {
         const activeVisitors = visitorPasses.filter(v => {

@@ -131,23 +131,15 @@ test.describe('parking log smart search @smoke', () => {
     await expect(searchInput).toHaveValue('');
   });
 
-  test('changing date filter triggers refetch immediately', async ({ page }) => {
+  test('date / status filter form is gone — search + pills do the job', async ({ page }) => {
     const opened = await openParkingLog(page);
     test.skip(!opened, 'No truck plaza property available');
 
-    // Grab the "From" date input.
-    const fromInput = page.locator('input[type="date"]').first();
-    await expect(fromInput).toBeVisible();
-
-    // Change to 30 days ago and verify no Apply step is required.
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-      .toISOString().slice(0, 10);
-    await fromInput.fill(thirtyDaysAgo);
-
-    // Wait briefly — if auto-apply works, the date range caption in the
-    // header updates to reflect the new range without any other action.
-    await expect(
-      page.getByText(new RegExp(thirtyDaysAgo))
-    ).toBeVisible({ timeout: 3000 });
+    // The filter form was deleted in the parking-pass simplification:
+    // search + status pills now drive everything. Make sure nobody re-adds
+    // those controls without thinking. If a date range is needed, the
+    // "🔭 Search the last 90 days" button in the empty state handles it.
+    await expect(page.locator('input[type="date"]')).toHaveCount(0);
+    await expect(page.locator('select').filter({ hasText: /violations/i })).toHaveCount(0);
   });
 });
