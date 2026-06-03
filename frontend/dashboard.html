@@ -9354,13 +9354,13 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
       {/* Towed-someone reminder. Drivers walk along trucks, run the plate,
           take a photo, come back to the tow truck, and physically tow.
           The thing they routinely forget is the LAST step — coming back
-          to the app to tap "Mark towed" so billing releases to the partner.
-          A persistent (not dismissable) banner here keeps the habit fresh.
-          Operators asked for this. */}
+          to the app to tap "Mark towed" on the pass. Without it the pass
+          stays open and the log falls out of sync. A persistent (not
+          dismissable) banner here keeps the habit fresh. Operators asked for this. */}
       <div style={{
-        background:'rgba(148,163,184,.10)',
-        border:'1px solid rgba(148,163,184,.3)',
-        borderLeft:'4px solid #94a3b8',
+        background:'rgba(239,68,68,.08)',
+        border:'1px solid rgba(239,68,68,.3)',
+        borderLeft:'4px solid #ef4444',
         borderRadius:10,
         padding:'10px 14px',
         display:'flex',
@@ -9371,7 +9371,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
         lineHeight:1.4,
       }}>
         <span style={{fontSize:18}} aria-hidden="true">🚛</span>
-        <span><strong>Towed a truck?</strong> Search the plate below, tap <strong>Mark towed</strong> on the row so billing releases to the partner.</span>
+        <span><strong>The system runs itself — except for one tap.</strong> Pull a truck, <strong>mark towed</strong> on its pass. It's the one input the system can't run without — skip it and it breaks.</span>
       </div>
 
       {/* ── Search bar (always-visible, live) ──────────────────────────── */}
