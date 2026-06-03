@@ -9059,6 +9059,65 @@ function ActivePassTracker({ propertyId }) {
   // No Registration). Click anywhere on the card to expand and see all
   // info plus the camera image.
   const [removingKey, setRemovingKey] = useState(null);
+  // Tow / No-tow action modal + busy flag (mirrors TruckParkingLog's pattern).
+  // The X button on the card is "dismiss from list" (overstay → cancel-pass,
+  // alpr → mark-no-tow). These are the explicit operator decisions:
+  //   Mark towed → force-bill the linked violation (or cancel-pass if no link)
+  //   No tow     → mark-no-tow the violation (or cancel-pass if no link)
+  const [trackerActionModal, setTrackerActionModal] = useState(null);
+  const [trackerActionSubmitting, setTrackerActionSubmitting] = useState(false);
+
+  // Resolve the violation id from an item — overstays may or may not have one
+  // (depends on whether cron-sessions-sweep filed an alpr_violations row for
+  // the overstayed pass). ALPR-source items always carry one.
+  function resolveViolationId(item) {
+    if ((item.kind === 'no_registration' || item.kind === 'cooldown') && item.alpr) {
+      return item.alpr.id;
+    }
+    if (item.kind === 'overstay' && item.pass) {
+      return item.pass.overstay_violation_id || null;
+    }
+    return null;
+  }
+
+  async function handleTrackerAction(kind, item, reason) {
+    setTrackerActionSubmitting(true);
+    const label = kind === 'tow' ? 'Marked towed' : 'Marked no-tow';
+    try {
+      const note = reason || `${label} via Active+Violations`;
+      const violationId = resolveViolationId(item);
+      if (violationId) {
+        if (kind === 'tow') {
+          await db.forceBillViolation(violationId, note);
+        } else {
+          await db.markViolationNoTow(violationId, note);
+        }
+      } else if (item.kind === 'overstay' && item.pass) {
+        // No linked violation — fall back to cancel-pass with a clear
+        // audit-line so future review queries can filter operator-actioned
+        // rows vs driver-cancelled rows.
+        await apiFetch(`/visitor_passes/${item.pass.id}/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: `${label} (no linked violation): ${note}` }),
+        });
+      } else {
+        throw new Error('Unactionable card');
+      }
+      // Optimistic remove so the operator sees immediate feedback even
+      // before realtime fires.
+      if (item.kind === 'overstay' && item.pass) {
+        setPasses(prev => prev.filter(p => p.id !== item.pass.id));
+      } else if (item.alpr) {
+        setAlprViols(prev => prev.filter(v => v.id !== item.alpr.id));
+      }
+      setTrackerActionModal(null);
+    } catch (e) {
+      window.alert(`${label} failed: ${e?.message || 'unknown error'}`);
+    } finally {
+      setTrackerActionSubmitting(false);
+    }
+  }
   // Removes a single item (no confirm dialog — callers gate on intent). Returns
   // { ok: true } on success or { ok: false, error } so callers can aggregate
   // batch results without a try/catch tax per item.
@@ -9228,10 +9287,42 @@ function ActivePassTracker({ propertyId }) {
           <div style={{fontSize:15,fontWeight:700,color:'var(--text-primary)',lineHeight:1.25}}>{item.company_name}</div>
         )}
 
-        {/* Affordance line */}
+        {/* Operator decision row — always visible. The X in the top-right
+            is "dismiss from list" (soft cancel); these are the explicit
+            "what actually happened" choices that close the loop with
+            billing. Stops the event so tapping doesn't expand the card. */}
+        {!selectMode && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:4}}
+          >
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setTrackerActionModal({ kind: 'no-tow', item, plate_text: item.plate_text });
+              }}
+              title="Truck left or you chose not to tow — closes without billing"
+              style={{flex:'1 1 0',minHeight:44,background:'rgba(255,255,255,.85)',color:'#374151',border:'1px solid rgba(0,0,0,.12)',borderRadius:10,padding:'10px 12px',fontSize:14,fontWeight:800,cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6}}
+            >
+              <span aria-hidden="true">✖</span> No tow
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setTrackerActionModal({ kind: 'tow', item, plate_text: item.plate_text });
+              }}
+              title="Confirm a tow happened — releases billing to the tow partner"
+              style={{flex:'1 1 0',minHeight:44,background:'#dc2626',color:'#fff',border:'1px solid #dc2626',borderRadius:10,padding:'10px 12px',fontSize:14,fontWeight:800,cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6,boxShadow:'0 1px 4px rgba(220,38,38,.3)'}}
+            >
+              <span aria-hidden="true">🚛</span> Mark towed
+            </button>
+          </div>
+        )}
+
+        {/* Affordance line — only when collapsed, lower priority than the actions above */}
         {!isExpanded && (
-          <div style={{fontSize:11,fontWeight:700,color:'#dc2626',letterSpacing:'.05em',textTransform:'uppercase',marginTop:2}}>
-            Tap for full details + image →
+          <div style={{fontSize:10,fontWeight:600,color:'var(--text-muted)',letterSpacing:'.04em',textTransform:'uppercase',marginTop:2,opacity:.7}}>
+            Tap card for details + image
           </div>
         )}
 
@@ -9469,6 +9560,30 @@ function ActivePassTracker({ propertyId }) {
             }}
           >{batchRemoving ? 'Removing…' : 'Remove selected'}</button>
         </div>
+      )}
+
+      {trackerActionModal && (
+        <ConfirmActionModal
+          plate={trackerActionModal.plate_text}
+          actionLabel={trackerActionModal.kind === 'tow' ? 'Mark this truck as towed?' : 'Mark this as no-tow?'}
+          description={(() => {
+            const hasViolation = !!resolveViolationId(trackerActionModal.item);
+            if (trackerActionModal.kind === 'tow') {
+              return hasViolation
+                ? <>Confirms a tow happened for <strong style={{color:'var(--text-primary)'}}>{trackerActionModal.plate_text}</strong>. Releases billing to the tow partner. Use this only after you've physically dispatched the truck.</>
+                : <>Marks <strong style={{color:'var(--text-primary)'}}>{trackerActionModal.plate_text}</strong> as towed and cancels the pass. No linked violation to bill — billing has to be handled out of band if the partner needs it.</>;
+            }
+            return hasViolation
+              ? <>Closes the violation for <strong style={{color:'var(--text-primary)'}}>{trackerActionModal.plate_text}</strong> without billing. Use this if the driver returned and moved the truck, or you chose not to enforce.</>
+              : <>Cancels the pass for <strong style={{color:'var(--text-primary)'}}>{trackerActionModal.plate_text}</strong> with a no-tow note. Row clears from the working view; no billing.</>;
+          })()}
+          confirmLabel={trackerActionModal.kind === 'tow' ? '🚛 Confirm towed' : '✖ Confirm no-tow'}
+          confirmColor={trackerActionModal.kind === 'tow' ? '#dc2626' : '#6b7280'}
+          reasonPlaceholder={trackerActionModal.kind === 'tow' ? 'Optional notes (tow company, time, etc.)' : 'Optional notes (why no tow)'}
+          submitting={trackerActionSubmitting}
+          onConfirm={(reason) => handleTrackerAction(trackerActionModal.kind, trackerActionModal.item, reason)}
+          onCancel={() => { if (!trackerActionSubmitting) setTrackerActionModal(null); }}
+        />
       )}
     </div>
   );
