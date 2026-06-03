@@ -9346,6 +9346,29 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
+      {/* Towed-someone reminder. Drivers walk along trucks, run the plate,
+          take a photo, come back to the tow truck, and physically tow.
+          The thing they routinely forget is the LAST step — coming back
+          to the app to tap "Mark towed" so billing releases to the partner.
+          A persistent (not dismissable) banner here keeps the habit fresh.
+          Operators asked for this. */}
+      <div style={{
+        background:'rgba(239,68,68,.08)',
+        border:'1px solid rgba(239,68,68,.3)',
+        borderLeft:'4px solid #ef4444',
+        borderRadius:10,
+        padding:'10px 14px',
+        display:'flex',
+        alignItems:'center',
+        gap:10,
+        fontSize:12,
+        color:'var(--text-primary)',
+        lineHeight:1.4,
+      }}>
+        <span style={{fontSize:18}} aria-hidden="true">🚛</span>
+        <span><strong>Towed a truck?</strong> Search the plate below, tap <strong>Mark towed</strong> on the row so billing releases to the partner.</span>
+      </div>
+
       {/* ── Search bar (always-visible, live) ──────────────────────────── */}
       {/* Operator-anchor. Filters everything below as the user types.
           Matches across: plate, driver name, company, phone, placard,
