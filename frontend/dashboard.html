@@ -9448,6 +9448,10 @@ function TruckParkingLog({ propertyId }) {
   // Auto-widening: if a search returns 0 matches in the current date window
   // but might match outside it, offer one-click to extend the window back 90d.
   const [widening, setWidening] = useState(false);
+  // Click-to-filter on the status pills. null = no pill filter (show all).
+  // Toggles between null and the status name on click. Client-side overlay
+  // on top of search + date filters — doesn't refetch.
+  const [pillStatusFilter, setPillStatusFilter] = useState(null);
 
   // ── search normalization helpers ─────────────────────────────────────
   // Plate field is stored normalized (uppercase, alphanumeric only) by both
@@ -9749,10 +9753,18 @@ function TruckParkingLog({ propertyId }) {
     return acc;
   }, {});
 
+  // Apply the pill-tap status filter on top of search results. The status
+  // pills above the grid show counts derived from `visitorMatches` (i.e.
+  // they reflect the search), so clicking one acts as a drill-down on
+  // those counts. Set to null to clear and see everything again.
+  const pillFilteredMatches = pillStatusFilter
+    ? visitorMatches.filter(x => deriveStatus(x.row) === pillStatusFilter)
+    : visitorMatches;
+
   // Sort: violations → expiring → active → towed → cancelled → revoked.
   // Within a status group, newest first so the latest activity floats up.
   // Sort preserves the matched-fields metadata so chips render alongside.
-  const sortedMatches = [...visitorMatches].sort((a, b) => {
+  const sortedMatches = [...pillFilteredMatches].sort((a, b) => {
     const sa = deriveStatus(a.row);
     const sb = deriveStatus(b.row);
     const oa = statusOrder[sa] ?? 99;
@@ -9763,8 +9775,11 @@ function TruckParkingLog({ propertyId }) {
     return tb - ta;
   });
 
-  // Total displayed reflects whatever's actually on screen right now.
-  const displayedTotal = hasSearch ? visitorMatches.length : (total || rows.length);
+  // Total displayed reflects whatever's actually on screen right now —
+  // accounts for both search filter AND the pill drill-down.
+  const displayedTotal = pillStatusFilter
+    ? pillFilteredMatches.length
+    : (hasSearch ? visitorMatches.length : (total || rows.length));
 
   // Pretty labels for the "matched: X" chip on each result.
   const matchedFieldLabel = {
@@ -9875,26 +9890,61 @@ function TruckParkingLog({ propertyId }) {
               {displayedTotal.toLocaleString()}<span style={{fontSize:13,fontWeight:600,color:'var(--text-muted)',marginLeft:6}}>{displayedTotal === 1 ? 'match' : (hasSearch ? 'matches' : 'passes')}</span>
             </div>
             {Object.keys(statusCounts).length > 0 && (
-              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
                 {['expired','expiring','active','towed','cancelled','revoked'].filter(s => statusCounts[s]).map(s => {
                   const color = statusColor[s] || 'var(--text-muted)';
                   const isLoud = s === 'expired' || s === 'expiring';
+                  const isActive = pillStatusFilter === s;
+                  const otherActive = pillStatusFilter && !isActive;
                   return (
-                    <span key={s} style={{
-                      fontSize: isLoud ? 13 : 11,
-                      fontWeight: 800,
-                      padding: isLoud ? '5px 12px' : '4px 10px',
-                      borderRadius:20,
-                      background:`${color}${isLoud ? '26' : '1a'}`,
-                      color,
-                      border:`1px solid ${color}${isLoud ? '66' : '40'}`,
-                      textTransform:'uppercase',
-                      letterSpacing:'.04em',
-                    }}>
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setPillStatusFilter(isActive ? null : s)}
+                      aria-pressed={isActive}
+                      title={isActive ? `Showing only ${statusDisplay[s] || s} — click to clear` : `Filter to ${statusDisplay[s] || s} only`}
+                      style={{
+                        fontSize: isLoud ? 13 : 11,
+                        fontWeight: 800,
+                        padding: isLoud ? '6px 14px' : '5px 12px',
+                        minHeight: 32,
+                        borderRadius: 20,
+                        background: isActive ? color : `${color}${isLoud ? '26' : '1a'}`,
+                        color: isActive ? '#fff' : color,
+                        border: `1px solid ${isActive ? color : `${color}${isLoud ? '66' : '40'}`}`,
+                        boxShadow: isActive ? `0 0 0 3px ${color}33` : 'none',
+                        opacity: otherActive ? 0.5 : 1,
+                        textTransform: 'uppercase',
+                        letterSpacing: '.04em',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        transition: 'background .12s, opacity .12s, box-shadow .12s',
+                      }}
+                    >
                       {statusCounts[s]} {statusDisplay[s] || s}{statusCounts[s] !== 1 && s === 'expired' ? 's' : ''}
-                    </span>
+                    </button>
                   );
                 })}
+                {pillStatusFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setPillStatusFilter(null)}
+                    aria-label="Clear status filter"
+                    title="Clear status filter"
+                    style={{
+                      fontSize: 11, fontWeight: 800,
+                      padding: '5px 10px', minHeight: 32,
+                      borderRadius: 20,
+                      background: 'transparent',
+                      color: 'var(--text-muted)',
+                      border: '1px solid var(--border)',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      letterSpacing: '.04em',
+                      textTransform: 'uppercase',
+                    }}
+                  >✕ All</button>
+                )}
               </div>
             )}
           </div>
