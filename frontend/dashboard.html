@@ -8115,23 +8115,73 @@ function TruckParkingLog({ propertyId }) {
   const [cancelling, setCancelling] = useState(false);
   const [exporting, setExporting] = useState(false);
 
+  // Operator-side text search must be forgiving: typing the driver's name,
+  // the company, or any partial chunk of the plate (case + spacing
+  // insensitive) all need to surface the pass. Backend exact-match on
+  // `plate` has caused at least one wrongful tow — operator searched the
+  // plate, got 0 hits, towed, then found the active pass on the live list.
+  // So we skip the backend plate/company filter and do substring matching
+  // on the rows we already fetch.
+  function normalizePlateForSearch(s) {
+    return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  }
+  function rowMatchesSearch(row, plateQuery, companyQuery) {
+    if (plateQuery) {
+      const qPlate = normalizePlateForSearch(plateQuery);
+      const qLower = plateQuery.trim().toLowerCase();
+      const rowPlate = normalizePlateForSearch(row.plate_text);
+      const rowName = (row.visitor_name || '').toLowerCase();
+      const rowCompany = (row.company_name || '').toLowerCase();
+      const plateHit = qPlate && rowPlate.includes(qPlate);
+      const nameHit = qLower && rowName.includes(qLower);
+      const companyHit = qLower && rowCompany.includes(qLower);
+      if (!plateHit && !nameHit && !companyHit) return false;
+    }
+    if (companyQuery) {
+      const qLower = companyQuery.trim().toLowerCase();
+      const rowCompany = (row.company_name || '').toLowerCase();
+      if (!rowCompany.includes(qLower)) return false;
+    }
+    return true;
+  }
+
+  const hasClientSearch = !!(
+    (filters.plate && filters.plate.trim()) ||
+    (filters.company_name && filters.company_name.trim())
+  );
+
   const load = useCallback(async () => {
     if (!propertyId) return;
     setLoading(true);
     setErr(null);
     try {
-      const res = await db.getParkingLog(propertyId, {
-        ...filters,
-        page,
-        page_size: pageSize,
-      });
-      setRows(res.items || []);
-      setTotal(res.total ?? (res.items?.length || 0));
+      // When the operator types in Plate or Company, drop those filters from
+      // the backend call (it does narrower matching than operators expect)
+      // and widen the page so client-side substring search has enough to
+      // work with. 500 covers any realistic truck-plaza per date window.
+      const apiOpts = hasClientSearch
+        ? {
+            date_from: filters.date_from,
+            date_to: filters.date_to,
+            status: filters.status,
+            page: 1,
+            page_size: 500,
+          }
+        : { ...filters, page, page_size: pageSize };
+      const res = await db.getParkingLog(propertyId, apiOpts);
+      let items = res.items || [];
+      let total = res.total ?? items.length;
+      if (hasClientSearch) {
+        items = items.filter(r => rowMatchesSearch(r, filters.plate, filters.company_name));
+        total = items.length;
+      }
+      setRows(items);
+      setTotal(total);
     } catch (e) {
       setErr(e.message || 'Failed to load log');
     }
     setLoading(false);
-  }, [propertyId, filters, page]);
+  }, [propertyId, filters, page, hasClientSearch]);
 
   // One-shot load per `load` identity. External changes to visitor_passes
   // no longer trigger a full reload of the log — the parent's realtime
@@ -8264,11 +8314,11 @@ function TruckParkingLog({ propertyId }) {
         <label style={labelStyle}>To
           <input type="date" value={pendingFilters.date_to} onChange={e => setPendingFilters({...pendingFilters, date_to: e.target.value})} style={inputStyle} />
         </label>
-        <label style={labelStyle}>Plate
-          <input type="text" value={pendingFilters.plate} onChange={e => setPendingFilters({...pendingFilters, plate: e.target.value})} placeholder="ABC 1234" style={inputStyle} />
+        <label style={labelStyle}>Plate / driver / company
+          <input type="text" value={pendingFilters.plate} onChange={e => setPendingFilters({...pendingFilters, plate: e.target.value})} placeholder="Plate, name, or unit #" style={inputStyle} />
         </label>
-        <label style={labelStyle}>Company
-          <input type="text" value={pendingFilters.company_name} onChange={e => setPendingFilters({...pendingFilters, company_name: e.target.value})} placeholder="ACME" style={inputStyle} />
+        <label style={labelStyle}>Company only
+          <input type="text" value={pendingFilters.company_name} onChange={e => setPendingFilters({...pendingFilters, company_name: e.target.value})} placeholder="e.g. Swift" style={inputStyle} />
         </label>
         <label style={labelStyle}>Status
           <select value={pendingFilters.status} onChange={e => setPendingFilters({...pendingFilters, status: e.target.value})} style={inputStyle}>
@@ -8284,12 +8334,21 @@ function TruckParkingLog({ propertyId }) {
           <button
             type="button"
             onClick={handleExport}
-            disabled={exporting || filtersDirty}
-            title={filtersDirty ? 'Apply filters before exporting' : undefined}
-            style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:exporting||filtersDirty?'not-allowed':'pointer',opacity:exporting||filtersDirty?.55:1,fontFamily:'inherit'}}
+            disabled={exporting || filtersDirty || hasClientSearch}
+            title={
+              filtersDirty ? 'Apply filters before exporting'
+              : hasClientSearch ? 'Clear the Plate/driver/company field to export — CSV uses server-side filtering only'
+              : undefined
+            }
+            style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:(exporting||filtersDirty||hasClientSearch)?'not-allowed':'pointer',opacity:(exporting||filtersDirty||hasClientSearch)?.55:1,fontFamily:'inherit'}}
           >{exporting ? 'Exporting…' : '↓ Export CSV'}</button>
         </div>
       </form>
+
+      <div style={{fontSize:11,color:'var(--text-faint)',marginTop:-6,paddingLeft:2}}>
+        The Plate / driver / company field matches any of: license plate (spaces and case ignored), driver name, or company name.
+        {hasClientSearch && rows.length === 0 && !loading && !err && ' No matches — try just a name, or widen the date range.'}
+      </div>
 
       {err && <div style={{padding:12,background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',fontSize:13}}>{err}</div>}
 
@@ -8337,7 +8396,7 @@ function TruckParkingLog({ propertyId }) {
         <div style={{padding:40,textAlign:'center',background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>
           <div style={{width:48,height:48,borderRadius:12,background:'rgba(96,165,250,.1)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px',fontSize:22}}>📋</div>
           <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>No passes for these filters</div>
-          <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>Try widening the date range or clearing the plate / company filter.</div>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>Try just the driver name, the company, or a shorter chunk of the plate. Widen the date range if the registration is older.</div>
         </div>
       ) : (
         <div style={{display:'grid',gap:10,gridTemplateColumns:'repeat(auto-fill, minmax(380px, 1fr))'}}>
