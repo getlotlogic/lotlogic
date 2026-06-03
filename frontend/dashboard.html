@@ -8823,10 +8823,21 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   // which broke the natural workflow of "I'm looking at the pass, here's
   // what happened to the truck."
   const [violationByPlate, setViolationByPlate] = useState(new Map());
-  // { kind: 'tow' | 'no-tow', violation: {id, plate_text, ...}, plate_text } | null
-  // Tow/no-tow modal removed — these are one-tap actions now. The
-  // submitting flag below still guards against double-tap races.
-  const [actionSubmitting, setActionSubmitting] = useState(false);
+  // Per-row submitting state — instead of a global flag that disables EVERY
+  // tow/no-tow button while any one is in flight. Operators on a busy lot
+  // tap row after row; they can't wait 2 seconds between each. Tracks the
+  // pass_id whose action is currently in flight (null otherwise). Buttons
+  // disable only when their own row matches.
+  const [submittingRowId, setSubmittingRowId] = useState(null);
+
+  // Property switch: clear caches keyed by row id so a new property never
+  // inherits a stale image, violation lookup, or submitting flag from the
+  // previous property. Realtime + load() handle the refresh below.
+  useEffect(() => {
+    setVehicleImageCache({});
+    setViolationByPlate(new Map());
+    setSubmittingRowId(null);
+  }, [propertyId]);
   // Auto-widening: if a search returns 0 matches in the current date window
   // but might match outside it, offer one-click to extend the window back 90d.
   const [widening, setWidening] = useState(false);
@@ -8973,11 +8984,13 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     setLoading(true);
     setErr(null);
     try {
-      // Fetch backend log + open alpr violations in parallel. Violations
-      // come back keyed by normalized plate so each row card can look up
-      // its matching violation and render the tow / no-tow action buttons.
+      // Fetch backend log + open alpr violations in parallel. allSettled so
+      // a violations-fetch failure doesn't blow away the log AND a log-fetch
+      // failure doesn't blow away the violation map. Each side is preserved
+      // independently — a network blip on one shouldn't strip tow buttons
+      // from the screen.
       // page_size=500 keeps the full date window in memory for live search.
-      const [res, viols] = await Promise.all([
+      const [resOutcome, violOutcome] = await Promise.allSettled([
         db.getParkingLog(propertyId, {
           date_from: filters.date_from,
           date_to: filters.date_to,
@@ -8985,27 +8998,38 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
           page: 1,
           page_size: 500,
         }),
-        db.getOpenAlprViolations(propertyId).catch(() => []),
+        db.getOpenAlprViolations(propertyId),
       ]);
-      // Backend returns `{ items, total, page, page_size }` per the docstring
-      // on db.getParkingLog. A prior refactor switched this to res.rows which
-      // is undefined, so `rows` was always [] and the search matched nothing
-      // even when `total` showed hundreds of passes. Accept both keys so the
-      // page stays correct if the backend response shape ever changes again.
-      const items = res.items || res.rows || [];
-      setRows(items);
-      setTotal(res.total ?? items.length);
-      // Build plate→violation map. The alpr_violations table doesn't store
-      // visitor_pass_id on every row, so we match by normalized plate +
-      // property_id (already filtered server-side). Only OPEN violations
-      // (action_taken IS NULL) come back from getOpenAlprViolations, so
-      // closed ones won't show buttons (correct — they're already actioned).
-      const m = new Map();
-      for (const v of (viols || [])) {
-        const k = normalizePlateForSearch(v.plate_text);
-        if (k && !m.has(k)) m.set(k, v);
+      if (resOutcome.status === 'fulfilled') {
+        const res = resOutcome.value;
+        // Backend returns `{ items, total, page, page_size }` per the docstring
+        // on db.getParkingLog. A prior refactor switched this to res.rows which
+        // is undefined, so `rows` was always [] and the search matched nothing
+        // even when `total` showed hundreds of passes. Accept both keys so the
+        // page stays correct if the backend response shape ever changes again.
+        const items = res.items || res.rows || [];
+        setRows(items);
+        setTotal(res.total ?? items.length);
+      } else {
+        // Log fetch failed — keep the previous rows on screen rather than
+        // emptying the list. Operator should see the error banner instead.
+        throw resOutcome.reason;
       }
-      setViolationByPlate(m);
+      if (violOutcome.status === 'fulfilled') {
+        // Build plate→violation map. The alpr_violations table doesn't store
+        // visitor_pass_id on every row, so we match by normalized plate +
+        // property_id (already filtered server-side). Only OPEN violations
+        // (action_taken IS NULL) come back from getOpenAlprViolations.
+        const viols = violOutcome.value;
+        const m = new Map();
+        for (const v of (viols || [])) {
+          const k = normalizePlateForSearch(v.plate_text);
+          if (k && !m.has(k)) m.set(k, v);
+        }
+        setViolationByPlate(m);
+      }
+      // else: keep previous violationByPlate so the tow/no-tow buttons
+      // don't silently disappear from a network blip.
     } catch (e) {
       setErr(e.message || 'Failed to load log');
     }
@@ -9027,7 +9051,15 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   //                          row clears from the working view; no billing
   //                          happens (there's no violation to bill).
   async function handleViolationAction(kind, payload, reason) {
-    setActionSubmitting(true);
+    // Defensive guards — if pass_id is missing (corrupted row data), refuse
+    // to fire the action rather than POSTing to /visitor_passes/undefined/cancel
+    // (which the backend silently 404s, leaving the operator thinking the
+    // tap succeeded). Surface a clear error instead.
+    if (!payload.pass_id && !payload.violation_id) {
+      addToast('Cannot action this row — missing ids. Refresh and retry.', 'error');
+      return;
+    }
+    setSubmittingRowId(payload.pass_id || payload.violation_id);
     const label = kind === 'tow' ? 'Marked towed' : 'Marked no-tow';
     try {
       const note = reason || `${label} from Parking Log`;
@@ -9053,7 +9085,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     } catch (e) {
       addToast(`${label} failed: ${e.message || 'unknown error'}`, 'error');
     } finally {
-      setActionSubmitting(false);
+      setSubmittingRowId(null);
     }
   }
 
@@ -9664,26 +9696,32 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                           style={{minHeight:44,background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}
                         >Cancel pass</button>
                       )}
-                      {showTowActions && (
-                        <>
-                          <button
-                            onClick={() => handleViolationAction('no-tow', { violation_id: openViolation?.id || null, pass_id: r.id, plate_text: r.plate_text }, '')}
-                            disabled={actionSubmitting}
-                            title="Truck left or you chose not to tow — closes without billing"
-                            style={{minHeight:44,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:700,cursor:actionSubmitting?'wait':'pointer',opacity:actionSubmitting?.55:1,fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
-                          >
-                            <span aria-hidden="true">✖</span> No tow
-                          </button>
-                          <button
-                            onClick={() => handleViolationAction('tow', { violation_id: openViolation?.id || null, pass_id: r.id, plate_text: r.plate_text }, '')}
-                            disabled={actionSubmitting}
-                            title="Confirm tow happened — releases billing for the partner"
-                            style={{minHeight:44,background:'#ef4444',color:'#fff',border:'1px solid #ef4444',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:800,cursor:actionSubmitting?'wait':'pointer',opacity:actionSubmitting?.55:1,fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
-                          >
-                            <span aria-hidden="true">🚛</span> Mark towed
-                          </button>
-                        </>
-                      )}
+                      {showTowActions && (() => {
+                        // Per-row in-flight check — only the row whose
+                        // action is currently being processed disables.
+                        // Other rows stay tappable.
+                        const rowBusy = submittingRowId === r.id;
+                        return (
+                          <>
+                            <button
+                              onClick={() => handleViolationAction('no-tow', { violation_id: openViolation?.id || null, pass_id: r.id, plate_text: r.plate_text }, '')}
+                              disabled={rowBusy}
+                              title="Truck left or you chose not to tow — closes without billing"
+                              style={{minHeight:44,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:700,cursor:rowBusy?'wait':'pointer',opacity:rowBusy?.55:1,fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
+                            >
+                              <span aria-hidden="true">✖</span> No tow
+                            </button>
+                            <button
+                              onClick={() => handleViolationAction('tow', { violation_id: openViolation?.id || null, pass_id: r.id, plate_text: r.plate_text }, '')}
+                              disabled={rowBusy}
+                              title="Confirm tow happened — releases billing for the partner"
+                              style={{minHeight:44,background:'#ef4444',color:'#fff',border:'1px solid #ef4444',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:800,cursor:rowBusy?'wait':'pointer',opacity:rowBusy?.55:1,fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
+                            >
+                              <span aria-hidden="true">🚛</span> Mark towed
+                            </button>
+                          </>
+                        );
+                      })()}
                     </div>
                   );
                 })()}
