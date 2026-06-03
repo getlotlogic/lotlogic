@@ -9331,7 +9331,56 @@ function ActivePassTracker({ propertyId }) {
               <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{violationColumn.length}</div>
             </div>
             {violationColumn.length > 0 && (
-              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+              <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                {(() => {
+                  // Sweep button — counts overstays older than the staleness
+                  // cutoff (24h) and offers one-tap clear. Auto-clear depends
+                  // on camera exit detection + the human loop (Mark towed
+                  // button in Parking Log); both have gaps in production.
+                  // This is the operator's escape hatch when stale rows pile up.
+                  const STALE_HOURS = 24;
+                  const staleCutoff = nowTick - STALE_HOURS * 3600 * 1000;
+                  const staleOverstays = violationColumn.filter(it =>
+                    it.kind === 'overstay' &&
+                    it.when &&
+                    it.when < staleCutoff
+                  );
+                  if (staleOverstays.length === 0) return null;
+                  return (
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm(
+                          `Clear ${staleOverstays.length} overstay${staleOverstays.length === 1 ? '' : 's'} older than ${STALE_HOURS}h?\n\n` +
+                          `This cancels the passes (one-by-one, in the background). Use only if you're confident those trucks are gone. ` +
+                          `If a truck is still on the lot, mark it towed instead.`
+                        )) return;
+                        setBatchRemoving(true);
+                        const results = await Promise.all(staleOverstays.map(it => removeOne(it)));
+                        const failed = results.filter(r => !r.ok).length;
+                        setBatchRemoving(false);
+                        if (failed === 0) {
+                          // toast not available in this scope — fall back to a quiet refresh
+                          // (the realtime channel + setPasses inside removeOne already cleared the UI)
+                        } else {
+                          window.alert(`${staleOverstays.length - failed} cleared, ${failed} failed.`);
+                        }
+                      }}
+                      disabled={batchRemoving}
+                      title={`${staleOverstays.length} overstays older than ${STALE_HOURS}h. Bulk-cancel them in one tap.`}
+                      style={{
+                        fontSize: 11, fontWeight: 800,
+                        padding: '6px 12px', borderRadius: 6,
+                        border: '1px solid rgba(239,68,68,.4)',
+                        background: batchRemoving ? 'rgba(239,68,68,.2)' : 'rgba(239,68,68,.12)',
+                        color: '#dc2626',
+                        cursor: batchRemoving ? 'wait' : 'pointer',
+                        letterSpacing: '.04em',
+                      }}
+                    >
+                      {batchRemoving ? 'Clearing…' : `🧹 Clear ${staleOverstays.length} stale`}
+                    </button>
+                  );
+                })()}
                 {selectMode && (
                   <>
                     <button
