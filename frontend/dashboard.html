@@ -8807,6 +8807,59 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   // placard, parking spot, reference ID). Updates as the operator types —
   // no Apply, no debounce. The filter runs against rows already in memory.
   const [searchText, setSearchText] = useState('');
+
+  // Tow queue. Operator walks the lot, runs plates, taps "+ Queue" on each
+  // truck he intends to tow. The queue persists across page reloads
+  // (per-property localStorage). When he's back at the tow truck he opens
+  // the queue and marks each one Towed / No tow.
+  // Shape: [{ pass_id, violation_id, plate_text, company_name, flagged_at }]
+  const queueStorageKey = propertyId ? `lotlogic_tow_queue_${propertyId}` : null;
+  const [towQueue, setTowQueue] = useState(() => {
+    if (!queueStorageKey) return [];
+    try {
+      const raw = localStorage.getItem(queueStorageKey);
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  });
+  const [queueOpen, setQueueOpen] = useState(false);
+  useEffect(() => {
+    if (!queueStorageKey) return;
+    try { localStorage.setItem(queueStorageKey, JSON.stringify(towQueue)); } catch {}
+  }, [queueStorageKey, towQueue]);
+  // Reload the queue when the property changes (in case the operator
+  // navigates A → B → A and we'd be reading stale state otherwise).
+  useEffect(() => {
+    if (!queueStorageKey) { setTowQueue([]); return; }
+    try {
+      const raw = localStorage.getItem(queueStorageKey);
+      setTowQueue(raw ? JSON.parse(raw) : []);
+    } catch { setTowQueue([]); }
+    setQueueOpen(false);
+  }, [queueStorageKey]);
+
+  const queueByPassId = useMemo(() => {
+    const m = new Map();
+    for (const q of towQueue) m.set(q.pass_id, q);
+    return m;
+  }, [towQueue]);
+
+  function addToQueue(r, openViolation) {
+    setTowQueue(prev => {
+      if (prev.some(p => p.pass_id === r.id)) return prev;
+      return [...prev, {
+        pass_id: r.id,
+        violation_id: openViolation?.id || null,
+        plate_text: r.plate_text,
+        company_name: r.company_name || null,
+        visitor_name: r.visitor_name || null,
+        flagged_at: new Date().toISOString(),
+      }];
+    });
+  }
+  function removeFromQueue(pass_id) {
+    setTowQueue(prev => prev.filter(p => p.pass_id !== pass_id));
+  }
+
   const [cancelModal, setCancelModal] = useState(null); // { id, plate_text } | null
   const [cancelling, setCancelling] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -9742,6 +9795,22 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                             >
                               <span aria-hidden="true">🚛</span> Mark towed
                             </button>
+                            {/* Tow queue: flag-for-later button. Operator
+                                walks the lot, queues trucks here, then
+                                marks them towed from the floating queue
+                                sheet when back at the truck. */}
+                            {(() => {
+                              const inQueue = queueByPassId.has(r.id);
+                              return (
+                                <button
+                                  onClick={() => inQueue ? removeFromQueue(r.id) : addToQueue(r, openViolation)}
+                                  title={inQueue ? 'Remove from tow queue' : 'Flag for later — review and confirm in the queue'}
+                                  style={{minHeight:44,background:inQueue?'rgba(74,222,128,.12)':'var(--bg-inset)',color:inQueue?'#15803d':'var(--text-primary)',border:`1px solid ${inQueue?'rgba(74,222,128,.4)':'var(--border)'}`,borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
+                                >
+                                  <span aria-hidden="true">{inQueue ? '✓' : '+'}</span> {inQueue ? 'Queued' : 'Queue'}
+                                </button>
+                              );
+                            })()}
                           </>
                         );
                       })()}
@@ -9782,6 +9851,148 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
           actions. The Cancel pass modal above is kept because it's a
           different kind of action (operator-initiated on an active pass,
           not a response to an existing violation). */}
+
+      {/* TOW QUEUE — floating bar at the bottom of the viewport when one
+          or more trucks are flagged. Tap to expand the queue sheet and
+          mark each one Towed / No tow when the operator is back at the
+          tow truck. State persists per-property in localStorage. */}
+      {towQueue.length > 0 && !queueOpen && (
+        <button
+          type="button"
+          onClick={() => setQueueOpen(true)}
+          style={{
+            position:'fixed', left:16, right:16, bottom:88,
+            zIndex: 60,
+            display:'flex', alignItems:'center', justifyContent:'space-between', gap:10,
+            padding:'12px 16px',
+            borderRadius:14,
+            border:'1px solid rgba(239,68,68,.45)',
+            background:'#ef4444',
+            color:'#fff',
+            fontSize:14, fontWeight:800, letterSpacing:'.02em',
+            cursor:'pointer',
+            boxShadow:'0 8px 28px rgba(239,68,68,.4)',
+            fontFamily:'inherit',
+          }}
+        >
+          <span>🚛 {towQueue.length} queued for tow</span>
+          <span style={{fontSize:12,fontWeight:700,opacity:.85}}>review →</span>
+        </button>
+      )}
+
+      {/* Queue sheet — full-width overlay listing each queued truck. Each
+          row gives Mark towed (fires force-bill / cancel-pass) and No tow
+          (mark-no-tow / cancel-pass), plus Remove (drops from queue with
+          no backend action). Successful action removes the row from
+          queue automatically (via handleViolationAction's load() + the
+          queue post-success cleanup in handleQueueAction below). */}
+      {queueOpen && (
+        <div
+          onClick={() => setQueueOpen(false)}
+          style={{
+            position:'fixed', inset:0, zIndex:70,
+            background:'rgba(0,0,0,.55)',
+            display:'flex', alignItems:'flex-end', justifyContent:'center',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width:'100%', maxWidth:520,
+              background:'var(--bg-card)',
+              borderTopLeftRadius:18, borderTopRightRadius:18,
+              borderTop:'1px solid var(--border)',
+              padding:'14px 14px 24px',
+              maxHeight:'80vh', overflowY:'auto',
+              boxShadow:'0 -8px 28px rgba(0,0,0,.3)',
+            }}
+          >
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div style={{fontSize:16,fontWeight:900,color:'var(--text-primary)'}}>🚛 Tow queue · {towQueue.length}</div>
+              <button
+                onClick={() => setQueueOpen(false)}
+                aria-label="Close queue"
+                style={{background:'transparent',border:'none',fontSize:22,color:'var(--text-muted)',cursor:'pointer',padding:6,lineHeight:1}}
+              >×</button>
+            </div>
+            <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:10,padding:'0 2px',lineHeight:1.4}}>
+              Confirm each truck once you've physically towed it (or didn't).
+              Removing skips the backend action entirely.
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:10}}>
+              {towQueue.map(q => {
+                const qBusy = submittingRowId === q.pass_id;
+                async function fireQueueAction(kind) {
+                  await handleViolationAction(kind, {
+                    violation_id: q.violation_id,
+                    pass_id: q.pass_id,
+                    plate_text: q.plate_text,
+                  }, '');
+                  // Remove on success regardless of which path the handler took.
+                  // If the action failed, the toast already surfaced the error;
+                  // the row stays in the queue so the operator can retry.
+                  removeFromQueue(q.pass_id);
+                }
+                return (
+                  <div key={q.pass_id} style={{
+                    background:'var(--bg-inset)',
+                    border:'1px solid var(--border)',
+                    borderLeft:'4px solid #ef4444',
+                    borderRadius:10,
+                    padding:'10px 12px',
+                    display:'flex', flexDirection:'column', gap:8,
+                  }}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,flexWrap:'wrap'}}>
+                      <div style={{fontSize:18,fontWeight:900,fontFamily:"'Courier New',monospace",letterSpacing:'.06em',color:'var(--text-primary)'}}>
+                        {q.plate_text}
+                      </div>
+                      <div style={{fontSize:11,color:'var(--text-faint)'}}>
+                        Flagged {new Date(q.flagged_at).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}
+                      </div>
+                    </div>
+                    {(q.visitor_name || q.company_name) && (
+                      <div style={{fontSize:13,color:'var(--text-secondary)',fontWeight:600}}>
+                        {[q.visitor_name, q.company_name].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
+                    <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:2}}>
+                      <button
+                        onClick={() => fireQueueAction('no-tow')}
+                        disabled={qBusy}
+                        style={{flex:'1 1 0',minHeight:44,background:'var(--bg-card)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',fontSize:13,fontWeight:700,cursor:qBusy?'wait':'pointer',opacity:qBusy?.55:1,fontFamily:'inherit',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6}}
+                      >
+                        <span aria-hidden="true">✖</span> No tow
+                      </button>
+                      <button
+                        onClick={() => fireQueueAction('tow')}
+                        disabled={qBusy}
+                        style={{flex:'1 1 0',minHeight:44,background:'#ef4444',color:'#fff',border:'1px solid #ef4444',borderRadius:8,padding:'10px 12px',fontSize:13,fontWeight:800,cursor:qBusy?'wait':'pointer',opacity:qBusy?.55:1,fontFamily:'inherit',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6}}
+                      >
+                        <span aria-hidden="true">🚛</span> Mark towed
+                      </button>
+                      <button
+                        onClick={() => removeFromQueue(q.pass_id)}
+                        title="Drop from queue without firing any action"
+                        style={{minHeight:44,background:'transparent',color:'var(--text-muted)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {towQueue.length > 1 && (
+              <button
+                type="button"
+                onClick={() => { if (window.confirm(`Clear all ${towQueue.length} from queue without action?`)) setTowQueue([]); }}
+                style={{marginTop:14,width:'100%',padding:'10px',background:'transparent',color:'var(--text-muted)',border:'1px dashed var(--border)',borderRadius:8,fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}
+              >
+                Clear queue
+              </button>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
