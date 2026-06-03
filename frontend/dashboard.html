@@ -3345,6 +3345,9 @@ const db = {
   // Open ALPR violations for a property (no_action / unresolved). These
   // are the "no registration" rows — vehicle was in the lot past grace,
   // never registered. Joined with the trigger plate_event for the image.
+  // Limit 500 (was 50): properties with backlogged overstays would lose
+  // their tow/no-tow buttons on the older 6+ rows because they fell
+  // outside the lookup map. Bumped to match the parking-log page size.
   async getOpenAlprViolations(propertyId) {
     if (!supabase || !propertyId) return [];
     const { data, error } = await supabase
@@ -3353,7 +3356,7 @@ const db = {
       .eq('property_id', propertyId)
       .is('action_taken', null)
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(500);
     if (error) return [];
     return data || [];
   },
@@ -9628,20 +9631,42 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   // dismissal). Both are owner-scoped on the backend; partners still see
   // the buttons here for visual consistency but the API call will 403
   // for them (caught and surfaced via toast).
-  async function handleViolationAction(kind, violationId, reason) {
+  // Action handler. Branches on whether the row has a matched open
+  // alpr_violation (the typical case) or not (camera-less property,
+  // already-actioned violation, or cron hasn't created one yet).
+  //   - WITH violation_id  → goes through the violation state machine
+  //                          (force-bill = towed, mark-no-tow = no tow).
+  //                          Billing handling is partner-side.
+  //   - WITHOUT violation  → falls back to cancel-pass with a note. The
+  //                          row clears from the working view; no billing
+  //                          happens (there's no violation to bill).
+  async function handleViolationAction(kind, payload, reason) {
     setActionSubmitting(true);
+    const label = kind === 'tow' ? 'Marked towed' : 'Marked no-tow';
     try {
-      if (kind === 'tow') {
-        await db.forceBillViolation(violationId, reason || 'Operator confirmed tow from Parking Log');
-        addToast('Marked towed — billing released', 'success');
+      const note = reason || `${label} from Parking Log`;
+      if (payload.violation_id) {
+        if (kind === 'tow') {
+          await db.forceBillViolation(payload.violation_id, note);
+          addToast('Marked towed — billing released', 'success');
+        } else {
+          await db.markViolationNoTow(payload.violation_id, note);
+          addToast('Marked no-tow', 'success');
+        }
       } else {
-        await db.markViolationNoTow(violationId, reason || 'Operator marked no-tow from Parking Log');
-        addToast('Marked no-tow', 'success');
+        // No linked violation — close the pass with a clear audit note.
+        // Reason prefix lets future review queries filter these out as
+        // operator-actioned rather than driver-cancelled.
+        await db.cancelVisitorPass(
+          payload.pass_id,
+          `${label} (no linked violation): ${note}`
+        );
+        addToast(`${label} (pass cancelled)`, 'success');
       }
       setActionModal(null);
       load();
     } catch (e) {
-      addToast((kind === 'tow' ? 'Mark towed' : 'Mark no-tow') + ' failed: ' + (e.message || 'unknown error'), 'error');
+      addToast(`${label} failed: ${e.message || 'unknown error'}`, 'error');
     } finally {
       setActionSubmitting(false);
     }
@@ -10225,13 +10250,18 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                 {(() => {
                   const violKey = normalizePlateForSearch(r.plate_text);
                   const openViolation = violationByPlate.get(violKey);
-                  // Tow / No-tow buttons appear on both fresh violations
-                  // (s === 'expired') and on auto-cleared rows that still
-                  // have an open violation in the DB. Auto-cleared just
-                  // means we've hidden it from the live tracker — the
-                  // operator may still need to action it (e.g., they towed
-                  // and forgot to mark it).
-                  const showTowActions = !!openViolation && (s === 'expired' || s === 'auto_cleared');
+                  // Tow / No-tow buttons show on EVERY expired or
+                  // auto-cleared row, regardless of whether we have a
+                  // matched open alpr_violation. Why: many rows don't
+                  // have one (cron didn't create it, or the property
+                  // has no ALPR cameras, or the violation was already
+                  // actioned). Without these buttons, operators can't
+                  // act on those rows from the Parking Log at all.
+                  // If a violation is matched, the action goes through
+                  // the violation state machine (force-bill / mark-no-tow).
+                  // If not, it falls back to cancel-pass with a note so
+                  // the row clears from the working view.
+                  const showTowActions = s === 'expired' || s === 'auto_cleared';
                   if (!isActive && !showTowActions) return null;
                   return (
                     <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:-2,flexWrap:'wrap'}}>
@@ -10244,14 +10274,14 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                       {showTowActions && (
                         <>
                           <button
-                            onClick={() => setActionModal({ kind: 'no-tow', violation: openViolation, plate_text: r.plate_text })}
+                            onClick={() => setActionModal({ kind: 'no-tow', violation_id: openViolation?.id || null, pass_id: r.id, plate_text: r.plate_text })}
                             title="Truck left on its own or you chose not to tow — closes the violation, no billing"
                             style={{minHeight:44,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
                           >
                             <span aria-hidden="true">✖</span> No tow
                           </button>
                           <button
-                            onClick={() => setActionModal({ kind: 'tow', violation: openViolation, plate_text: r.plate_text })}
+                            onClick={() => setActionModal({ kind: 'tow', violation_id: openViolation?.id || null, pass_id: r.id, plate_text: r.plate_text })}
                             title="Confirm tow happened — releases billing for the partner"
                             style={{minHeight:44,background:'#ef4444',color:'#fff',border:'1px solid #ef4444',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:800,cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
                           >
@@ -10296,16 +10326,22 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
         <ConfirmActionModal
           plate={actionModal.plate_text}
           actionLabel={actionModal.kind === 'tow' ? 'Mark this truck as towed?' : 'Mark this as no-tow?'}
-          description={
-            actionModal.kind === 'tow'
-              ? <>Confirms a tow happened for <strong style={{color:'var(--text-primary)'}}>{actionModal.plate_text}</strong>. Releases billing to the tow partner. Use this only after you've physically dispatched the truck — undoing it later requires owner-side billing rollback.</>
-              : <>Closes the violation for <strong style={{color:'var(--text-primary)'}}>{actionModal.plate_text}</strong> without billing. Use this if the driver returned and moved the truck, or you chose not to enforce. The pass row stays visible in the log.</>
-          }
+          description={(() => {
+            const hasViolation = !!actionModal.violation_id;
+            if (actionModal.kind === 'tow') {
+              return hasViolation
+                ? <>Confirms a tow happened for <strong style={{color:'var(--text-primary)'}}>{actionModal.plate_text}</strong>. Releases billing to the tow partner. Use this only after you've physically dispatched the truck — undoing it later requires owner-side billing rollback.</>
+                : <>Marks <strong style={{color:'var(--text-primary)'}}>{actionModal.plate_text}</strong> as towed and cancels the pass. No linked violation to bill — billing has to be handled out of band if the partner needs it.</>;
+            }
+            return hasViolation
+              ? <>Closes the violation for <strong style={{color:'var(--text-primary)'}}>{actionModal.plate_text}</strong> without billing. Use this if the driver returned and moved the truck, or you chose not to enforce. The pass row stays visible in the log.</>
+              : <>Cancels the pass for <strong style={{color:'var(--text-primary)'}}>{actionModal.plate_text}</strong> with a no-tow note. Row clears from the working view; no billing.</>;
+          })()}
           confirmLabel={actionModal.kind === 'tow' ? '🚛 Confirm towed' : '✖ Confirm no-tow'}
           confirmColor={actionModal.kind === 'tow' ? '#ef4444' : '#6b7280'}
           reasonPlaceholder={actionModal.kind === 'tow' ? 'Optional notes (tow company, time, etc.)' : 'Optional notes (why no tow)'}
           submitting={actionSubmitting}
-          onConfirm={(reason) => handleViolationAction(actionModal.kind, actionModal.violation.id, reason)}
+          onConfirm={(reason) => handleViolationAction(actionModal.kind, actionModal, reason)}
           onCancel={() => { if (!actionSubmitting) setActionModal(null); }}
         />
       )}
