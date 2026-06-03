@@ -9220,7 +9220,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     revoked: 'Revoked',
     towed: 'Towed',
   };
-  const statusOrder = { expired: 0, expiring: 1, active: 2, towed: 3, auto_cleared: 4, cancelled: 5, revoked: 6 };
+  const statusOrder = { expiring: 0, active: 1, expired: 2, towed: 3, auto_cleared: 4, cancelled: 5, revoked: 6 };
   // Explainer copy shown under the plate on each card. Operator's contract:
   // what happened, why, and what to do about it. Only statuses where the
   // "why" is non-obvious need an explainer — the rest leave this null.
