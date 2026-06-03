@@ -8836,6 +8836,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     setVehicleImageCache({});
     setViolationByPlate(new Map());
     setSubmittingRowId(null);
+    setPillStatusFilter(null);
   }, [propertyId]);
   // Auto-widening: if a search returns 0 matches in the current date window
   // but might match outside it, offer one-click to extend the window back 90d.
@@ -9781,7 +9782,6 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
           actions. The Cancel pass modal above is kept because it's a
           different kind of action (operator-initiated on an active pass,
           not a response to an existing violation). */}
-      )}
     </div>
   );
 }
@@ -11345,11 +11345,19 @@ function TowActivityPage({ user }) {
       // tow plate OR a Lev≤2 OCR variant. The DB-side levenshtein extension
       // lets us push the fuzzy match into SQL rather than scanning client-side.
       const orClauses = allPlates.map(p => `normalized_plate.eq.${p}`).join(',');
+      // Guard the empty case: with no canonical plates registered, `orClauses`
+      // is '' and `.or(',match_status.eq.partner_truck')` is a malformed
+      // leading-comma PostgREST filter that errors → the page silently goes
+      // empty. Fall back to the partner_truck match alone (the signal that
+      // matters when no explicit plates are on file).
+      const orFilter = orClauses
+        ? `${orClauses},match_status.eq.partner_truck`
+        : 'match_status.eq.partner_truck';
       const { data: evs } = await supabase
         .from('plate_events')
         .select('id, created_at, normalized_plate, plate_text, confidence, image_url, match_status, camera_id, raw_data, property_id')
         .gte('created_at', since)
-        .or(`${orClauses},match_status.eq.partner_truck`)
+        .or(orFilter)
         .order('created_at', { ascending: false })
         .limit(1000);
 
