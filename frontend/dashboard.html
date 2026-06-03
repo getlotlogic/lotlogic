@@ -8846,6 +8846,51 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   // on top of search + date filters — doesn't refetch.
   const [pillStatusFilter, setPillStatusFilter] = useState(null);
 
+  // ── Walk-around state ────────────────────────────────────────────────
+  // Operator walks the lot with their phone, takes a photo of any truck
+  // they want to verify, the OCR'd plate either matches a row in this Log
+  // (sign-in confirmed, no tow) or doesn't (Towable — one tap to tow with
+  // the photo attached). Each capture lives in a per-property local queue
+  // until the operator decides "Tow" / "OK signed in" / "Dismiss".
+  // queue entry shape:
+  //   { id, captured_at, photo_signed_url, plate_text, plate_confidence,
+  //     candidates: [{plate, score}], matched_row_id, status }
+  // where status ∈ 'pending' | 'matched' | 'towable' | 'submitting'
+  //                | 'towed' | 'dismissed' | 'failed'
+  const walkQueueKey = propertyId ? `lotlogic_walk_queue_${propertyId}` : null;
+  const [walkQueue, setWalkQueue] = useState(() => {
+    if (typeof window === 'undefined' || !propertyId) return [];
+    try {
+      const raw = window.localStorage.getItem(`lotlogic_walk_queue_${propertyId}`);
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  });
+  const [walkUploading, setWalkUploading] = useState(false);
+  const [walkErr, setWalkErr] = useState(null);
+  const cameraInputRef = useRef(null);
+  // Persist queue per property so a refresh mid-walk doesn't lose captures.
+  // Trim to last 50 — operators rarely walk that many at once and we don't
+  // want localStorage to balloon if someone forgets to clear.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !walkQueueKey) return;
+    try {
+      const trimmed = walkQueue.slice(0, 50);
+      window.localStorage.setItem(walkQueueKey, JSON.stringify(trimmed));
+    } catch { /* quota exceeded — silent. */ }
+  }, [walkQueue, walkQueueKey]);
+  // Property switch: reload the queue from its own per-property key. The
+  // outer state-clear effect already wipes other property-scoped caches.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !propertyId) {
+      setWalkQueue([]);
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(`lotlogic_walk_queue_${propertyId}`);
+      setWalkQueue(raw ? JSON.parse(raw) : []);
+    } catch { setWalkQueue([]); }
+  }, [propertyId]);
+
   // ── search normalization helpers ─────────────────────────────────────
   // Plate field is stored normalized (uppercase, alphanumeric only) by both
   // QR forms. Phone is stored E.164 ("+15551234567"). Operator input needs
@@ -9089,6 +9134,165 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     }
   }
 
+  // ── Walk-around handlers ─────────────────────────────────────────────
+  // Match an OCR'd plate against everything visible in this Log. Normalized
+  // compare on both sides. Returns the union row whose plate_text matches,
+  // or null. Used to decide whether a captured truck is a Towable or a
+  // signed-in pass — same data the search box already filters against.
+  function matchPlateAgainstRows(plate) {
+    const target = normalizePlateForSearch(plate);
+    if (!target) return null;
+    for (const r of unionRows) {
+      if (normalizePlateForSearch(r.plate_text) === target) return r;
+    }
+    return null;
+  }
+
+  // Send the captured photo to the walk-around-ocr edge function. Returns
+  // the OCR result + signed URL on success, throws on failure. The edge
+  // function handles auth, property-scope, R2-style storage write, and the
+  // Plate Recognizer call. Network failure / OCR failure are surfaced to
+  // the operator — we'd rather they re-shoot than tow blind.
+  async function uploadWalkPhoto(file) {
+    const token = getSessionToken();
+    if (!token) throw new Error('not_signed_in');
+    const fd = new FormData();
+    fd.append('property_id', propertyId);
+    fd.append('upload', file, file.name || 'walkaround.jpg');
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/walk-around-ocr`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const j = await res.json();
+        detail = j.detail || j.error || detail;
+      } catch {}
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
+  async function handleWalkCapture(e) {
+    const file = e.target.files && e.target.files[0];
+    // Reset the input so re-shooting the same plate fires the change again.
+    if (e.target) e.target.value = '';
+    if (!file) return;
+    if (!propertyId) {
+      setWalkErr('Pick a property first.');
+      return;
+    }
+    setWalkUploading(true);
+    setWalkErr(null);
+    const tempId = 'walk_' + Math.random().toString(36).slice(2, 10);
+    // Optimistic queue entry so the operator sees their capture immediately
+    // while OCR runs. Status flips once the upload settles.
+    setWalkQueue(q => [{
+      id: tempId,
+      captured_at: new Date().toISOString(),
+      photo_signed_url: null,
+      plate_text: '',
+      plate_confidence: 0,
+      candidates: [],
+      matched_row_id: null,
+      status: 'pending',
+    }, ...q]);
+    try {
+      const out = await uploadWalkPhoto(file);
+      const matchedRow = out.plate_text ? matchPlateAgainstRows(out.plate_text) : null;
+      // If matched plate has an active / non-violation status → 'matched'
+      // (the truck is signed in, no tow). Otherwise it's a 'towable' —
+      // either no pass at all, or the pass already expired.
+      const derived = matchedRow ? deriveStatus(matchedRow) : null;
+      const signedIn = derived === 'active' || derived === 'expiring';
+      setWalkQueue(q => q.map(entry => entry.id === tempId ? {
+        ...entry,
+        photo_signed_url: out.photo_signed_url,
+        plate_text: out.plate_text || '',
+        plate_confidence: out.plate_confidence || 0,
+        candidates: Array.isArray(out.candidates) ? out.candidates : [],
+        matched_row_id: matchedRow ? matchedRow.id : null,
+        status: signedIn ? 'matched' : 'towable',
+      } : entry));
+      if (matchedRow && signedIn) {
+        addToast(`Signed in: ${matchedRow.visitor_name || matchedRow.plate_text}`, 'success');
+      } else if (out.plate_text) {
+        addToast(`Read ${out.plate_text} — no active pass`, 'warning');
+      } else {
+        addToast('Photo saved. Plate unreadable — type it manually.', 'warning');
+      }
+    } catch (err) {
+      setWalkQueue(q => q.map(entry => entry.id === tempId ? { ...entry, status: 'failed' } : entry));
+      setWalkErr(err.message || 'Capture failed');
+      addToast(`Capture failed: ${err.message || 'unknown error'}`, 'error');
+    } finally {
+      setWalkUploading(false);
+    }
+  }
+
+  // Tow a captured row. If it already maps to an open alpr_violations row,
+  // re-use the existing tow path (force-bill with the photo URL in the
+  // note). If not, fall back to cancel-pass when there's a matched pass,
+  // or just remove from queue when there's nothing on file (the operator
+  // can still tow off-platform — the photo + log line is the audit trail).
+  async function handleWalkTow(entry) {
+    if (!entry.plate_text) {
+      addToast('Type a plate first — OCR didn\'t read one.', 'warning');
+      return;
+    }
+    setWalkQueue(q => q.map(x => x.id === entry.id ? { ...x, status: 'submitting' } : x));
+    try {
+      const matchedRow = entry.matched_row_id
+        ? unionRows.find(r => r.id === entry.matched_row_id)
+        : matchPlateAgainstRows(entry.plate_text);
+      const note = `Walk-around tow. Plate read: ${entry.plate_text}` +
+        (entry.plate_confidence ? ` (conf ${(entry.plate_confidence * 100).toFixed(0)}%)` : '') +
+        (entry.photo_signed_url ? ` — photo: ${entry.photo_signed_url}` : '');
+      const violation = matchedRow ? violationByPlate.get(normalizePlateForSearch(matchedRow.plate_text)) : null;
+      if (violation && violation.id) {
+        await db.forceBillViolation(violation.id, note);
+        addToast('Marked towed — billing released', 'success');
+      } else if (matchedRow) {
+        await db.cancelVisitorPass(matchedRow.id, `Walk-around tow (no linked violation): ${note}`);
+        addToast('Marked towed (pass cancelled)', 'success');
+      } else {
+        // No pass on file — log-only outcome. We can't write a violation
+        // from the frontend without a session/event, and forging one would
+        // pollute the ALPR pipeline. The photo in storage + the queue entry
+        // are the audit trail; a backend `walk-around/tow` route is the
+        // proper fix and ships in the next patch.
+        addToast(`Logged off-platform tow: ${entry.plate_text}`, 'success');
+      }
+      setWalkQueue(q => q.map(x => x.id === entry.id ? { ...x, status: 'towed' } : x));
+      load();
+    } catch (err) {
+      setWalkQueue(q => q.map(x => x.id === entry.id ? { ...x, status: 'towable' } : x));
+      addToast(`Tow failed: ${err.message || 'unknown error'}`, 'error');
+    }
+  }
+
+  function handleWalkDismiss(entryId) {
+    setWalkQueue(q => q.filter(x => x.id !== entryId));
+  }
+
+  function handleWalkPlateEdit(entryId, newPlate) {
+    const normalized = normalizePlateForSearch(newPlate);
+    setWalkQueue(q => q.map(entry => {
+      if (entry.id !== entryId) return entry;
+      const matchedRow = normalized ? matchPlateAgainstRows(normalized) : null;
+      const derived = matchedRow ? deriveStatus(matchedRow) : null;
+      const signedIn = derived === 'active' || derived === 'expiring';
+      return {
+        ...entry,
+        plate_text: normalized,
+        matched_row_id: matchedRow ? matchedRow.id : null,
+        status: matchedRow ? (signedIn ? 'matched' : 'towable') : 'towable',
+      };
+    }));
+  }
+
 
   // Initial load + on filter / page changes via `load` identity.
   useIntervalFetch(load, 0, [load]);
@@ -9306,8 +9510,10 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     ? visitorMatches.filter(x => deriveStatus(x.row) === pillStatusFilter)
     : visitorMatches;
 
-  // Sort: violations → expiring → active → towed → cancelled → revoked.
-  // Within a status group, newest first so the latest activity floats up.
+  // Sort: expiring → active → violations → towed → auto-cleared → cancelled → revoked.
+  // Triage-first ordering: rows the operator can still act on come before
+  // the post-mortem queue. Within a status group, newest first so the
+  // latest activity floats up.
   // Sort preserves the matched-fields metadata so chips render alongside.
   const sortedMatches = [...pillFilteredMatches].sort((a, b) => {
     const sa = deriveStatus(a.row);
@@ -9383,13 +9589,35 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
           onChange={e => setSearchText(e.target.value)}
           placeholder="Search plate, driver, company, phone, placard, spot, or ref ID…"
           style={{
-            width:'100%', padding:'14px 44px 14px 44px',
+            width:'100%', padding:'14px 84px 14px 44px',
             background:'var(--bg-card)', border:'1.5px solid var(--border)',
             borderRadius:12, color:'var(--text-primary)', fontSize:15,
             fontFamily:'inherit', boxSizing:'border-box',
           }}
         />
         <span aria-hidden="true" style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',fontSize:18,opacity:.55}}>🔍</span>
+        {/* Walk-around camera trigger. Native file input with capture=environment
+            opens the rear camera on mobile, a file picker on desktop. */}
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={handleWalkCapture}
+          style={{display:'none'}}
+        />
+        <button
+          type="button"
+          onClick={() => cameraInputRef.current && cameraInputRef.current.click()}
+          disabled={walkUploading}
+          aria-label="Walk-around — take plate photo"
+          title="Walk-around: photograph a plate, OCR + tow in one tap"
+          style={{
+            position:'absolute', right: hasSearch ? 42 : 8, top:'50%', transform:'translateY(-50%)',
+            background:'transparent', border:'none', cursor: walkUploading ? 'wait' : 'pointer',
+            padding:6, color: walkUploading ? 'var(--text-muted)' : 'var(--text-primary)', fontSize:18, lineHeight:1,
+          }}
+        >{walkUploading ? '⏳' : '📷'}</button>
         {hasSearch && (
           <button
             type="button"
@@ -9400,6 +9628,104 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
           >✕</button>
         )}
       </div>
+
+      {/* ── Walk queue panel ──────────────────────────────────────────────
+          Each capture sits here until the operator dispositions it. Matched
+          captures show "Signed in" (no tow), Towable captures show a one-tap
+          Tow button + Dismiss. Plate text is editable in case OCR misread. */}
+      {walkQueue.length > 0 && (
+        <div style={{padding:12,background:'var(--bg-card)',border:'1.5px solid var(--border)',borderRadius:12,display:'flex',flexDirection:'column',gap:10}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+            <div style={{fontSize:13,fontWeight:700,color:'var(--text-primary)',letterSpacing:'.02em',textTransform:'uppercase'}}>
+              Walk-around · {walkQueue.length}
+            </div>
+            <button
+              type="button"
+              onClick={() => setWalkQueue([])}
+              style={{background:'transparent',border:'none',cursor:'pointer',color:'var(--text-muted)',fontSize:12,padding:4}}
+              title="Clear walk queue"
+            >Clear all</button>
+          </div>
+          {walkErr && <div style={{fontSize:12,color:'#ef4444'}}>{walkErr}</div>}
+          {walkQueue.map(entry => {
+            const matchedRow = entry.matched_row_id ? unionRows.find(r => r.id === entry.matched_row_id) : null;
+            const isSubmitting = entry.status === 'submitting';
+            const isTowed = entry.status === 'towed';
+            const isPending = entry.status === 'pending';
+            const isFailed = entry.status === 'failed';
+            const statusColor =
+              entry.status === 'matched' ? '#22c55e' :
+              entry.status === 'towable' ? '#f97316' :
+              isTowed ? 'var(--text-muted)' :
+              isFailed ? '#ef4444' : 'var(--text-muted)';
+            const statusLabel =
+              isPending ? 'Reading plate…' :
+              entry.status === 'matched' ? 'Signed in' :
+              entry.status === 'towable' ? 'No active pass' :
+              isSubmitting ? 'Submitting…' :
+              isTowed ? 'Towed' :
+              isFailed ? 'Failed' : '';
+            return (
+              <div key={entry.id} style={{display:'flex',gap:10,alignItems:'flex-start',padding:'8px 0',borderTop:'1px solid var(--border)'}}>
+                {/* Photo thumb */}
+                <div style={{width:56,height:56,borderRadius:8,overflow:'hidden',background:'rgba(0,0,0,.2)',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  {entry.photo_signed_url
+                    ? <img src={entry.photo_signed_url} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}} />
+                    : <span style={{fontSize:24,opacity:.4}}>📷</span>}
+                </div>
+                <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:4}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                    <input
+                      type="text"
+                      value={entry.plate_text}
+                      onChange={ev => handleWalkPlateEdit(entry.id, ev.target.value)}
+                      placeholder={isPending ? '…' : 'Type plate'}
+                      disabled={isSubmitting || isTowed}
+                      style={{
+                        background:'transparent',border:'1px solid var(--border)',borderRadius:6,
+                        padding:'4px 8px',color:'var(--text-primary)',fontSize:14,fontWeight:700,
+                        letterSpacing:'.04em',fontFamily:'inherit',width:140,boxSizing:'border-box',
+                      }}
+                    />
+                    <span style={{fontSize:11,fontWeight:700,color:statusColor,letterSpacing:'.05em',textTransform:'uppercase'}}>{statusLabel}</span>
+                    {entry.plate_confidence > 0 && !isPending && (
+                      <span style={{fontSize:11,color:'var(--text-muted)'}}>{(entry.plate_confidence * 100).toFixed(0)}%</span>
+                    )}
+                  </div>
+                  {matchedRow && (
+                    <div style={{fontSize:12,color:'var(--text-muted)'}}>
+                      {matchedRow.visitor_name || '—'}
+                      {matchedRow.company_name ? ` · ${matchedRow.company_name}` : ''}
+                    </div>
+                  )}
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    {!isTowed && entry.status !== 'matched' && (
+                      <button
+                        type="button"
+                        onClick={() => handleWalkTow(entry)}
+                        disabled={isSubmitting || isPending || !entry.plate_text}
+                        style={{
+                          background:'#ef4444',border:'none',borderRadius:6,padding:'6px 12px',
+                          color:'#fff',fontSize:12,fontWeight:700,cursor: (isSubmitting || isPending || !entry.plate_text) ? 'not-allowed' : 'pointer',
+                          opacity: (isSubmitting || isPending || !entry.plate_text) ? .5 : 1,
+                        }}
+                      >{isSubmitting ? 'Towing…' : 'Tow'}</button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleWalkDismiss(entry.id)}
+                      style={{
+                        background:'transparent',border:'1px solid var(--border)',borderRadius:6,
+                        padding:'6px 12px',color:'var(--text-muted)',fontSize:12,fontWeight:600,cursor:'pointer',
+                      }}
+                    >{isTowed ? 'Done' : 'Dismiss'}</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* The date/status filter form used to live here. Removed in the
           parking-pass simplification — the smart search box + tap-pills
