@@ -5241,16 +5241,24 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     : filter === 'open' ? openJobs
     : filter === 'handled' ? handledToday
     : active; // 'all'
+  // Plate matching needs the same normalization the QR forms use on
+  // registration: uppercase, strip non-alphanumeric. Without this, typing
+  // "abc 1234" wouldn't match the stored "ABC1234". ≥2 alphanumeric
+  // characters required so a stray "a" doesn't match every plate with
+  // an A in it. Mirrors the TruckParkingLog smart-search rule.
   const filteredActive = baseList.filter(v => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
-    return (v.vehicle_color?.toLowerCase().includes(q)) ||
+    const qPlate = q.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const normPlate = (v.plate_text || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return (qPlate.length >= 2 && normPlate.includes(qPlate)) ||
+      (v.vehicle_color?.toLowerCase().includes(q)) ||
       (v.vehicle_type?.toLowerCase().includes(q)) ||
       (v.vehicle_make?.toLowerCase().includes(q)) ||
       (v.vehicle_model?.toLowerCase().includes(q)) ||
       (lotMap[v.lot_id]?.name?.toLowerCase().includes(q)) ||
       (v._lot_name?.toLowerCase().includes(q)) ||
-      (v.plate_text?.toLowerCase().includes(q)) ||
+      (v._camera_name?.toLowerCase().includes(q)) ||
       (v.zone_id?.toLowerCase().includes(q));
   });
 
@@ -5319,7 +5327,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
         <div className="search-bar">
           <div className="search-wrap">
             <SearchIcon />
-            <input className="search-input" placeholder="Search color, type, lot…" value={search} onChange={e => setSearch(e.target.value)} />
+            <input className="search-input" placeholder="Search plate, color, type, make, lot, camera…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
         </div>
       )}
