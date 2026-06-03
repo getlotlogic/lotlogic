@@ -8095,10 +8095,11 @@ function TruckParkingLog({ propertyId }) {
   const { addToast } = useToast();
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const pageSize = 100;
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  // Backend-side filters: date range + status. Changes require an Apply because
+  // they refetch from the server. Search text is separate state below and is
+  // pure client-side (live filter on already-fetched rows).
   const [filters, setFilters] = useState(() => {
     // Default to last 7 days so a partner logging in mid-shift sees recent
     // history, not just today (which is empty for the first hours each day).
@@ -8107,81 +8108,97 @@ function TruckParkingLog({ propertyId }) {
     return {
       date_from: weekAgo.toISOString().slice(0, 10),
       date_to: today.toISOString().slice(0, 10),
-      plate: '', company_name: '', status: '',
+      status: '',
     };
   });
   const [pendingFilters, setPendingFilters] = useState(filters);
+  // Live search text. Drives client-side substring matching across every
+  // field a driver enters on the QR form (plate, name, company, phone,
+  // placard, parking spot, reference ID). Updates as the operator types —
+  // no Apply, no debounce. The filter runs against rows already in memory.
+  const [searchText, setSearchText] = useState('');
   const [cancelModal, setCancelModal] = useState(null); // { id, plate_text } | null
   const [cancelling, setCancelling] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Auto-widening: if a search returns 0 matches in the current date window
+  // but might match outside it, offer one-click to extend the window back 90d.
+  const [widening, setWidening] = useState(false);
 
-  // Operator-side text search must be forgiving: typing the driver's name,
-  // the company, or any partial chunk of the plate (case + spacing
-  // insensitive) all need to surface the pass. Backend exact-match on
-  // `plate` has caused at least one wrongful tow — operator searched the
-  // plate, got 0 hits, towed, then found the active pass on the live list.
-  // So we skip the backend plate/company filter and do substring matching
-  // on the rows we already fetch.
+  // ── search normalization helpers ─────────────────────────────────────
+  // Plate field is stored normalized (uppercase, alphanumeric only) by both
+  // QR forms. Phone is stored E.164 ("+15551234567"). Operator input needs
+  // the same treatment so "abc 1234" matches "ABC1234" and "(555) 123-4"
+  // matches "+15551234567".
   function normalizePlateForSearch(s) {
     return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   }
-  function rowMatchesSearch(row, plateQuery, companyQuery) {
-    if (plateQuery) {
-      const qPlate = normalizePlateForSearch(plateQuery);
-      const qLower = plateQuery.trim().toLowerCase();
-      const rowPlate = normalizePlateForSearch(row.plate_text);
-      const rowName = (row.visitor_name || '').toLowerCase();
-      const rowCompany = (row.company_name || '').toLowerCase();
-      const plateHit = qPlate && rowPlate.includes(qPlate);
-      const nameHit = qLower && rowName.includes(qLower);
-      const companyHit = qLower && rowCompany.includes(qLower);
-      if (!plateHit && !nameHit && !companyHit) return false;
+  function normalizePhoneForSearch(s) {
+    return (s || '').replace(/\D/g, '');
+  }
+  // Returns the list of field names this row matched on, or [] if no match.
+  // An empty/whitespace-only query is treated as "no filter" by the caller,
+  // so we don't bother here.
+  function searchMatches(row, query) {
+    const matched = [];
+    const qLower = query.trim().toLowerCase();
+    if (!qLower) return matched;
+    const qPlate = normalizePlateForSearch(query);
+    const qPhone = normalizePhoneForSearch(query);
+
+    // Plate: ≥2 alphanumeric chars to avoid noise (typing "ab" shouldn't
+    // match every plate containing AB; typing "abc" should).
+    if (qPlate.length >= 2 && normalizePlateForSearch(row.plate_text).includes(qPlate)) {
+      matched.push('plate');
     }
-    if (companyQuery) {
-      const qLower = companyQuery.trim().toLowerCase();
-      const rowCompany = (row.company_name || '').toLowerCase();
-      if (!rowCompany.includes(qLower)) return false;
+    // Driver name on the visitor pass.
+    if ((row.visitor_name || '').toLowerCase().includes(qLower)) matched.push('name');
+    // Carrier / company.
+    if ((row.company_name || '').toLowerCase().includes(qLower)) matched.push('company');
+    // Phone: digits-only match against E.164 stored value. ≥4 digit
+    // threshold prevents random short numerics from matching every phone.
+    if (qPhone.length >= 4 && normalizePhoneForSearch(row.phone).includes(qPhone)) {
+      matched.push('phone');
     }
-    return true;
+    // Placard color: exact-word feel is fine — colors are short.
+    if ((row.placard_color || '').toLowerCase().includes(qLower)) matched.push('placard');
+    // Parking spot: stored as text or number; coerce to string.
+    if (row.parking_spot != null && String(row.parking_spot).toLowerCase().includes(qLower)) {
+      matched.push('spot');
+    }
+    // Reference ID: short generated identifier printed on the driver's
+    // success card; they may quote it on the phone.
+    if ((row.reference_id || '').toLowerCase().includes(qLower)) matched.push('ref');
+
+    return matched;
   }
 
-  const hasClientSearch = !!(
-    (filters.plate && filters.plate.trim()) ||
-    (filters.company_name && filters.company_name.trim())
-  );
+  const trimmedSearch = searchText.trim();
+  const hasSearch = trimmedSearch.length > 0;
 
   const load = useCallback(async () => {
     if (!propertyId) return;
     setLoading(true);
     setErr(null);
     try {
-      // When the operator types in Plate or Company, drop those filters from
-      // the backend call (it does narrower matching than operators expect)
-      // and widen the page so client-side substring search has enough to
-      // work with. 500 covers any realistic truck-plaza per date window.
-      const apiOpts = hasClientSearch
-        ? {
-            date_from: filters.date_from,
-            date_to: filters.date_to,
-            status: filters.status,
-            page: 1,
-            page_size: 500,
-          }
-        : { ...filters, page, page_size: pageSize };
-      const res = await db.getParkingLog(propertyId, apiOpts);
-      let items = res.items || [];
-      let total = res.total ?? items.length;
-      if (hasClientSearch) {
-        items = items.filter(r => rowMatchesSearch(r, filters.plate, filters.company_name));
-        total = items.length;
-      }
-      setRows(items);
-      setTotal(total);
+      // Always fetch with page_size=500 so client-side live filter has
+      // enough rows to work with. The previous backend-paginated mode
+      // (100 per page) is gone — search-as-you-type only makes sense
+      // when the full date window is in memory.
+      const res = await db.getParkingLog(propertyId, {
+        date_from: filters.date_from,
+        date_to: filters.date_to,
+        status: filters.status,
+        page: 1,
+        page_size: 500,
+      });
+      setRows(res.items || []);
+      setTotal(res.total ?? (res.items?.length || 0));
     } catch (e) {
       setErr(e.message || 'Failed to load log');
     }
     setLoading(false);
-  }, [propertyId, filters, page, hasClientSearch]);
+  }, [propertyId, filters]);
+
 
   // One-shot load per `load` identity. External changes to visitor_passes
   // no longer trigger a full reload of the log — the parent's realtime
@@ -8208,6 +8225,10 @@ function TruckParkingLog({ propertyId }) {
   async function handleExport() {
     setExporting(true);
     try {
+      // Export honours the date/status range only. The smart search box is
+      // pure UI and isn't sent to the backend — exporting "all matches" of
+      // a free-text query reliably needs a backend column-aware filter we
+      // don't have yet, so the CSV reflects the date window unfiltered.
       const blob = await db.getParkingLog(propertyId, { ...filters, format: 'csv' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -8226,19 +8247,31 @@ function TruckParkingLog({ propertyId }) {
 
   function applyFilters(e) {
     e?.preventDefault();
-    setPage(1);
     setFilters(pendingFilters);
   }
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  // Export uses the last-applied `filters`, not `pendingFilters`. If the user
-  // edited the form but hasn't clicked Apply, the CSV would silently reflect
-  // stale filters. Disable the Export button until the form is re-applied.
+  function widenDateRange() {
+    // 90-day lookback covers nearly every realistic "I swear they were here
+    // a while ago" case without dumping a year of rows on the operator.
+    const today = new Date();
+    const ninetyDaysAgo = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const next = {
+      ...filters,
+      date_from: ninetyDaysAgo.toISOString().slice(0, 10),
+      date_to: today.toISOString().slice(0, 10),
+    };
+    setWidening(true);
+    setFilters(next);
+    setPendingFilters(next);
+    setTimeout(() => setWidening(false), 800);
+  }
+
+  // Export reflects the last-applied date/status filters, not the in-progress
+  // pendingFilters edits. Disable Export while the form is dirty so users
+  // don't ship a CSV that disagrees with what's on screen.
   const filtersDirty = (
     pendingFilters.date_from !== filters.date_from ||
     pendingFilters.date_to !== filters.date_to ||
-    pendingFilters.plate !== filters.plate ||
-    pendingFilters.company_name !== filters.company_name ||
     pendingFilters.status !== filters.status
   );
   const inputStyle = {padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit'};
@@ -8284,8 +8317,19 @@ function TruckParkingLog({ propertyId }) {
     return hex ? <span aria-hidden="true" style={{display:'inline-block',width:10,height:10,borderRadius:3,background:hex,border:'1px solid rgba(0,0,0,.25)',verticalAlign:'middle',marginRight:5}} /> : null;
   };
 
+  // Live filter: when there's a search query, narrow visitor passes to
+  // those that matched. Each entry carries the `matched` field list so
+  // we can show "matched: name" chips beside the result.
+  const visitorMatches = hasSearch
+    ? rows.map(r => ({ row: r, matched: searchMatches(r, trimmedSearch) }))
+          .filter(x => x.matched.length > 0)
+    : rows.map(r => ({ row: r, matched: [] }));
+
   // Counts by derived status — drives the per-status pills above the grid.
-  const statusCounts = rows.reduce((acc, r) => {
+  // Always derived from the currently-displayed visitor passes so it stays
+  // honest as the operator types.
+  const visitorRows = visitorMatches.map(x => x.row);
+  const statusCounts = visitorRows.reduce((acc, r) => {
     const s = deriveStatus(r);
     acc[s] = (acc[s] || 0) + 1;
     return acc;
@@ -8293,32 +8337,80 @@ function TruckParkingLog({ propertyId }) {
 
   // Sort: violations → expiring → active → towed → cancelled → revoked.
   // Within a status group, newest first so the latest activity floats up.
-  const sortedRows = [...rows].sort((a, b) => {
-    const sa = deriveStatus(a);
-    const sb = deriveStatus(b);
+  // Sort preserves the matched-fields metadata so chips render alongside.
+  const sortedMatches = [...visitorMatches].sort((a, b) => {
+    const sa = deriveStatus(a.row);
+    const sb = deriveStatus(b.row);
     const oa = statusOrder[sa] ?? 99;
     const ob = statusOrder[sb] ?? 99;
     if (oa !== ob) return oa - ob;
-    const ta = new Date(a.created_at || 0).getTime();
-    const tb = new Date(b.created_at || 0).getTime();
+    const ta = new Date(a.row.created_at || 0).getTime();
+    const tb = new Date(b.row.created_at || 0).getTime();
     return tb - ta;
   });
 
+  // Total displayed reflects whatever's actually on screen right now.
+  const displayedTotal = hasSearch ? visitorMatches.length : (total || rows.length);
+
+  // Pretty labels for the "matched: X" chip on each result.
+  const matchedFieldLabel = {
+    plate: 'plate',
+    name: 'driver name',
+    company: 'company',
+    phone: 'phone',
+    placard: 'placard',
+    spot: 'parking spot',
+    ref: 'reference ID',
+  };
+
+  // Common chip style for the small "matched: X" pill beside each result.
+  const matchedChip = (field) => (
+    <span key={field} style={{fontSize:9,fontWeight:700,letterSpacing:'.05em',textTransform:'uppercase',padding:'2px 7px',borderRadius:12,background:'rgba(168,85,247,.14)',color:'#c084fc',border:'1px solid rgba(168,85,247,.35)'}}>
+      matched: {matchedFieldLabel[field] || field}
+    </span>
+  );
+
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      {/* Filters */}
+      {/* ── Search bar (always-visible, live) ──────────────────────────── */}
+      {/* Operator-anchor. Filters everything below as the user types.
+          Matches across: plate, driver name, company, phone, placard,
+          parking spot, reference ID. Spans both visitor passes (this tab)
+          and the permanent allowlist so a Swift driver registered as an
+          employee surfaces in the same search. */}
+      <div style={{position:'relative'}}>
+        <input
+          type="text"
+          autoFocus
+          value={searchText}
+          onChange={e => setSearchText(e.target.value)}
+          placeholder="Search plate, driver, company, phone, placard, spot, or ref ID…"
+          style={{
+            width:'100%', padding:'14px 44px 14px 44px',
+            background:'var(--bg-card)', border:'1.5px solid var(--border)',
+            borderRadius:12, color:'var(--text-primary)', fontSize:15,
+            fontFamily:'inherit', boxSizing:'border-box',
+          }}
+        />
+        <span aria-hidden="true" style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',fontSize:18,opacity:.55}}>🔍</span>
+        {hasSearch && (
+          <button
+            type="button"
+            onClick={() => setSearchText('')}
+            aria-label="Clear search"
+            title="Clear search"
+            style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'transparent',border:'none',cursor:'pointer',padding:6,color:'var(--text-muted)',fontSize:16,lineHeight:1}}
+          >✕</button>
+        )}
+      </div>
+
+      {/* ── Date / Status filters (require Apply since they refetch) ──── */}
       <form onSubmit={applyFilters} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:14,display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10,alignItems:'end'}}>
         <label style={labelStyle}>From
           <input type="date" value={pendingFilters.date_from} onChange={e => setPendingFilters({...pendingFilters, date_from: e.target.value})} style={inputStyle} />
         </label>
         <label style={labelStyle}>To
           <input type="date" value={pendingFilters.date_to} onChange={e => setPendingFilters({...pendingFilters, date_to: e.target.value})} style={inputStyle} />
-        </label>
-        <label style={labelStyle}>Plate / driver / company
-          <input type="text" value={pendingFilters.plate} onChange={e => setPendingFilters({...pendingFilters, plate: e.target.value})} placeholder="Plate, name, or unit #" style={inputStyle} />
-        </label>
-        <label style={labelStyle}>Company only
-          <input type="text" value={pendingFilters.company_name} onChange={e => setPendingFilters({...pendingFilters, company_name: e.target.value})} placeholder="e.g. Swift" style={inputStyle} />
         </label>
         <label style={labelStyle}>Status
           <select value={pendingFilters.status} onChange={e => setPendingFilters({...pendingFilters, status: e.target.value})} style={inputStyle}>
@@ -8330,34 +8422,25 @@ function TruckParkingLog({ propertyId }) {
           </select>
         </label>
         <div style={{display:'flex',gap:8,alignSelf:'end',flexWrap:'wrap'}}>
-          <button type="submit" style={{background:'var(--accent)',color:'#fff',border:'none',borderRadius:8,padding:'9px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Apply</button>
+          <button type="submit" disabled={!filtersDirty} style={{background:filtersDirty?'var(--accent)':'var(--bg-inset)',color:filtersDirty?'#fff':'var(--text-muted)',border:'none',borderRadius:8,padding:'9px 16px',fontSize:13,fontWeight:700,cursor:filtersDirty?'pointer':'not-allowed',fontFamily:'inherit'}}>Apply dates</button>
           <button
             type="button"
             onClick={handleExport}
-            disabled={exporting || filtersDirty || hasClientSearch}
-            title={
-              filtersDirty ? 'Apply filters before exporting'
-              : hasClientSearch ? 'Clear the Plate/driver/company field to export — CSV uses server-side filtering only'
-              : undefined
-            }
-            style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:(exporting||filtersDirty||hasClientSearch)?'not-allowed':'pointer',opacity:(exporting||filtersDirty||hasClientSearch)?.55:1,fontFamily:'inherit'}}
+            disabled={exporting || filtersDirty}
+            title={filtersDirty ? 'Apply filters before exporting' : 'CSV reflects the date/status filters; the search box is not applied to CSV exports.'}
+            style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:(exporting||filtersDirty)?'not-allowed':'pointer',opacity:(exporting||filtersDirty)?.55:1,fontFamily:'inherit'}}
           >{exporting ? 'Exporting…' : '↓ Export CSV'}</button>
         </div>
       </form>
 
-      <div style={{fontSize:11,color:'var(--text-faint)',marginTop:-6,paddingLeft:2}}>
-        The Plate / driver / company field matches any of: license plate (spaces and case ignored), driver name, or company name.
-        {hasClientSearch && rows.length === 0 && !loading && !err && ' No matches — try just a name, or widen the date range.'}
-      </div>
-
       {err && <div style={{padding:12,background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',fontSize:13}}>{err}</div>}
 
-      {/* Header summary row */}
+      {/* ── Header summary row ────────────────────────────────────────── */}
       {!err && (
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <div style={{display:'flex',gap:14,alignItems:'baseline',flexWrap:'wrap'}}>
             <div style={{fontSize:22,fontWeight:800,color:'var(--text-primary)',letterSpacing:'-.01em'}}>
-              {total.toLocaleString()}<span style={{fontSize:13,fontWeight:600,color:'var(--text-muted)',marginLeft:6}}>{total === 1 ? 'pass' : 'passes'}</span>
+              {displayedTotal.toLocaleString()}<span style={{fontSize:13,fontWeight:600,color:'var(--text-muted)',marginLeft:6}}>{displayedTotal === 1 ? 'match' : (hasSearch ? 'matches' : 'passes')}</span>
             </div>
             {Object.keys(statusCounts).length > 0 && (
               <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
@@ -8383,24 +8466,38 @@ function TruckParkingLog({ propertyId }) {
               </div>
             )}
           </div>
-          <div style={{fontSize:12,color:'var(--text-muted)'}}>
-            Page {page} of {totalPages}
+          <div style={{fontSize:11,color:'var(--text-muted)'}}>
+            {filters.date_from} → {filters.date_to}
           </div>
         </div>
       )}
 
-      {/* Card list */}
+      {/* ── Visitor-pass results ──────────────────────────────────────── */}
       {loading && rows.length === 0 ? (
         <div style={{padding:40,textAlign:'center',color:'var(--text-muted)',fontSize:13,background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>Loading…</div>
-      ) : rows.length === 0 ? (
+      ) : sortedMatches.length === 0 ? (
         <div style={{padding:40,textAlign:'center',background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>
           <div style={{width:48,height:48,borderRadius:12,background:'rgba(96,165,250,.1)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px',fontSize:22}}>📋</div>
-          <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>No passes for these filters</div>
-          <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>Try just the driver name, the company, or a shorter chunk of the plate. Widen the date range if the registration is older.</div>
+          <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>
+            {hasSearch ? `No matches for "${trimmedSearch}"` : 'No passes for these filters'}
+          </div>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4,maxWidth:480,margin:'4px auto 0'}}>
+            {hasSearch
+              ? <>Try a shorter chunk of the plate, just the driver's first name, or the company. Phone numbers and placard color also work.</>
+              : <>Try widening the date range or clearing the status filter.</>}
+          </div>
+          {hasSearch && (
+            <button
+              type="button"
+              onClick={widenDateRange}
+              disabled={widening}
+              style={{marginTop:14,background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'8px 16px',fontSize:13,fontWeight:700,cursor:widening?'wait':'pointer',fontFamily:'inherit'}}
+            >{widening ? 'Loading…' : '🔭 Search the last 90 days'}</button>
+          )}
         </div>
       ) : (
         <div style={{display:'grid',gap:10,gridTemplateColumns:'repeat(auto-fill, minmax(380px, 1fr))'}}>
-          {sortedRows.map(r => {
+          {sortedMatches.map(({ row: r, matched }) => {
             const s = deriveStatus(r);
             const color = statusColor[s] || 'var(--text-muted)';
             const isActive = (r.status || 'active') === 'active';
@@ -8466,7 +8563,7 @@ function TruckParkingLog({ propertyId }) {
                 </div>
 
                 {/* Detail chips */}
-                {detailChips.length > 0 && (
+                {(detailChips.length > 0 || matched.length > 0 || r.policy_acknowledged_at) && (
                   <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                     {detailChips.map((c, i) => (
                       <span key={i} style={{fontSize:11,padding:'3px 9px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-secondary)',border:'1px solid var(--border-subtle)',display:'inline-flex',alignItems:'center'}}>
@@ -8480,6 +8577,7 @@ function TruckParkingLog({ propertyId }) {
                         ✓ Policy
                       </span>
                     )}
+                    {matched.map(matchedChip)}
                   </div>
                 )}
 
@@ -8512,12 +8610,13 @@ function TruckParkingLog({ propertyId }) {
         </div>
       )}
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div style={{display:'flex',justifyContent:'center',alignItems:'center',gap:10,fontSize:13,color:'var(--text-muted)'}}>
-          <button onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1 || loading} style={{background:'var(--bg-card)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:page<=1?'not-allowed':'pointer',opacity:page<=1?.45:1,fontFamily:'inherit'}}>← Prev</button>
-          <span style={{fontWeight:600,color:'var(--text-primary)'}}>Page {page} of {totalPages}</span>
-          <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages || loading} style={{background:'var(--bg-card)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:page>=totalPages?'not-allowed':'pointer',opacity:page>=totalPages?.45:1,fontFamily:'inherit'}}>Next →</button>
+      {/* Pagination removed: we fetch up to 500 rows for the date window
+          and filter client-side as the operator types, so server-side
+          pages no longer apply. If a property genuinely sees >500 passes
+          in a 7-day window we'll surface a warning and re-introduce paging. */}
+      {!loading && rows.length >= 500 && (
+        <div style={{fontSize:11,color:'#facc15',padding:'8px 12px',background:'rgba(250,204,21,.08)',border:'1px solid rgba(250,204,21,.3)',borderRadius:8}}>
+          Showing the most recent 500 passes for this date window. If you can't find a specific driver, narrow the date range and try again.
         </div>
       )}
 
