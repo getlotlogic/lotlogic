@@ -8743,837 +8743,6 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // Paginated, filterable temporary-pass log for truck_plaza properties.
 // Data comes from the backend /visitor_passes/parking-log endpoint — the same
 // shape as the CSV export so the two never drift.
-// ActivePassTracker — the on-site plate-matching surface.
-// Two columns:
-//   LEFT: Active passes (currently allowed). Yellow expiring (<3h) sorted
-//         to the top, green active below. Sorted by valid_until asc so the
-//         most-urgent are at the top of the column.
-//   RIGHT: Current violations (expired). Click → reveal the camera image
-//          of the actual vehicle so the operator can match what they see
-//          on the lot to what's flagged.
-//
-// Design intent (psychological / scannability):
-//   • Plate text dominates each card at 48-56px, Courier-Mono, all caps.
-//     Plate IS the visual the operator scans against — it MUST be the
-//     anchor (F-pattern top-left).
-//   • Color coding: green = OK, yellow = expiring soon, red = violation.
-//     Traffic-light convention; instant emotional read.
-//   • Whitespace is deliberate — breathing room signals "important content,
-//     pay attention" rather than "checklist to power through."
-//   • Card structure repeats (Gestalt similarity) so the operator's eye
-//     learns the layout once and scans the whole column without rereading.
-//   • Countdown chip in the active column creates time-awareness without
-//     panic; expiry timestamp underneath gives the absolute reference.
-//   • Violations are a separate column so they're never mixed with allowed
-//     plates — separation reduces accidental misclassification.
-function ActivePassTracker({ propertyId }) {
-  const [passes, setPasses] = useState([]);
-  const [alprViols, setAlprViols] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [expandedKey, setExpandedKey] = useState(null); // e.g. "pass:UUID" or "alpr:UUID"
-  const [imageCache, setImageCache] = useState({});    // expandedKey -> {url, loading, error, capturedAt, cameraName}
-  // Bulk-select state. When selectMode is on, clicking a card toggles selection
-  // rather than expanding. Checkboxes appear on each card and a floating action
-  // bar offers "Remove N selected".
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
-  const [batchRemoving, setBatchRemoving] = useState(false);
-  const nowTick = useNowTick();
-
-  // Only show the full-page spinner on the FIRST load. Realtime refetches
-  // shouldn't replace the card grid with a loader — that scrolls the user
-  // back to the top every time anything changes.
-  const initialLoadedRef = useRef(false);
-  const load = useCallback(async () => {
-    if (!propertyId) return;
-    if (!initialLoadedRef.current) setLoading(true);
-    try {
-      const [all, alpr] = await Promise.all([
-        db.getVisitorPasses(propertyId, { limit: 200 }),
-        db.getOpenAlprViolations(propertyId),
-      ]);
-      setPasses((all || []).filter(p => p.status === 'active' || p.status === 'expired'));
-      setAlprViols(alpr || []);
-    } catch (e) {
-      // swallow; empty state will show
-    }
-    initialLoadedRef.current = true;
-    setLoading(false);
-  }, [propertyId]);
-
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    if (!supabase || !propertyId) return;
-    const ch1 = supabase.channel('active-pass-tracker-passes-' + propertyId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'visitor_passes', filter: 'property_id=eq.' + propertyId }, () => load())
-      .subscribe();
-    const ch2 = supabase.channel('active-pass-tracker-alpr-' + propertyId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'alpr_violations', filter: 'property_id=eq.' + propertyId }, () => load())
-      .subscribe();
-    return () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2); };
-  }, [propertyId, load]);
-
-  const EXPIRING_WINDOW_MS = 3 * 60 * 60 * 1000;
-  function deriveStatus(p) {
-    if (p.status === 'expired') return 'violation';
-    // No valid_until on an active pass = malformed/missing data. Treat as
-    // expiring (yellow) so it surfaces for review rather than disappearing.
-    if (!p.valid_until) return 'expiring';
-    const remaining = new Date(p.valid_until).getTime() - nowTick;
-    if (remaining <= 0) return 'violation';
-    if (remaining < EXPIRING_WINDOW_MS) return 'expiring';
-    return 'active';
-  }
-
-  // Active column: expiring on top, active below; within each, soonest-to-expire first.
-  const activeColumn = passes
-    .filter(p => {
-      if (p.status !== 'active') return false;
-      // No valid_until → still surface in UI (treated as expiring above)
-      if (!p.valid_until) return true;
-      return new Date(p.valid_until).getTime() > nowTick;
-    })
-    .sort((a, b) => {
-      // Null valid_until sorts to top (most-urgent-to-review).
-      const ta = a.valid_until ? new Date(a.valid_until).getTime() : 0;
-      const tb = b.valid_until ? new Date(b.valid_until).getTime() : 0;
-      return ta - tb;
-    });
-
-  // Violation column: THREE sources unified.
-  //   1. Overstay        = visitor_passes that expired (had a pass, ran past it)
-  //   2. No registration = alpr_violations open rows (in lot, never registered)
-  //   3. Cooldown        = alpr_violations rows where violation_type='cooldown'
-  //                        (driver tried to re-register inside the 24h cooldown)
-  // Each item normalized to { key, kind, plate_text, company_name?, …
-  // sourceRow, when }. Sorted most-recent first (most-likely-still-in-lot).
-  const overstayItems = passes
-    .filter(p => p.status === 'expired' || (p.status === 'active' && new Date(p.valid_until).getTime() <= nowTick))
-    .map(p => ({
-      key: 'pass:' + p.id,
-      kind: 'overstay',
-      plate_text: p.plate_text,
-      company_name: p.company_name || null,
-      pass: p,
-      when: new Date(p.valid_until || p.created_at).getTime(),
-    }));
-  const noRegItems = alprViols
-    .filter(v => v.violation_type !== 'cooldown')
-    .map(v => ({
-      key: 'alpr:' + v.id,
-      kind: 'no_registration',
-      plate_text: v.plate_text,
-      company_name: null,
-      alpr: v,
-      when: new Date(v.created_at).getTime(),
-    }));
-  const cooldownItems = alprViols
-    .filter(v => v.violation_type === 'cooldown')
-    .map(v => ({
-      key: 'alpr:' + v.id,
-      kind: 'cooldown',
-      plate_text: v.plate_text,
-      company_name: null,
-      alpr: v,
-      when: new Date(v.created_at).getTime(),
-    }));
-  // 24-hour cutoff: rows older than this drop out of the operator's
-  // working view. They are NOT deleted — they still live in the DB and
-  // surface in the Parking Log with an AUTO-CLEARED label. This stops
-  // the "50+ piled up" problem where stale rows drown out new ones.
-  const VIOLATION_AUTO_CLEAR_HOURS = 24;
-  const violationStaleCutoff = nowTick - VIOLATION_AUTO_CLEAR_HOURS * 3600 * 1000;
-  const allViolations = [...overstayItems, ...noRegItems, ...cooldownItems].sort((a, b) => b.when - a.when);
-  const violationColumn = allViolations.filter(it => !it.when || it.when >= violationStaleCutoff);
-  const hiddenStaleCount = allViolations.length - violationColumn.length;
-
-  function fmtRemaining(targetMs, fromMs) {
-    const ms = Math.max(0, targetMs - fromMs);
-    const h = Math.floor(ms / 3600000);
-    const m = Math.floor((ms % 3600000) / 60000);
-    if (h <= 0 && m <= 0) return 'Ending now';
-    if (h <= 0) return `${m}m left`;
-    return `${h}h ${m}m left`;
-  }
-
-  function fmtElapsed(fromMs, nowMs) {
-    const ms = Math.max(0, nowMs - fromMs);
-    const h = Math.floor(ms / 3600000);
-    const m = Math.floor((ms % 3600000) / 60000);
-    if (h <= 0 && m <= 0) return 'just now';
-    if (h <= 0) return `${m}m ago`;
-    if (h < 24) return `${h}h ${m}m ago`;
-    const days = Math.floor(h / 24);
-    return `${days}d ago`;
-  }
-
-  function fmtAbsolute(s) {
-    if (!s) return '—';
-    return new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  }
-
-  // The DB stores `stay_days` as a ceil(stay_hours/24) integer (1 or 2 for the
-  // 12/24/36/48 hour options). Rendering "{stay_days}d" makes a 12h pass and a
-  // 24h pass both display as "1d", which is the bug Frank flagged. Compute the
-  // real duration from valid_from→valid_until and show hours unless it's an
-  // exact multiple of 24.
-  function stayLabel(p) {
-    if (!p?.valid_from || !p?.valid_until) {
-      // Fallback for legacy rows missing one timestamp.
-      if (p?.stay_days) return `${p.stay_days * 24}h`;
-      return null;
-    }
-    const hrs = Math.round((new Date(p.valid_until) - new Date(p.valid_from)) / 3600000);
-    if (hrs <= 0) return null;
-    if (hrs % 24 === 0) return `${hrs / 24}d`;
-    return `${hrs}h`;
-  }
-
-  function placardSwatch(color) {
-    if (!color) return null;
-    const hex = ({ red: '#ef4444', orange: '#f97316', yellow: '#eab308', green: '#22c55e', blue: '#3b82f6', purple: '#a855f7', pink: '#ec4899', white: '#f8fafc', black: '#0f172a' })[String(color).toLowerCase()] || null;
-    return hex ? <span aria-hidden="true" style={{display:'inline-block',width:14,height:14,borderRadius:4,background:hex,border:'1.5px solid rgba(0,0,0,.3)',verticalAlign:'middle',marginRight:6,boxShadow:'0 1px 3px rgba(0,0,0,.2)'}} /> : null;
-  }
-
-  async function toggleExpand(item) {
-    const key = item.key;
-    if (expandedKey === key) {
-      setExpandedKey(null);
-      return;
-    }
-    setExpandedKey(key);
-    if (imageCache[key]) return;
-
-    // Fast path: alpr_violations carries the trigger plate_event image.
-    if (item.kind === 'no_registration' || item.kind === 'cooldown') {
-      const ev = item.alpr?.plate_events;
-      if (ev?.image_url) {
-        setImageCache(c => ({ ...c, [key]: { url: ev.image_url, capturedAt: ev.created_at, cameraName: ev.alpr_cameras?.name } }));
-        return;
-      }
-    }
-
-    // Otherwise look up the most recent capture for this plate.
-    setImageCache(c => ({ ...c, [key]: { loading: true } }));
-    try {
-      const ev = await db.getLatestPlateEventForPlate(propertyId, item.plate_text);
-      if (ev?.image_url) {
-        setImageCache(c => ({ ...c, [key]: { url: ev.image_url, capturedAt: ev.created_at, cameraName: ev.alpr_cameras?.name } }));
-      } else {
-        setImageCache(c => ({ ...c, [key]: { error: 'No camera capture found for this plate yet.' } }));
-      }
-    } catch (e) {
-      setImageCache(c => ({ ...c, [key]: { error: e.message || 'Failed to load image.' } }));
-    }
-  }
-
-  // Active card: rich, scannable, plate dominates. No collapse — operator
-  // wants every active pass detail visible (driver, phone, spot, expiry).
-  function ActivePassCard({ p }) {
-    const status = deriveStatus(p);
-    const expiring = status === 'expiring';
-    const driverLine = [p.visitor_name, p.company_name].filter(Boolean).join(' · ') || '—';
-    const accent = expiring ? '#f59e0b' : '#22c55e';
-    const accentSoft = expiring ? 'rgba(245,158,11,.08)' : 'rgba(34,197,94,.06)';
-    const accentBorder = expiring ? 'rgba(245,158,11,.45)' : 'rgba(34,197,94,.35)';
-    const plateColor = expiring ? '#b45309' : '#15803d';
-
-    return (
-      <div style={{
-        background: accentSoft,
-        border: `1px solid ${accentBorder}`,
-        borderLeft: `8px solid ${accent}`,
-        borderRadius: 14,
-        padding: 18,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 14,
-        boxShadow: '0 2px 14px rgba(0,0,0,.06)',
-      }}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10,flexWrap:'wrap'}}>
-          <div style={{display:'flex',flexDirection:'column',gap:4,minWidth:0}}>
-            <div style={{display:'flex',alignItems:'baseline',flexWrap:'wrap',gap:10,minWidth:0}}>
-              <div style={{
-                fontSize: 'clamp(38px, 7vw, 64px)',
-                fontWeight: 900,
-                fontFamily: "'Courier New', ui-monospace, monospace",
-                letterSpacing: '.08em',
-                color: plateColor,
-                lineHeight: 1,
-                wordBreak: 'break-all',
-              }}>{p.plate_text}</div>
-              {p.usdot_number && <span style={{fontSize:10,fontWeight:800,letterSpacing:'.07em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#1d4ed8',border:'1px solid rgba(59,130,246,.3)'}}>USDOT {p.usdot_number}</span>}
-              {p.mc_number && <span style={{fontSize:10,fontWeight:800,letterSpacing:'.07em',padding:'2px 7px',borderRadius:14,background:'rgba(59,130,246,.12)',color:'#1d4ed8',border:'1px solid rgba(59,130,246,.3)'}}>MC {p.mc_number}</span>}
-            </div>
-            {p.back_plate && (
-              <div style={{
-                fontSize: 13,
-                fontWeight: 700,
-                fontFamily: "'Courier New', ui-monospace, monospace",
-                letterSpacing: '.06em',
-                color: 'var(--text-muted)',
-              }}>Trailer · {p.back_plate}</div>
-            )}
-          </div>
-          <span style={{fontSize:11,fontWeight:800,padding:'5px 12px',borderRadius:22,background:accent,color:'#fff',textTransform:'uppercase',letterSpacing:'.08em',whiteSpace:'nowrap',flexShrink:0,boxShadow:`0 2px 8px ${accent}55`}}>
-            {expiring ? 'Expiring' : 'Active'}
-          </span>
-        </div>
-
-        <div style={{display:'flex',flexDirection:'column',gap:3}}>
-          <div style={{fontSize:15,fontWeight:700,color:'var(--text-primary)',lineHeight:1.3}}>{driverLine}</div>
-          {p.phone && <div style={{fontSize:13,color:'var(--text-secondary)'}}>📞 {p.phone}</div>}
-        </div>
-
-        <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-          {p.parking_spot && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Spot</span>{p.parking_spot}</span>}
-          {stayLabel(p) && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Stay</span>{stayLabel(p)}</span>}
-          {p.placard_color && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',display:'inline-flex',alignItems:'center',fontWeight:700}}>{placardSwatch(p.placard_color)}<span style={{textTransform:'capitalize'}}>{p.placard_color} placard</span></span>}
-        </div>
-
-        {/* Pre-registration camera capture — proof the vehicle was already on
-            the lot before the driver opened the QR form. Click to see the
-            full uncropped image. */}
-        {p.first_seen_image_url && (
-          <FirstSeenEvidence
-            plate={p.plate_text}
-            imageUrl={p.first_seen_image_url}
-            firstSeenAt={p.first_seen_at}
-            registeredAt={p.created_at}
-            compact
-          />
-        )}
-
-        <div style={{paddingTop:10,borderTop:`1px dashed ${accentBorder}`,display:'flex',alignItems:'baseline',gap:12,flexWrap:'wrap'}}>
-          <div style={{fontSize: expiring ? 20 : 16,fontWeight:800,color:plateColor,letterSpacing:'-.01em'}}>
-            ⏱ {fmtRemaining(new Date(p.valid_until).getTime(), nowTick)}
-          </div>
-          <div style={{fontSize:11,color:'var(--text-muted)'}}>Expires {fmtAbsolute(p.valid_until)}</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Violation card: COLLAPSED by default. Outside shows only plate +
-  // company-name (when known) + violation-type pill (Overstay or
-  // No Registration). Click anywhere on the card to expand and see all
-  // info plus the camera image.
-  const [removingKey, setRemovingKey] = useState(null);
-  // Tow / No-tow action modal + busy flag (mirrors TruckParkingLog's pattern).
-  // The X button on the card is "dismiss from list" (overstay → cancel-pass,
-  // alpr → mark-no-tow). These are the explicit operator decisions:
-  //   Mark towed → force-bill the linked violation (or cancel-pass if no link)
-  //   No tow     → mark-no-tow the violation (or cancel-pass if no link)
-  // One-tap action busy flag — disables all tracker action buttons while
-  // any request is in flight, preventing double-tap races.
-  const [trackerActionSubmitting, setTrackerActionSubmitting] = useState(false);
-
-  // Resolve the violation id from an item — overstays may or may not have one
-  // (depends on whether cron-sessions-sweep filed an alpr_violations row for
-  // the overstayed pass). ALPR-source items always carry one.
-  function resolveViolationId(item) {
-    if ((item.kind === 'no_registration' || item.kind === 'cooldown') && item.alpr) {
-      return item.alpr.id;
-    }
-    if (item.kind === 'overstay' && item.pass) {
-      return item.pass.overstay_violation_id || null;
-    }
-    return null;
-  }
-
-  async function handleTrackerAction(kind, item, reason) {
-    setTrackerActionSubmitting(true);
-    const label = kind === 'tow' ? 'Marked towed' : 'Marked no-tow';
-    try {
-      const note = reason || `${label} via Active+Violations`;
-      const violationId = resolveViolationId(item);
-      if (violationId) {
-        if (kind === 'tow') {
-          await db.forceBillViolation(violationId, note);
-        } else {
-          await db.markViolationNoTow(violationId, note);
-        }
-      } else if (item.kind === 'overstay' && item.pass) {
-        // No linked violation — fall back to cancel-pass with a clear
-        // audit-line so future review queries can filter operator-actioned
-        // rows vs driver-cancelled rows.
-        await apiFetch(`/visitor_passes/${item.pass.id}/cancel`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: `${label} (no linked violation): ${note}` }),
-        });
-      } else {
-        throw new Error('Unactionable card');
-      }
-      // Optimistic remove so the operator sees immediate feedback even
-      // before realtime fires.
-      if (item.kind === 'overstay' && item.pass) {
-        setPasses(prev => prev.filter(p => p.id !== item.pass.id));
-      } else if (item.alpr) {
-        setAlprViols(prev => prev.filter(v => v.id !== item.alpr.id));
-      }
-    } catch (e) {
-      window.alert(`${label} failed: ${e?.message || 'unknown error'}`);
-    } finally {
-      setTrackerActionSubmitting(false);
-    }
-  }
-  // Removes a single item (no confirm dialog — callers gate on intent). Returns
-  // { ok: true } on success or { ok: false, error } so callers can aggregate
-  // batch results without a try/catch tax per item.
-  async function removeOne(item) {
-    let path;
-    if (item.kind === 'overstay' && item.pass) {
-      path = `/visitor_passes/${item.pass.id}/cancel`;
-    } else if ((item.kind === 'no_registration' || item.kind === 'cooldown') && item.alpr) {
-      path = `/violations/${item.alpr.id}/mark-no-tow`;
-    } else {
-      return { ok: false, error: 'Unknown card type' };
-    }
-    try {
-      await apiFetch(path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: 'operator dismissed via dashboard' }),
-      });
-      if (item.kind === 'overstay') {
-        setPasses(prev => prev.filter(p => p.id !== item.pass.id));
-      } else {
-        setAlprViols(prev => prev.filter(v => v.id !== item.alpr.id));
-      }
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: e?.message || 'unknown error' };
-    }
-  }
-  async function removeItem(item) {
-    // No confirm dialog — operators asked to remove the friction. Cancel is a
-    // soft action (pass moves to cancelled status, ALPR row moves to no_tow);
-    // both can be re-issued or re-flagged if needed.
-    setRemovingKey(item.key);
-    const r = await removeOne(item);
-    if (!r.ok) window.alert('Remove failed: ' + r.error);
-    setRemovingKey(null);
-  }
-  async function removeSelected() {
-    if (!selectedKeys.size) return;
-    setBatchRemoving(true);
-    // Resolve the items to remove by key against the current violationColumn.
-    const itemsToRemove = violationColumn.filter(it => selectedKeys.has(it.key));
-    const results = await Promise.all(itemsToRemove.map(it => removeOne(it)));
-    const failed = results.filter(r => !r.ok).length;
-    setBatchRemoving(false);
-    setSelectedKeys(new Set());
-    setSelectMode(false);
-    if (failed > 0) {
-      window.alert(`${itemsToRemove.length - failed} removed, ${failed} failed.`);
-    }
-  }
-  function toggleSelect(key) {
-    setSelectedKeys(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-  function selectAll() {
-    setSelectedKeys(new Set(violationColumn.map(it => it.key)));
-  }
-  function clearSelection() {
-    setSelectedKeys(new Set());
-  }
-  function ViolationCard({ item }) {
-    const isExpanded = expandedKey === item.key;
-    const imgEntry = imageCache[item.key];
-    const pass = item.pass;
-    const alpr = item.alpr;
-    const isRemoving = removingKey === item.key;
-    const isSelected = selectedKeys.has(item.key);
-    const typeLabel = item.kind === 'overstay' ? 'Overstay'
-      : item.kind === 'cooldown' ? 'Cooldown'
-      : 'No Registration';
-    const typeColor = item.kind === 'overstay' ? '#dc2626'
-      : item.kind === 'cooldown' ? '#f59e0b'
-      : '#9333ea';
-    const accentBorder = 'rgba(239,68,68,.5)';
-
-    return (
-      <div
-        onClick={() => selectMode ? toggleSelect(item.key) : toggleExpand(item)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectMode ? toggleSelect(item.key) : toggleExpand(item); } }}
-        aria-expanded={isExpanded}
-        aria-selected={selectMode ? isSelected : undefined}
-        style={{
-          position: 'relative',
-          background: isSelected ? 'rgba(59,130,246,.12)' : 'rgba(239,68,68,.08)',
-          border: `1px solid ${isSelected ? 'rgba(59,130,246,.55)' : accentBorder}`,
-          borderLeft: `8px solid ${isSelected ? '#3b82f6' : '#ef4444'}`,
-          borderRadius: 14,
-          padding: 18,
-          paddingRight: 44,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: isExpanded ? 14 : 10,
-          cursor: 'pointer',
-          boxShadow: '0 2px 14px rgba(0,0,0,.06)',
-          transition: 'transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease',
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 22px rgba(239,68,68,.16)'; }}
-        onMouseLeave={(e) => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 2px 14px rgba(0,0,0,.06)'; }}
-      >
-        {/* Top-right control: either a checkbox (select mode) or the X. */}
-        {selectMode ? (
-          <div
-            aria-hidden="true"
-            style={{
-              position:'absolute',top:8,right:8,width:28,height:28,borderRadius:6,
-              border:`2px solid ${isSelected ? '#3b82f6' : 'rgba(148,163,184,.5)'}`,
-              background: isSelected ? '#3b82f6' : 'rgba(255,255,255,.85)',
-              color:'#fff',fontSize:18,fontWeight:900,lineHeight:1,
-              display:'flex',alignItems:'center',justifyContent:'center',
-              boxShadow:'0 1px 4px rgba(0,0,0,.1)',
-            }}
-          >{isSelected ? '✓' : ''}</div>
-        ) : (
-          <button
-            onClick={(e) => { e.stopPropagation(); removeItem(item); }}
-            disabled={isRemoving}
-            aria-label={`Remove ${item.plate_text}`}
-            title="Remove from list"
-            style={{
-              position: 'absolute',
-              top: 8,
-              right: 8,
-              width: 28,
-              height: 28,
-              borderRadius: '50%',
-              border: '1px solid rgba(239,68,68,.4)',
-              background: isRemoving ? 'rgba(239,68,68,.3)' : 'rgba(255,255,255,.85)',
-              color: '#dc2626',
-              fontSize: 16,
-              fontWeight: 800,
-              lineHeight: 1,
-              cursor: isRemoving ? 'wait' : 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              boxShadow: '0 1px 4px rgba(0,0,0,.1)',
-              opacity: isRemoving ? .6 : 1,
-            }}
-          >{isRemoving ? '…' : '×'}</button>
-        )}
-        {/* COLLAPSED row: plate + violation type pill (always visible) */}
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10,flexWrap:'wrap'}}>
-          <div style={{
-            fontSize: 'clamp(30px, 5.5vw, 52px)',
-            fontWeight: 900,
-            fontFamily: "'Courier New', ui-monospace, monospace",
-            letterSpacing: '.08em',
-            color: '#dc2626',
-            lineHeight: 1,
-            wordBreak: 'break-all',
-          }}>{item.plate_text}</div>
-          <span style={{fontSize:11,fontWeight:800,padding:'5px 12px',borderRadius:22,background:typeColor,color:'#fff',textTransform:'uppercase',letterSpacing:'.08em',whiteSpace:'nowrap',flexShrink:0,boxShadow:`0 2px 8px ${typeColor}55`}}>
-            {typeLabel}
-          </span>
-        </div>
-
-        {/* Company name (when known) — second tier on collapsed view */}
-        {item.company_name && (
-          <div style={{fontSize:15,fontWeight:700,color:'var(--text-primary)',lineHeight:1.25}}>{item.company_name}</div>
-        )}
-
-        {/* Operator decision row — always visible. ONE TAP, no confirm
-            modal: tap fires the action immediately. Optimistic remove
-            via the handler so the card disappears on success. If the
-            API errors, a toast surfaces and the card stays. Buttons
-            disable while any tracker action is in flight to prevent
-            double-tap races. */}
-        {!selectMode && (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:4}}
-          >
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleTrackerAction('no-tow', item, '');
-              }}
-              disabled={trackerActionSubmitting}
-              title="Truck left or you chose not to tow — closes without billing"
-              style={{flex:'1 1 0',minHeight:44,background:'rgba(255,255,255,.85)',color:'#374151',border:'1px solid rgba(0,0,0,.12)',borderRadius:10,padding:'10px 12px',fontSize:14,fontWeight:800,cursor:trackerActionSubmitting?'wait':'pointer',opacity:trackerActionSubmitting?.55:1,fontFamily:'inherit',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6}}
-            >
-              <span aria-hidden="true">✖</span> No tow
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleTrackerAction('tow', item, '');
-              }}
-              disabled={trackerActionSubmitting}
-              title="Confirm a tow happened — releases billing to the tow partner"
-              style={{flex:'1 1 0',minHeight:44,background:'#dc2626',color:'#fff',border:'1px solid #dc2626',borderRadius:10,padding:'10px 12px',fontSize:14,fontWeight:800,cursor:trackerActionSubmitting?'wait':'pointer',opacity:trackerActionSubmitting?.55:1,fontFamily:'inherit',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6,boxShadow:'0 1px 4px rgba(220,38,38,.3)'}}
-            >
-              <span aria-hidden="true">🚛</span> Mark towed
-            </button>
-          </div>
-        )}
-
-        {/* Affordance line — only when collapsed, lower priority than the actions above */}
-        {!isExpanded && (
-          <div style={{fontSize:10,fontWeight:600,color:'var(--text-muted)',letterSpacing:'.04em',textTransform:'uppercase',marginTop:2,opacity:.7}}>
-            Tap card for details + image
-          </div>
-        )}
-
-        {/* EXPANDED content */}
-        {isExpanded && (
-          <>
-            <div style={{paddingTop:10,borderTop:`1px dashed ${accentBorder}`,display:'flex',flexDirection:'column',gap:10}}>
-              {/* All info */}
-              {item.kind === 'overstay' && pass && (
-                <>
-                  {pass.visitor_name && <div style={{fontSize:14,color:'var(--text-primary)'}}><span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Pass holder</span>{pass.visitor_name}</div>}
-                  {pass.phone && <div style={{fontSize:14,color:'var(--text-primary)'}}><span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Phone</span>📞 {pass.phone}</div>}
-                  <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                    {pass.parking_spot && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Spot</span>{pass.parking_spot}</span>}
-                    {stayLabel(pass) && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',fontWeight:700}}><span style={{color:'var(--text-faint)',fontSize:9,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:4}}>Stay</span>{stayLabel(pass)}</span>}
-                    {pass.placard_color && <span style={{fontSize:12,padding:'4px 10px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',display:'inline-flex',alignItems:'center',fontWeight:700}}>{placardSwatch(pass.placard_color)}<span style={{textTransform:'capitalize'}}>{pass.placard_color} placard</span></span>}
-                  </div>
-                  <div style={{fontSize:12,color:'#dc2626',fontWeight:700}}>
-                    Pass expired {fmtElapsed(new Date(pass.valid_until).getTime(), nowTick)} — {fmtAbsolute(pass.valid_until)}
-                  </div>
-                </>
-              )}
-              {item.kind === 'no_registration' && alpr && (
-                <>
-                  <div style={{fontSize:14,color:'var(--text-primary)'}}>
-                    <span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Cause</span>
-                    Vehicle was in the lot past the grace window without registering.
-                  </div>
-                  <div style={{fontSize:12,color:'#dc2626',fontWeight:700}}>
-                    Flagged {fmtElapsed(new Date(alpr.created_at).getTime(), nowTick)} — {fmtAbsolute(alpr.created_at)}
-                  </div>
-                </>
-              )}
-              {item.kind === 'cooldown' && alpr && (
-                <>
-                  <div style={{fontSize:14,color:'var(--text-primary)'}}>
-                    <span style={{color:'var(--text-faint)',fontSize:10,fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',marginRight:6}}>Cause</span>
-                    Vehicle attempted to re-register inside the 24h cooldown window.
-                  </div>
-                  <div style={{fontSize:12,color:'#f59e0b',fontWeight:700}}>
-                    Flagged {fmtElapsed(new Date(alpr.created_at).getTime(), nowTick)} — {fmtAbsolute(alpr.created_at)}
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Image */}
-            <div style={{background:'#0a0a0a',border:'1px solid rgba(239,68,68,.4)',borderRadius:10,padding:10,display:'flex',flexDirection:'column',gap:8}}>
-              {imgEntry?.loading && <div style={{padding:30,textAlign:'center',color:'#94a3b8',fontSize:13}}>Loading camera capture…</div>}
-              {imgEntry?.error && <div style={{padding:14,textAlign:'center',color:'#fca5a5',fontSize:13}}>{imgEntry.error}</div>}
-              {imgEntry?.url && (
-                <>
-                  <img src={imgEntry.url} alt={`Camera capture for ${item.plate_text}`} style={{width:'100%',height:'auto',display:'block',borderRadius:6,maxHeight:'70vh',objectFit:'contain',background:'#000'}} />
-                  <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'#94a3b8'}}>
-                    <span>{imgEntry.cameraName || 'Camera'}</span>
-                    <span>{fmtAbsolute(imgEntry.capturedAt)}</span>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div style={{fontSize:10,fontWeight:800,color:'#dc2626',letterSpacing:'.07em',textTransform:'uppercase',textAlign:'right'}}>
-              Tap to collapse
-            </div>
-          </>
-        )}
-      </div>
-    );
-  }
-
-  if (loading) {
-    return <div style={{padding:30,textAlign:'center',color:'var(--text-muted)',fontSize:13}}>Loading active pass tracker…</div>;
-  }
-
-  return (
-    <div style={{display:'flex',flexDirection:'column',gap:18,marginBottom:22}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',flexWrap:'wrap',gap:8}}>
-        <div>
-          <div style={{fontSize:24,fontWeight:900,color:'var(--text-primary)',letterSpacing:'-.01em'}}>Active Pass Tracker</div>
-          <div style={{fontSize:13,color:'var(--text-muted)',marginTop:3}}>Real-time view of who is allowed in the lot right now and which plates are out of compliance.</div>
-        </div>
-      </div>
-
-      {/* Two-column layout: Active passes (green) on the left, Violations
-          (red/amber/purple) on the right. Violations are bucketed by kind:
-            • Overstay          (visitor_passes that ran past valid_until)
-            • No Registration   (alpr_violations open rows — no pass at all)
-            • 24h Cooldown      (alpr_violations rows with violation_type='cooldown'
-                                 — driver tried to re-register too soon) */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))',gap:18,minWidth:0}}>
-        <div style={{display:'flex',flexDirection:'column',gap:12,minWidth:0}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
-            <div style={{fontSize:14,fontWeight:800,color:'#15803d',letterSpacing:'.04em',textTransform:'uppercase'}}>
-              Active Now
-            </div>
-            <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{activeColumn.length}</div>
-          </div>
-          {activeColumn.length === 0 ? (
-            <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
-              No active passes
-            </div>
-          ) : (
-            activeColumn.map(p => <ActivePassCard key={p.id} p={p} />)
-          )}
-        </div>
-        <div style={{display:'flex',flexDirection:'column',gap:12,minWidth:0}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-            <div style={{display:'flex',alignItems:'baseline',gap:10}}>
-              <div style={{fontSize:14,fontWeight:800,color:'#dc2626',letterSpacing:'.04em',textTransform:'uppercase'}}>
-                Violations
-              </div>
-              <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)'}}>{violationColumn.length}</div>
-            </div>
-            {violationColumn.length > 0 && (
-              <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-                {(() => {
-                  // Sweep button — counts overstays older than the staleness
-                  // cutoff (24h) and offers one-tap clear. Auto-clear depends
-                  // on camera exit detection + the human loop (Mark towed
-                  // button in Parking Log); both have gaps in production.
-                  // This is the operator's escape hatch when stale rows pile up.
-                  const STALE_HOURS = 24;
-                  const staleCutoff = nowTick - STALE_HOURS * 3600 * 1000;
-                  const staleOverstays = violationColumn.filter(it =>
-                    it.kind === 'overstay' &&
-                    it.when &&
-                    it.when < staleCutoff
-                  );
-                  if (staleOverstays.length === 0) return null;
-                  return (
-                    <button
-                      onClick={async () => {
-                        if (!window.confirm(
-                          `Clear ${staleOverstays.length} overstay${staleOverstays.length === 1 ? '' : 's'} older than ${STALE_HOURS}h?\n\n` +
-                          `This cancels the passes (one-by-one, in the background). Use only if you're confident those trucks are gone. ` +
-                          `If a truck is still on the lot, mark it towed instead.`
-                        )) return;
-                        setBatchRemoving(true);
-                        const results = await Promise.all(staleOverstays.map(it => removeOne(it)));
-                        const failed = results.filter(r => !r.ok).length;
-                        setBatchRemoving(false);
-                        if (failed === 0) {
-                          // toast not available in this scope — fall back to a quiet refresh
-                          // (the realtime channel + setPasses inside removeOne already cleared the UI)
-                        } else {
-                          window.alert(`${staleOverstays.length - failed} cleared, ${failed} failed.`);
-                        }
-                      }}
-                      disabled={batchRemoving}
-                      title={`${staleOverstays.length} overstays older than ${STALE_HOURS}h. Bulk-cancel them in one tap.`}
-                      style={{
-                        fontSize: 11, fontWeight: 800,
-                        padding: '6px 12px', borderRadius: 6,
-                        border: '1px solid rgba(239,68,68,.4)',
-                        background: batchRemoving ? 'rgba(239,68,68,.2)' : 'rgba(239,68,68,.12)',
-                        color: '#dc2626',
-                        cursor: batchRemoving ? 'wait' : 'pointer',
-                        letterSpacing: '.04em',
-                      }}
-                    >
-                      {batchRemoving ? 'Clearing…' : `🧹 Clear ${staleOverstays.length} stale`}
-                    </button>
-                  );
-                })()}
-                {selectMode && (
-                  <>
-                    <button
-                      onClick={selectedKeys.size === violationColumn.length ? clearSelection : selectAll}
-                      style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
-                    >
-                      {selectedKeys.size === violationColumn.length ? 'Clear' : 'Select all'}
-                    </button>
-                    <button
-                      onClick={() => { setSelectMode(false); setSelectedKeys(new Set()); }}
-                      style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-muted)',cursor:'pointer'}}
-                    >
-                      Cancel
-                    </button>
-                  </>
-                )}
-                {!selectMode && (
-                  <button
-                    onClick={() => setSelectMode(true)}
-                    style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',cursor:'pointer'}}
-                  >
-                    Select
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-          {hiddenStaleCount > 0 && (
-            <div style={{
-              padding:'10px 12px',
-              background:'rgba(107,114,128,.08)',
-              border:'1px dashed rgba(107,114,128,.4)',
-              borderRadius:10,
-              fontSize:12,
-              color:'var(--text-muted)',
-              display:'flex', alignItems:'center', justifyContent:'space-between', gap:8,
-            }} title={`Auto-cleared after ${VIOLATION_AUTO_CLEAR_HOURS}h to keep this view focused. Camera didn't catch the truck leaving and no one marked it. Search the plate in Parking Log if you need to act on one.`}>
-              <span>ⓘ {hiddenStaleCount} auto-cleared (older than {VIOLATION_AUTO_CLEAR_HOURS}h)</span>
-              <span style={{fontSize:11,opacity:.75}}>view in Parking Log</span>
-            </div>
-          )}
-          {violationColumn.length === 0 ? (
-            <div style={{padding:32,textAlign:'center',background:'var(--bg-card)',border:'1px dashed var(--border)',borderRadius:12,color:'var(--text-muted)',fontSize:13}}>
-              No active violations
-            </div>
-          ) : (
-            violationColumn.map(item => <ViolationCard key={item.key} item={item} />)
-          )}
-        </div>
-      </div>
-      {/* Floating batch-action bar. Anchored bottom-right, only visible when
-          at least one card is selected. Stays above the bottom nav. */}
-      {selectMode && selectedKeys.size > 0 && (
-        <div style={{
-          position:'fixed', bottom:80, right:16, zIndex:50,
-          display:'flex',alignItems:'center',gap:10,
-          padding:'10px 14px',borderRadius:999,
-          background:'#dc2626',color:'#fff',
-          boxShadow:'0 8px 28px rgba(220,38,38,.4)',
-        }}>
-          <span style={{fontSize:13,fontWeight:800}}>{selectedKeys.size} selected</span>
-          <button
-            onClick={removeSelected}
-            disabled={batchRemoving}
-            style={{
-              fontSize:13,fontWeight:800,padding:'7px 14px',borderRadius:999,
-              border:'1px solid rgba(255,255,255,.4)',
-              background:batchRemoving ? 'rgba(255,255,255,.2)' : 'rgba(255,255,255,.95)',
-              color:batchRemoving ? '#fff' : '#dc2626',
-              cursor:batchRemoving ? 'wait' : 'pointer',
-            }}
-          >{batchRemoving ? 'Removing…' : 'Remove selected'}</button>
-        </div>
-      )}
-
-      {/* Confirmation modal removed — tow/no-tow are one-tap actions.
-          If a misclick happens, search the plate in Parking Log and
-          action again (the row resurfaces because the underlying state
-          changed). Trade-off: faster workflow at the cost of undoable
-          mistakes. Operators asked for this explicitly. */}
-      )}
-    </div>
-  );
 }
 
 function TruckParkingLog({ propertyId, isOwner = false }) {
@@ -9615,6 +8784,12 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   const [cancelModal, setCancelModal] = useState(null); // { id, plate_text } | null
   const [cancelling, setCancelling] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Camera-snapshot cache for inline violation/auto-cleared image previews.
+  // Keyed by row id. The image fetch is lazy (IntersectionObserver) so a
+  // 500-row log doesn't hammer the API on load. Replaces what ActivePassTracker
+  // used to surface as a click-to-expand thumbnail; now inline so operators
+  // can visually match the truck to the row without an extra tap.
+  const [vehicleImageCache, setVehicleImageCache] = useState({});
   // Open alpr_violations for this property keyed by normalized plate, so
   // each visitor-pass row can show "✅ Towed / ✖ No Tow" buttons when the
   // pass became an overstay-violation. Operators used to have to leave the
@@ -9644,6 +8819,88 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   }
   function normalizePhoneForSearch(s) {
     return (s || '').replace(/\D/g, '');
+  }
+
+  // Inline vehicle image preview for violation / auto-cleared rows.
+  // Lazy-loads on intersection (200px rootMargin pre-warm). Caches in
+  // vehicleImageCache so re-rendering doesn't re-fetch. If a plate has
+  // no camera capture (property without ALPR cams, or read pending),
+  // renders quietly nothing — no "missing image" stub so empty rows
+  // stay clean. Replaces what ActivePassTracker used to expose behind a
+  // click-to-expand affordance.
+  function VehicleImage({ rowId, plateText }) {
+    const containerRef = useRef(null);
+    const entry = vehicleImageCache[rowId];
+    useEffect(() => {
+      if (entry) return; // already loaded, loading, or known-empty
+      const el = containerRef.current;
+      if (!el || !propertyId || !plateText) return;
+      const obs = new IntersectionObserver((entries) => {
+        if (!entries[0].isIntersecting) return;
+        obs.disconnect();
+        setVehicleImageCache(c => ({ ...c, [rowId]: { loading: true } }));
+        db.getLatestPlateEventForPlate(propertyId, plateText).then(ev => {
+          if (ev?.image_url) {
+            setVehicleImageCache(c => ({
+              ...c,
+              [rowId]: {
+                url: ev.image_url,
+                capturedAt: ev.created_at,
+                cameraName: ev.alpr_cameras?.name || null,
+              },
+            }));
+          } else {
+            setVehicleImageCache(c => ({ ...c, [rowId]: { empty: true } }));
+          }
+        }).catch(() => {
+          setVehicleImageCache(c => ({ ...c, [rowId]: { empty: true } }));
+        });
+      }, { rootMargin: '200px' });
+      obs.observe(el);
+      return () => obs.disconnect();
+    }, [rowId, plateText, entry]);
+
+    // Skip rendering entirely when known-empty so violation cards stay
+    // tight on properties without ALPR cameras.
+    if (entry?.empty) return null;
+
+    return (
+      <div ref={containerRef} style={{
+        position:'relative',
+        background:'var(--bg-inset)',
+        borderRadius:8,
+        overflow:'hidden',
+        minHeight: entry?.loading ? 80 : (entry?.url ? 0 : 80),
+        display: entry?.url || entry?.loading ? 'block' : 'none',
+      }}>
+        {entry?.loading && (
+          <div style={{
+            position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',
+            fontSize:11,color:'var(--text-faint)',letterSpacing:'.04em',textTransform:'uppercase',
+          }}>Loading camera frame…</div>
+        )}
+        {entry?.url && (
+          <>
+            <img
+              src={entry.url}
+              alt={`Vehicle ${plateText}`}
+              loading="lazy"
+              style={{display:'block',width:'100%',maxHeight:200,objectFit:'cover'}}
+            />
+            <div style={{
+              position:'absolute',bottom:0,left:0,right:0,
+              padding:'4px 8px',
+              background:'linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0))',
+              fontSize:10,color:'#fff',
+              display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,
+            }}>
+              <span style={{fontWeight:700,letterSpacing:'.03em'}}>📷 {entry.cameraName || 'camera'}</span>
+              <span style={{opacity:.85}}>{entry.capturedAt ? new Date(entry.capturedAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}</span>
+            </div>
+          </>
+        )}
+      </div>
+    );
   }
   // Returns the list of field names this row matched on, or [] if no match.
   // An empty/whitespace-only query is treated as "no filter" by the caller,
@@ -10322,6 +9579,14 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                   />
                 )}
 
+                {/* Vehicle photo (camera snapshot) for violation / auto-cleared
+                    rows. Lazy-loaded on intersection — operators see what the
+                    truck looks like without expanding anything. Replaces the
+                    ActivePassTracker click-to-expand affordance. */}
+                {(isViolation || isAutoCleared) && (
+                  <VehicleImage rowId={r.id} plateText={r.plate_text} />
+                )}
+
                 {/* Time range */}
                 <div style={{display:'grid',gridTemplateColumns: r.exited_at ? '1fr auto 1fr auto 1fr' : '1fr auto 1fr',alignItems:'center',gap:10,padding:'10px 12px',background:'var(--bg-inset)',borderRadius:8,fontSize:11}}>
                   <div>
@@ -10492,16 +9757,15 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   // Persists across reloads.
   const [sectionFilter, setSectionFilter] = useState(() => {
     try {
-      const saved = localStorage.getItem('lotlogic_pd_section') || 'all';
-      // Migration: 'tracker' is now owner-only. If a partner has it cached
-      // from a previous session, fall back to 'all' so they don't land on
-      // a non-rendering section.
-      const role = (() => {
-        try { return JSON.parse(localStorage.getItem('lotlogic_session') || 'null')?._role; } catch { return null; }
-      })();
-      if (saved === 'tracker' && role && role !== 'owner') return 'all';
+      // Default to 'log' so opening any property page lands directly on
+      // the Parking Log — the surface everyone actually uses. Previously
+      // defaulted to 'all' which dumped every section.
+      const saved = localStorage.getItem('lotlogic_pd_section') || 'log';
+      // Migration: 'tracker' no longer exists. Anyone with it cached
+      // gets bumped to 'log' (the same content area, just renamed).
+      if (saved === 'tracker') return 'log';
       return saved;
-    } catch { return 'all'; }
+    } catch { return 'log'; }
   });
   useEffect(() => {
     try { localStorage.setItem('lotlogic_pd_section', sectionFilter); } catch {}
@@ -10883,11 +10147,9 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           const chips = [
             { id: 'all',     label: 'All' },
             { id: 'noreg',   label: 'No Registration Evidence Package' },
-            // Active+Violations is the owner's per-property health-check
-            // surface. Operators (partners) action from the Parking Log
-            // search-first view instead. Hide the chip for non-owners.
-            // Owner desktop keeps the legacy two-column view.
-            ...(isTruckPlaza && isOwner ? [{ id: 'tracker', label: 'Active + Violations' }] : []),
+            // ActivePassTracker chip removed entirely — the component was
+            // deleted in the parking-pass consolidation. The Parking Log
+            // is the single source of truth now.
             ...(isTruckPlaza ? [{ id: 'log',     label: 'Parking Log' }] : [{ id: 'log', label: 'Parking Passes' }]),
           ];
           return chips.map(c => {
@@ -11047,14 +10309,13 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </div>
       )}
 
-      {/* Active Pass Tracker — primary on-site plate-matching surface for
-          truck plazas. Above the historical log so it's the first thing the
-          eye sees on entry. */}
-      {showSection('tracker') && isTruckPlaza && (
-        <ErrorBoundary label="active pass tracker"><ActivePassTracker propertyId={propertyId} /></ErrorBoundary>
-      )}
+      {/* ActivePassTracker was deleted — it duplicated what TruckParkingLog
+          already does (search, status filters, tow/no-tow per row). Per the
+          consolidation: search-first workflow is the right operator UX, and
+          owners get the same data via the Parking Log. Image preview moved
+          inline into Parking Log rows. */}
 
-      {/* Temporary Passes / Truck Parking Log — variant depends on property_type */}
+      {/* Parking Log — primary surface for both operators and owners. */}
       {showSection('log') && (isTruckPlaza ? (
         <>
           <div className="pd-section-head">
