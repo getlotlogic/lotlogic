@@ -9427,7 +9427,6 @@ function TruckParkingLog({ propertyId }) {
       status: '',
     };
   });
-  const [pendingFilters, setPendingFilters] = useState(filters);
   // Live search text. Drives client-side substring matching across every
   // field a driver enters on the QR form (plate, name, company, phone,
   // placard, parking spot, reference ID). Updates as the operator types —
@@ -9436,6 +9435,16 @@ function TruckParkingLog({ propertyId }) {
   const [cancelModal, setCancelModal] = useState(null); // { id, plate_text } | null
   const [cancelling, setCancelling] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Open alpr_violations for this property keyed by normalized plate, so
+  // each visitor-pass row can show "✅ Towed / ✖ No Tow" buttons when the
+  // pass became an overstay-violation. Operators used to have to leave the
+  // Parking Log and go to Billing → Confirmation Review to mark these,
+  // which broke the natural workflow of "I'm looking at the pass, here's
+  // what happened to the truck."
+  const [violationByPlate, setViolationByPlate] = useState(new Map());
+  // { kind: 'tow' | 'no-tow', violation: {id, plate_text, ...}, plate_text } | null
+  const [actionModal, setActionModal] = useState(null);
+  const [actionSubmitting, setActionSubmitting] = useState(false);
   // Auto-widening: if a search returns 0 matches in the current date window
   // but might match outside it, offer one-click to extend the window back 90d.
   const [widening, setWidening] = useState(false);
@@ -9496,17 +9505,20 @@ function TruckParkingLog({ propertyId }) {
     setLoading(true);
     setErr(null);
     try {
-      // Always fetch with page_size=500 so client-side live filter has
-      // enough rows to work with. The previous backend-paginated mode
-      // (100 per page) is gone — search-as-you-type only makes sense
-      // when the full date window is in memory.
-      const res = await db.getParkingLog(propertyId, {
-        date_from: filters.date_from,
-        date_to: filters.date_to,
-        status: filters.status,
-        page: 1,
-        page_size: 500,
-      });
+      // Fetch backend log + open alpr violations in parallel. Violations
+      // come back keyed by normalized plate so each row card can look up
+      // its matching violation and render the tow / no-tow action buttons.
+      // page_size=500 keeps the full date window in memory for live search.
+      const [res, viols] = await Promise.all([
+        db.getParkingLog(propertyId, {
+          date_from: filters.date_from,
+          date_to: filters.date_to,
+          status: filters.status,
+          page: 1,
+          page_size: 500,
+        }),
+        db.getOpenAlprViolations(propertyId).catch(() => []),
+      ]);
       // Backend returns `{ items, total, page, page_size }` per the docstring
       // on db.getParkingLog. A prior refactor switched this to res.rows which
       // is undefined, so `rows` was always [] and the search matched nothing
@@ -9515,11 +9527,46 @@ function TruckParkingLog({ propertyId }) {
       const items = res.items || res.rows || [];
       setRows(items);
       setTotal(res.total ?? items.length);
+      // Build plate→violation map. The alpr_violations table doesn't store
+      // visitor_pass_id on every row, so we match by normalized plate +
+      // property_id (already filtered server-side). Only OPEN violations
+      // (action_taken IS NULL) come back from getOpenAlprViolations, so
+      // closed ones won't show buttons (correct — they're already actioned).
+      const m = new Map();
+      for (const v of (viols || [])) {
+        const k = normalizePlateForSearch(v.plate_text);
+        if (k && !m.has(k)) m.set(k, v);
+      }
+      setViolationByPlate(m);
     } catch (e) {
       setErr(e.message || 'Failed to load log');
     }
     setLoading(false);
   }, [propertyId, filters]);
+
+  // Handler for the tow / no-tow confirmation modal. Calls the existing
+  // backend endpoints (force-bill for tow-confirmation, mark-no-tow for
+  // dismissal). Both are owner-scoped on the backend; partners still see
+  // the buttons here for visual consistency but the API call will 403
+  // for them (caught and surfaced via toast).
+  async function handleViolationAction(kind, violationId, reason) {
+    setActionSubmitting(true);
+    try {
+      if (kind === 'tow') {
+        await db.forceBillViolation(violationId, reason || 'Operator confirmed tow from Parking Log');
+        addToast('Marked towed — billing released', 'success');
+      } else {
+        await db.markViolationNoTow(violationId, reason || 'Operator marked no-tow from Parking Log');
+        addToast('Marked no-tow', 'success');
+      }
+      setActionModal(null);
+      load();
+    } catch (e) {
+      addToast((kind === 'tow' ? 'Mark towed' : 'Mark no-tow') + ' failed: ' + (e.message || 'unknown error'), 'error');
+    } finally {
+      setActionSubmitting(false);
+    }
+  }
 
 
   // Initial load + on filter / page changes via `load` identity.
@@ -9605,11 +9652,6 @@ function TruckParkingLog({ propertyId }) {
     setExporting(false);
   }
 
-  function applyFilters(e) {
-    e?.preventDefault();
-    setFilters(pendingFilters);
-  }
-
   function widenDateRange() {
     // 90-day lookback covers nearly every realistic "I swear they were here
     // a while ago" case without dumping a year of rows on the operator.
@@ -9622,18 +9664,8 @@ function TruckParkingLog({ propertyId }) {
     };
     setWidening(true);
     setFilters(next);
-    setPendingFilters(next);
     setTimeout(() => setWidening(false), 800);
   }
-
-  // Export reflects the last-applied date/status filters, not the in-progress
-  // pendingFilters edits. Disable Export while the form is dirty so users
-  // don't ship a CSV that disagrees with what's on screen.
-  const filtersDirty = (
-    pendingFilters.date_from !== filters.date_from ||
-    pendingFilters.date_to !== filters.date_to ||
-    pendingFilters.status !== filters.status
-  );
   const inputStyle = {padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit'};
   const labelStyle = {display:'flex',flexDirection:'column',gap:5,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase'};
   // Traffic-light coloring for on-site plate scanning:
@@ -9786,16 +9818,35 @@ function TruckParkingLog({ propertyId }) {
         )}
       </div>
 
-      {/* ── Date / Status filters (require Apply since they refetch) ──── */}
-      <form onSubmit={applyFilters} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:14,display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10,alignItems:'end'}}>
+      {/* ── Date / Status filters (auto-apply on change, no button needed) ──
+          Operators expected the form to behave like the search — change a
+          value and see results update. The old "Apply dates" gate was
+          friction that meant some operators thought the page was broken
+          ("I changed the date and nothing happened"). Now everything is
+          live; the form just exists to expose the inputs. */}
+      <form onSubmit={(e) => e.preventDefault()} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:14,display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10,alignItems:'end'}}>
         <label style={labelStyle}>From
-          <input type="date" value={pendingFilters.date_from} onChange={e => setPendingFilters({...pendingFilters, date_from: e.target.value})} style={inputStyle} />
+          <input
+            type="date"
+            value={filters.date_from}
+            onChange={e => setFilters({...filters, date_from: e.target.value})}
+            style={inputStyle}
+          />
         </label>
         <label style={labelStyle}>To
-          <input type="date" value={pendingFilters.date_to} onChange={e => setPendingFilters({...pendingFilters, date_to: e.target.value})} style={inputStyle} />
+          <input
+            type="date"
+            value={filters.date_to}
+            onChange={e => setFilters({...filters, date_to: e.target.value})}
+            style={inputStyle}
+          />
         </label>
         <label style={labelStyle}>Status
-          <select value={pendingFilters.status} onChange={e => setPendingFilters({...pendingFilters, status: e.target.value})} style={inputStyle}>
+          <select
+            value={filters.status}
+            onChange={e => setFilters({...filters, status: e.target.value})}
+            style={inputStyle}
+          >
             <option value="">All</option>
             <option value="expired">Violations</option>
             <option value="active">Active</option>
@@ -9804,13 +9855,12 @@ function TruckParkingLog({ propertyId }) {
           </select>
         </label>
         <div style={{display:'flex',gap:8,alignSelf:'end',flexWrap:'wrap'}}>
-          <button type="submit" disabled={!filtersDirty} style={{background:filtersDirty?'var(--accent)':'var(--bg-inset)',color:filtersDirty?'#fff':'var(--text-muted)',border:'none',borderRadius:8,padding:'9px 16px',fontSize:13,fontWeight:700,cursor:filtersDirty?'pointer':'not-allowed',fontFamily:'inherit'}}>Apply dates</button>
           <button
             type="button"
             onClick={handleExport}
-            disabled={exporting || filtersDirty}
-            title={filtersDirty ? 'Apply filters before exporting' : 'CSV reflects the date/status filters; the search box is not applied to CSV exports.'}
-            style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:(exporting||filtersDirty)?'not-allowed':'pointer',opacity:(exporting||filtersDirty)?.55:1,fontFamily:'inherit'}}
+            disabled={exporting}
+            title="CSV reflects the date/status filters; the search box is not applied to CSV exports."
+            style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:exporting?'not-allowed':'pointer',opacity:exporting?.55:1,fontFamily:'inherit'}}
           >{exporting ? 'Exporting…' : '↓ Export CSV'}</button>
         </div>
       </form>
@@ -10012,15 +10062,45 @@ function TruckParkingLog({ propertyId }) {
                   </div>
                 </div>
 
-                {/* Actions row */}
-                {isActive && (
-                  <div style={{display:'flex',justifyContent:'flex-end',marginTop:-2}}>
-                    <button
-                      onClick={() => setCancelModal({ id: r.id, plate_text: r.plate_text })}
-                      style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}
-                    >Cancel pass</button>
-                  </div>
-                )}
+                {/* Actions row. Cancel-pass for active passes; tow-decision
+                    for expired passes that have a matching open ALPR
+                    violation (the overstay case). 44px-tall tap targets
+                    for mobile thumb use; color-coded so destructive vs
+                    benign is visually unambiguous in sun. */}
+                {(() => {
+                  const violKey = normalizePlateForSearch(r.plate_text);
+                  const openViolation = violationByPlate.get(violKey);
+                  const showTowActions = !!openViolation && s === 'expired';
+                  if (!isActive && !showTowActions) return null;
+                  return (
+                    <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:-2,flexWrap:'wrap'}}>
+                      {isActive && (
+                        <button
+                          onClick={() => setCancelModal({ id: r.id, plate_text: r.plate_text })}
+                          style={{minHeight:44,background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}
+                        >Cancel pass</button>
+                      )}
+                      {showTowActions && (
+                        <>
+                          <button
+                            onClick={() => setActionModal({ kind: 'no-tow', violation: openViolation, plate_text: r.plate_text })}
+                            title="Truck left on its own or you chose not to tow — closes the violation, no billing"
+                            style={{minHeight:44,background:'var(--bg-inset)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
+                          >
+                            <span aria-hidden="true">✖</span> No tow
+                          </button>
+                          <button
+                            onClick={() => setActionModal({ kind: 'tow', violation: openViolation, plate_text: r.plate_text })}
+                            title="Confirm tow happened — releases billing for the partner"
+                            style={{minHeight:44,background:'#ef4444',color:'#fff',border:'1px solid #ef4444',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:800,cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
+                          >
+                            <span aria-hidden="true">🚛</span> Mark towed
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
@@ -10048,6 +10128,24 @@ function TruckParkingLog({ propertyId }) {
           submitting={cancelling}
           onConfirm={(reason) => handleCancel(reason)}
           onCancel={() => { if (!cancelling) setCancelModal(null); }}
+        />
+      )}
+
+      {actionModal && (
+        <ConfirmActionModal
+          plate={actionModal.plate_text}
+          actionLabel={actionModal.kind === 'tow' ? 'Mark this truck as towed?' : 'Mark this as no-tow?'}
+          description={
+            actionModal.kind === 'tow'
+              ? <>Confirms a tow happened for <strong style={{color:'var(--text-primary)'}}>{actionModal.plate_text}</strong>. Releases billing to the tow partner. Use this only after you've physically dispatched the truck — undoing it later requires owner-side billing rollback.</>
+              : <>Closes the violation for <strong style={{color:'var(--text-primary)'}}>{actionModal.plate_text}</strong> without billing. Use this if the driver returned and moved the truck, or you chose not to enforce. The pass row stays visible in the log.</>
+          }
+          confirmLabel={actionModal.kind === 'tow' ? '🚛 Confirm towed' : '✖ Confirm no-tow'}
+          confirmColor={actionModal.kind === 'tow' ? '#ef4444' : '#6b7280'}
+          reasonPlaceholder={actionModal.kind === 'tow' ? 'Optional notes (tow company, time, etc.)' : 'Optional notes (why no tow)'}
+          submitting={actionSubmitting}
+          onConfirm={(reason) => handleViolationAction(actionModal.kind, actionModal.violation.id, reason)}
+          onCancel={() => { if (!actionSubmitting) setActionModal(null); }}
         />
       )}
     </div>
