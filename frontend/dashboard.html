@@ -9205,7 +9205,10 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   const statusColor = {
     active: '#4ade80',
     expiring: '#facc15',
-    expired: '#ef4444',
+    // De-emphasized (2026-06): violations read as neutral/reference rather
+    // than a red alert while camera coverage is unreliable and the pass
+    // system is carrying enforcement. Flip back to '#ef4444' to restore.
+    expired: '#94a3b8',
     auto_cleared: '#6b7280',
     cancelled: 'var(--text-muted)',
     revoked: 'var(--text-muted)',
@@ -9355,9 +9358,9 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
           A persistent (not dismissable) banner here keeps the habit fresh.
           Operators asked for this. */}
       <div style={{
-        background:'rgba(239,68,68,.08)',
-        border:'1px solid rgba(239,68,68,.3)',
-        borderLeft:'4px solid #ef4444',
+        background:'rgba(148,163,184,.10)',
+        border:'1px solid rgba(148,163,184,.3)',
+        borderLeft:'4px solid #94a3b8',
         borderRadius:10,
         padding:'10px 14px',
         display:'flex',
@@ -9444,9 +9447,10 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
             </div>
             {Object.keys(statusCounts).length > 0 && (
               <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-                {['expired','expiring','active','towed','auto_cleared','cancelled','revoked'].filter(s => statusCounts[s]).map(s => {
+                {['expiring','active','towed','auto_cleared','cancelled','revoked','expired'].filter(s => statusCounts[s]).map(s => {
                   const color = statusColor[s] || 'var(--text-muted)';
-                  const isLoud = s === 'expired' || s === 'expiring';
+                  // Live passes lead; violations (expired) sit last + quiet.
+                  const isLoud = s === 'expiring';
                   const isActive = pillStatusFilter === s;
                   const otherActive = pillStatusFilter && !isActive;
                   return (
