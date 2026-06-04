@@ -3383,13 +3383,16 @@ const db = {
   // fuzzy server-side (latest_vehicle_frame RPC) so pass rows show a picture far
   // more often than an exact front-plate match would. Also returns the frame's
   // make/model/color so a pass with no stored MMC can still display what we saw.
-  async getBestVehicleFrame(propertyId, plateText, backPlate) {
+  async getBestVehicleFrame(propertyId, plateText, backPlate, fromTs, untilTs) {
     if (!supabase || !propertyId || !plateText) return null;
     const norm  = (plateText || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const bnorm = (backPlate || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const { data, error } = await supabase.rpc('latest_vehicle_frame', {
-      p_property_id: propertyId, p_plate: norm, p_back_plate: bnorm,
-    });
+    // Bound to the pass's visit window so we never show a frame from a prior
+    // visit (a stale frame is almost never the same stay, and often blank).
+    const args = { p_property_id: propertyId, p_plate: norm, p_back_plate: bnorm };
+    if (fromTs)  args.p_from  = fromTs;
+    if (untilTs) args.p_until = untilTs;
+    const { data, error } = await supabase.rpc('latest_vehicle_frame', args);
     if (error || !data || data.length === 0) return null;
     return data[0];
   },
@@ -8834,7 +8837,7 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // is a new function object every parent render, which makes React unmount/remount
 // every instance and re-create its IntersectionObserver on each setCache call.
 // Cache + setter come in as props so the parent still owns the state.
-function VehicleImage({ rowId, plateText, backPlate, propertyId, cache, setCache }) {
+function VehicleImage({ rowId, plateText, backPlate, propertyId, cache, setCache, fromTs, untilTs }) {
   const containerRef = useRef(null);
   const entry = cache[rowId];
   useEffect(() => {
@@ -8845,7 +8848,7 @@ function VehicleImage({ rowId, plateText, backPlate, propertyId, cache, setCache
       if (!entries[0].isIntersecting) return;
       obs.disconnect();
       setCache(c => ({ ...c, [rowId]: { loading: true } }));
-      db.getBestVehicleFrame(propertyId, plateText, backPlate).then(ev => {
+      db.getBestVehicleFrame(propertyId, plateText, backPlate, fromTs, untilTs).then(ev => {
         if (ev?.image_url) {
           setCache(c => ({
             ...c,
@@ -8868,7 +8871,7 @@ function VehicleImage({ rowId, plateText, backPlate, propertyId, cache, setCache
     }, { rootMargin: '200px' });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [rowId, plateText, backPlate, entry, propertyId, setCache]);
+  }, [rowId, plateText, backPlate, entry, propertyId, setCache, fromTs, untilTs]);
 
   // Skip rendering entirely when known-empty so rows stay tight on properties
   // without ALPR cameras.
@@ -8899,7 +8902,7 @@ function VehicleImage({ rowId, plateText, backPlate, propertyId, cache, setCache
             src={entry.url}
             alt={`Vehicle ${plateText}`}
             loading="lazy"
-            style={{display:'block',width:'100%',maxHeight:200,objectFit:'cover'}}
+            style={{display:'block',width:'100%',height:'auto',objectFit:'contain'}}
           />
           <div style={{
             position:'absolute',bottom:0,left:0,right:0,
@@ -9750,7 +9753,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                     pre-registration frame (FirstSeenEvidence) above — so every
                     row carries the car's picture without doubling it up. */}
                 {(isViolation || isAutoCleared || ((isActive || isExpiring) && !r.first_seen_image_url)) && (
-                  <VehicleImage rowId={r.id} plateText={r.plate_text} backPlate={r.back_plate} propertyId={propertyId} cache={vehicleImageCache} setCache={setVehicleImageCache} />
+                  <VehicleImage rowId={r.id} plateText={r.plate_text} backPlate={r.back_plate} propertyId={propertyId} cache={vehicleImageCache} setCache={setVehicleImageCache} fromTs={r.valid_from} untilTs={r.valid_until} />
                 )}
 
                 {/* Time range */}
