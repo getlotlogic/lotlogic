@@ -7001,7 +7001,6 @@ function PassContextPanel({ pass }) {
   if (pass.visitor_name) bits.push({ label: 'Pass holder', value: pass.visitor_name });
   if (pass.company_name) bits.push({ label: '', value: pass.company_name });
   if (pass.parking_spot) bits.push({ label: 'spot', value: pass.parking_spot });
-  if (pass.placard_color) bits.push({ label: 'placard', value: pass.placard_color });
   return React.createElement('div', {
     style: {
       margin: '6px 0 2px', padding: '6px 8px', borderRadius: 6,
@@ -7106,7 +7105,7 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       if (plateTexts.length > 0 && propIds.length > 0) {
         const { data: passes, error: passesErr } = await supabase
           .from('visitor_passes')
-          .select('id, property_id, plate_text, visitor_name, company_name, parking_spot, placard_color, phone, valid_from, valid_until, status, policy_acknowledged_at, stay_days, created_at')
+          .select('id, property_id, plate_text, visitor_name, company_name, parking_spot, phone, valid_from, valid_until, status, policy_acknowledged_at, stay_days, created_at')
           .in('property_id', propIds)
           .in('plate_text', plateTexts)
           .order('created_at', { ascending: false })
@@ -8947,7 +8946,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   });
   // Live search text. Drives client-side substring matching across every
   // field a driver enters on the QR form (plate, name, company, phone,
-  // placard, parking spot, reference ID). Updates as the operator types —
+  // parking spot, reference ID). Updates as the operator types —
   // no Apply, no debounce. The filter runs against rows already in memory.
   const [searchText, setSearchText] = useState('');
   const [cancelModal, setCancelModal] = useState(null); // { id, plate_text } | null
@@ -9029,8 +9028,6 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     if (qPhone.length >= 4 && normalizePhoneForSearch(row.phone).includes(qPhone)) {
       matched.push('phone');
     }
-    // Placard color: exact-word feel is fine — colors are short.
-    if ((row.placard_color || '').toLowerCase().includes(qLower)) matched.push('placard');
     // Parking spot: stored as text or number; coerce to string.
     if (row.parking_spot != null && String(row.parking_spot).toLowerCase().includes(qLower)) {
       matched.push('spot');
@@ -9333,12 +9330,6 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     if (days === 1) return 'Yesterday';
     return `${days} days ago`;
   };
-  const placardSwatch = (color) => {
-    if (!color) return null;
-    const hex = ({ red: '#ef4444', orange: '#f97316', yellow: '#eab308', green: '#22c55e', blue: '#3b82f6', purple: '#a855f7', pink: '#ec4899', white: '#f8fafc', black: '#0f172a' })[String(color).toLowerCase()] || null;
-    return hex ? <span aria-hidden="true" style={{display:'inline-block',width:10,height:10,borderRadius:3,background:hex,border:'1px solid rgba(0,0,0,.25)',verticalAlign:'middle',marginRight:5}} /> : null;
-  };
-
   // Union the backend log (rows) with the direct Supabase pull
   // (directPasses) so the search has everything the Active list does,
   // even if the backend silently filters something out. Dedupe by id;
@@ -9403,7 +9394,6 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     name: 'name',
     company: 'company',
     phone: 'phone',
-    placard: 'placard',
     spot: 'parking spot',
     ref: 'reference ID',
   };
@@ -9442,7 +9432,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
 
       {/* ── Search bar (always-visible, live) ──────────────────────────── */}
       {/* Operator-anchor. Filters everything below as the user types.
-          Matches across: plate, driver name, company, phone, placard,
+          Matches across: plate, driver name, company, phone,
           parking spot, reference ID. Spans both visitor passes (this tab)
           and the permanent allowlist so a Swift driver registered as an
           employee surfaces in the same search. */}
@@ -9452,7 +9442,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
           autoFocus
           value={searchText}
           onChange={e => setSearchText(e.target.value)}
-          placeholder="Search plate, driver, company, phone, placard, spot, or ref ID…"
+          placeholder="Search plate, driver, company, phone, spot, or ref ID…"
           style={{
             width:'100%', padding:'14px 44px 14px 44px',
             background:'var(--bg-card)', border:'1.5px solid var(--border)',
@@ -9588,7 +9578,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
           </div>
           <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4,maxWidth:480,margin:'4px auto 0'}}>
             {hasSearch
-              ? <>Try a shorter chunk of the plate, just the driver's first name, or the company. Phone numbers and placard color also work.</>
+              ? <>Try a shorter chunk of the plate, just the driver's first name, or the company. Phone numbers also work.</>
               : <>Try widening the date range or clearing the status filter.</>}
           </div>
           {hasSearch && (
@@ -9621,7 +9611,6 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                 : (r.stay_days ? r.stay_days * 24 : null);
               if (hrs && hrs > 0) detailChips.push({ label: 'Stay', value: hrs % 24 === 0 ? `${hrs/24}d` : `${hrs}h` });
             }
-            if (r.placard_color) detailChips.push({ label: 'Placard', value: r.placard_color, swatch: true });
             return (
               <div key={r.id} style={{
                 background: isExpiring ? 'rgba(250,204,21,.06)' : isAutoCleared ? 'rgba(107,114,128,.04)' : 'var(--bg-card)',
@@ -9723,7 +9712,6 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                   <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                     {detailChips.map((c, i) => (
                       <span key={i} style={{fontSize:11,padding:'3px 9px',borderRadius:14,background:'var(--bg-inset)',color:'var(--text-secondary)',border:'1px solid var(--border-subtle)',display:'inline-flex',alignItems:'center'}}>
-                        {c.swatch ? placardSwatch(c.value) : null}
                         <span style={{fontWeight:600,color:'var(--text-faint)',marginRight:5,textTransform:'uppercase',fontSize:10,letterSpacing:'.06em'}}>{c.label}</span>
                         <span style={{textTransform:'capitalize',fontWeight:700,color:'var(--text-primary)'}}>{c.value}</span>
                       </span>

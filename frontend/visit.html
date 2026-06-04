@@ -485,9 +485,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           <label for="driverName">Operator Name <span class="required">*</span></label>
           <input type="text" id="driverName" placeholder="John Smith" required maxlength="80">
 
-          <label for="placardColor">Color Placard <span class="required">*</span></label>
-          <input type="text" id="placardColor" placeholder="yellow / red / blue / etc." required maxlength="30">
-
           <label for="stayHours">Stay Duration <span class="required">*</span></label>
           <select id="stayHours" required>
             <option value="" disabled selected>Select duration</option>
@@ -503,7 +500,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
               <li><strong>NO CARS</strong> in truck parking — vehicles will be towed.</li>
               <li><strong>All trucks must park in a marked, numbered spot.</strong> Trucks not in a spot will be towed.</li>
               <li><strong>Maximum stay 48 hours.</strong> After your pass expires, remain off the property for 24 hours before re-registering.</li>
-              <li>Inaccurate plate, time, or placard color voids your pass.</li>
+              <li>Inaccurate plate or time voids your pass.</li>
             </ul>
             <div style="margin-top:12px;font-size:12px;color:#D9C9A6;">NMLD Towing &middot; (269) 217-6208 &middot; Truck parking rules are in effect 24/7.</div>
             <div style="margin-top:10px;font-size:12px;color:#D9C9A6;">By submitting you confirm you have read and agree to these rules and the property's full parking policy.</div>
@@ -611,7 +608,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const validUntil = result.valid_until ? new Date(result.valid_until)
           : new Date(Date.now() + stayHours * 60 * 60 * 1000);
         const refId = (result.reference_id || '').toString().toUpperCase();
-        showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot: null, placardColor: null});
+        showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot: null});
       } catch (err) {
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
@@ -637,7 +634,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const backPlateRaw = document.getElementById('backPlate')?.value || '';
         const backPlateText = backPlateRaw.trim() ? normalizePlate(backPlateRaw) : null;
         const phone       = normalizePhone(document.getElementById('phone').value);
-        const placardColor = document.getElementById('placardColor').value.trim();
         const stayHours = parseInt(document.getElementById('stayHours').value, 10) || 0;
 
         if (!companyName) throw new Error('Company name is required.');
@@ -646,7 +642,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         if (backPlateText && backPlateText.length < 2) throw new Error('Trailer/rear plate must be at least 2 characters, or leave it blank.');
         if (backPlateText && backPlateText === plateText) throw new Error('Trailer/rear plate must differ from the front plate, or leave it blank.');
         if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
-        if (!placardColor) throw new Error('Color placard is required.');
         if (![12, 24, 36, 48].includes(stayHours)) throw new Error('Choose 12, 24, 36, or 48 hours.');
 
         const recaptchaToken = await getRecaptchaToken('pass_register').catch(() => null);
@@ -664,7 +659,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
           host_unit: '',
           host_name: '',
           phone: phone,
-          placard_color: placardColor,
           stay_hours: stayHours,
           policy_acknowledged_at: now.toISOString(),
           submission_idempotency_key: idempotencyKey,
@@ -674,7 +668,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         const validUntil = result.valid_until ? new Date(result.valid_until)
           : new Date(now.getTime() + stayHours * 60 * 60 * 1000);
         const refId = (result.reference_id || '').toString().toUpperCase();
-        showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot: null, placardColor, companyName});
+        showSuccess({plate: result.plate_text || plateText, validUntil, stayHours, refId: refId || null, parkingSpot: null, companyName});
       } catch (err) {
         // Cooldown is allow + flag as of 2026-05-31 — the DB trigger no longer
         // blocks re-registration and the backend register endpoint no longer
@@ -730,7 +724,7 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
     }
 
     function showSuccess(opts) {
-      const {plate, validUntil, stayHours, refId, parkingSpot, placardColor, companyName} = opts;
+      const {plate, validUntil, stayHours, refId, parkingSpot, companyName} = opts;
       const expiresStr = validUntil.toLocaleString('en-US', {
         weekday: 'short', month: 'short', day: 'numeric',
         hour: 'numeric', minute: '2-digit', hour12: true,
@@ -740,7 +734,6 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
         <div class="success-detail" style="margin-top:8px;">
           ${companyName ? `Company: <strong>${escapeHtml(companyName)}</strong><br>` : ''}
           ${parkingSpot ? `Parking space: <strong>${escapeHtml(parkingSpot)}</strong><br>` : ''}
-          ${placardColor ? `Placard: <strong>${escapeHtml(placardColor)}</strong><br>` : ''}
           ${refId ? `Reference: <strong>${escapeHtml(refId)}</strong>` : ''}
         </div>
         <div class="success-detail" style="margin-top:14px;color:#6b7280;font-size:12px;">
