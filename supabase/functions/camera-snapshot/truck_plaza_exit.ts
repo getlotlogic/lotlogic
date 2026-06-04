@@ -675,6 +675,10 @@ export async function handleTruckPlazaExit(args: {
   const vehicleColorInsert = insertMmc?.color ?? onboard?.vehicleColor  ?? null;
   const vehicleMakeConf    = insertMmc ? (insertMmc.make_score  ?? null) : null;
   const vehicleColorConf   = insertMmc ? (insertMmc.color_score ?? null) : null;
+  // vehicle_type: PR's body type if available, else onboard's vehicleType
+  // (TS4467 reliably reports Truck/Van/etc). Was previously dropped, leaving
+  // vehicle_type null on every onboard read.
+  const vehicleTypeInsert  = (insertMmc?.vehicle_type) ?? onboard?.vehicleType ?? null;
   // _mmc_source in raw_data distinguishes PR MMC, onboard LPR, and neither.
   const mmcSource = insertMmc
     ? "pr_cloud"
@@ -691,6 +695,7 @@ export async function handleTruckPlazaExit(args: {
     vehicle_make_confidence:  vehicleMakeConf,
     vehicle_color:            vehicleColorInsert,
     vehicle_color_confidence: vehicleColorConf,
+    vehicle_type:             vehicleTypeInsert,
     raw_data: {
       onboardLpr: onboard,
       flow: tow ? "partner_truck_sighting" : "truck_plaza_exit",
