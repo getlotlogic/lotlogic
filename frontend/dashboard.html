@@ -3378,6 +3378,21 @@ const db = {
     if (error || !data || data.length === 0) return null;
     return data[0];
   },
+  // Best camera frame for a vehicle, tolerant of OCR drift and front/back-plate
+  // swaps (truck-plaza rigs register both). Falls back through exact -> back ->
+  // fuzzy server-side (latest_vehicle_frame RPC) so pass rows show a picture far
+  // more often than an exact front-plate match would. Also returns the frame's
+  // make/model/color so a pass with no stored MMC can still display what we saw.
+  async getBestVehicleFrame(propertyId, plateText, backPlate) {
+    if (!supabase || !propertyId || !plateText) return null;
+    const norm  = (plateText || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const bnorm = (backPlate || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const { data, error } = await supabase.rpc('latest_vehicle_frame', {
+      p_property_id: propertyId, p_plate: norm, p_back_plate: bnorm,
+    });
+    if (error || !data || data.length === 0) return null;
+    return data[0];
+  },
   async getRecentPlateEvents(propertyId, limit = 50) {
     if (supabase) {
       const { data, error } = await supabase
@@ -3444,7 +3459,7 @@ const db = {
   },
   async getALPRViolations(propertyId, status) {
     if (supabase) {
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, alpr_cameras:camera_id(id, name, gate_id))');
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, vehicle_make, vehicle_model, vehicle_color, vehicle_type, alpr_cameras:camera_id(id, name, gate_id))');
       if (propertyId) q = q.eq('property_id', propertyId);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
@@ -3463,7 +3478,7 @@ const db = {
     if (supabase) {
       const propIds = await this._getPropertyIds(userId, role);
       if (propIds.length === 0) return [];
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, alpr_cameras:camera_id(id, name, gate_id)), properties(name, address)').in('property_id', propIds);
+      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, vehicle_make, vehicle_model, vehicle_color, vehicle_type, alpr_cameras:camera_id(id, name, gate_id)), properties(name, address)').in('property_id', propIds);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
       const { data, error } = await q;
@@ -4949,7 +4964,13 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     _paired_camera_name: av._paired_camera_name || null,
     _detections: null,
     plate_text: av.plate_text,
-    vehicle_color: null, vehicle_type: null, vehicle_make: null, vehicle_model: null,
+    // MMC: prefer the violation row's own columns (filled by the
+    // alpr_violation_fill_mmc trigger), fall back to the linked plate_event for
+    // rows that predate the trigger. Treat onboard "-" as empty.
+    vehicle_color: (av.vehicle_color ?? av.plate_events?.vehicle_color) || null,
+    vehicle_type:  (av.vehicle_type  ?? av.plate_events?.vehicle_type)  || null,
+    vehicle_make:  (av.vehicle_make  ?? av.plate_events?.vehicle_make)  || null,
+    vehicle_model: (av.vehicle_model ?? av.plate_events?.vehicle_model) || null,
     // Preserve the real DB violation_type so the Jobs-tab filters (Overstays /
     // Open Jobs) can split alpr_violations rows correctly. Forcing
     // 'parking_pass' here masked 'overstay' and 'cooldown', funneling everything
@@ -5229,13 +5250,19 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all'); // all | nreg | overstays | open | handled
 
-  // Derived lists per filter
-  const overstayJobs = active.filter(v =>
-    (v.violation_type || '').toLowerCase().includes('overstay')
-  );
-  const openJobs = active.filter(v =>
-    !v._isNoReg && !(v.violation_type || '').toLowerCase().includes('overstay')
-  );
+  const isOverstay = (v) => (v.violation_type || '').toLowerCase().includes('overstay');
+
+  // Partner-awaiting rows (dispatched, no Tow/No-tow recorded yet) live in their
+  // own "awaiting your response" block above and are excluded from `active`. But
+  // the pills + search must still apply to them, AND the pill COUNTS must include
+  // them — otherwise "Open jobs" reads 0 while 16 dispatches sit above unhandled.
+  // So count + filter over the full open universe (awaiting + in-progress).
+  const awaitingRaw = allViolations.filter(isPartnerAwaiting);
+  const openUniverse = user?._role === 'partner' ? [...awaitingRaw, ...active] : active;
+
+  // Derived lists per filter (counts span the full open universe)
+  const overstayJobs = openUniverse.filter(isOverstay);
+  const openJobs = openUniverse.filter(v => !v._isNoReg && !isOverstay(v));
   // "Handled today" = resolved/cleared/towed today
   const todayStartMs = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   const handledToday = allViolations.filter(v =>
@@ -5243,17 +5270,12 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     new Date(v.resolved_at || v.departed_at || v.cleared_at || v.detected_at).getTime() >= todayStartMs
   );
 
-  // Filter active jobs — nreg pill swaps in the no-reg rows instead of the standard active list
-  const baseList = filter === 'overstays' ? overstayJobs
-    : filter === 'open' ? openJobs
-    : filter === 'handled' ? handledToday
-    : active; // 'all'
   // Plate matching needs the same normalization the QR forms use on
   // registration: uppercase, strip non-alphanumeric. Without this, typing
   // "abc 1234" wouldn't match the stored "ABC1234". ≥2 alphanumeric
   // characters required so a stray "a" doesn't match every plate with
   // an A in it. Mirrors the TruckParkingLog smart-search rule.
-  const filteredActive = baseList.filter(v => {
+  const matchesSearch = (v) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     const qPlate = q.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -5267,7 +5289,23 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
       (v._lot_name?.toLowerCase().includes(q)) ||
       (v._camera_name?.toLowerCase().includes(q)) ||
       (v.zone_id?.toLowerCase().includes(q));
-  });
+  };
+  // Pill predicate for the awaiting + in-progress lists. 'handled' swaps in its
+  // own source list, so it isn't a predicate here.
+  const matchesPill = (v) =>
+    filter === 'overstays' ? isOverstay(v)
+    : filter === 'open' ? (!v._isNoReg && !isOverstay(v))
+    : true; // 'all'
+
+  // In-progress list: 'handled' shows handledToday; otherwise the active list
+  // narrowed by the pill. Search applies in every case.
+  const filteredActive = (filter === 'handled' ? handledToday : active.filter(matchesPill))
+    .filter(matchesSearch);
+  // Awaiting block, narrowed by the same pill + search. 'handled' hides it
+  // (an awaiting dispatch is by definition not yet handled).
+  const filteredAwaiting = filter === 'handled'
+    ? []
+    : awaitingRaw.filter(matchesPill).filter(matchesSearch);
 
   if (loading && violations.length === 0) {
     return <div className="page-enter"><SkeletonKPIs /><SkeletonCards count={4} /></div>;
@@ -5330,7 +5368,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
       )}
 
       {/* Search and filter */}
-      {(active.length > 0 || noRegRows.length > 0 || handledToday.length > 0) && (
+      {(active.length > 0 || awaitingRaw.length > 0 || noRegRows.length > 0 || handledToday.length > 0) && (
         <div className="search-bar">
           <div className="search-wrap">
             <SearchIcon />
@@ -5339,10 +5377,10 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
         </div>
       )}
       {/* Filter pill row — brand-v2 style, horizontally scrollable */}
-      {(active.length > 0 || noRegRows.length > 0 || handledToday.length > 0) && (
+      {(active.length > 0 || awaitingRaw.length > 0 || noRegRows.length > 0 || handledToday.length > 0) && (
         <div className="filter-bar-paper" style={{marginBottom:8}}>
           <button className={`filter-pill-paper${filter === 'all' ? ' active' : ''}`} onClick={() => setFilter('all')}>
-            All<span className="n">{active.length + handledToday.length}</span>
+            All<span className="n">{openUniverse.length + handledToday.length}</span>
           </button>
           <button className={`filter-pill-paper${filter === 'overstays' ? ' active' : ''}`} onClick={() => setFilter('overstays')}>
             Overstays<span className="n">{overstayJobs.length}</span>
@@ -5394,9 +5432,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
           action (action_channel is null) and the row is still alerted/dispatched. Distinct from
           the general Open Jobs list so partners see exactly what the dispatch system is waiting on. */}
       {user?._role === 'partner' && (() => {
-        const awaiting = allViolations.filter(v =>
-          !v.action_channel && ['alerted', 'dispatched'].includes(v._origStatus || v.status)
-        );
+        const awaiting = filteredAwaiting;
         if (awaiting.length === 0) return null;
         return (
           <div style={{marginBottom:18}}>
@@ -5417,12 +5453,19 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                 const anyActing = acting !== null;
                 const lotName = lotMap[v.lot_id]?.name || v._lot_name || '—';
                 const dispatchedAt = v.dispatched_at || v.created_at || v.detected_at;
+                // Car identity our cameras captured — helps the partner recognize
+                // the vehicle before dispatching. "car" is too generic to show.
+                const vehicleDesc = [v.vehicle_color, v.vehicle_type && v.vehicle_type !== 'car' ? v.vehicle_type : null, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ');
                 return (
                   <div key={'awaiting-' + v.id} style={{
                     background:'var(--bg-card)', border:'1px solid rgba(251,191,36,.25)',
                     borderRadius:10, padding:'10px 12px',
                     display:'flex', flexWrap:'wrap', alignItems:'center', gap:10,
                   }}>
+                    {v._snapshot_url && (
+                      <img src={v._snapshot_url} alt={`Vehicle ${v.plate_text || ''}`} loading="lazy"
+                        style={{width:56, height:56, objectFit:'cover', borderRadius:8, border:'1px solid var(--border)', flexShrink:0}} />
+                    )}
                     <div style={{flex:1, minWidth:180}}>
                       <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:4}}>
                         <span style={{
@@ -5432,6 +5475,12 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                         }}>{v.plate_text || '—'}</span>
                         <span style={{fontSize:12, color:'var(--text-secondary)'}}>{lotName}</span>
                       </div>
+                      {vehicleDesc && (
+                        <div style={{display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--text-secondary)', textTransform:'capitalize', marginBottom:3}}>
+                          {displayColor(v.vehicle_color) && <span style={{width:8, height:8, borderRadius:3, background:colorHex(v.vehicle_color), border:'1px solid rgba(128,128,128,.3)', flexShrink:0}} />}
+                          {vehicleDesc}
+                        </div>
+                      )}
                       <div style={{fontSize:11, color:'var(--text-faint)'}}>
                         Dispatched {dispatchedAt ? fmtTime(dispatchedAt) : '—'}
                       </div>
@@ -8865,7 +8914,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   // renders quietly nothing — no "missing image" stub so empty rows
   // stay clean. Replaces what ActivePassTracker used to expose behind a
   // click-to-expand affordance.
-  function VehicleImage({ rowId, plateText }) {
+  function VehicleImage({ rowId, plateText, backPlate }) {
     const containerRef = useRef(null);
     const entry = vehicleImageCache[rowId];
     useEffect(() => {
@@ -8876,14 +8925,18 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
         if (!entries[0].isIntersecting) return;
         obs.disconnect();
         setVehicleImageCache(c => ({ ...c, [rowId]: { loading: true } }));
-        db.getLatestPlateEventForPlate(propertyId, plateText).then(ev => {
+        db.getBestVehicleFrame(propertyId, plateText, backPlate).then(ev => {
           if (ev?.image_url) {
             setVehicleImageCache(c => ({
               ...c,
               [rowId]: {
                 url: ev.image_url,
                 capturedAt: ev.created_at,
-                cameraName: ev.alpr_cameras?.name || null,
+                cameraName: ev.camera_name || null,
+                make: ev.vehicle_make || null,
+                model: ev.vehicle_model || null,
+                color: ev.vehicle_color || null,
+                type: ev.vehicle_type || null,
               },
             }));
           } else {
@@ -8895,7 +8948,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
       }, { rootMargin: '200px' });
       obs.observe(el);
       return () => obs.disconnect();
-    }, [rowId, plateText, entry]);
+    }, [rowId, plateText, backPlate, entry]);
 
     // Skip rendering entirely when known-empty so violation cards stay
     // tight on properties without ALPR cameras.
@@ -9614,6 +9667,25 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                 <div style={{display:'flex',flexDirection:'column',gap:3}}>
                   <div style={{fontSize:13,color:'var(--text-primary)',fontWeight:600}}>{driverLine}</div>
                   {r.phone && <div style={{fontSize:12,color:'var(--text-muted)'}}>📞 {r.phone}</div>}
+                  {/* Car our cameras identified — color swatch + make/model/type.
+                      Prefer the pass's stored MMC; fall back to the matched
+                      camera frame's MMC (vehicleImageCache) so a pass with no
+                      stored attributes still shows what the cameras saw.
+                      "car" is too generic to surface. */}
+                  {(() => {
+                    const frame = vehicleImageCache[r.id] || {};
+                    const vColor = r.vehicle_color || frame.color;
+                    const vType  = r.vehicle_type  || frame.type;
+                    const vMake  = r.vehicle_make  || frame.make;
+                    const vModel = r.vehicle_model || frame.model;
+                    const vDesc = [vColor, vType && vType !== 'car' ? vType : null, vMake, vModel].filter(Boolean).join(' ');
+                    return vDesc ? (
+                      <div style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--text-secondary)',textTransform:'capitalize'}}>
+                        {displayColor(vColor) && <span style={{width:9,height:9,borderRadius:3,background:colorHex(vColor),border:'1px solid rgba(128,128,128,.3)',flexShrink:0}} />}
+                        {vDesc}
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
 
                 {/* Status explainer — only renders when the status carries
@@ -9666,12 +9738,14 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                   />
                 )}
 
-                {/* Vehicle photo (camera snapshot) for violation / auto-cleared
-                    rows. Lazy-loaded on intersection — operators see what the
-                    truck looks like without expanding anything. Replaces the
-                    ActivePassTracker click-to-expand affordance. */}
-                {(isViolation || isAutoCleared) && (
-                  <VehicleImage rowId={r.id} plateText={r.plate_text} />
+                {/* Vehicle photo (camera snapshot). Lazy-loaded on intersection —
+                    operators/partners see what the vehicle looks like without
+                    expanding anything. Shown for violation / auto-cleared rows,
+                    and for active/expiring passes that don't already have a
+                    pre-registration frame (FirstSeenEvidence) above — so every
+                    row carries the car's picture without doubling it up. */}
+                {(isViolation || isAutoCleared || ((isActive || isExpiring) && !r.first_seen_image_url)) && (
+                  <VehicleImage rowId={r.id} plateText={r.plate_text} backPlate={r.back_plate} />
                 )}
 
                 {/* Time range */}
