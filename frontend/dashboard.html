@@ -9695,11 +9695,9 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                 <div style={{display:'flex',flexDirection:'column',gap:3}}>
                   <div style={{fontSize:13,color:'var(--text-primary)',fontWeight:600}}>{driverLine}</div>
                   {r.phone && <div style={{fontSize:12,color:'var(--text-muted)'}}>📞 {r.phone}</div>}
-                  {/* Vehicle identity chip — what the cameras saw. Body type comes
-                      from PR (granular: Sedan/Pickup/Big Truck/SUV/Van) or onboard
-                      (Truck/Car/Van); color from onboard; make/model when PR's MMC
-                      add-on is on. Prefer the pass's stored value, fall back to the
-                      matched camera frame (vehicleImageCache). */}
+                  {/* Vehicle — what the cameras identified. PR gives make / model /
+                      color / granular body type; onboard gives color + Truck/Car/Van.
+                      Prefer the pass's stored values, fall back to the matched frame. */}
                   {(() => {
                     const frame = vehicleImageCache[r.id] || {};
                     const vColor = cleanMmc(r.vehicle_color) ?? cleanMmc(frame.color);
@@ -9707,21 +9705,37 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                     const vMake  = cleanMmc(r.vehicle_make)  ?? cleanMmc(frame.make);
                     const vModel = cleanMmc(r.vehicle_model) ?? cleanMmc(frame.model);
                     if (!vColor && !vType && !vMake && !vModel) return null;
-                    const head = [displayColor(vColor), vehicleTypeLabel(vType)].filter(Boolean).join(' ');
                     const makeModel = [vMake, vModel].filter(Boolean).join(' ');
+                    const typeLabel = vehicleTypeLabel(vType);
+                    const colorWord = displayColor(vColor);
+                    const primary = makeModel || [colorWord, typeLabel].filter(Boolean).join(' ') || 'Vehicle';
+                    const sub = makeModel ? [colorWord, typeLabel].filter(Boolean).join(' · ') : null;
+                    const swatch = colorHex(vColor);
                     return (
-                      <div title="Identified from camera reads" style={{
-                        display:'inline-flex', alignItems:'center', gap:7, alignSelf:'flex-start', marginTop:2,
-                        padding:'4px 11px 4px 7px', borderRadius:999,
+                      <div style={{
+                        display:'flex', alignItems:'center', gap:11, marginTop:7,
+                        padding:'8px 12px', borderRadius:13,
                         background:'var(--bg-inset)', border:'1px solid var(--border-subtle)',
                       }}>
-                        {displayColor(vColor)
-                          ? <span title={vColor} style={{width:13,height:13,borderRadius:'50%',background:colorHex(vColor),border:'1px solid rgba(0,0,0,.22)',boxShadow:'inset 0 0 0 1.5px rgba(255,255,255,.4)',flexShrink:0}} />
-                          : <span aria-hidden="true" style={{fontSize:13,lineHeight:1}}>{vehicleTypeIcon(vType)}</span>}
-                        <span style={{fontSize:12,fontWeight:700,color:'var(--text-primary)',textTransform:'capitalize',letterSpacing:'.01em'}}>
-                          {head || makeModel}
-                          {head && makeModel ? <span style={{fontWeight:600,color:'var(--text-faint)'}}> · {makeModel}</span> : null}
-                        </span>
+                        <div aria-hidden="true" style={{
+                          position:'relative', width:36, height:36, borderRadius:10, flexShrink:0,
+                          background:'var(--bg-card)', border:'1px solid var(--border-subtle)',
+                          display:'flex', alignItems:'center', justifyContent:'center', fontSize:19, lineHeight:1,
+                        }}>
+                          {vehicleTypeIcon(vType)}
+                          {displayColor(vColor) && (
+                            <span title={colorWord} style={{
+                              position:'absolute', right:-3, bottom:-3, width:13, height:13, borderRadius:'50%',
+                              background:swatch, border:'2px solid var(--bg-inset)',
+                              boxShadow:'inset 0 0 0 1px rgba(0,0,0,.18)',
+                            }} />
+                          )}
+                        </div>
+                        <div style={{minWidth:0, flex:1}}>
+                          <div style={{fontSize:10, fontWeight:800, color:'var(--text-faint)', letterSpacing:'.08em', textTransform:'uppercase'}}>Vehicle</div>
+                          <div style={{fontSize:14, fontWeight:800, color:'var(--text-primary)', textTransform:'capitalize', letterSpacing:'.01em', lineHeight:1.2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{primary}</div>
+                          {sub && <div style={{fontSize:11.5, fontWeight:600, color:'var(--text-muted)', textTransform:'capitalize', marginTop:1}}>{sub}</div>}
+                        </div>
                       </div>
                     );
                   })()}
