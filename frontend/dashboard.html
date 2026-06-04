@@ -4084,12 +4084,21 @@ const VEHICLE_COLOR_HEX = {
 function displayColor(c) {
   if (!c) return '';
   const v = String(c).trim().toLowerCase();
-  if (!v || v === 'unknown' || v === 'none') return '';
+  if (!v || v === '-' || v === 'unknown' || v === 'none') return '';
   return v;
 }
 function colorHex(c) {
   const v = displayColor(c);
   return VEHICLE_COLOR_HEX[v] || '#6b7280';
+}
+// Normalize an onboard MMC attribute (make/model/type) for display: Plate
+// Recognizer writes "-" for unknowns. Returns null for those + unknown/none/
+// empty so .filter(Boolean) drops them and we never render a bare dash.
+function cleanMmc(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  if (!s || s === '-' || s.toLowerCase() === 'unknown' || s.toLowerCase() === 'none') return null;
+  return s;
 }
 function isLowConfColor(c) {
   const v = displayColor(c);
@@ -4966,11 +4975,11 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
     plate_text: av.plate_text,
     // MMC: prefer the violation row's own columns (filled by the
     // alpr_violation_fill_mmc trigger), fall back to the linked plate_event for
-    // rows that predate the trigger. Treat onboard "-" as empty.
-    vehicle_color: (av.vehicle_color ?? av.plate_events?.vehicle_color) || null,
-    vehicle_type:  (av.vehicle_type  ?? av.plate_events?.vehicle_type)  || null,
-    vehicle_make:  (av.vehicle_make  ?? av.plate_events?.vehicle_make)  || null,
-    vehicle_model: (av.vehicle_model ?? av.plate_events?.vehicle_model) || null,
+    // rows that predate the trigger. cleanMmc nulls onboard "-" / unknown noise.
+    vehicle_color: cleanMmc(av.vehicle_color) ?? cleanMmc(av.plate_events?.vehicle_color),
+    vehicle_type:  cleanMmc(av.vehicle_type)  ?? cleanMmc(av.plate_events?.vehicle_type),
+    vehicle_make:  cleanMmc(av.vehicle_make)  ?? cleanMmc(av.plate_events?.vehicle_make),
+    vehicle_model: cleanMmc(av.vehicle_model) ?? cleanMmc(av.plate_events?.vehicle_model),
     // Preserve the real DB violation_type so the Jobs-tab filters (Overstays /
     // Open Jobs) can split alpr_violations rows correctly. Forcing
     // 'parking_pass' here masked 'overstay' and 'cooldown', funneling everything
@@ -8819,6 +8828,92 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // Data comes from the backend /visitor_passes/parking-log endpoint — the same
 // shape as the CSV export so the two never drift.
 
+// Inline vehicle image preview for a pass / violation row. Lazy-loads the best
+// camera frame on intersection (exact->back->fuzzy via getBestVehicleFrame) and
+// caches it in the parent's vehicleImageCache. MODULE-SCOPED (not nested in
+// TruckParkingLog) so it has a stable component identity: a nested definition
+// is a new function object every parent render, which makes React unmount/remount
+// every instance and re-create its IntersectionObserver on each setCache call.
+// Cache + setter come in as props so the parent still owns the state.
+function VehicleImage({ rowId, plateText, backPlate, propertyId, cache, setCache }) {
+  const containerRef = useRef(null);
+  const entry = cache[rowId];
+  useEffect(() => {
+    if (entry) return; // already loaded, loading, or known-empty
+    const el = containerRef.current;
+    if (!el || !propertyId || !plateText) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (!entries[0].isIntersecting) return;
+      obs.disconnect();
+      setCache(c => ({ ...c, [rowId]: { loading: true } }));
+      db.getBestVehicleFrame(propertyId, plateText, backPlate).then(ev => {
+        if (ev?.image_url) {
+          setCache(c => ({
+            ...c,
+            [rowId]: {
+              url: ev.image_url,
+              capturedAt: ev.created_at,
+              cameraName: ev.camera_name || null,
+              make: ev.vehicle_make || null,
+              model: ev.vehicle_model || null,
+              color: ev.vehicle_color || null,
+              type: ev.vehicle_type || null,
+            },
+          }));
+        } else {
+          setCache(c => ({ ...c, [rowId]: { empty: true } }));
+        }
+      }).catch(() => {
+        setCache(c => ({ ...c, [rowId]: { empty: true } }));
+      });
+    }, { rootMargin: '200px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [rowId, plateText, backPlate, entry, propertyId, setCache]);
+
+  // Skip rendering entirely when known-empty so rows stay tight on properties
+  // without ALPR cameras.
+  if (entry?.empty) return null;
+
+  return (
+    <div ref={containerRef} style={{
+      position:'relative',
+      background:'var(--bg-inset)',
+      borderRadius:8,
+      overflow:'hidden',
+      minHeight: entry?.loading ? 80 : (entry?.url ? 0 : 80),
+      display: entry?.url || entry?.loading ? 'block' : 'none',
+    }}>
+      {entry?.loading && (
+        <div style={{
+          position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',
+          fontSize:11,color:'var(--text-faint)',letterSpacing:'.04em',textTransform:'uppercase',
+        }}>Loading camera frame…</div>
+      )}
+      {entry?.url && (
+        <>
+          <img
+            src={entry.url}
+            alt={`Vehicle ${plateText}`}
+            loading="lazy"
+            style={{display:'block',width:'100%',maxHeight:200,objectFit:'cover'}}
+          />
+          <div style={{
+            position:'absolute',bottom:0,left:0,right:0,
+            padding:'4px 8px',
+            background:'linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0))',
+            fontSize:10,color:'#fff',
+            display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,
+          }}>
+            <span style={{fontWeight:700,letterSpacing:'.03em'}}>📷 {entry.cameraName || 'camera'}</span>
+            <span style={{opacity:.85}}>{entry.capturedAt ? new Date(entry.capturedAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function TruckParkingLog({ propertyId, isOwner = false }) {
   const { addToast } = useToast();
   const [rows, setRows] = useState([]);
@@ -8907,91 +9002,9 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     return (s || '').replace(/\D/g, '');
   }
 
-  // Inline vehicle image preview for violation / auto-cleared rows.
-  // Lazy-loads on intersection (200px rootMargin pre-warm). Caches in
-  // vehicleImageCache so re-rendering doesn't re-fetch. If a plate has
-  // no camera capture (property without ALPR cams, or read pending),
-  // renders quietly nothing — no "missing image" stub so empty rows
-  // stay clean. Replaces what ActivePassTracker used to expose behind a
-  // click-to-expand affordance.
-  function VehicleImage({ rowId, plateText, backPlate }) {
-    const containerRef = useRef(null);
-    const entry = vehicleImageCache[rowId];
-    useEffect(() => {
-      if (entry) return; // already loaded, loading, or known-empty
-      const el = containerRef.current;
-      if (!el || !propertyId || !plateText) return;
-      const obs = new IntersectionObserver((entries) => {
-        if (!entries[0].isIntersecting) return;
-        obs.disconnect();
-        setVehicleImageCache(c => ({ ...c, [rowId]: { loading: true } }));
-        db.getBestVehicleFrame(propertyId, plateText, backPlate).then(ev => {
-          if (ev?.image_url) {
-            setVehicleImageCache(c => ({
-              ...c,
-              [rowId]: {
-                url: ev.image_url,
-                capturedAt: ev.created_at,
-                cameraName: ev.camera_name || null,
-                make: ev.vehicle_make || null,
-                model: ev.vehicle_model || null,
-                color: ev.vehicle_color || null,
-                type: ev.vehicle_type || null,
-              },
-            }));
-          } else {
-            setVehicleImageCache(c => ({ ...c, [rowId]: { empty: true } }));
-          }
-        }).catch(() => {
-          setVehicleImageCache(c => ({ ...c, [rowId]: { empty: true } }));
-        });
-      }, { rootMargin: '200px' });
-      obs.observe(el);
-      return () => obs.disconnect();
-    }, [rowId, plateText, backPlate, entry]);
-
-    // Skip rendering entirely when known-empty so violation cards stay
-    // tight on properties without ALPR cameras.
-    if (entry?.empty) return null;
-
-    return (
-      <div ref={containerRef} style={{
-        position:'relative',
-        background:'var(--bg-inset)',
-        borderRadius:8,
-        overflow:'hidden',
-        minHeight: entry?.loading ? 80 : (entry?.url ? 0 : 80),
-        display: entry?.url || entry?.loading ? 'block' : 'none',
-      }}>
-        {entry?.loading && (
-          <div style={{
-            position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',
-            fontSize:11,color:'var(--text-faint)',letterSpacing:'.04em',textTransform:'uppercase',
-          }}>Loading camera frame…</div>
-        )}
-        {entry?.url && (
-          <>
-            <img
-              src={entry.url}
-              alt={`Vehicle ${plateText}`}
-              loading="lazy"
-              style={{display:'block',width:'100%',maxHeight:200,objectFit:'cover'}}
-            />
-            <div style={{
-              position:'absolute',bottom:0,left:0,right:0,
-              padding:'4px 8px',
-              background:'linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0))',
-              fontSize:10,color:'#fff',
-              display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,
-            }}>
-              <span style={{fontWeight:700,letterSpacing:'.03em'}}>📷 {entry.cameraName || 'camera'}</span>
-              <span style={{opacity:.85}}>{entry.capturedAt ? new Date(entry.capturedAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}</span>
-            </div>
-          </>
-        )}
-      </div>
-    );
-  }
+  // VehicleImage is defined at module scope (search `function VehicleImage`)
+  // so it keeps a stable component identity across this component's frequent
+  // re-renders. It takes the cache + setter as props.
   // Returns the list of field names this row matched on, or [] if no match.
   // An empty/whitespace-only query is treated as "no filter" by the caller,
   // so we don't bother here.
@@ -9674,10 +9687,10 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                       "car" is too generic to surface. */}
                   {(() => {
                     const frame = vehicleImageCache[r.id] || {};
-                    const vColor = r.vehicle_color || frame.color;
-                    const vType  = r.vehicle_type  || frame.type;
-                    const vMake  = r.vehicle_make  || frame.make;
-                    const vModel = r.vehicle_model || frame.model;
+                    const vColor = cleanMmc(r.vehicle_color) ?? cleanMmc(frame.color);
+                    const vType  = cleanMmc(r.vehicle_type)  ?? cleanMmc(frame.type);
+                    const vMake  = cleanMmc(r.vehicle_make)  ?? cleanMmc(frame.make);
+                    const vModel = cleanMmc(r.vehicle_model) ?? cleanMmc(frame.model);
                     const vDesc = [vColor, vType && vType !== 'car' ? vType : null, vMake, vModel].filter(Boolean).join(' ');
                     return vDesc ? (
                       <div style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--text-secondary)',textTransform:'capitalize'}}>
@@ -9745,7 +9758,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                     pre-registration frame (FirstSeenEvidence) above — so every
                     row carries the car's picture without doubling it up. */}
                 {(isViolation || isAutoCleared || ((isActive || isExpiring) && !r.first_seen_image_url)) && (
-                  <VehicleImage rowId={r.id} plateText={r.plate_text} backPlate={r.back_plate} />
+                  <VehicleImage rowId={r.id} plateText={r.plate_text} backPlate={r.back_plate} propertyId={propertyId} cache={vehicleImageCache} setCache={setVehicleImageCache} />
                 )}
 
                 {/* Time range */}
