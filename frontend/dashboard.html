@@ -8877,11 +8877,15 @@ function VehicleImage({ rowId, plateText, backPlate, propertyId, cache, setCache
   return (
     <div ref={containerRef} style={{
       position:'relative',
-      background:'var(--bg-inset)',
+      // NEVER display:none while idle — a display:none element never reports as
+      // intersecting, which deadlocks the IntersectionObserver lazy-load (the
+      // fetch could never start). Idle = 1px + transparent (observable but
+      // invisible); 80px while loading; image height once loaded. Known-empty
+      // returns null above.
+      background: (entry?.url || entry?.loading) ? 'var(--bg-inset)' : 'transparent',
       borderRadius:8,
       overflow:'hidden',
-      minHeight: entry?.loading ? 80 : (entry?.url ? 0 : 80),
-      display: entry?.url || entry?.loading ? 'block' : 'none',
+      minHeight: entry?.url ? 0 : (entry?.loading ? 80 : 1),
     }}>
       {entry?.loading && (
         <div style={{
