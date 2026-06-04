@@ -4103,6 +4103,25 @@ function cleanMmc(v) {
   if (!s || s === '-' || s.toLowerCase() === 'unknown' || s.toLowerCase() === 'none') return null;
   return s;
 }
+// Vehicle body type — Plate Recognizer returns granular types (Sedan / Pickup
+// Truck / Big Truck / SUV / Van); onboard returns coarse Truck / Car / Van. Map
+// to a clean label + a glyph for an at-a-glance read on the pass card.
+const VEHICLE_TYPE_META = {
+  'big truck': ['Big Truck', '🚛'], 'semi': ['Semi', '🚛'], 'truck': ['Truck', '🚛'],
+  'pickup truck': ['Pickup', '🛻'], 'pickup': ['Pickup', '🛻'],
+  'van': ['Van', '🚐'], 'minivan': ['Minivan', '🚐'],
+  'suv': ['SUV', '🚙'], 'sedan': ['Sedan', '🚗'], 'car': ['Car', '🚗'],
+  'motorcycle': ['Motorcycle', '🏍️'], 'bus': ['Bus', '🚌'],
+};
+function vehicleTypeLabel(t) {
+  const c = cleanMmc(t); if (!c) return null;
+  const m = VEHICLE_TYPE_META[c.toLowerCase()];
+  return m ? m[0] : c.replace(/\b\w/g, ch => ch.toUpperCase());
+}
+function vehicleTypeIcon(t) {
+  const c = cleanMmc(t); if (!c) return '🚗';
+  return (VEHICLE_TYPE_META[c.toLowerCase()] || [null, '🚗'])[1];
+}
 function isLowConfColor(c) {
   const v = displayColor(c);
   return !v;
@@ -9676,24 +9695,35 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                 <div style={{display:'flex',flexDirection:'column',gap:3}}>
                   <div style={{fontSize:13,color:'var(--text-primary)',fontWeight:600}}>{driverLine}</div>
                   {r.phone && <div style={{fontSize:12,color:'var(--text-muted)'}}>📞 {r.phone}</div>}
-                  {/* Car our cameras identified — color swatch + make/model/type.
-                      Prefer the pass's stored MMC; fall back to the matched
-                      camera frame's MMC (vehicleImageCache) so a pass with no
-                      stored attributes still shows what the cameras saw.
-                      "car" is too generic to surface. */}
+                  {/* Vehicle identity chip — what the cameras saw. Body type comes
+                      from PR (granular: Sedan/Pickup/Big Truck/SUV/Van) or onboard
+                      (Truck/Car/Van); color from onboard; make/model when PR's MMC
+                      add-on is on. Prefer the pass's stored value, fall back to the
+                      matched camera frame (vehicleImageCache). */}
                   {(() => {
                     const frame = vehicleImageCache[r.id] || {};
                     const vColor = cleanMmc(r.vehicle_color) ?? cleanMmc(frame.color);
                     const vType  = cleanMmc(r.vehicle_type)  ?? cleanMmc(frame.type);
                     const vMake  = cleanMmc(r.vehicle_make)  ?? cleanMmc(frame.make);
                     const vModel = cleanMmc(r.vehicle_model) ?? cleanMmc(frame.model);
-                    const vDesc = [vColor, vType && vType !== 'car' ? vType : null, vMake, vModel].filter(Boolean).join(' ');
-                    return vDesc ? (
-                      <div style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--text-secondary)',textTransform:'capitalize'}}>
-                        {displayColor(vColor) && <span style={{width:9,height:9,borderRadius:3,background:colorHex(vColor),border:'1px solid rgba(128,128,128,.3)',flexShrink:0}} />}
-                        {vDesc}
+                    if (!vColor && !vType && !vMake && !vModel) return null;
+                    const head = [displayColor(vColor), vehicleTypeLabel(vType)].filter(Boolean).join(' ');
+                    const makeModel = [vMake, vModel].filter(Boolean).join(' ');
+                    return (
+                      <div title="Identified from camera reads" style={{
+                        display:'inline-flex', alignItems:'center', gap:7, alignSelf:'flex-start', marginTop:2,
+                        padding:'4px 11px 4px 7px', borderRadius:999,
+                        background:'var(--bg-inset)', border:'1px solid var(--border-subtle)',
+                      }}>
+                        {displayColor(vColor)
+                          ? <span title={vColor} style={{width:13,height:13,borderRadius:'50%',background:colorHex(vColor),border:'1px solid rgba(0,0,0,.22)',boxShadow:'inset 0 0 0 1.5px rgba(255,255,255,.4)',flexShrink:0}} />
+                          : <span aria-hidden="true" style={{fontSize:13,lineHeight:1}}>{vehicleTypeIcon(vType)}</span>}
+                        <span style={{fontSize:12,fontWeight:700,color:'var(--text-primary)',textTransform:'capitalize',letterSpacing:'.01em'}}>
+                          {head || makeModel}
+                          {head && makeModel ? <span style={{fontWeight:600,color:'var(--text-faint)'}}> · {makeModel}</span> : null}
+                        </span>
                       </div>
-                    ) : null;
+                    );
                   })()}
                 </div>
 
