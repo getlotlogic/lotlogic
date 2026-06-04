@@ -10,6 +10,7 @@ import { isPlateHeld } from "./holds.ts";
 import { extractUsdot } from "./usdot-ocr.ts";
 import { computeImageHashes } from "./image-hash.ts";
 import { rotateJpegBytes, type RotationDir } from "./image-rotate.ts";
+import { extractMmc, mmcColumns, isMmcBlocked, handleMmcFailureStatus, type PrMmcData } from "./mmc.ts";
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
@@ -21,6 +22,16 @@ const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
 // single feature flag for the SDK rollout — flip it on/off in Supabase
 // secrets without redeploying.
 const PR_SDK_URL = Deno.env.get("PR_SDK_URL") ?? "";
+// MMC (make/model/color) feature flags. Default OFF: with PR_MMC_ENABLED unset,
+// no mmc=true is ever appended to a PR request and behavior is identical to
+// today except the new (nullable) MMC columns receive NULLs.
+const PR_MMC_ENABLED               = (Deno.env.get("PR_MMC_ENABLED")               ?? "false").toLowerCase() === "true";
+const PR_MMC_ENTITLEMENT_CONFIRMED = (Deno.env.get("PR_MMC_ENTITLEMENT_CONFIRMED") ?? "false").toLowerCase() === "true";
+const PR_MMC_BACKOFF_MINUTES       = Number(Deno.env.get("PR_MMC_BACKOFF_MINUTES") ?? "60");
+// When true, only send mmc=true for reads from truck_plaza or enforcement-active
+// properties. Gate is by property type (the only point where gating is possible
+// without a second PR round-trip). Default false.
+const PR_MMC_ENFORCEMENT_SITES_ONLY = (Deno.env.get("PR_MMC_ENFORCEMENT_SITES_ONLY") ?? "false").toLowerCase() === "true";
 const PR_MIN_SCORE = Number(Deno.env.get("PR_MIN_SCORE") ?? "0.8");
 // Per-camera PR_MIN_SCORE override. JSON map { "<camera_id>": <floor> }.
 // When a camera_id is in the map, its plate reads bypass BOTH the
@@ -182,7 +193,10 @@ const SYSTEM_PAUSED = (Deno.env.get("SYSTEM_PAUSED") ?? "false").toLowerCase() =
 
 // Log critical config at module load so we can verify env wiring from the
 // edge-function logs without needing direct access to secrets.
-console.log(`camera-snapshot boot: sidecar_url_set=${OPENALPR_SIDECAR_URL ? "yes" : "NO"} pr_token_set=${PR_TOKEN ? "yes" : "NO"} url_secret_set=${URL_SECRET ? "yes" : "NO"} paused=${SYSTEM_PAUSED}`);
+console.log(`camera-snapshot boot: sidecar_url_set=${OPENALPR_SIDECAR_URL ? "yes" : "NO"} pr_token_set=${PR_TOKEN ? "yes" : "NO"} url_secret_set=${URL_SECRET ? "yes" : "NO"} paused=${SYSTEM_PAUSED} mmc_enabled=${PR_MMC_ENABLED} mmc_entitlement_confirmed=${PR_MMC_ENTITLEMENT_CONFIRMED} mmc_enforcement_sites_only=${PR_MMC_ENFORCEMENT_SITES_ONLY}`);
+if (PR_MMC_ENABLED && !PR_MMC_ENTITLEMENT_CONFIRMED) {
+  console.warn("[mmc] WARNING: PR_MMC_ENABLED=true but PR_MMC_ENTITLEMENT_CONFIRMED is not set. Every invocation will attempt mmc=true and retry on failure. Set PR_MMC_ENTITLEMENT_CONFIRMED=true after confirming PR plan includes MMC.");
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
@@ -307,6 +321,11 @@ Deno.serve(async (req: Request) => {
           return { plate: "", confidence: 0 };
         } : undefined,
         bypassSidecarGate: SKIP_SIDECAR_MACS.has(camera.api_key),
+        // MMC config. This branch is the truck_plaza path, so the
+        // PR_MMC_ENFORCEMENT_SITES_ONLY truck_plaza clause is satisfied —
+        // wantMmc reduces to PR_MMC_ENABLED here.
+        mmcEnabled: PR_MMC_ENABLED,
+        mmcBackoffMinutes: PR_MMC_BACKOFF_MINUTES,
         notifyLeftBeforeTow: (violationId) => {
           // Fire-and-forget. Partner gets a follow-up "stand down" email
           // because we already dispatched a tow that's no longer needed.
@@ -794,7 +813,19 @@ Deno.serve(async (req: Request) => {
       console.log(`camera-snapshot: pre-rotated bytes (${rotateDir}) for camera=${camera.id} before PR/USDOT`);
     }
 
-    const prResp = await callPlateRecognizer(bytesForRecognizers, cameraApiKey);
+    // Compute whether to request MMC for this read. The gate fires before the
+    // PR call because match_status is not known until after PR returns;
+    // property-type is the available proxy. With PR_MMC_ENFORCEMENT_SITES_ONLY
+    // false (default), all reads get mmc=true when the plan is enabled, at zero
+    // additional billing cost. (This main call site only runs for non-truck_plaza
+    // properties — the truck_plaza branch returns earlier — so the truck_plaza
+    // clause is harmless here.)
+    const wantMmc = PR_MMC_ENABLED && (
+      !PR_MMC_ENFORCEMENT_SITES_ONLY ||
+      propertyType === "truck_plaza"
+    );
+
+    const prResp = await callPlateRecognizer(bytesForRecognizers, cameraApiKey, wantMmc, PR_MMC_BACKOFF_MINUTES);
     if (!prResp.ok) {
       console.warn("camera-snapshot PR call failed:", prResp.status, prResp.bodyText.slice(0, 200));
       return json(200, { ok: false, reason: "pr_call_failed", status: prResp.status });
@@ -925,6 +956,20 @@ Deno.serve(async (req: Request) => {
       const normalized = normalizePlate(result.plate as string);
       const vehicleType = (result as { vehicle?: { type?: string | null } }).vehicle?.type ?? null;
 
+      // MMC extraction. When usdotSynthesizedPlate=true, `result` is a synthetic
+      // object with no model_make/color arrays — extract MMC from the first real
+      // PR result instead (the one PR actually analyzed before USDOT synthesis).
+      // If prResp.data.results is empty (PR returned nothing, USDOT synthesized),
+      // mmcData is undefined — correct.
+      const mmcSourceResult = usdotSynthesizedPlate
+        ? (Array.isArray((prResp.data as Record<string, unknown>)?.results)
+            ? (prResp.data as Record<string, unknown[]>).results[0]
+            : undefined)
+        : result;
+      const mmcData: PrMmcData | undefined = prResp.mmcRequested
+        ? extractMmc(mmcSourceResult)
+        : undefined;
+
       // Upload the snapshot to R2 once per surviving result. Key is
       // property / day / camera / epoch / plate so evidence is easy to find.
       const epochMs = now.getTime();
@@ -1030,10 +1075,22 @@ Deno.serve(async (req: Request) => {
         mc_number: usdotSynthesizedPlate
           ? (usdotResult.kind === "mc" ? usdotResult.number : null)
           : frameMc,
+        // Five first-class MMC columns (nullable; migration 027). NULL when
+        // mmc was not requested or PR returned no MMC data.
+        ...mmcColumns(mmcData),
+        // vehicle_type (body type) — PR returns vehicle.type on every read
+        // (standard, not MMC-gated) and onboard LPR reports it too, so this
+        // populates regardless of the MMC flag. Column added in migration 028.
+        vehicle_type: vehicleType ?? null,
         raw_data: {
           ...result,
           _pr_response: prResp.data,
           _pr_source: prResp.source,
+          _pr_mmc_requested: prResp.mmcRequested,
+          _mmc: mmcData ?? null,
+          // Documents whether MMC values came from PR cloud or onboard LPR.
+          // NULL = neither path fired (flag off or PR returned no MMC data).
+          _mmc_source: mmcData ? "pr_cloud" : null,
           _source: `camera-snapshot:${extracted.source}`,
           _orientation: camera.orientation,
           _usdot_ocr: usdotResult.kind === "none"
@@ -1248,6 +1305,11 @@ Deno.serve(async (req: Request) => {
             backPlate: paired?.paired_plate ?? null,
             normalizedBackPlate: paired?.normalized_paired_plate ?? null,
             vehicleType,
+            vehicleMake:            mmcData?.make        ?? null,
+            vehicleModel:           mmcData?.model       ?? null,
+            vehicleMakeConfidence:  mmcData?.make_score  ?? null,
+            vehicleColor:           mmcData?.color       ?? null,
+            vehicleColorConfidence: mmcData?.color_score ?? null,
             entryCameraId: camera.id,
             entryPlateEventId: ev.data.id,
             state,
@@ -1271,6 +1333,28 @@ Deno.serve(async (req: Request) => {
         // Direction inference across cameras.
         await inferDirection(db, sess.id, camera.property_id, normalized, camera.id, now);
 
+        // Backfill the matched pass with this read's photo + MMC. The RPC is
+        // fill-when-null, so it only stamps the car's identity when the pass
+        // doesn't already have it (the backend stamps a pre-registration frame
+        // at registration; this covers cars first seen AFTER they register,
+        // which the 2h lookback misses). Driver-declared values are preserved.
+        if (pass?.id) {
+          try {
+            const bf = await db.rpc("backfill_pass_vehicle", {
+              p_pass_id:  pass.id,
+              p_event_id: ev.data.id,
+              p_make:     mmcData?.make  ?? null,
+              p_model:    mmcData?.model ?? null,
+              p_color:    mmcData?.color ?? null,
+              p_type:     vehicleType ?? null,
+            });
+            if (bf.error) console.warn(`[pass-mmc] entry backfill failed for ${pass.id}: ${bf.error.message}`);
+          } catch (e) {
+            // Best-effort: must never break ingestion of the plate read.
+            console.warn(`[pass-mmc] entry backfill threw for ${pass.id}: ${e instanceof Error ? e.message : e}`);
+          }
+        }
+
         // Note: held plates open state='grace'. The cron will issue a tow at
         // t+15m because the backend blocks registration during the hold.
         // We log the hold context in raw_data for operator visibility.
@@ -1293,6 +1377,14 @@ Deno.serve(async (req: Request) => {
             violation_type: "cooldown",
             session_id: sess.id,
             notes: `Re-entry within ${cooldown.cooldown_hours}h cooldown (prior exit ${cooldown.prior_exited_at})`,
+            // MMC: vehicle_type always available from PR; make/model/color only
+            // when the MMC plan is active. vehicle_type sourced from vehicleType
+            // (the line-957 extraction), NOT from mmcData, so it populates
+            // regardless of MMC plan status.
+            vehicle_type:  vehicleType ?? null,
+            vehicle_make:  mmcData?.make  ?? null,
+            vehicle_model: mmcData?.model ?? null,
+            vehicle_color: mmcData?.color ?? null,
           }).select("id").single();
           if (vIns.error) throw vIns.error;
 
@@ -1392,6 +1484,26 @@ Deno.serve(async (req: Request) => {
           holdDurationHours: 24,
         }, outcome);
 
+        // Backfill the registered pass with this exit read's photo + MMC
+        // (fill-when-null in the RPC) so the dashboard pass row shows the car
+        // even when the only camera frame we ever got was on the way out.
+        if (openSession.visitor_pass_id) {
+          try {
+            const bf = await db.rpc("backfill_pass_vehicle", {
+              p_pass_id:  openSession.visitor_pass_id,
+              p_event_id: ev.data.id,
+              p_make:     mmcData?.make  ?? null,
+              p_model:    mmcData?.model ?? null,
+              p_color:    mmcData?.color ?? null,
+              p_type:     vehicleType ?? null,
+            });
+            if (bf.error) console.warn(`[pass-mmc] exit backfill failed for ${openSession.visitor_pass_id}: ${bf.error.message}`);
+          } catch (e) {
+            // Best-effort: must never break ingestion of the plate read.
+            console.warn(`[pass-mmc] exit backfill threw for ${openSession.visitor_pass_id}: ${e instanceof Error ? e.message : e}`);
+          }
+        }
+
         // Fire-and-forget tow-confirm for exit events too — an exit scan of a
         // partner tow truck's plate is the typical "tow complete" signal that
         // correlates back to open violations and sets tow_confirmed_at.
@@ -1432,20 +1544,26 @@ Deno.serve(async (req: Request) => {
 async function callPlateRecognizer(
   imageBytes: Uint8Array,
   cameraId: string,
-): Promise<{ ok: true; data: any; source: "sdk" | "cloud" } | { ok: false; status: number; bodyText: string }> {
+  mmcEnabled: boolean,
+  mmcBackoffMinutes: number,
+): Promise<{ ok: true; data: any; source: "sdk" | "cloud"; mmcRequested: boolean } | { ok: false; status: number; bodyText: string }> {
   // SDK takes priority when configured. The SDK Docker container exposes the
   // SAME /v1/plate-reader/ endpoint as the cloud API, so the request shape
   // is identical — only the host URL and auth differ.
   const usingSdk = !!PR_SDK_URL;
   if (!usingSdk && !PR_TOKEN) return { ok: false, status: 0, bodyText: "PLATE_RECOGNIZER_TOKEN missing (and PR_SDK_URL unset)" };
 
-  const fd = new FormData();
-  const imagePart = imageBytes.buffer.slice(
-    imageBytes.byteOffset,
-    imageBytes.byteOffset + imageBytes.byteLength,
-  ) as ArrayBuffer;
-  fd.append("upload", new Blob([imagePart], { type: "image/jpeg" }), "snap.jpg");
-  fd.append("camera_id", cameraId);
+  const buildForm = (withMmc: boolean): FormData => {
+    const fd = new FormData();
+    const imagePart = imageBytes.buffer.slice(
+      imageBytes.byteOffset,
+      imageBytes.byteOffset + imageBytes.byteLength,
+    ) as ArrayBuffer;
+    fd.append("upload", new Blob([imagePart], { type: "image/jpeg" }), "snap.jpg");
+    fd.append("camera_id", cameraId);
+    if (withMmc) fd.append("mmc", "true");
+    return fd;
+  };
 
   // Cloud API requires Authorization: Token <api_token>. The self-hosted SDK
   // validates its license on container startup, so per-request auth is
@@ -1457,23 +1575,46 @@ async function callPlateRecognizer(
   // the edge-function invocation until Supabase's 150s wall-clock kills
   // it and returns 500 to the camera — which then retries, queueing
   // more invocations. Matches the sidecar / weak-buffer PR call patterns.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 10_000);
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "POST", headers, body: fd, signal: ctrl.signal });
-  } catch (err) {
+  const doFetch = async (fd: FormData): Promise<
+    { ok: true; data: any } | { ok: false; status: number; bodyText: string }
+  > => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "POST", headers, body: fd, signal: ctrl.signal });
+    } catch (err) {
+      clearTimeout(timer);
+      const reason = (err as Error)?.name === "AbortError" ? "timeout" : ((err as Error)?.message ?? "fetch_failed");
+      return { ok: false, status: 0, bodyText: reason };
+    }
     clearTimeout(timer);
-    const reason = (err as Error)?.name === "AbortError" ? "timeout" : ((err as Error)?.message ?? "fetch_failed");
-    return { ok: false, status: 0, bodyText: reason };
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      return { ok: false, status: res.status, bodyText };
+    }
+    const data = await res.json();
+    return { ok: true, data };
+  };
+
+  const source: "sdk" | "cloud" = usingSdk ? "sdk" : "cloud";
+  const tryMmc = mmcEnabled && !isMmcBlocked();
+
+  if (tryMmc) {
+    const first = await doFetch(buildForm(true));
+    if (first.ok) return { ...first, source, mmcRequested: true };
+    // Non-200 on an mmc-augmented call. Apply status-specific backoff, then
+    // retry WITHOUT mmc so a read can never break on the mmc path.
+    handleMmcFailureStatus(first.status, mmcBackoffMinutes);
+    console.warn(`[callPlateRecognizer] mmc attempt returned ${first.status}; retrying without mmc (source=${source})`);
+    const retry = await doFetch(buildForm(false));
+    if (!retry.ok) return retry; // true PR outage — same behavior as today
+    return { ...retry, source, mmcRequested: false };
   }
-  clearTimeout(timer);
-  if (!res.ok) {
-    const bodyText = await res.text().catch(() => "");
-    return { ok: false, status: res.status, bodyText };
-  }
-  const data = await res.json();
-  return { ok: true, data, source: usingSdk ? "sdk" : "cloud" };
+
+  const attempt = await doFetch(buildForm(false));
+  if (!attempt.ok) return attempt;
+  return { ...attempt, source, mmcRequested: false };
 }
 
 // Call the OpenALPR sidecar (Railway-hosted Python service running OpenALPR
@@ -1625,6 +1766,11 @@ type PrResult = {
   score: number;
   vehicle?: { score?: number; type?: string; box?: unknown };
   box?: unknown;
+  model_make?: Array<{ make?: string; model?: string; score?: number }>;
+  color?: Array<{ color?: string; score?: number }>;
+  orientation?: Array<{ orientation?: string; score?: number }>;
+  _synthesized_from?: string;
+  _synthesized_raw_text?: string;
 };
 
 // Three-layer plausibility check that rejects PR's plate-like false

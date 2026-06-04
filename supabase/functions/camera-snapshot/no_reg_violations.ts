@@ -80,6 +80,9 @@ export async function insertViolation(db: SupabaseClient, args: {
   presence_strength: "brief" | "lingered";
   evidence: EvidenceItem[];
   weak_read_ids: string[];
+  vehicle_make?:  string | null;
+  vehicle_model?: string | null;
+  vehicle_color?: string | null;
 }): Promise<NoRegViolationRow> {
   const row = {
     property_id: args.property_id,
@@ -92,6 +95,9 @@ export async function insertViolation(db: SupabaseClient, args: {
     status: "pending" as const,
     evidence: args.evidence,
     weak_read_ids: args.weak_read_ids,
+    vehicle_make:  args.vehicle_make  ?? null,
+    vehicle_model: args.vehicle_model ?? null,
+    vehicle_color: args.vehicle_color ?? null,
   };
   const { data, error } = await db
     .from("no_registration_violations")

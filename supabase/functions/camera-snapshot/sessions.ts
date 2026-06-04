@@ -739,6 +739,11 @@ export type NewSessionInput = {
   backPlate?: string | null;
   normalizedBackPlate?: string | null;
   vehicleType: string | null;
+  vehicleMake?:             string | null;
+  vehicleModel?:            string | null;
+  vehicleMakeConfidence?:   number | null;
+  vehicleColor?:            string | null;
+  vehicleColorConfidence?:  number | null;
   entryCameraId: string;
   entryPlateEventId: string;
   state: "grace" | "registered" | "resident" | "expired";
@@ -760,6 +765,11 @@ export async function insertSession(
     back_plate: input.backPlate ?? null,
     normalized_back_plate: input.normalizedBackPlate ?? null,
     vehicle_type: input.vehicleType,
+    vehicle_make:             input.vehicleMake            ?? null,
+    vehicle_model:            input.vehicleModel           ?? null,
+    vehicle_make_confidence:  input.vehicleMakeConfidence  ?? null,
+    vehicle_color:            input.vehicleColor           ?? null,
+    vehicle_color_confidence: input.vehicleColorConfidence ?? null,
     entry_camera_id: input.entryCameraId,
     entry_plate_event_id: input.entryPlateEventId,
     entered_at: input.enteredAt.toISOString(),

@@ -28,6 +28,7 @@ import {
   LINGER_MS,
   EXIT_GAP_MS,
 } from "./no_reg_violations.ts";
+import { extractMmc, isMmcBlocked, handleMmcFailureStatus, type PrMmcData } from "./mmc.ts";
 
 // Plate-shape gate for no-registration violations. OCR off the side/back of a
 // truck routinely returns trailer brand names (WABASH, FREIGHTLINER), decals,
@@ -93,6 +94,11 @@ type FlushArgs = {
   now: Date;
   prToken: string;
   prApiUrl: string;
+  // Optional: when absent, MMC is disabled for this flush. Making these
+  // optional means a stale cron-sessions-sweep caller degrades to no-MMC
+  // rather than throwing a type error at runtime.
+  mmcEnabled?: boolean;
+  mmcBackoffMinutes?: number;
   // Resolve the URL or raw bytes for PR. Returning null skips PR (we use
   // the sidecar plate directly). The caller controls how the snapshot is
   // produced — we just pass the image_url back from the chosen row.
@@ -190,34 +196,79 @@ async function callPrViaUrl(
   imageUrl: string,
   token: string,
   apiUrl: string,
-): Promise<{ plate: string; confidence: number | null } | null> {
-  try {
+  mmcEnabled = false,
+  mmcBackoffMinutes = 60,
+): Promise<{ plate: string; confidence: number | null; mmc?: PrMmcData; mmcRequested: boolean } | null> {
+  const buildForm = (withMmc: boolean): FormData => {
     const form = new FormData();
     form.append("upload_url", imageUrl);
     form.append("regions", "us");
+    if (withMmc) form.append("mmc", "true");
+    return form;
+  };
+
+  const doCall = async (form: FormData): Promise<
+    { ok: true; body: unknown } | { ok: false; status: number }
+  > => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    const res = await fetch(apiUrl, {
-      method: "POST",
-      headers: { Authorization: `Token ${token}` },
-      body: form,
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const body = await res.json();
-    const results = (body?.results ?? []) as Array<{ plate?: string; score?: number }>;
-    if (results.length === 0) return null;
-    const best = results.reduce((a, b) => (Number(b.score ?? 0) > Number(a.score ?? 0) ? b : a));
-    if (!best.plate) return null;
-    return { plate: best.plate, confidence: typeof best.score === "number" ? best.score : null };
-  } catch (err) {
-    // Surface timeouts (AbortError after 8s) + network failures + parse
-    // errors so we can tell "PR returned no plate" (legitimate) from
-    // "PR is unreachable" (operational issue) without trawling the DB.
-    console.warn(`callPrViaUrl failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
-    return null;
+    try {
+      const res = await fetch(apiUrl, {
+        method: "POST",
+        headers: { Authorization: `Token ${token}` },
+        body: form,
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (!res.ok) {
+        console.warn(`callPrViaUrl: status ${res.status}`);
+        return { ok: false, status: res.status };
+      }
+      return { ok: true, body: await res.json() };
+    } catch (err) {
+      clearTimeout(timer);
+      // Surface timeouts (AbortError after 8s) + network failures + parse
+      // errors so we can tell "PR returned no plate" (legitimate) from
+      // "PR is unreachable" (operational issue) without trawling the DB.
+      console.warn(`callPrViaUrl failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
+      return { ok: false, status: 0 };
+    }
+  };
+
+  const tryMmc = mmcEnabled && !isMmcBlocked();
+  let body: unknown;
+  let mmcRequested = false;
+
+  if (tryMmc) {
+    const first = await doCall(buildForm(true));
+    if (!first.ok) {
+      handleMmcFailureStatus(first.status, mmcBackoffMinutes);
+      const retry = await doCall(buildForm(false));
+      if (!retry.ok) return null;
+      body = retry.body;
+      mmcRequested = false;
+    } else {
+      body = first.body;
+      mmcRequested = true;
+    }
+  } else {
+    const attempt = await doCall(buildForm(false));
+    if (!attempt.ok) return null;
+    body = attempt.body;
   }
+
+  const results = ((body as Record<string, unknown>)?.results ?? []) as Array<Record<string, unknown>>;
+  if (results.length === 0) return null;
+  const best = results.reduce((a, b) =>
+    Number(b.score ?? 0) > Number(a.score ?? 0) ? b : a,
+  );
+  if (!best.plate) return null;
+  return {
+    plate:        best.plate as string,
+    confidence:   typeof best.score === "number" ? (best.score as number) : null,
+    mmc:          mmcRequested ? extractMmc(best) : undefined,
+    mmcRequested,
+  };
 }
 
 async function findActiveUnexitedPassFuzzy(
@@ -326,6 +377,8 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
   let prPlateRaw: string | null = null;
   let prConfidence: number | null = null;
   let prFrameWinner = best;
+  let prMmcData: PrMmcData | undefined;
+  let prMmcRequested = false;
   if (prToken && prApiUrl) {
     const framesToTry: typeof claimed = [];
     if (best.image_url) framesToTry.push(best);
@@ -337,9 +390,19 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
         .slice(0, 2);
       framesToTry.push(...additional);
     }
+    const flushMmcEnabled = args.mmcEnabled ?? false;
+    const flushMmcBackoff = args.mmcBackoffMinutes ?? 60;
+    // Track whether entitlement failed in this flush so later frames skip the mmc attempt.
+    let mmcBlockedThisFlush = false;
     for (const frame of framesToTry) {
-      const pr = await callPrViaUrl(frame.image_url!, prToken, prApiUrl);
+      const effectiveMmc = flushMmcEnabled && !mmcBlockedThisFlush;
+      const pr = await callPrViaUrl(frame.image_url!, prToken, prApiUrl, effectiveMmc, flushMmcBackoff);
       if (!pr) continue;
+      // If this call hit an entitlement failure and fell back, disable mmc for
+      // remaining frames so we don't make doomed mmc attempts.
+      if (pr.mmcRequested === false && effectiveMmc) {
+        mmcBlockedThisFlush = true;
+      }
       const norm = normalizePlate(pr.plate);
       if (norm.length < 4) continue;
       plateForMatch = norm;
@@ -347,6 +410,8 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
       prPlateRaw = pr.plate;
       prConfidence = pr.confidence;
       prFrameWinner = frame;
+      prMmcData = pr.mmc;
+      prMmcRequested = pr.mmcRequested;
       break;
     }
   }
@@ -460,6 +525,9 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
       presence_strength: burst_span_ms >= LINGER_MS ? "lingered" : "brief",
       evidence: bundleEvidence(evidenceRows),
       weak_read_ids: claimed.map((r) => r.id),
+      vehicle_make:  prMmcData?.make  ?? null,
+      vehicle_model: prMmcData?.model ?? null,
+      vehicle_color: prMmcData?.color ?? null,
     });
     return {
       outcome: "no_registration_recorded",
@@ -479,6 +547,11 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
     plate_text: (prUsed && prPlateRaw && !tow ? prPlateRaw : chosenFrame.raw_plate).toUpperCase(),
     normalized_plate: plateForMatch,
     image_url: chosenFrame.image_url,
+    vehicle_make:             prMmcData?.make        ?? null,
+    vehicle_model:            prMmcData?.model       ?? null,
+    vehicle_make_confidence:  prMmcData?.make_score  ?? null,
+    vehicle_color:            prMmcData?.color       ?? null,
+    vehicle_color_confidence: prMmcData?.color_score ?? null,
     raw_data: {
       flow: tow ? "partner_truck_sighting" : "truck_plaza_exit",
       ocr_source: prUsed && !tow ? "pr_via_weak_buffer" : "sidecar_weak_buffer",
@@ -494,6 +567,9 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
       pr_confidence: prConfidence,
       pr_rescued_from_non_best_frame: !tow && prUsed && prFrameWinner.id !== best.id,
       tow_matched_on_non_best_frame: tow ? chosenFrame.id !== best.id : false,
+      _pr_mmc_requested: prMmcRequested,
+      _mmc: prMmcData ?? null,
+      _mmc_source: prMmcData ? "pr_cloud" : null,
     },
     match_status: matchStatus,
     confidence: tow ? chosenFrame.confidence : (prUsed ? prConfidence : chosenFrame.confidence),

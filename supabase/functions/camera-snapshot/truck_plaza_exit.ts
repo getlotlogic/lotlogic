@@ -23,6 +23,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { plateSimilar } from "./sessions.ts";
 import { insertWeakRead, findStaleGroups, flushGroup } from "./weak_plate_reads.ts";
+import { extractMmc, isMmcBlocked, handleMmcFailureStatus, type PrMmcData } from "./mmc.ts";
 
 export type CameraRow = {
   id: string;
@@ -64,7 +65,7 @@ export type TruckPlazaResult =
   | { outcome: "partner_truck_sighting"; partner_id: string; plate_event_id: string; sighting_id: string; plate: string; confidence: number }
   | { outcome: "buffered"; weak_read_id: string; opportunistic_flushed: number };
 
-type ResolvedPlate = { raw: string; normalized: string; confidence: number | null; source: "onboard" | "pr" };
+type ResolvedPlate = { raw: string; normalized: string; confidence: number | null; source: "onboard" | "pr"; mmc?: PrMmcData; mmcRequested?: boolean };
 
 // Sidecar threshold. Below this confidence we drop the frame outright;
 // at-or-above buffers into weak_plate_reads for best-of-N selection in
@@ -337,32 +338,76 @@ async function callPlateRecognizerCloud(
   token: string,
   apiUrl: string,
   bytes: Uint8Array,
-): Promise<{ plate: string; confidence: number } | null> {
+  mmcEnabled = false,
+  mmcBackoffMinutes = 60,
+): Promise<{ plate: string; confidence: number; mmc?: PrMmcData; mmcRequested: boolean } | null> {
   if (!token) return null;
-  try {
+
+  const buildForm = (withMmc: boolean): FormData => {
     const form = new FormData();
     form.append("upload", new Blob([bytes as BlobPart], { type: "image/jpeg" }), "snapshot.jpg");
     form.append("regions", "us");
+    if (withMmc) form.append("mmc", "true");
+    return form;
+  };
+
+  const doCall = async (form: FormData): Promise<
+    { ok: true; body: unknown } | { ok: false; status: number }
+  > => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    const res = await fetch(apiUrl, {
-      method: "POST",
-      headers: { Authorization: `Token ${token}` },
-      body: form,
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const body = await res.json();
-    const results = (body?.results ?? []) as Array<{ plate?: string; score?: number }>;
-    if (results.length === 0) return null;
-    const best = results.reduce((a, b) => (Number(b.score ?? 0) > Number(a.score ?? 0) ? b : a));
-    if (!best.plate || typeof best.score !== "number") return null;
-    return { plate: best.plate, confidence: best.score };
-  } catch (err) {
-    console.warn(`callPlateRecognizerCloud failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
-    return null;
+    try {
+      const res = await fetch(apiUrl, {
+        method: "POST",
+        headers: { Authorization: `Token ${token}` },
+        body: form,
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (!res.ok) return { ok: false, status: res.status };
+      return { ok: true, body: await res.json() };
+    } catch (err) {
+      clearTimeout(timer);
+      console.warn(`callPlateRecognizerCloud failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
+      return { ok: false, status: 0 };
+    }
+  };
+
+  const tryMmc = mmcEnabled && !isMmcBlocked();
+  let body: unknown;
+  let mmcRequested = false;
+
+  if (tryMmc) {
+    const first = await doCall(buildForm(true));
+    if (!first.ok) {
+      handleMmcFailureStatus(first.status, mmcBackoffMinutes);
+      console.warn(`callPlateRecognizerCloud: mmc ${first.status}; retrying without mmc`);
+      const retry = await doCall(buildForm(false));
+      if (!retry.ok) return null;
+      body = retry.body;
+      mmcRequested = false;
+    } else {
+      body = first.body;
+      mmcRequested = true;
+    }
+  } else {
+    const attempt = await doCall(buildForm(false));
+    if (!attempt.ok) return null;
+    body = attempt.body;
   }
+
+  const results = ((body as Record<string, unknown>)?.results ?? []) as Array<Record<string, unknown>>;
+  if (results.length === 0) return null;
+  const best = results.reduce((a, b) =>
+    Number(b.score ?? 0) > Number(a.score ?? 0) ? b : a,
+  );
+  if (!best.plate || typeof best.score !== "number") return null;
+  return {
+    plate:        best.plate as string,
+    confidence:   best.score as number,
+    mmc:          mmcRequested ? extractMmc(best) : undefined,
+    mmcRequested,
+  };
 }
 
 export async function handleTruckPlazaExit(args: {
@@ -391,6 +436,10 @@ export async function handleTruckPlazaExit(args: {
   // the partner gets a "vehicle already gone — stand down" follow-up
   // instead of rolling a truck to an empty space.
   notifyLeftBeforeTow?: (violationId: string) => void;
+  // MMC config threaded from index.ts (this module never reads Deno.env for
+  // MMC — the boot log in index.ts stays authoritative).
+  mmcEnabled?: boolean;
+  mmcBackoffMinutes?: number;
 }): Promise<TruckPlazaResult> {
   const { db, camera, payload, now } = args;
   const onboard = payload.onboardLpr;
@@ -413,6 +462,10 @@ export async function handleTruckPlazaExit(args: {
   //     and the burst-flush delay swallowed plates we'd rather see
   //     immediately. Configured per-MAC via SKIP_SIDECAR_MACS in index.ts.
   if (!resolved && args.bypassSidecarGate) {
+    // Do NOT pass mmcEnabled here: this call fires on frames that may return no
+    // plate at all (the entire purpose is to check). Sending mmc=true on blank
+    // frames doubles the retry cost when the plan isn't entitled. MMC is applied
+    // post-match, below (low-conf rescue path) where a plate is confirmed.
     const prResult = await callPlateRecognizerCloud(args.prToken, args.prApiUrl, payload.bytes);
     if (!prResult || !prResult.plate) {
       return { outcome: "dropped", reason: "pr_empty" };
@@ -421,7 +474,7 @@ export async function handleTruckPlazaExit(args: {
     if (prNorm.length < 4) {
       return { outcome: "dropped", reason: "pr_plate_too_short" };
     }
-    resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr" };
+    resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr", mmc: undefined, mmcRequested: false };
     // Fall through to section 3 (tow truck + pass matching).
   }
 
@@ -441,7 +494,7 @@ export async function handleTruckPlazaExit(args: {
       let flushed = 0;
       for (const s of stale) {
         if (s.property_id === camera.property_id && s.group_key === myGroup) {
-          const r = await flushGroup({ db, propertyId: s.property_id, groupKey: s.group_key, now, prToken: args.prToken, prApiUrl: args.prApiUrl });
+          const r = await flushGroup({ db, propertyId: s.property_id, groupKey: s.group_key, now, prToken: args.prToken, prApiUrl: args.prApiUrl, mmcEnabled: args.mmcEnabled, mmcBackoffMinutes: args.mmcBackoffMinutes });
           if (r.outcome !== "no_op") flushed++;
         }
       }
@@ -470,7 +523,7 @@ export async function handleTruckPlazaExit(args: {
     let flushed = 0;
     for (const s of stale) {
       if (s.property_id === camera.property_id && s.group_key === groupKey) {
-        const r = await flushGroup({ db, propertyId: s.property_id, groupKey: s.group_key, now, prToken: args.prToken, prApiUrl: args.prApiUrl });
+        const r = await flushGroup({ db, propertyId: s.property_id, groupKey: s.group_key, now, prToken: args.prToken, prApiUrl: args.prApiUrl, mmcEnabled: args.mmcEnabled, mmcBackoffMinutes: args.mmcBackoffMinutes });
         if (r.outcome !== "no_op") flushed++;
       }
     }
@@ -502,11 +555,13 @@ export async function handleTruckPlazaExit(args: {
       args.prToken,
       args.prApiUrl,
       payload.bytes,
+      args.mmcEnabled ?? false,
+      args.mmcBackoffMinutes ?? 60,
     );
     if (prResult && prResult.plate && prResult.confidence >= PR_RESOLVE_FLOOR) {
       const prNorm = normalizePlate(prResult.plate);
       if (prNorm.length >= 4) {
-        resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr" };
+        resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr", mmc: prResult.mmc, mmcRequested: prResult.mmcRequested };
       } else {
         return { outcome: "dropped", reason: `low_conf_pr_short_${resolved.confidence.toFixed(2)}` };
       }
@@ -610,12 +665,32 @@ export async function handleTruckPlazaExit(args: {
     ? (overstay ? "overstay" : (fuzzyHit ? "visitor_pass_fuzzy" : "visitor_pass"))
     : "unmatched";
 
+  // MMC source reconciliation:
+  // - source === "pr": PR cloud analyzed this frame and may have returned MMC.
+  // - source === "onboard": TS4467 firmware. Use onboard vehicleBrand/vehicleColor.
+  //   No confidence scores available from onboard LPR.
+  const insertMmc = resolved.source === "pr" ? resolved.mmc : undefined;
+  const vehicleMakeInsert  = insertMmc?.make  ?? onboard?.vehicleBrand  ?? null;
+  const vehicleModelInsert = insertMmc?.model ?? null; // onboard has no model field
+  const vehicleColorInsert = insertMmc?.color ?? onboard?.vehicleColor  ?? null;
+  const vehicleMakeConf    = insertMmc ? (insertMmc.make_score  ?? null) : null;
+  const vehicleColorConf   = insertMmc ? (insertMmc.color_score ?? null) : null;
+  // _mmc_source in raw_data distinguishes PR MMC, onboard LPR, and neither.
+  const mmcSource = insertMmc
+    ? "pr_cloud"
+    : (onboard?.vehicleBrand || onboard?.vehicleColor ? "onboard_lpr" : null);
+
   const evIns = await db.from("plate_events").insert({
     property_id: camera.property_id,
     camera_id: camera.id,
     plate_text: resolved.raw.toUpperCase(),
     normalized_plate: resolved.normalized,
     image_url: imageUrl,
+    vehicle_make:             vehicleMakeInsert,
+    vehicle_model:            vehicleModelInsert,
+    vehicle_make_confidence:  vehicleMakeConf,
+    vehicle_color:            vehicleColorInsert,
+    vehicle_color_confidence: vehicleColorConf,
     raw_data: {
       onboardLpr: onboard,
       flow: tow ? "partner_truck_sighting" : "truck_plaza_exit",
@@ -623,6 +698,9 @@ export async function handleTruckPlazaExit(args: {
       direction: onboard?.direction ?? null,
       pass_id: pass?.id ?? null,
       pass_match_fuzzy: fuzzyHit,
+      _pr_mmc_requested: resolved.mmcRequested ?? false,
+      _mmc: insertMmc ?? null,
+      _mmc_source: mmcSource,
       // Audit: was the pass match found via cross-camera unification?
       // If yes, this stores the other camera's plate + delta so the
       // dashboard can show "matched via other camera read X seconds away".
