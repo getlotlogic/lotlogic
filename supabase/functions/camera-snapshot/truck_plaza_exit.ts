@@ -462,10 +462,9 @@ export async function handleTruckPlazaExit(args: {
   //     and the burst-flush delay swallowed plates we'd rather see
   //     immediately. Configured per-MAC via SKIP_SIDECAR_MACS in index.ts.
   if (!resolved && args.bypassSidecarGate) {
-    // Request MMC when enabled. The PR plan is entitled, so there's no 402/403
-    // retry penalty, and these are exactly the truck-plaza reads we want make/
-    // model/color on. A blank frame simply returns no plate and is dropped below.
-    const prResult = await callPlateRecognizerCloud(args.prToken, args.prApiUrl, payload.bytes, args.mmcEnabled, args.mmcBackoffMinutes);
+    // Do NOT request MMC here — this call fires on frames that may return no
+    // plate at all (the purpose is to check). MMC was reverted per request.
+    const prResult = await callPlateRecognizerCloud(args.prToken, args.prApiUrl, payload.bytes);
     if (!prResult || !prResult.plate) {
       return { outcome: "dropped", reason: "pr_empty" };
     }
@@ -473,7 +472,7 @@ export async function handleTruckPlazaExit(args: {
     if (prNorm.length < 4) {
       return { outcome: "dropped", reason: "pr_plate_too_short" };
     }
-    resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr", mmc: prResult.mmc, mmcRequested: prResult.mmcRequested };
+    resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr", mmc: undefined, mmcRequested: false };
     // Fall through to section 3 (tow truck + pass matching).
   }
 
