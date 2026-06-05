@@ -3264,6 +3264,41 @@ const db = {
     }
     return [];
   },
+  // ─────────────────────────────────────────────────────────────────────────
+  // THE SINGLE SOURCE OF TRUTH for "who is currently registered."
+  // Every surface that shows registered passes (the Lots "Registered" count,
+  // the Registered drill-down, and the Truck Parking Log's live roster) calls
+  // THIS — one query, one definition — so they can never disagree again.
+  //
+  // The predicate is the canonical one, identical to the backend contract:
+  //   status = 'active'  AND  exited_at IS NULL  AND  (valid_until IS NULL OR valid_until > now)
+  // No date window, no pagination cap that could hide a pass. RLS scopes
+  // visitor_passes to the property's owner AND tow partner, so the same query
+  // is correct for every role. Throws on error so callers can keep the last
+  // known roster on screen rather than blanking.
+  // ─────────────────────────────────────────────────────────────────────────
+  async getActiveRoster(propertyId) {
+    if (!supabase || !propertyId) return [];
+    // Plain, robust query: status='active' AND exited_at IS NULL. The result is
+    // small (only trucks currently on the lot), so we apply the in-window check
+    // client-side rather than depending on fragile PostgREST or() syntax for
+    // the valid_until-null case. Throws on error so the caller keeps the last
+    // known roster instead of blanking.
+    const { data, error } = await supabase
+      .from('visitor_passes')
+      .select('*, first_seen_event:plate_events!visitor_passes_first_seen_event_id_fkey(image_url, created_at)')
+      .eq('property_id', propertyId)
+      .eq('status', 'active')
+      .is('exited_at', null)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error) throw error;
+    const now = Date.now();
+    return (data || [])
+      // Canonical window predicate: no expiry, or expiry still ahead of now.
+      .filter(p => !p.valid_until || new Date(p.valid_until).getTime() > now)
+      .map(p => ({ ...p, first_seen_image_url: p.first_seen_event?.image_url || null }));
+  },
   async countVisitorPasses(propertyId) {
     if (supabase) {
       const { count, error } = await supabase
@@ -3680,6 +3715,39 @@ function useOnlineStatus() {
 //
 // Dependencies go in `deps` — treat it like the deps array on useEffect.
 // Because deps is dynamic we silence exhaustive-deps at the call site.
+// THE shared hook for "who is currently registered." Wraps db.getActiveRoster
+// (the single source of truth) with realtime updates + a 60s safety poll, and
+// keeps the last good roster on screen if a refresh errors. Used by the Lots
+// "Registered" count, the Registered drill-down, and the Truck Parking Log so
+// all three render identical data. Returns { roster, loading, error, refresh }.
+function useActiveRoster(propertyId) {
+  const [roster, setRoster] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const refresh = useCallback(() => {
+    if (!propertyId) return;
+    db.getActiveRoster(propertyId)
+      .then(r => { setRoster(r || []); setError(null); })
+      // Keep the previous roster — never blank on a transient error.
+      .catch(e => { setError(e?.message || 'Could not refresh roster'); })
+      .finally(() => setLoading(false));
+  }, [propertyId]);
+  useEffect(() => {
+    if (!propertyId) return;
+    setLoading(true);
+    refresh();
+    const poll = setInterval(refresh, 60000);
+    let ch = null;
+    if (supabase) {
+      ch = supabase.channel('active-roster-' + propertyId + '-' + Math.random().toString(36).slice(2, 8))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'visitor_passes', filter: 'property_id=eq.' + propertyId }, refresh)
+        .subscribe();
+    }
+    return () => { clearInterval(poll); if (ch) { try { supabase.removeChannel(ch); } catch {} } };
+  }, [propertyId, refresh]);
+  return { roster, loading, error, refresh };
+}
+
 function useIntervalFetch(fn, ms, deps) {
   useEffect(() => {
     let cancelled = false;
@@ -8964,7 +9032,13 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   // ActivePassTracker uses) and merge the union into the search pool.
   // This means: if a pass appears in Active + Violations, it's
   // guaranteed to appear in Parking Log search.
-  const [directPasses, setDirectPasses] = useState([]);
+  // THE single source of truth for the registered roster — shared with the
+  // Registered drill-down and the Lots "Registered" count via useActiveRoster,
+  // so all three always show identical data. Realtime updates, a 60s safety
+  // poll, and keep-last-on-error all live inside the hook. The backend parking
+  // log (below) is used ONLY for history/search and is purely additive — it can
+  // never subtract from this roster.
+  const { roster: activeRoster, error: rosterError, refresh: refreshRoster } = useActiveRoster(propertyId);
   // Backend-side filters: date range + status. Changes require an Apply because
   // they refetch from the server. Search text is separate state below and is
   // pure client-side (live filter on already-fetched rows).
@@ -9190,31 +9264,15 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   }
 
 
-  // Initial load + on filter / page changes via `load` identity.
-  useIntervalFetch(load, 0, [load]);
+  // Initial load + on filter / page changes via `load` identity. The 60s poll
+  // is a safety net: realtime delivers updates instantly, but if the realtime
+  // socket silently dies (laptop sleep, network switch, supabase-js drop) the
+  // poll guarantees the roster still self-heals and never freezes stale.
+  useIntervalFetch(load, 60000, [load]);
 
-  // PARITY FETCH — direct Supabase, no date filter, same query the
-  // ActivePassTracker uses. The backend's parking-log endpoint has
-  // historically had silent filters that excluded active passes;
-  // pulling from Supabase too guarantees the search has at least
-  // everything the Active list does. Realtime keeps it fresh.
-  useEffect(() => {
-    if (!propertyId) return;
-    let cancelled = false;
-    const refresh = () => {
-      db.getVisitorPasses(propertyId, { limit: 500 })
-        .then(r => { if (!cancelled) setDirectPasses(r || []); })
-        .catch(() => { /* non-fatal — backend rows still drive the log */ });
-    };
-    refresh();
-    if (supabase) {
-      const ch = supabase.channel('parking-log-direct-' + propertyId + '-' + Math.random().toString(36).slice(2, 8))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'visitor_passes', filter: 'property_id=eq.' + propertyId }, refresh)
-        .subscribe();
-      return () => { cancelled = true; try { supabase.removeChannel(ch); } catch {} };
-    }
-    return () => { cancelled = true; };
-  }, [propertyId]);
+  // (The authoritative roster + its realtime/poll now live in useActiveRoster
+  // above — the old parallel direct-pull was deleted as part of collapsing
+  // everything onto one source of truth.)
 
   // Realtime subscription. New passes inserted (and exit/overstay updates)
   // refresh the log silently — filter + pagination state are preserved
@@ -9367,25 +9425,51 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
     if (days === 1) return 'Yesterday';
     return `${days} days ago`;
   };
-  // Union the backend log (rows) with the direct Supabase pull
-  // (directPasses) so the search has everything the Active list does,
-  // even if the backend silently filters something out. Dedupe by id;
-  // backend wins on conflict because it carries the joined fields the
-  // direct query doesn't.
+  // Union the authoritative live roster (the single source of truth) with the
+  // backend history log. Roster first so every currently-registered pass is
+  // present; backend rows overwrite on id so they win where they carry richer
+  // joined fields. History is additive only — it can never remove a roster pass.
   const allRowsMap = new Map();
-  for (const r of directPasses) allRowsMap.set(r.id, r);
-  for (const r of rows) allRowsMap.set(r.id, r);
+  for (const r of activeRoster) allRowsMap.set(r.id, r);
+  for (const r of rows) allRowsMap.set(r.id, r);   // backend wins: carries joined fields
   const unionRows = Array.from(allRowsMap.values());
 
-  // Live filter: when there's a search query, narrow to matches across
-  // the union. Each entry carries the `matched` field list so we can
-  // show "matched: name" chips beside the result. When there's no
-  // search, show the backend-fetched rows only (respects the date
-  // range filter — adding the direct pull would dilute the view).
+  // "Registered right now" — mirrors the backend GET /{lot_id}/registered
+  // contract exactly: active status, not yet exited, still inside its window.
+  // Anything matching this MUST appear in the default view regardless of the
+  // date filter, so a truck that just registered can never be missing.
+  const isCurrentlyRegistered = (r) =>
+    (r.status || 'active') === 'active' &&
+    !r.exited_at &&
+    (!r.valid_until || new Date(r.valid_until).getTime() > Date.now());
+
+  // Default (no search) view = the COMPLETE live roster of currently-registered
+  // vehicles (authoritative, date-window-independent) followed by the recent
+  // historical rows from the windowed backend log (violations / cancelled /
+  // auto-cleared) for operational context. This is the fix for passes silently
+  // dropping off the active list: the roster is built from the union of the
+  // authoritative active fetch + direct pull, never from the windowed log alone.
+  const defaultMatches = (() => {
+    const seen = new Set();
+    const roster = [];
+    for (const r of unionRows) {
+      if (isCurrentlyRegistered(r)) { roster.push({ row: r, matched: [] }); seen.add(r.id); }
+    }
+    const history = [];
+    for (const r of rows) {
+      if (!seen.has(r.id)) history.push({ row: r, matched: [] });
+    }
+    return roster.concat(history);
+  })();
+
+  // Live filter: when there's a search query, narrow to matches across the
+  // full union. Each entry carries the `matched` field list so we can show
+  // "matched: name" chips beside the result. When there's no search, show the
+  // authoritative roster + windowed history (defaultMatches).
   const visitorMatches = hasSearch
     ? unionRows.map(r => ({ row: r, matched: searchMatches(r, trimmedSearch) }))
                .filter(x => x.matched.length > 0)
-    : rows.map(r => ({ row: r, matched: [] }));
+    : defaultMatches;
 
   // Counts by derived status — drives the per-status pills above the grid.
   // Always derived from the currently-displayed visitor passes so it stays
@@ -9423,7 +9507,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   // accounts for both search filter AND the pill drill-down.
   const displayedTotal = pillStatusFilter
     ? pillFilteredMatches.length
-    : (hasSearch ? visitorMatches.length : (total || rows.length));
+    : (hasSearch ? visitorMatches.length : defaultMatches.length);
 
   // Pretty labels for the "matched: X" chip on each result.
   const matchedFieldLabel = {
@@ -9507,10 +9591,20 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
           next to the total count (owner desktop only — operators on phones
           don't export from the field). */}
 
-      {err && <div style={{padding:12,background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',fontSize:13}}>{err}</div>}
+      {/* Non-blocking refresh error. The roster below is sourced independently
+          from Supabase, so a backend-log hiccup must NEVER blank the view: we
+          show a quiet amber notice + manual retry and KEEP the last known
+          roster on screen. It auto-recovers on the next 60s poll. */}
+      {(err || rosterError) && (
+        <div style={{padding:'10px 12px',background:'rgba(245,158,11,.1)',border:'1px solid rgba(245,158,11,.35)',borderRadius:8,color:'var(--text-primary)',fontSize:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <span>⚠️ Couldn't refresh from the server — showing the last known roster. Retrying automatically…</span>
+          <button type="button" onClick={() => { load(); refreshRoster(); }} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:6,border:'1px solid var(--border)',background:'transparent',color:'var(--text-primary)',cursor:'pointer',fontFamily:'inherit'}}>Retry now</button>
+        </div>
+      )}
 
-      {/* ── Header summary row ────────────────────────────────────────── */}
-      {!err && (
+      {/* ── Header summary row (always rendered — NEVER gated on error, so the
+          roster + counts stay visible through a backend blip) ───────────── */}
+      {(
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <div style={{display:'flex',gap:14,alignItems:'baseline',flexWrap:'wrap'}}>
             <div style={{fontSize:22,fontWeight:800,color:'var(--text-primary)',letterSpacing:'-.01em',display:'flex',alignItems:'baseline',gap:6}}>
@@ -9605,18 +9699,20 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
       )}
 
       {/* ── Visitor-pass results ──────────────────────────────────────── */}
-      {loading && rows.length === 0 ? (
+      {loading && sortedMatches.length === 0 ? (
         <div style={{padding:40,textAlign:'center',color:'var(--text-muted)',fontSize:13,background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>Loading…</div>
       ) : sortedMatches.length === 0 ? (
         <div style={{padding:40,textAlign:'center',background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>
           <div style={{width:48,height:48,borderRadius:12,background:'rgba(96,165,250,.1)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px',fontSize:22}}>📋</div>
           <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>
-            {hasSearch ? `No matches for "${trimmedSearch}"` : 'No passes for these filters'}
+            {hasSearch ? `No matches for "${trimmedSearch}"` : ((err || rosterError) ? "Couldn't load the roster" : 'No passes for these filters')}
           </div>
           <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4,maxWidth:480,margin:'4px auto 0'}}>
             {hasSearch
               ? <>Try a shorter chunk of the plate, just the driver's first name, or the company. Phone numbers also work.</>
-              : <>Try widening the date range or clearing the status filter.</>}
+              : ((err || rosterError)
+                  ? <>Connection issue — the list refreshes automatically every minute. Tap “Retry now” above if it persists.</>
+                  : <>Try widening the date range or clearing the status filter.</>)}
           </div>
           {hasSearch && (
             <button
@@ -11100,32 +11196,27 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
 
 
 // ── RegisteredDrill — Active parking passes drill-down ───────────────────────
-// Lists active parking passes for a property from GET /lots/<id>/registered.
-// Shows plate, holder name, duration info (no "Permanent"/"Temporary" labels),
-// space number if present, and a green ACTIVE indicator.
+// Lists currently-registered parking passes from the shared useActiveRoster
+// source (same data as the Truck Parking Log roster + the Lots "Registered"
+// count). Shows plate, holder name, duration info, parking spot if present,
+// and a green ACTIVE indicator.
 function RegisteredDrill({ propertyId, propertyName, onBack }) {
   const { addToast } = useToast();
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Single source of truth — identical data to the Truck Parking Log roster and
+  // the Lots "Registered" count. Realtime + 60s poll + keep-last-on-error are
+  // all handled by the shared hook, so this screen can never disagree with the
+  // others. Aliased to the names the rest of this component already uses.
+  const { roster: rows, loading, error: err, refresh: load } = useActiveRoster(propertyId);
   const [confirmId, setConfirmId] = useState(null);
   const [acting, setActing] = useState(null);
   const nowTick = useNowTick(60000);
 
-  useEffect(() => {
-    if (!propertyId) return;
-    setLoading(true);
-    apiFetch(`/lots/${propertyId}/registered`)
-      .then(data => { setRows(Array.isArray(data) ? data : []); })
-      .catch(() => { setRows([]); })
-      .finally(() => { setLoading(false); });
-  }, [propertyId]);
-
-  // Compute human-readable pass duration without "Permanent"/"Temporary" labels.
-  // API returns pass_type 'Permanent' | 'Temporary' — we intentionally ignore it
-  // and derive display text from the expiry timestamp only.
+  // Compute human-readable pass duration. Rows are raw visitor_passes, so the
+  // expiry is valid_until (expires_at kept as a fallback for safety).
   function passExpiryLabel(row) {
-    if (!row.expires_at) return 'No expiry';
-    const ms = new Date(row.expires_at) - Date.now();
+    const expiry = row.valid_until || row.expires_at;
+    if (!expiry) return 'No expiry';
+    const ms = new Date(expiry) - Date.now();
     if (ms <= 0) return 'Expired';
     const totalMins = Math.ceil(ms / 60000);
     if (totalMins < 60) return `Expires in ${totalMins}m`;
@@ -11137,17 +11228,16 @@ function RegisteredDrill({ propertyId, propertyName, onBack }) {
   async function removeRow(row) {
     setActing(row.id);
     try {
-      // Temporary → visitor_passes; Permanent → resident_plates. Both soft-cancel.
-      const path = row.pass_type === 'Temporary'
-        ? `/visitor_passes/${row.id}/cancel`
-        : `/resident_plates/${row.id}/cancel`;
-      await apiFetch(path, {
+      // The roster is active visitor_passes only, so cancel always soft-cancels
+      // the visitor pass. The shared hook re-pulls via realtime + the load()
+      // below, so the row drops from every surface at once.
+      await apiFetch(`/visitor_passes/${row.id}/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'operator removed via dashboard' }),
       });
-      setRows(prev => prev.filter(r => r.id !== row.id));
       addToast('Parking pass removed', 'success');
+      load();
     } catch (e) {
       addToast('Remove failed: ' + (e?.message || ''), 'error');
     } finally {
@@ -11164,20 +11254,29 @@ function RegisteredDrill({ propertyId, propertyName, onBack }) {
           <button className="back" onClick={onBack}>‹ Back</button>
         </header>
 
+        {/* Non-blocking refresh error — keep whatever roster we last had on
+            screen and offer a retry, never a misleading empty state. */}
+        {err && (
+          <div style={{margin:'0 0 10px',padding:'10px 12px',background:'rgba(245,158,11,.1)',border:'1px solid rgba(245,158,11,.35)',borderRadius:8,color:'var(--ink-1-paper, var(--text-primary))',fontSize:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+            <span>⚠️ Couldn't refresh — showing the last known roster.</span>
+            <button type="button" onClick={() => load()} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:6,border:'1px solid var(--border)',background:'transparent',color:'inherit',cursor:'pointer',fontFamily:'inherit'}}>Retry now</button>
+          </div>
+        )}
+
         {loading ? (
           <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>Loading…</div>
         ) : rows.length === 0 ? (
-          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>No active parking passes</div>
+          <div style={{padding:'24px 16px',textAlign:'center',color:'var(--ink-3-paper)',fontSize:14}}>{err ? "Couldn't load the roster — tap Retry above." : 'No active parking passes'}</div>
         ) : rows.map((row, i) => {
           const isConfirming = confirmId === row.id;
           const isActing = acting === row.id;
           return (
             <div key={row.id || i} className="reg-row-paper">
-              <span className="plate-tag-paper" style={{fontSize:13,padding:'5px 9px'}}>{(row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
+              <span className="plate-tag-paper" style={{fontSize:13,padding:'5px 9px'}}>{(row.plate_text || row.raw_plate || row.normalized_plate || '—').replace(/([A-Z0-9]{3})([A-Z0-9]+)/, '$1 $2')}</span>
               <div>
-                <div className="reg-name-paper">{row.driver_name || row.holder_name || 'Unknown'}</div>
+                <div className="reg-name-paper">{row.visitor_name || row.driver_name || row.company_name || 'Unknown'}</div>
                 <div className="reg-detail-paper">
-                  {passExpiryLabel(row)}{row.space_number ? ` · Space #${row.space_number}` : ''}
+                  {passExpiryLabel(row)}{(row.parking_spot || row.space_number) ? ` · Space #${row.parking_spot || row.space_number}` : ''}
                 </div>
               </div>
               <div className="reg-time-paper" style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}}>
@@ -11190,7 +11289,7 @@ function RegisteredDrill({ propertyId, propertyName, onBack }) {
                   <>
                     <span className="reg-live-paper">● ACTIVE</span>
                     <div style={{display:'flex',alignItems:'center',gap:8}}>
-                      {row.starts_at && <span style={{fontSize:11,color:'var(--ink-3-paper)'}}>Since {new Date(row.starts_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
+                      {(row.valid_from || row.starts_at) && <span style={{fontSize:11,color:'var(--ink-3-paper)'}}>Since {new Date(row.valid_from || row.starts_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
                       <button onClick={() => setConfirmId(row.id)} aria-label="Remove parking pass" style={{fontSize:11,fontWeight:600,padding:'4px 9px',borderRadius:6,border:'1px solid var(--border-strong-paper)',background:'transparent',color:'var(--red-paper)',cursor:'pointer',letterSpacing:'.02em'}}>Remove</button>
                     </div>
                   </>
@@ -11250,7 +11349,9 @@ function ALPRPropertiesPage({ user }) {
                 .then(r => ({ count: r.count || 0 }))
                 .catch(() => ({ count: 0 }))
             : Promise.resolve({ count: 0 }),
-          apiFetch(`/lots/${p.id}/registered`)
+          // Single source of truth — same query the drill + parking log use,
+          // so the count can never disagree with the lists.
+          db.getActiveRoster(p.id)
             .catch(() => []),
         ]);
         return [p.id, {
