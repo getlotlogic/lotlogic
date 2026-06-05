@@ -3284,7 +3284,18 @@ const db = {
     if (opts.plate) params.set('plate', opts.plate);
     if (opts.company_name) params.set('company', opts.company_name);
     if (opts.date_from) params.set('from_date', opts.date_from);
-    if (opts.date_to) params.set('to_date', opts.date_to);
+    if (opts.date_to) {
+      // date_to is a bare calendar date (YYYY-MM-DD). The backend filters
+      // `created_at <= :to_date`, and a bare date parses to 00:00:00 UTC —
+      // which silently drops every pass created later that same day. That's
+      // why a truck registered this morning showed up in search but not in
+      // today's active list. Send an inclusive end-of-day bound so "through
+      // today" means through right now.
+      const toDate = /^\d{4}-\d{2}-\d{2}$/.test(opts.date_to)
+        ? `${opts.date_to}T23:59:59.999Z`
+        : opts.date_to;
+      params.set('to_date', toDate);
+    }
     if (opts.page) params.set('page', String(opts.page));
     if (opts.page_size) params.set('page_size', String(opts.page_size));
     if (opts.format === 'csv') {
