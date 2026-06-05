@@ -1,0 +1,7 @@
+name = "email-tow-action"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+account_id = "25eda16dfb7e7c04951ac81d1b7069e4"
+
+[vars]
+BACKEND_URL = "https://lotlogic-backend-production.up.railway.app"
