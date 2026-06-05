@@ -3398,7 +3398,10 @@ const db = {
     if (!supabase || !propertyId) return [];
     const { data, error } = await supabase
       .from('alpr_violations')
-      .select('id, plate_text, normalized_plate, property_id, plate_event_id, status, action_taken, violation_type, created_at, plate_events:plate_event_id(image_url, created_at, alpr_cameras:camera_id(name))')
+      // `normalized_plate` is NOT a column on alpr_violations (was causing a 400
+      // / empty result — the tow-button violation map never populated). Embed via
+      // the explicit FK constraint name so the join is unambiguous.
+      .select('id, plate_text, property_id, plate_event_id, status, action_taken, violation_type, created_at, plate_events!alpr_violations_plate_event_id_fkey(image_url, created_at, alpr_cameras:camera_id(name))')
       .eq('property_id', propertyId)
       .is('action_taken', null)
       .order('created_at', { ascending: false })
@@ -3446,7 +3449,10 @@ const db = {
     if (supabase) {
       const { data, error } = await supabase
         .from('plate_events')
-        .select('id, plate_text, normalized_plate, confidence, image_url, event_type, camera_id, created_at, visitor_pass_id, resident_plate_id, match_status, match_reason, matched_at, session_id, plate_sessions(state)')
+        // plate_events↔plate_sessions has 3 relationships (session_id here, plus
+        // entry/exit_plate_event_id back-refs), so a bare plate_sessions(state)
+        // embed is ambiguous → 300. Pin the FK we mean (plate_events.session_id).
+        .select('id, plate_text, normalized_plate, confidence, image_url, event_type, camera_id, created_at, visitor_pass_id, resident_plate_id, match_status, match_reason, matched_at, session_id, plate_sessions!plate_events_session_id_fkey(state)')
         .eq('property_id', propertyId)
         .order('created_at', { ascending: false })
         .limit(limit);
