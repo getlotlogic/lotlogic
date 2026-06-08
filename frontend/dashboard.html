@@ -9562,7 +9562,9 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   // pass never double-counts. Operator voids/revokes/tows and anything that
   // ended >4 days ago are NOT shown here — they live in the History tab.
   const useBuckets = !isHistory;
-  const TRUCK_BUCKET_ORDER = ['cooldown', 'active', 'expiring', 'recently_expired'];
+  // Order drives BOTH the pill row and the list: expiring soon first (most
+  // time-sensitive), then active, then the ended buckets.
+  const TRUCK_BUCKET_ORDER = ['expiring', 'active', 'cooldown', 'recently_expired'];
   const truckBucketMeta = {
     cooldown:         { label: 'On Cooldown',      color: '#ef4444' },
     active:           { label: 'Active',           color: '#4ade80' },
