@@ -9965,14 +9965,16 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
         <div style={{padding:40,textAlign:'center',background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>
           <div style={{width:48,height:48,borderRadius:12,background:'rgba(96,165,250,.1)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px',fontSize:22}}>📋</div>
           <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>
-            {hasSearch ? `No matches for "${trimmedSearch}"` : ((err || rosterError) ? "Couldn't load the roster" : 'No passes for these filters')}
+            {hasSearch ? `No matches for "${trimmedSearch}"` : ((err || rosterError) ? "Couldn't load the roster" : (useBuckets ? 'Nothing active or recently expired' : 'No passes for these filters'))}
           </div>
           <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4,maxWidth:480,margin:'4px auto 0'}}>
             {hasSearch
               ? <>Try a shorter chunk of the plate, just the driver's first name, or the company. Phone numbers also work.</>
               : ((err || rosterError)
                   ? <>Connection issue — the list refreshes automatically every minute. Tap “Retry now” above if it persists.</>
-                  : <>Try widening the date range or clearing the status filter.</>)}
+                  : (useBuckets
+                      ? <>Active, expiring, on-cooldown, and recently-expired passes show here. Older records are in the History tab.</>
+                      : <>Try widening the date range or clearing the status filter.</>))}
           </div>
           {/* History mode is already all-time, so the "widen to 90 days" button
               would only NARROW it — hide it there. */}
@@ -10089,10 +10091,11 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                   {r.phone && <div style={{fontSize:12,color:'var(--text-muted)'}}>📞 {r.phone}</div>}
                 </div>
 
-                {/* Status explainer — only renders when the status carries
-                    one in `statusExplainer`. Today: just `auto_cleared`.
-                    Telling the operator what happened, why, and what to do. */}
-                {statusExplainer[s] && (
+                {/* Status explainer. In bucket mode it only belongs on the
+                    Recently-expired bucket — otherwise an "On Cooldown" row
+                    would carry the grey "window ended" note and read as
+                    self-contradictory. History keeps the original behaviour. */}
+                {statusExplainer[s] && (!useBuckets || bkt === 'recently_expired') && (
                   <div style={{
                     fontSize: 12, lineHeight: 1.45,
                     padding: '8px 10px',
@@ -10242,9 +10245,12 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
           and filter client-side as the operator types, so server-side
           pages no longer apply. If a property genuinely sees >500 passes
           in a 7-day window we'll surface a warning and re-introduce paging. */}
-      {!loading && total > rows.length && (
+      {/* Only meaningful in History (the full record). In bucket/Parking-Log
+          mode the list is the four roster-driven buckets, so a windowed
+          "showing 500 of 540" count would contradict the header + cards. */}
+      {!loading && isHistory && total > rows.length && (
         <div style={{fontSize:11,color:'#facc15',padding:'8px 12px',background:'rgba(250,204,21,.08)',border:'1px solid rgba(250,204,21,.3)',borderRadius:8}}>
-          Showing {rows.length.toLocaleString()} of {total.toLocaleString()} passes. {isHistory ? 'Search by plate, driver, or company to find any specific registration.' : 'Narrow the date range to load older passes.'}
+          Showing {rows.length.toLocaleString()} of {total.toLocaleString()} passes. Search by plate, driver, or company to find any specific registration.
         </div>
       )}
 
