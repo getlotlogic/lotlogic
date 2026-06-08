@@ -9630,6 +9630,12 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   // from the loaded passes every render so it can't silently fail like a stored
   // flag. The prior pass always ended <24h earlier, so it's always loaded too.
   const COOLDOWN_MS = 24 * 60 * 60 * 1000;
+  // A "real prior stay" the cooldown counts against. Exclude voided passes:
+  // operator-dismissed/removed and revoked aren't real stays, so they must not
+  // trigger a false cooldown flag. Only camera-detected closures count.
+  const isRealStay = (o) =>
+    o.status !== 'revoked' &&
+    !(o.status === 'cancelled' && !String(o.cancelled_by || '').startsWith('camera_exit'));
   const cooldownIds = (() => {
     const byPlate = new Map();
     for (const r of unionRows) {
@@ -9645,13 +9651,16 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
         const reg = new Date(r.created_at).getTime();
         if (!reg) continue;
         for (const o of list) {
-          if (o === r) continue;
+          if (o === r || !isRealStay(o)) continue;
           const oReg = new Date(o.created_at).getTime();
           if (!(oReg < reg)) continue; // only an earlier registration counts
-          const end = Math.max(
-            o.valid_until ? new Date(o.valid_until).getTime() : 0,
-            o.exited_at ? new Date(o.exited_at).getTime() : 0,
-          );
+          // The prior stay's end AS OF this registration. An exit only counts if
+          // it happened BEFORE this registration — a later closure (an overstay
+          // the camera closed days afterward) must not back-date the end and
+          // fake a cooldown. Otherwise fall back to the scheduled valid_until.
+          const ex = o.exited_at ? new Date(o.exited_at).getTime() : 0;
+          const vu = o.valid_until ? new Date(o.valid_until).getTime() : 0;
+          const end = (ex && ex <= reg) ? ex : vu;
           if (end && end > reg - COOLDOWN_MS) { flagged.add(r.id); break; }
         }
       }
