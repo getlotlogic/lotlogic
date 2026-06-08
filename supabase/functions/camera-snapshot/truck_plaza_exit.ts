@@ -84,6 +84,16 @@ export const SC211_SIDECAR_FLOOR = 0.0;
 // Env-tunable; log-and-retune as data accumulates.
 const TRUCK_FUZZY_CANCEL_MIN = Number(Deno.env.get("TRUCK_FUZZY_CANCEL_MIN") ?? "0.65");
 
+// Minimum dwell before a camera read may count as an EXIT. Charlotte has no
+// entry/exit direction gate, so the read that fires right as/after a truck
+// REGISTERS (their arrival, sitting at the gate) was being treated as an exit
+// and closing the pass instantly. A genuine exit is hours later (min stay is
+// hours); a read within this many minutes of the pass's valid_from is the
+// ARRIVAL, not a departure — so it must not close the pass. (Data showed ~25%
+// of camera-exits were closing within an hour of registration, many within 5
+// minutes — all false.) Env-tunable.
+const EXIT_MIN_DWELL_MINUTES = Number(Deno.env.get("EXIT_MIN_DWELL_MINUTES") ?? "15");
+
 // Max TOTAL differing character positions (OCR-confusable swaps + true edits
 // combined) for a fuzzy exit read to auto-close a pass. The old rule allowed
 // UNLIMITED confusable swaps + 1 true edit, so a read could ride several "free"
@@ -119,6 +129,7 @@ function groupKeyFor(camera: CameraRow): string {
 type PassMatch = {
   id: string;
   valid_until: string;
+  valid_from: string | null;
   fuzzy: boolean;
   // If the proactive overstay cron already created an overstay violation
   // (and stamped it on the pass), we want to link the camera-detected
@@ -188,6 +199,7 @@ async function findActiveUnexitedPass(
   const wrap = (r: Row, fuzzy: boolean): PassMatch => ({
     id: r.id,
     valid_until: r.valid_until,
+    valid_from: r.valid_from ?? null,
     fuzzy,
     overstay_violation_id: r.overstay_violation_id ?? null,
   });
@@ -665,6 +677,21 @@ export async function handleTruckPlazaExit(args: {
           `truck_plaza_exit: fuzzy match "${resolved.normalized}" → pass ${pass.id} REJECTED, read conf ${(resolved.confidence ?? 0).toFixed(2)} < ${TRUCK_FUZZY_CANCEL_MIN} (no cancel)`,
         );
         pass = null;
+      }
+
+      // MINIMUM-DWELL GUARD — applies to ALL match tiers. A read within
+      // EXIT_MIN_DWELL_MINUTES of the pass's registration is the truck ARRIVING
+      // (no entry/exit direction gate at Charlotte), not leaving — so it must
+      // not close the pass. This is the fix for passes being cancelled
+      // instantly after registration by their own arrival read.
+      if (pass && pass.valid_from) {
+        const dwellMin = (now.getTime() - new Date(pass.valid_from).getTime()) / 60000;
+        if (dwellMin < EXIT_MIN_DWELL_MINUTES) {
+          console.log(
+            `truck_plaza_exit: read "${resolved.normalized}" → pass ${pass.id} only ${dwellMin.toFixed(1)}min after registration (< ${EXIT_MIN_DWELL_MINUTES}min dwell) — ARRIVAL, not exit (no cancel)`,
+          );
+          pass = null;
+        }
       }
     }
   }
