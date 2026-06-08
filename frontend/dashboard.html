@@ -9425,11 +9425,11 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   const inputStyle = {padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:13,fontFamily:'inherit'};
   const labelStyle = {display:'flex',flexDirection:'column',gap:5,fontSize:10,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase'};
   // Traffic-light coloring for on-site plate scanning:
-  //   RED     = expired / violation (window closed, may still be in lot, actionable)
+  //   GREY    = recently expired (window closed ≤4 days ago, may still be in lot)
   //   YELLOW  = expiring soon (active but < 3h to valid_until)
   //   GREEN   = active and >3h remaining
-  //   GREY    = auto-cleared (expired > 24h ago; no camera exit detected
-  //             and no operator action — archived for record, not actionable)
+  //   GREY    = expired (window closed > 4 days ago; no camera exit detected
+  //             and no operator action — kept for the permanent record)
   //
   // `expiring` and `auto_cleared` are DERIVED at render time. The DB only
   // knows active|expired|... — the time-windowed buckets are purely visual.
@@ -9475,8 +9475,8 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   function deriveStatus(r) {
     const raw = r.status || 'active';
     if (raw !== 'active') {
-      // Expired rows split by age: <24h is still actionable, ≥24h is
-      // archived. Same row, different visual + different operator urgency.
+      // Expired rows split by age: ≤4 days = "Recently expired" (surfaced),
+      // older = "Expired" (permanent record). Same row, different label.
       if (raw === 'expired' && r.valid_until) {
         const expiredAgo = Date.now() - new Date(r.valid_until).getTime();
         if (expiredAgo >= AUTO_CLEAR_WINDOW_MS) return 'auto_cleared';
@@ -9487,7 +9487,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     const remaining = new Date(r.valid_until).getTime() - Date.now();
     if (remaining <= 0) {
       // Crossed the expiry boundary just now — still bucket by age so
-      // the 24h cut catches the case where status hasn't been flipped
+      // the 4-day cut catches the case where status hasn't been flipped
       // to 'expired' by the backend yet.
       if (-remaining >= AUTO_CLEAR_WINDOW_MS) return 'auto_cleared';
       return 'expired';
@@ -9795,7 +9795,9 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                   ? <>Connection issue — the list refreshes automatically every minute. Tap “Retry now” above if it persists.</>
                   : <>Try widening the date range or clearing the status filter.</>)}
           </div>
-          {hasSearch && (
+          {/* History mode is already all-time, so the "widen to 90 days" button
+              would only NARROW it — hide it there. */}
+          {hasSearch && !isHistory && (
             <button
               type="button"
               onClick={widenDateRange}
