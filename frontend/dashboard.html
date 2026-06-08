@@ -9290,13 +9290,9 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
             page: 1,
             page_size: 500,
           });
-      // Cooldown needs EVERY pass for the property. In history the display is
-      // already all of them; in default mode fetch them separately for the pool.
-      const poolFetch = isHistory ? Promise.resolve(null) : db.getAllParkingLog(propertyId, {});
-      const [resOutcome, violOutcome, poolOutcome] = await Promise.allSettled([
+      const [resOutcome, violOutcome] = await Promise.allSettled([
         logFetch,
         db.getOpenAlprViolations(propertyId),
-        poolFetch,
       ]);
       if (resOutcome.status === 'fulfilled') {
         const res = resOutcome.value;
@@ -9308,10 +9304,10 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
         const items = res.items || res.rows || [];
         setRows(items);
         setTotal(res.total ?? items.length);
+        // History already loaded every pass — reuse it as the cooldown pool.
+        // (Default mode loads the pool once per property in a separate effect,
+        // NOT on every realtime/poll tick — see below.)
         if (isHistory) setCdPool(items);
-        else if (poolOutcome.status === 'fulfilled' && poolOutcome.value) {
-          setCdPool(poolOutcome.value.rows || poolOutcome.value.items || []);
-        }
       } else {
         // Log fetch failed — keep the previous rows on screen rather than
         // emptying the list. Operator should see the error banner instead.
@@ -9337,6 +9333,21 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     }
     setLoading(false);
   }, [propertyId, filters]);
+
+  // Cooldown pool — the complete pass history for the property, fetched ONCE per
+  // property (default mode only; history mode's load already sets it). NOT tied
+  // to the realtime/poll `load`, so a busy lot doesn't re-sweep all history on
+  // every update. New passes still flag correctly: they arrive via the windowed
+  // rows + roster and are merged into the cooldown source, while this pool
+  // supplies the older priors (which don't change).
+  useEffect(() => {
+    if (isHistory || !propertyId) return;
+    let cancelled = false;
+    db.getAllParkingLog(propertyId, {})
+      .then((res) => { if (!cancelled) setCdPool(res.rows || res.items || []); })
+      .catch(() => { /* keep last pool; cooldown still works off unionRows */ });
+    return () => { cancelled = true; };
+  }, [propertyId, isHistory]);
 
   // Handler for the tow / no-tow confirmation modal. Calls the existing
   // backend endpoints (force-bill for tow-confirmation, mark-no-tow for
