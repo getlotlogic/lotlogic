@@ -9557,6 +9557,39 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     if (remaining < EXPIRING_WINDOW_MS) return 'expiring';
     return 'active';
   }
+  // The Parking Log (default mode) is simplified to FOUR mutually-exclusive
+  // buckets. On Cooldown and Recently expired are split at the 24h line so a
+  // pass never double-counts. Operator voids/revokes/tows and anything that
+  // ended >4 days ago are NOT shown here — they live in the History tab.
+  const useBuckets = !isHistory;
+  const TRUCK_BUCKET_ORDER = ['cooldown', 'active', 'expiring', 'recently_expired'];
+  const truckBucketMeta = {
+    cooldown:         { label: 'On Cooldown',      color: '#ef4444' },
+    active:           { label: 'Active',           color: '#4ade80' },
+    expiring:         { label: 'Expiring soon',    color: '#facc15' },
+    recently_expired: { label: 'Recently expired', color: '#94a3b8' },
+  };
+  function truckBucket(r) {
+    const now = Date.now();
+    const vu = r.valid_until ? new Date(r.valid_until).getTime() : null;
+    const ex = r.exited_at ? new Date(r.exited_at).getTime() : null;
+    const status = r.status || 'active';
+    const cb = String(r.cancelled_by || '');
+    // Operator/admin void, revoke, tow → not a natural pass-end; History only.
+    if (status === 'revoked' || status === 'towed') return null;
+    if (status === 'cancelled' && !cb.startsWith('camera_exit')) return null;
+    const DAY = 24 * 60 * 60 * 1000;
+    // Still parked (valid window, no exit, not camera-closed) → active/expiring.
+    const parked = ex === null && status !== 'cancelled' && vu !== null && vu > now;
+    if (parked) return (vu - now) <= EXPIRING_WINDOW_MS ? 'expiring' : 'active';
+    // Ended. Pass END = camera exit if seen, else the time limit (matches the
+    // count_on_cooldown RPC). On cooldown for 24h from that end.
+    const end = ex !== null ? ex : vu;
+    if (end !== null && end <= now && (now - end) <= DAY) return 'cooldown';
+    // Recently expired = TIMED OUT (no camera exit, not cancelled) 24h–4 days ago.
+    if (ex === null && status !== 'cancelled' && vu !== null && vu <= now - DAY && vu > now - AUTO_CLEAR_WINDOW_MS) return 'recently_expired';
+    return null;
+  }
   const fmtDateTime = (s) => s ? new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
   // Human-relative day label for the operator's "how long ago" scan.
   // "Today", "Yesterday", or "N days ago".
@@ -9593,6 +9626,12 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   // dropping off the active list: the roster is built from the union of the
   // authoritative active fetch + direct pull, never from the windowed log alone.
   const defaultMatches = (() => {
+    if (useBuckets) {
+      // Parking Log = ONLY the four buckets (On Cooldown / Active / Expiring
+      // soon / Recently expired). Everything else (operator-closed, ended >4
+      // days ago) lives in the History tab.
+      return unionRows.filter(r => truckBucket(r) !== null).map(r => ({ row: r, matched: [] }));
+    }
     const seen = new Set();
     const roster = [];
     for (const r of unionRows) {
@@ -9623,23 +9662,46 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     acc[s] = (acc[s] || 0) + 1;
     return acc;
   }, {});
+  // Default (Parking Log) mode uses the four mutually-exclusive buckets; History
+  // keeps the full derived statuses. `pillList` is the unified shape the pill
+  // row renders from either way.
+  const bucketCounts = useBuckets ? visitorRows.reduce((acc, r) => {
+    const b = truckBucket(r);
+    if (b) acc[b] = (acc[b] || 0) + 1;
+    return acc;
+  }, {}) : {};
+  const pillList = useBuckets
+    ? TRUCK_BUCKET_ORDER.filter(b => bucketCounts[b]).map(b => ({
+        id: b, label: truckBucketMeta[b].label, color: truckBucketMeta[b].color,
+        count: bucketCounts[b], loud: b === 'cooldown' || b === 'expiring',
+      }))
+    : ['expiring','active','towed','auto_cleared','cancelled','revoked','expired']
+        .filter(s => statusCounts[s]).map(s => ({
+          id: s, label: statusDisplay[s] || s, color: statusColor[s] || 'var(--text-muted)',
+          count: statusCounts[s], loud: s === 'expiring',
+        }));
 
   // Apply the pill-tap status filter on top of search results. The status
   // pills above the grid show counts derived from `visitorMatches` (i.e.
   // they reflect the search), so clicking one acts as a drill-down on
   // those counts. Set to null to clear and see everything again.
   const pillFilteredMatches = pillStatusFilter
-    ? visitorMatches.filter(x => deriveStatus(x.row) === pillStatusFilter)
+    ? visitorMatches.filter(x => (useBuckets ? truckBucket(x.row) : deriveStatus(x.row)) === pillStatusFilter)
     : visitorMatches;
 
   // Sort: violations → expiring → active → towed → cancelled → revoked.
   // Within a status group, newest first so the latest activity floats up.
   // Sort preserves the matched-fields metadata so chips render alongside.
   const sortedMatches = [...pillFilteredMatches].sort((a, b) => {
-    const sa = deriveStatus(a.row);
-    const sb = deriveStatus(b.row);
-    const oa = statusOrder[sa] ?? 99;
-    const ob = statusOrder[sb] ?? 99;
+    let oa, ob;
+    if (useBuckets) {
+      const ia = TRUCK_BUCKET_ORDER.indexOf(truckBucket(a.row));
+      const ib = TRUCK_BUCKET_ORDER.indexOf(truckBucket(b.row));
+      oa = ia < 0 ? 99 : ia; ob = ib < 0 ? 99 : ib;
+    } else {
+      oa = statusOrder[deriveStatus(a.row)] ?? 99;
+      ob = statusOrder[deriveStatus(b.row)] ?? 99;
+    }
     if (oa !== ob) return oa - ob;
     const ta = new Date(a.row.created_at || 0).getTime();
     const tb = new Date(b.row.created_at || 0).getTime();
@@ -9831,12 +9893,9 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                 >{exporting ? 'Exporting…' : '↓ CSV'}</button>
               )}
             </div>
-            {Object.keys(statusCounts).length > 0 && (
+            {pillList.length > 0 && (
               <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-                {['expiring','active','towed','auto_cleared','cancelled','revoked','expired'].filter(s => statusCounts[s]).map(s => {
-                  const color = statusColor[s] || 'var(--text-muted)';
-                  // Live passes lead; violations (expired) sit last + quiet.
-                  const isLoud = s === 'expiring';
+                {pillList.map(({ id: s, label, color, count, loud: isLoud }) => {
                   const isActive = pillStatusFilter === s;
                   const otherActive = pillStatusFilter && !isActive;
                   return (
@@ -9845,7 +9904,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                       type="button"
                       onClick={() => setPillStatusFilter(isActive ? null : s)}
                       aria-pressed={isActive}
-                      title={isActive ? `Showing only ${statusDisplay[s] || s} — click to clear` : `Filter to ${statusDisplay[s] || s} only`}
+                      title={isActive ? `Showing only ${label} — click to clear` : `Filter to ${label} only`}
                       style={{
                         fontSize: isLoud ? 13 : 11,
                         fontWeight: 800,
@@ -9864,7 +9923,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                         transition: 'background .12s, opacity .12s, box-shadow .12s',
                       }}
                     >
-                      {statusCounts[s]} {statusDisplay[s] || s}
+                      {count} {label}
                     </button>
                   );
                 })}
@@ -9928,10 +9987,15 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
         <div style={{display:'grid',gap:10,gridTemplateColumns:'repeat(auto-fill, minmax(380px, 1fr))'}}>
           {sortedMatches.map(({ row: r, matched }) => {
             const s = deriveStatus(r);
-            const color = statusColor[s] || 'var(--text-muted)';
+            // Parking Log (bucket) mode badges the bucket; History badges the
+            // full derived status.
+            const bkt = useBuckets ? truckBucket(r) : null;
+            const bktMeta = bkt ? truckBucketMeta[bkt] : null;
+            const dispLabel = bktMeta ? bktMeta.label : (statusDisplay[s] || s);
+            const color = bktMeta ? bktMeta.color : (statusColor[s] || 'var(--text-muted)');
             const isActive = (r.status || 'active') === 'active';
             const isViolation = s === 'expired';
-            const isExpiring = s === 'expiring';
+            const isExpiring = bkt ? bkt === 'expiring' : s === 'expiring';
             const isAutoCleared = s === 'auto_cleared';
             const isCooldownViol = cooldownIds.has(r.id);
             const driverLine = [r.visitor_name, r.company_name].filter(Boolean).join(' · ') || '—';
@@ -9985,7 +10049,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                       }}>Trailer · {r.back_plate}</div>
                     )}
                   </div>
-                  <span aria-label={`Pass status: ${statusDisplay[s] || s}`} style={{
+                  <span aria-label={`Pass status: ${dispLabel}`} style={{
                     fontSize: isExpiring ? 13 : 10,
                     fontWeight: 800,
                     padding: isExpiring ? '5px 12px' : '4px 10px',
@@ -9997,7 +10061,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                     letterSpacing:'.06em',
                     whiteSpace:'nowrap',
                     flexShrink:0,
-                  }}>{statusDisplay[s] || s}</span>
+                  }}>{dispLabel}</span>
                 </div>
 
                 {/* Violation, on the pass itself. Cooldown = re-registered
