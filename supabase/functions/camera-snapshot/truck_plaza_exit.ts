@@ -91,8 +91,12 @@ const TRUCK_FUZZY_CANCEL_MIN = Number(Deno.env.get("TRUCK_FUZZY_CANCEL_MIN") ?? 
 // hours); a read within this many minutes of the pass's valid_from is the
 // ARRIVAL, not a departure — so it must not close the pass. (Data showed ~25%
 // of camera-exits were closing within an hour of registration, many within 5
-// minutes — all false.) Env-tunable.
-const EXIT_MIN_DWELL_MINUTES = Number(Deno.env.get("EXIT_MIN_DWELL_MINUTES") ?? "15");
+// minutes — all false.) Env-tunable. Default 30: the Charlotte arrival-read
+// cluster is all <=37min on 12-48h passes, while the earliest plausible genuine
+// exit observed is 72min, so 30 catches every false arrival-close and stays
+// well clear of real exits. Assumes valid_from == registration time (true
+// today); if valid_from is ever repurposed as a policy start, re-anchor this.
+const EXIT_MIN_DWELL_MINUTES = Number(Deno.env.get("EXIT_MIN_DWELL_MINUTES") ?? "30");
 
 // Max TOTAL differing character positions (OCR-confusable swaps + true edits
 // combined) for a fuzzy exit read to auto-close a pass. The old rule allowed
