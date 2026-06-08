@@ -6947,17 +6947,7 @@ function SnapsLightbox({ snaps, startIndex, plate, onClose }) {
 // overlay on click for the full uncropped frame. Esc / outside-click closes.
 function FirstSeenEvidence({ plate, imageUrl, firstSeenAt, registeredAt, compact }) {
   const [open, setOpen] = useState(false);
-  const leadMs = firstSeenAt && registeredAt
-    ? new Date(registeredAt).getTime() - new Date(firstSeenAt).getTime()
-    : 0;
-  const leadMin = Math.max(0, Math.round(leadMs / 60000));
-  const leadLabel = leadMin >= 60 ? `${Math.floor(leadMin/60)}h ${leadMin%60}m` : `${leadMin} min`;
-  // Only call it a "pre-registration" sighting when the camera actually read
-  // the plate BEFORE the driver registered (leadMin > 0). When the read landed
-  // at/after registration it's just the vehicle's entry photo — render it plain
-  // (like every other pass), not as an orange evidence flag.
-  const beforeReg = leadMin > 0;
-  const noun = beforeReg ? 'pre-registration snapshot' : 'entry photo';
+  // It's just the vehicle's entry photo — one plain presentation for every pass.
   const whenLabel = firstSeenAt
     ? new Date(firstSeenAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
     : '';
@@ -6969,29 +6959,29 @@ function FirstSeenEvidence({ plate, imageUrl, firstSeenAt, registeredAt, compact
   }, [open]);
   return (
     <div style={{
-      border: beforeReg ? '1px solid rgba(245,158,11,.45)' : '1px solid var(--border)',
-      background: beforeReg ? 'rgba(245,158,11,.08)' : 'transparent',
+      border: '1px solid var(--border)',
+      background: 'transparent',
       borderRadius: 10, padding: compact ? 8 : 10,
       display: 'flex', flexDirection: 'column', gap: compact ? 6 : 8,
     }}>
       <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-        <span style={{fontSize: compact ? 10 : 11,fontWeight:800,padding:'3px 8px',borderRadius:12,background: beforeReg ? '#f59e0b' : 'var(--bg-inset)',color: beforeReg ? '#fff' : 'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'.06em'}}>
-          {beforeReg ? 'Seen on camera before registering' : '📷 Entry photo'}
+        <span style={{fontSize: compact ? 10 : 11,fontWeight:800,padding:'3px 8px',borderRadius:12,background:'var(--bg-inset)',color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'.06em'}}>
+          📷 Entry photo
         </span>
         <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:600}}>
-          {beforeReg ? `${leadLabel} earlier · ` : ''}{whenLabel}
+          {whenLabel}
         </span>
       </div>
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-        aria-label={`Enlarge ${noun} for ${plate || 'unknown plate'}`}
+        aria-label={`Enlarge entry photo for ${plate || 'unknown plate'}`}
         title="Click to see full image"
         style={{display:'block',width:'100%',padding:0,border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',background:'#000',cursor:'zoom-in'}}
       >
         <img
           src={imageUrl}
-          alt={`${plate || ''} ${noun}`}
+          alt={`${plate || ''} entry photo`}
           loading="lazy"
           style={{display:'block',width:'100%',height: compact ? 140 : 180,objectFit:'contain',background:'#000'}}
         />
@@ -7001,7 +6991,7 @@ function FirstSeenEvidence({ plate, imageUrl, firstSeenAt, registeredAt, compact
           onClick={() => setOpen(false)}
           role="dialog"
           aria-modal="true"
-          aria-label="Pre-registration snapshot"
+          aria-label="Entry photo"
           style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:1200,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
         >
           <div onClick={(e) => e.stopPropagation()} style={{maxWidth:'min(1200px, 98vw)',maxHeight:'94vh',display:'flex',flexDirection:'column',gap:8,alignItems:'center'}}>
@@ -9962,11 +9952,9 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                   </div>
                 )}
 
-                {/* First seen on lot — pre-registration camera snapshot.
-                    Backfilled by the backend when a camera read the plate
-                    in the 2h before the driver registered. This proves the
-                    vehicle was already on the lot when they registered.
-                    Click the image to see the full uncropped frame. */}
+                {/* Entry photo — the camera frame of the vehicle on the lot
+                    (first_seen_event_id). One plain presentation for every pass;
+                    click the image to see the full uncropped frame. */}
                 {r.first_seen_image_url && (
                   <FirstSeenEvidence
                     plate={r.plate_text}
