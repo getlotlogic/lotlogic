@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
   <title>LotView — AI Parking Enforcement</title>
-  <meta name="description" content="AI-powered parking lot enforcement dashboard. Manage violations, cameras, and earnings in real time." />
+  <meta name="description" content="AI-powered parking management dashboard. Manage parking passes, cameras, and earnings in real time." />
   <meta name="theme-color" content="#0c0e14" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -3874,7 +3874,7 @@ const NotifyManager = (() => {
   // Main entry: fire notification for a new violation
   function notifyNewViolation(violation) {
     const zone = violation.zone_id || 'Unknown zone';
-    const type = violation.violation_type || 'Violation';
+    const type = violation.violation_type || 'Recently expired';
     const desc = [violation.vehicle_color, violation.vehicle_type && violation.vehicle_type !== 'car' ? violation.vehicle_type : 'vehicle'].filter(Boolean).join(' ');
 
     playChime();
@@ -5651,7 +5651,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
           {user?._role === 'partner' ? (
             <>Dispatches your team has already responded to. They'll auto-close once our cameras confirm the tow or the vehicle leaves. This list does <b>not</b> include items still awaiting your Tow / No-tow decision — those live above.</>
           ) : (
-            <>Active violations at your lots that haven't been resolved yet. Includes dispatches in flight to your tow partner plus anything that hasn't been acted on.</>
+            <>Active jobs at your lots that haven't been resolved yet. Includes dispatches in flight to your tow partner plus anything that hasn't been acted on.</>
           )}
         </div>
       )}
@@ -5683,7 +5683,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
           <div className="empty-body">
             {user?._role === 'partner'
               ? "No in-progress jobs right now. New dispatches will show above when LotLogic sends them."
-              : "No violations pending at your lots right now"}
+              : "Nothing pending at your lots right now"}
           </div>
           {/* Partner-only orientation mini-explainer. Owners see the existing empty state unchanged. */}
           {user?._role === 'partner' && (
@@ -5955,7 +5955,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                 <button className="action-btn tow" disabled={anyActing} onClick={async () => { setActing(v.id); try { await db.dispatchALPRViolation(v.id); addToast('Tow dispatched', 'success'); if (onAction) onAction(); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Dispatch tow" style={{padding:'12px 6px', fontSize:13}}>
                   {isActing ? '…' : 'Dispatch Tow'}
                 </button>
-                <button className="action-btn dismiss" disabled={anyActing} onClick={async () => { setActing(v.id); try { await db.dismissALPRViolation(v.id); addToast('Violation dismissed', 'success'); if (onAction) onAction(); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Dismiss violation" style={{padding:'12px 6px', fontSize:13}}>
+                <button className="action-btn dismiss" disabled={anyActing} onClick={async () => { setActing(v.id); try { await db.dismissALPRViolation(v.id); addToast('Pass dismissed', 'success'); if (onAction) onAction(); } catch(e) { addToast('Failed: '+(e.message||''), 'error'); } setActing(null); }} aria-label="Dismiss" style={{padding:'12px 6px', fontSize:13}}>
                   {isActing ? '…' : 'Dismiss'}
                 </button>
               </div>
@@ -5974,12 +5974,12 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                   {v.status === 'alerted' && (
                     <button className="action-btn" disabled={anyActing || acking === v.id}
                       onClick={(e) => { e.stopPropagation(); handleAcknowledge(v.id); }}
-                      aria-label="Acknowledge violation"
+                      aria-label="Acknowledge"
                       style={{background:'rgba(245,158,11,.12)', border:'1px solid rgba(245,158,11,.3)', color:'#f59e0b'}}>
                       {acking === v.id ? '…' : 'Acknowledge'}
                     </button>
                   )}
-                  <button className="action-btn dismiss" disabled={anyActing} onClick={() => requestAction(v.id, 'dismissed')} aria-label="Dismiss violation">
+                  <button className="action-btn dismiss" disabled={anyActing} onClick={() => requestAction(v.id, 'dismissed')} aria-label="Dismiss">
                     Dismiss
                   </button>
                   <button className="action-btn gone" disabled={anyActing} onClick={() => requestAction(v.id, 'already_gone')} aria-label="Mark vehicle as already gone">
@@ -6246,7 +6246,7 @@ function EarningsPage({ violations, lots, isOwner, user, onNavigate }) {
       <div className="kpi-bar" style={{marginBottom:16}}>
         <div className="kpi-card">
           <div className="kpi-val blue">{totalViolations}</div>
-          <div className="kpi-label">Violations</div>
+          <div className="kpi-label">Recently expired</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-val green">{actionsExecuted}</div>
@@ -7525,7 +7525,7 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
   return React.createElement('div', null,
     React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, marginBottom: 4, color: 'var(--text-primary)' } }, 'Confirmation review'),
     React.createElement('p', { style: { fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 } },
-      'Per-violation billing review. Disputes and verification candidates at the top. Refreshes every 15s.'),
+      'Per-pass billing review. Disputes and verification candidates at the top. Refreshes every 15s.'),
 
     // Read-only banner for partners — their endpoints 400/403 server-side,
     // so they see evidence only. Disputes go through the owner.
@@ -8697,7 +8697,7 @@ function AnalyticsPage({ lots, violations, partners = [], isOwner, onNavigate })
             </div>
           </div>
           <div className="projection-row">
-            <div className="projection-label">Violations per day</div>
+            <div className="projection-label">Recently expired per day</div>
             <div>
               <span className="projection-val">{projData.violationsPerDay}</span>
               {projData.violTrendPct !== 0 && (
@@ -8763,7 +8763,7 @@ function AnalyticsPage({ lots, violations, partners = [], isOwner, onNavigate })
       {/* Peak Violation Hours Heatmap */}
       {hourlyData && (
         <div className="analytics-card">
-          <div className="analytics-card-title">Peak Violation Hours (Last 90 Days)</div>
+          <div className="analytics-card-title">Peak Recently-Expired Hours (Last 90 Days)</div>
           <div style={{overflowX:'auto', paddingBottom:4}}>
             <div className="heatmap-grid" style={{minWidth:360}}>
               {/* Hour labels */}
@@ -8784,7 +8784,7 @@ function AnalyticsPage({ lots, violations, partners = [], isOwner, onNavigate })
                     return (
                       <div key={`${dow}-${hour}`} className="heatmap-cell"
                         style={{background: bg}}
-                        title={`${day} ${hour}:00 — ${count} violation${count !== 1 ? 's' : ''}`}
+                        title={`${day} ${hour}:00 — ${count} recently expired`}
                       />
                     );
                   })}
@@ -8844,7 +8844,7 @@ function AnalyticsPage({ lots, violations, partners = [], isOwner, onNavigate })
         <div className="kpi-bar">
           <div className="kpi-card">
             <div className="kpi-val blue">{hourlyData?.total || 0}</div>
-            <div className="kpi-label">Violations (90d)</div>
+            <div className="kpi-label">Recently expired (90d)</div>
           </div>
           <div className="kpi-card">
             <div className="kpi-val green">{lots.length}</div>
@@ -9372,13 +9372,16 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   // Adding a new status = one row in each of the three maps below, and one
   // entry in deriveStatus(). Everything downstream consumes from these maps.
   const EXPIRING_WINDOW_MS = 3 * 60 * 60 * 1000;
-  const AUTO_CLEAR_WINDOW_MS = 24 * 60 * 60 * 1000;
+  // A pass whose window ended within the last 4 days shows as "Recently expired";
+  // older than that it's just "Expired" and lives in the permanent History.
+  // (Was a 24h "auto-clear" cut; widened to 4 days per ops.)
+  const AUTO_CLEAR_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
   const statusColor = {
     active: '#4ade80',
     expiring: '#facc15',
-    // De-emphasized (2026-06): violations read as neutral/reference rather
-    // than a red alert while camera coverage is unreliable and the pass
-    // system is carrying enforcement. Flip back to '#ef4444' to restore.
+    // Neutral grey, never a red alert: a "recently expired" pass usually just
+    // means the window ended and the camera (north gate, at night) didn't catch
+    // the exit — not a violation.
     expired: '#94a3b8',
     auto_cleared: '#6b7280',
     cancelled: 'var(--text-muted)',
@@ -9388,20 +9391,21 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   const statusDisplay = {
     active: 'Active',
     expiring: 'Expiring soon',
-    expired: 'Violation',
-    auto_cleared: 'Auto-cleared',
+    expired: 'Recently expired',
+    auto_cleared: 'Expired',
     cancelled: 'Cancelled',
     revoked: 'Revoked',
     towed: 'Towed',
   };
   // Order: live passes first (expiring soon is most time-sensitive, then
-  // active), housekeeping in the middle, violations (expired) LAST.
+  // active), housekeeping in the middle, expired records LAST.
   const statusOrder = { expiring: 0, active: 1, towed: 2, auto_cleared: 3, cancelled: 4, revoked: 5, expired: 6 };
-  // Explainer copy shown under the plate on each card. Operator's contract:
-  // what happened, why, and what to do about it. Only statuses where the
-  // "why" is non-obvious need an explainer — the rest leave this null.
+  // Soft explainer under the plate. The expired tiers carry the cover-the-
+  // customer note: an expiry often just means the camera missed the exit
+  // (night/power gaps at the north gate), not a violation.
   const statusExplainer = {
-    auto_cleared: "Auto-cleared after 24h. Camera didn't catch the truck leaving and no one marked it. If this truck is still on the lot, tap Mark towed below.",
+    expired: "Parking window ended — the vehicle may have already exited (the camera may not have captured it).",
+    auto_cleared: "Parking window ended (over 4 days ago) — kept here for the permanent record. If this truck is still on the lot, tap Mark towed.",
   };
 
   function deriveStatus(r) {
@@ -9678,7 +9682,7 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                         transition: 'background .12s, opacity .12s, box-shadow .12s',
                       }}
                     >
-                      {statusCounts[s]} {statusDisplay[s] || s}{statusCounts[s] !== 1 && s === 'expired' ? 's' : ''}
+                      {statusCounts[s]} {statusDisplay[s] || s}
                     </button>
                   );
                 })}
