@@ -3343,6 +3343,29 @@ const db = {
     }
     return apiFetch(`/visitor_passes/parking-log?${params}`);
   },
+  // Fetch EVERY page of the parking log and concatenate. The backend caps
+  // page_size at 500, so any property with more than 500 passes in the window
+  // (Charlotte already has >540) would silently lose its OLDEST registrations —
+  // unacceptable for the permanent History record. This pages through the whole
+  // result set using the `total` the backend reports, with a hard page cap so a
+  // bad `total` can never spin forever, and surfaces `truncated` if that cap is
+  // ever hit so the UI can say so honestly rather than pretend it's complete.
+  async getAllParkingLog(propertyId, opts = {}) {
+    const PAGE_SIZE = 500;
+    const MAX_PAGES = 60; // 30k rows — far beyond any real truck-plaza history
+    let page = 1;
+    let all = [];
+    let total = 0;
+    for (; page <= MAX_PAGES; page++) {
+      const res = await this.getParkingLog(propertyId, { ...opts, page, page_size: PAGE_SIZE });
+      const items = res.items || res.rows || [];
+      total = res.total ?? items.length;
+      all = all.concat(items);
+      // Stop when the page came back short (last page) or we have everything.
+      if (items.length < PAGE_SIZE || all.length >= total) break;
+    }
+    return { rows: all, total, truncated: all.length < total };
+  },
   async cancelVisitorPass(id, reason) {
     return apiFetch(`/visitor_passes/${id}/cancel`, {
       method: 'POST',
@@ -9240,15 +9263,26 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
       // failure doesn't blow away the violation map. Each side is preserved
       // independently — a network blip on one shouldn't strip tow buttons
       // from the screen.
-      // page_size=500 keeps the full date window in memory for live search.
+      // History is the permanent record — it must load EVERY pass, not just the
+      // most recent 500, or the oldest registrations silently vanish (Charlotte
+      // already has >540). getAllParkingLog pages through the whole result set;
+      // once every row is in memory the client-side search box covers 100% of
+      // history. Default (live-ops) mode keeps a single 500-row recent window.
+      const logFetch = isHistory
+        ? db.getAllParkingLog(propertyId, {
+            date_from: filters.date_from,
+            date_to: filters.date_to,
+            status: filters.status,
+          })
+        : db.getParkingLog(propertyId, {
+            date_from: filters.date_from,
+            date_to: filters.date_to,
+            status: filters.status,
+            page: 1,
+            page_size: 500,
+          });
       const [resOutcome, violOutcome] = await Promise.allSettled([
-        db.getParkingLog(propertyId, {
-          date_from: filters.date_from,
-          date_to: filters.date_to,
-          status: filters.status,
-          page: 1,
-          page_size: 500,
-        }),
+        logFetch,
         db.getOpenAlprViolations(propertyId),
       ]);
       if (resOutcome.status === 'fulfilled') {
@@ -10042,9 +10076,9 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
           and filter client-side as the operator types, so server-side
           pages no longer apply. If a property genuinely sees >500 passes
           in a 7-day window we'll surface a warning and re-introduce paging. */}
-      {!loading && rows.length >= 500 && (
+      {!loading && total > rows.length && (
         <div style={{fontSize:11,color:'#facc15',padding:'8px 12px',background:'rgba(250,204,21,.08)',border:'1px solid rgba(250,204,21,.3)',borderRadius:8}}>
-          Showing the most recent 500 passes for this date window. If you can't find a specific driver, narrow the date range and try again.
+          Showing {rows.length.toLocaleString()} of {total.toLocaleString()} passes. {isHistory ? 'Search by plate, driver, or company to find any specific registration.' : 'Narrow the date range to load older passes.'}
         </div>
       )}
 
