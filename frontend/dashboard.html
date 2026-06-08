@@ -11567,7 +11567,7 @@ function ALPRPropertiesPage({ user }) {
         // Per-property KPI counts. The no-reg count slot was wired to
         // /no-reg-violations (now retired). Hardcode to [] until the KPI
         // tile is either removed or rewired to query vehicle-event bundles.
-        const [noRegRows, openRows, overstayRows, registeredRows] = await Promise.all([
+        const [noRegRows, openRows, overstayRows, registeredRows, cooldownRow] = await Promise.all([
           Promise.resolve([]),
           supabase
             ? supabase.from('alpr_violations')
@@ -11590,12 +11590,22 @@ function ALPRPropertiesPage({ user }) {
           // so the count can never disagree with the lists.
           db.getActiveRoster(p.id)
             .catch(() => []),
+          // Truck-plaza only: plates currently on a 24h cooldown — a pass whose
+          // END (camera exit if seen, else the time-limit expiry) was within the
+          // last 24h. Registration-based, no camera dependence. Powers the "On
+          // Cooldown (Tow if seen)" tile.
+          (p.property_type === 'truck_plaza' && supabase)
+            ? supabase.rpc('count_on_cooldown', { p_property_id: p.id })
+                .then(r => ({ count: r.data ?? 0 }))
+                .catch(() => ({ count: 0 }))
+            : Promise.resolve({ count: 0 }),
         ]);
         return [p.id, {
           noReg: Array.isArray(noRegRows) ? noRegRows.length : 0,
           openJobs: openRows.count,
           overstays: overstayRows.count,
           registered: Array.isArray(registeredRows) ? registeredRows.length : 0,
+          onCooldown: cooldownRow.count,
         }];
       })
     ).then(pairs => {
@@ -11691,9 +11701,16 @@ function ALPRPropertiesPage({ user }) {
             const noReg = kpi.noReg || 0;
             const overstays = kpi.overstays || 0;
             const registered = kpi.registered || 0;
-            // Lot-level status pill
-            const pillCls = noReg > 0 ? 'red' : openJobs > 0 ? 'amber' : 'green';
-            const pillLabel = noReg > 0 ? 'Needs attention' : openJobs > 0 ? `${openJobs} open job${openJobs !== 1 ? 's' : ''}` : 'All clear';
+            const onCooldown = kpi.onCooldown || 0;
+            const isTruckPlaza = p.property_type === 'truck_plaza';
+            // Lot-level status pill. Truck plazas key off the on-cooldown count
+            // (camera-driven jobs are hidden); apartments keep the jobs pill.
+            const pillCls = isTruckPlaza
+              ? (onCooldown > 0 ? 'red' : 'green')
+              : (noReg > 0 ? 'red' : openJobs > 0 ? 'amber' : 'green');
+            const pillLabel = isTruckPlaza
+              ? (onCooldown > 0 ? `${onCooldown} on cooldown` : 'All clear')
+              : (noReg > 0 ? 'Needs attention' : openJobs > 0 ? `${openJobs} open job${openJobs !== 1 ? 's' : ''}` : 'All clear');
             return (
               <article key={p.id} className="lot-card-paper">
                 <div className="lot-head-paper">
@@ -11713,22 +11730,39 @@ function ALPRPropertiesPage({ user }) {
                 </div>
 
                 <div className="kpis-paper">
-                  <button
-                    className={`kpi-paper ${openJobs > 0 ? 'amber' : 'calm'}`}
-                    onClick={() => setSelectedId(p.id)}
-                    aria-label={`Open jobs for ${p.name}`}
-                  >
-                    <div className="top-row"><div className="val">{openJobs}</div><div className="chev">›</div></div>
-                    <div className="label">Open Jobs</div>
-                  </button>
-                  <button
-                    className={`kpi-paper ${overstays > 0 ? 'amber' : 'calm'}`}
-                    onClick={() => setSelectedId(p.id)}
-                    aria-label={`Overstays for ${p.name}`}
-                  >
-                    <div className="top-row"><div className="val">{overstays}</div><div className="chev">›</div></div>
-                    <div className="label">Overstays</div>
-                  </button>
+                  {isTruckPlaza ? (
+                    /* Truck plaza: camera-driven Open Jobs/Overstays are hidden.
+                       One tile = plates whose pass ended (camera exit OR time
+                       limit) within 24h, so they're on cooldown and shouldn't
+                       be back on the lot. Registration-based; tow if seen. */
+                    <button
+                      className={`kpi-paper ${onCooldown > 0 ? 'red' : 'calm'}`}
+                      onClick={() => setSelectedId(p.id)}
+                      aria-label={`On cooldown, tow if seen, for ${p.name}`}
+                    >
+                      <div className="top-row"><div className="val">{onCooldown}</div><div className="chev">›</div></div>
+                      <div className="label">On Cooldown (Tow if seen)</div>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        className={`kpi-paper ${openJobs > 0 ? 'amber' : 'calm'}`}
+                        onClick={() => setSelectedId(p.id)}
+                        aria-label={`Open jobs for ${p.name}`}
+                      >
+                        <div className="top-row"><div className="val">{openJobs}</div><div className="chev">›</div></div>
+                        <div className="label">Open Jobs</div>
+                      </button>
+                      <button
+                        className={`kpi-paper ${overstays > 0 ? 'amber' : 'calm'}`}
+                        onClick={() => setSelectedId(p.id)}
+                        aria-label={`Overstays for ${p.name}`}
+                      >
+                        <div className="top-row"><div className="val">{overstays}</div><div className="chev">›</div></div>
+                        <div className="label">Overstays</div>
+                      </button>
+                    </>
+                  )}
                   <button
                     className="kpi-paper green"
                     onClick={() => setDrillState({ propId: p.id, drill: 'registered' })}
