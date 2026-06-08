@@ -9636,11 +9636,15 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   const isRealStay = (o) =>
     o.status !== 'revoked' &&
     !(o.status === 'cancelled' && !String(o.cancelled_by || '').startsWith('camera_exit'));
+  // Placeholder plates and test rows are NOT real identities — different trucks
+  // share them, so they must never group together and fake a cooldown.
+  const COOLDOWN_PLACEHOLDER_PLATES = new Set(['NOPLATE','TEMPTAG','NONE','NA','TEMP','UNKNOWN']);
+  const isTestRow = (r) => /^test/i.test(r.company_name || '') || /^test/i.test(r.visitor_name || '');
   const cooldownIds = (() => {
     const byPlate = new Map();
     for (const r of unionRows) {
       const k = normalizePlateForSearch(r.plate_text);
-      if (!k) continue;
+      if (!k || COOLDOWN_PLACEHOLDER_PLATES.has(k) || isTestRow(r)) continue;
       if (!byPlate.has(k)) byPlate.set(k, []);
       byPlate.get(k).push(r);
     }
