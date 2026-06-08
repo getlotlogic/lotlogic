@@ -6947,7 +6947,16 @@ function SnapsLightbox({ snaps, startIndex, plate, onClose }) {
 // overlay on click for the full uncropped frame. Esc / outside-click closes.
 function FirstSeenEvidence({ plate, imageUrl, firstSeenAt, registeredAt, compact }) {
   const [open, setOpen] = useState(false);
-  // It's just the vehicle's entry photo — one plain presentation for every pass.
+  // Entry vs exit is just timing: a read within the arrival grace of
+  // registration is the truck coming IN (entry photo); a later read is it
+  // leaving (exit photo). Grace mirrors the backend EXIT_MIN_DWELL_MINUTES.
+  const GRACE_MIN = 30;
+  const readVsRegMin = firstSeenAt && registeredAt
+    ? (new Date(firstSeenAt).getTime() - new Date(registeredAt).getTime()) / 60000
+    : 0;
+  const isEntry = readVsRegMin <= GRACE_MIN;
+  const kindLabel = isEntry ? '📷 Entry photo' : '🚪 Exit photo';
+  const kindNoun = isEntry ? 'entry photo' : 'exit photo';
   const whenLabel = firstSeenAt
     ? new Date(firstSeenAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
     : '';
@@ -6966,7 +6975,7 @@ function FirstSeenEvidence({ plate, imageUrl, firstSeenAt, registeredAt, compact
     }}>
       <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
         <span style={{fontSize: compact ? 10 : 11,fontWeight:800,padding:'3px 8px',borderRadius:12,background:'var(--bg-inset)',color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'.06em'}}>
-          📷 Entry photo
+          {kindLabel}
         </span>
         <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:600}}>
           {whenLabel}
@@ -6975,13 +6984,13 @@ function FirstSeenEvidence({ plate, imageUrl, firstSeenAt, registeredAt, compact
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-        aria-label={`Enlarge entry photo for ${plate || 'unknown plate'}`}
+        aria-label={`Enlarge ${kindNoun} for ${plate || 'unknown plate'}`}
         title="Click to see full image"
         style={{display:'block',width:'100%',padding:0,border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',background:'#000',cursor:'zoom-in'}}
       >
         <img
           src={imageUrl}
-          alt={`${plate || ''} entry photo`}
+          alt={`${plate || ''} ${kindNoun}`}
           loading="lazy"
           style={{display:'block',width:'100%',height: compact ? 140 : 180,objectFit:'contain',background:'#000'}}
         />
@@ -6991,7 +7000,7 @@ function FirstSeenEvidence({ plate, imageUrl, firstSeenAt, registeredAt, compact
           onClick={() => setOpen(false)}
           role="dialog"
           aria-modal="true"
-          aria-label="Entry photo"
+          aria-label={kindNoun}
           style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:1200,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
         >
           <div onClick={(e) => e.stopPropagation()} style={{maxWidth:'min(1200px, 98vw)',maxHeight:'94vh',display:'flex',flexDirection:'column',gap:8,alignItems:'center'}}>
