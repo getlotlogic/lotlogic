@@ -517,9 +517,16 @@ The property and tow operator are not responsible for any damage to vehicles tha
 
           <div style="margin-top:18px;background:#1F1B14;color:#F4ECD8;border:1.5px solid #1F1B14;padding:16px 18px;font-size:13px;line-height:1.55;letter-spacing:.02em;">
             <div style="font-family:'Fraunces',serif;font-style:italic;font-size:16px;margin-bottom:10px;color:#F4ECD8;">Towing enforced — please read the rules.</div>
-            <div style="white-space:pre-wrap;max-height:260px;overflow:auto;color:#F4ECD8;font-size:12.5px;line-height:1.5;background:#171309;border:1px solid #2A241A;border-radius:6px;padding:12px 14px;">${escapeHtml(property.policy_text || DEFAULT_TRUCK_PLAZA_POLICY)}</div>
+            <!-- The property's official posted policy, shown as the actual signed document image.
+                 Keyed by qr_code_id so each property can drop in /policy/<qr>.jpg. Falls back to
+                 the text policy only if no image exists for this property. -->
+            <img src="/policy/${escapeHtml(qrCodeId)}.jpg"
+                 alt="Official truck parking policies"
+                 style="width:100%;height:auto;display:block;border-radius:6px;background:#FFFFFF;"
+                 onerror="this.style.display='none';var f=document.getElementById('policyTextFallback');if(f)f.style.display='block';" />
+            <div id="policyTextFallback" style="display:none;white-space:pre-wrap;max-height:260px;overflow:auto;color:#F4ECD8;font-size:12.5px;line-height:1.5;background:#171309;border:1px solid #2A241A;border-radius:6px;padding:12px 14px;">${escapeHtml(property.policy_text || DEFAULT_TRUCK_PLAZA_POLICY)}</div>
             <div style="margin-top:12px;font-size:12px;color:#D9C9A6;">NMLD Towing &middot; ${escapeHtml(property.policy_phone || '(269) 217-6208')} &middot; Truck parking rules are in effect 24/7.</div>
-            <div style="margin-top:10px;font-size:12px;color:#D9C9A6;">By submitting you confirm you have read and agree to all parking policies above and understand the liability notice.</div>
+            <div style="margin-top:10px;font-size:12px;color:#D9C9A6;">By submitting you confirm you have read and agree to all parking policies shown above and understand the liability notice.</div>
           </div>
 
           <button type="submit" class="submit-btn" id="submitBtn" style="margin-top:18px;">Get parking pass →</button>
