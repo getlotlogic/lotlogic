@@ -193,7 +193,10 @@ async function overstayExpiry(): Promise<number> {
       .from("visitor_passes")
       .select("valid_until")
       .eq("id", s.visitor_pass_id)
-      .single();
+      .maybeSingle();
+    // maybeSingle (not single): a deleted pass returns null, not a throw, so one
+    // orphaned visitor_pass_id can't abort the whole sweep tick. The null case
+    // is already handled below (skip the session).
     if (pErr) throw pErr;
     if (!pass?.valid_until) continue;
     if (new Date(pass.valid_until).getTime() >= graceCutoffMs) continue;
@@ -316,7 +319,10 @@ async function closeExpired(): Promise<number> {
         .from("alpr_violations")
         .select("status, tow_confirmed_at")
         .eq("id", s.violation_id)
-        .single();
+        .maybeSingle();
+      // maybeSingle (not single): a deleted violation returns null, not a throw,
+      // so the orphan-close branch below actually runs (with single() it threw
+      // and aborted the tick, making that branch dead code).
       if (vErr) throw vErr;
       if (!v) {
         // Violation row referenced by this session has been deleted from
