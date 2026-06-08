@@ -3445,6 +3445,18 @@ const db = {
     if (error || !data || data.length === 0) return null;
     return data[0];
   },
+  // The exact camera frame that closed a pass (the exit/departure proof),
+  // fetched by the pass's exited_via_plate_event_id. Returns image + camera + time.
+  async getExitFrame(plateEventId) {
+    if (!supabase || !plateEventId) return null;
+    const { data, error } = await supabase
+      .from('plate_events')
+      .select('image_url, created_at, confidence, alpr_cameras:camera_id(name)')
+      .eq('id', plateEventId)
+      .maybeSingle();
+    if (error || !data || !data.image_url) return null;
+    return { image_url: data.image_url, created_at: data.created_at, confidence: data.confidence, camera_name: data.alpr_cameras?.name || null };
+  },
   async getRecentPlateEvents(propertyId, limit = 50) {
     if (supabase) {
       const { data, error } = await supabase
@@ -9031,7 +9043,56 @@ function VehicleImage({ rowId, plateText, backPlate, propertyId, cache, setCache
   );
 }
 
-function TruckParkingLog({ propertyId, isOwner = false }) {
+// ExitImage — the exact camera frame that closed a pass (departure proof),
+// keyed by exited_via_plate_event_id. Lazy-loaded on intersection like
+// VehicleImage; self-contained local state. Renders nothing if no frame exists.
+function ExitImage({ plateEventId, plate }) {
+  const containerRef = useRef(null);
+  const [st, setSt] = useState(null); // null | {loading} | {url,...} | {empty}
+  useEffect(() => {
+    if (st || !plateEventId) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (!entries[0].isIntersecting) return;
+      obs.disconnect();
+      setSt({ loading: true });
+      db.getExitFrame(plateEventId)
+        .then((ev) => setSt(ev?.image_url ? { url: ev.image_url, capturedAt: ev.created_at, cameraName: ev.camera_name } : { empty: true }))
+        .catch(() => setSt({ empty: true }));
+    }, { rootMargin: '200px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [plateEventId, st]);
+  if (st?.empty) return null;
+  return (
+    <div ref={containerRef} style={{
+      position:'relative',
+      background: (st?.url || st?.loading) ? 'var(--bg-inset)' : 'transparent',
+      borderRadius:8, overflow:'hidden',
+      minHeight: st?.url ? 0 : (st?.loading ? 80 : 1),
+    }}>
+      {st?.loading && (
+        <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,color:'var(--text-faint)',letterSpacing:'.04em',textTransform:'uppercase'}}>Loading exit photo…</div>
+      )}
+      {st?.url && (
+        <>
+          <img src={st.url} alt={`Exit ${plate}`} loading="lazy" style={{display:'block',width:'100%',height:'auto',objectFit:'contain'}} />
+          <div style={{position:'absolute',bottom:0,left:0,right:0,padding:'4px 8px',background:'linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0))',fontSize:10,color:'#fff',display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8}}>
+            <span style={{fontWeight:700,letterSpacing:'.03em'}}>🚪 Exit · {st.cameraName || 'camera'}</span>
+            <span style={{opacity:.85}}>{st.capturedAt ? new Date(st.capturedAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
+  // mode='history' → the permanent, all-time record (no date lower bound): every
+  // registration ever, all statuses, searchable + CSV. 'default' = the live ops
+  // log (last 4 days). Same machinery either way.
+  const isHistory = mode === 'history';
   const { addToast } = useToast();
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
@@ -9056,11 +9117,14 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
   // they refetch from the server. Search text is separate state below and is
   // pure client-side (live filter on already-fetched rows).
   const [filters, setFilters] = useState(() => {
-    // Default to last 4 days. Passes older than that are dropped from the
-    // operator's working view — they're historical and clutter the queue.
-    // Filter is adjustable via the date_from input if an operator needs
-    // to look further back.
     const today = new Date();
+    // History mode = the permanent record: NO lower bound (empty date_from →
+    // backend returns all-time), so nothing is ever dropped/forgotten.
+    if (isHistory) {
+      return { date_from: '', date_to: today.toISOString().slice(0, 10), status: '' };
+    }
+    // Default ops view: last 4 days. Older passes are historical and clutter
+    // the working queue (and live in the History tab). Adjustable via date_from.
     const fourDaysAgo = new Date(today.getTime() - 4 * 24 * 60 * 60 * 1000);
     return {
       date_from: fourDaysAgo.toISOString().slice(0, 10),
@@ -9870,14 +9934,20 @@ function TruckParkingLog({ propertyId, isOwner = false }) {
                   />
                 )}
 
-                {/* Vehicle photo (camera snapshot). Lazy-loaded on intersection —
-                    operators/partners see what the vehicle looks like without
-                    expanding anything. Shown for violation / auto-cleared rows,
-                    and for active/expiring passes that don't already have a
-                    pre-registration frame (FirstSeenEvidence) above — so every
-                    row carries the car's picture without doubling it up. */}
-                {(isViolation || isAutoCleared || ((isActive || isExpiring) && !r.first_seen_image_url)) && (
+                {/* Vehicle / entry photo (best camera frame in the visit window),
+                    lazy-loaded on intersection. Shown on EVERY row that doesn't
+                    already have a dedicated pre-registration (entry) frame above
+                    — so every truck we saw carries a picture, not just the
+                    expired ones. Renders nothing if the camera never caught it. */}
+                {!r.first_seen_image_url && (
                   <VehicleImage rowId={r.id} plateText={r.plate_text} backPlate={r.back_plate} propertyId={propertyId} cache={vehicleImageCache} setCache={setVehicleImageCache} fromTs={r.valid_from} untilTs={r.valid_until} />
+                )}
+
+                {/* Exit / departure proof — the exact frame that closed this
+                    pass (the camera read at exited_via_plate_event_id). Always
+                    attached when we have it; renders nothing otherwise. */}
+                {r.exited_via_plate_event_id && (
+                  <ExitImage plateEventId={r.exited_via_plate_event_id} plate={r.plate_text} />
                 )}
 
                 {/* Time range */}
@@ -10448,7 +10518,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             // ActivePassTracker chip removed entirely — the component was
             // deleted in the parking-pass consolidation. The Parking Log
             // is the single source of truth now.
-            ...(isTruckPlaza ? [{ id: 'log',     label: 'Parking Log' }] : [{ id: 'log', label: 'Parking Passes' }]),
+            ...(isTruckPlaza ? [{ id: 'log', label: 'Parking Log' }, { id: 'history', label: 'History' }] : [{ id: 'log', label: 'Parking Passes' }]),
           ];
           return chips.map(c => {
             const active = sectionFilter === c.id;
@@ -10683,6 +10753,20 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           </>
         );
       })())}
+
+      {/* History — permanent, all-time record of every registration (truck
+          plazas). For the tow company / owner to audit everything, forever. */}
+      {showSection('history') && isTruckPlaza && (
+        <>
+          <div className="pd-section-head">
+            <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+              <span className="pd-section-title">History</span>
+            </div>
+            <div className="pd-section-meta">All registrations · all time</div>
+          </div>
+          <ErrorBoundary label="history"><TruckParkingLog propertyId={propertyId} isOwner={isOwner} mode="history" /></ErrorBoundary>
+        </>
+      )}
 
       {/* Cameras — owner-only. Partners don't manage hardware. */}
       {showSection('cameras') && isOwner && (
