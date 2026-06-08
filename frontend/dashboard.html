@@ -11600,12 +11600,22 @@ function ALPRPropertiesPage({ user }) {
                 .catch(() => ({ count: 0 }))
             : Promise.resolve({ count: 0 }),
         ]);
+        // Expiring soon = active passes within 3h of their limit. Derived from
+        // the roster we just fetched (no extra query); mirrors the EXPIRING
+        // window the parking log uses.
+        const roster = Array.isArray(registeredRows) ? registeredRows : [];
+        const EXPIRING_MS = 3 * 60 * 60 * 1000;
+        const expiringSoon = roster.filter(r => {
+          const ms = r.valid_until ? new Date(r.valid_until).getTime() - Date.now() : null;
+          return ms !== null && ms > 0 && ms < EXPIRING_MS;
+        }).length;
         return [p.id, {
           noReg: Array.isArray(noRegRows) ? noRegRows.length : 0,
           openJobs: openRows.count,
           overstays: overstayRows.count,
-          registered: Array.isArray(registeredRows) ? registeredRows.length : 0,
+          registered: roster.length,
           onCooldown: cooldownRow.count,
+          expiringSoon,
         }];
       })
     ).then(pairs => {
@@ -11702,6 +11712,7 @@ function ALPRPropertiesPage({ user }) {
             const overstays = kpi.overstays || 0;
             const registered = kpi.registered || 0;
             const onCooldown = kpi.onCooldown || 0;
+            const expiringSoon = kpi.expiringSoon || 0;
             const isTruckPlaza = p.property_type === 'truck_plaza';
             // Lot-level status pill. Truck plazas key off the on-cooldown count
             // (camera-driven jobs are hidden); apartments keep the jobs pill.
@@ -11732,17 +11743,37 @@ function ALPRPropertiesPage({ user }) {
                 <div className="kpis-paper">
                   {isTruckPlaza ? (
                     /* Truck plaza: camera-driven Open Jobs/Overstays are hidden.
-                       One tile = plates whose pass ended (camera exit OR time
-                       limit) within 24h, so they're on cooldown and shouldn't
-                       be back on the lot. Registration-based; tow if seen. */
-                    <button
-                      className={`kpi-paper ${onCooldown > 0 ? 'red' : 'calm'}`}
-                      onClick={() => setSelectedId(p.id)}
-                      aria-label={`On cooldown, tow if seen, for ${p.name}`}
-                    >
-                      <div className="top-row"><div className="val">{onCooldown}</div><div className="chev">›</div></div>
-                      <div className="label">On Cooldown (Tow if seen)</div>
-                    </button>
+                       The three pass-states that matter — On Cooldown (pass
+                       ended, camera exit OR time limit, within 24h → tow if
+                       seen), Active (currently parked), Expiring soon (<3h
+                       left). The no-registration evidence package stays inside
+                       the property, not on the card. */
+                    <>
+                      <button
+                        className={`kpi-paper ${onCooldown > 0 ? 'red' : 'calm'}`}
+                        onClick={() => setSelectedId(p.id)}
+                        aria-label={`On cooldown, tow if seen, for ${p.name}`}
+                      >
+                        <div className="top-row"><div className="val">{onCooldown}</div><div className="chev">›</div></div>
+                        <div className="label">On Cooldown (Tow if seen)</div>
+                      </button>
+                      <button
+                        className="kpi-paper green"
+                        onClick={() => setDrillState({ propId: p.id, drill: 'registered' })}
+                        aria-label={`Active parking passes for ${p.name}`}
+                      >
+                        <div className="top-row"><div className="val">{registered}</div><div className="chev">›</div></div>
+                        <div className="label">Active</div>
+                      </button>
+                      <button
+                        className={`kpi-paper ${expiringSoon > 0 ? 'amber' : 'calm'}`}
+                        onClick={() => setSelectedId(p.id)}
+                        aria-label={`Expiring soon for ${p.name}`}
+                      >
+                        <div className="top-row"><div className="val">{expiringSoon}</div><div className="chev">›</div></div>
+                        <div className="label">Expiring soon</div>
+                      </button>
+                    </>
                   ) : (
                     <>
                       <button
@@ -11761,16 +11792,16 @@ function ALPRPropertiesPage({ user }) {
                         <div className="top-row"><div className="val">{overstays}</div><div className="chev">›</div></div>
                         <div className="label">Overstays</div>
                       </button>
+                      <button
+                        className="kpi-paper green"
+                        onClick={() => setDrillState({ propId: p.id, drill: 'registered' })}
+                        aria-label={`Registered parking passes for ${p.name}`}
+                      >
+                        <div className="top-row"><div className="val">{registered}</div><div className="chev">›</div></div>
+                        <div className="label">Registered</div>
+                      </button>
                     </>
                   )}
-                  <button
-                    className="kpi-paper green"
-                    onClick={() => setDrillState({ propId: p.id, drill: 'registered' })}
-                    aria-label={`Registered parking passes for ${p.name}`}
-                  >
-                    <div className="top-row"><div className="val">{registered}</div><div className="chev">›</div></div>
-                    <div className="label">Registered</div>
-                  </button>
                 </div>
 
                 <div className="lot-foot-paper">
