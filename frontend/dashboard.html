@@ -3730,16 +3730,23 @@ function useActiveRoster(propertyId) {
   const [roster, setRoster] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Monotonic request token: a slow fetch for a previous propertyId must never
+  // push its stale roster after a newer fetch has started. Each refresh claims
+  // a token; only the latest token is allowed to write state.
+  const reqRef = useRef(0);
   const refresh = useCallback(() => {
     if (!propertyId) return;
+    const myReq = ++reqRef.current;
     db.getActiveRoster(propertyId)
-      .then(r => { setRoster(r || []); setError(null); })
+      .then(r => { if (myReq === reqRef.current) { setRoster(r || []); setError(null); } })
       // Keep the previous roster — never blank on a transient error.
-      .catch(e => { setError(e?.message || 'Could not refresh roster'); })
-      .finally(() => setLoading(false));
+      .catch(e => { if (myReq === reqRef.current) setError(e?.message || 'Could not refresh roster'); })
+      .finally(() => { if (myReq === reqRef.current) setLoading(false); });
   }, [propertyId]);
   useEffect(() => {
-    if (!propertyId) return;
+    // No property yet → clear the spinner instead of hanging on "Loading…".
+    if (!propertyId) { setLoading(false); return; }
+    reqRef.current++;            // invalidate any in-flight fetch from a prior id
     setLoading(true);
     refresh();
     const poll = setInterval(refresh, 60000);
