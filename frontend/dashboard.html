@@ -9623,6 +9623,42 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     return tb - ta;
   });
 
+  // Cooldown violation — DERIVED, no camera needed. A pass is flagged when the
+  // SAME plate has an earlier pass that ended (or was still active) within 24h
+  // before this one registered — i.e. they re-registered when they shouldn't be
+  // here yet. Surfaced on the pass itself (the Jobs tab is hidden); recomputed
+  // from the loaded passes every render so it can't silently fail like a stored
+  // flag. The prior pass always ended <24h earlier, so it's always loaded too.
+  const COOLDOWN_MS = 24 * 60 * 60 * 1000;
+  const cooldownIds = (() => {
+    const byPlate = new Map();
+    for (const r of unionRows) {
+      const k = normalizePlateForSearch(r.plate_text);
+      if (!k) continue;
+      if (!byPlate.has(k)) byPlate.set(k, []);
+      byPlate.get(k).push(r);
+    }
+    const flagged = new Set();
+    for (const list of byPlate.values()) {
+      if (list.length < 2) continue;
+      for (const r of list) {
+        const reg = new Date(r.created_at).getTime();
+        if (!reg) continue;
+        for (const o of list) {
+          if (o === r) continue;
+          const oReg = new Date(o.created_at).getTime();
+          if (!(oReg < reg)) continue; // only an earlier registration counts
+          const end = Math.max(
+            o.valid_until ? new Date(o.valid_until).getTime() : 0,
+            o.exited_at ? new Date(o.exited_at).getTime() : 0,
+          );
+          if (end && end > reg - COOLDOWN_MS) { flagged.add(r.id); break; }
+        }
+      }
+    }
+    return flagged;
+  })();
+
   // Total displayed reflects whatever's actually on screen right now —
   // accounts for both search filter AND the pill drill-down.
   const displayedTotal = pillStatusFilter
@@ -9854,6 +9890,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
             const isViolation = s === 'expired';
             const isExpiring = s === 'expiring';
             const isAutoCleared = s === 'auto_cleared';
+            const isCooldownViol = cooldownIds.has(r.id);
             const driverLine = [r.visitor_name, r.company_name].filter(Boolean).join(' · ') || '—';
             const detailChips = [];
             if (r.parking_spot) detailChips.push({ label: 'Spot', value: r.parking_spot });
@@ -9919,6 +9956,23 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                     flexShrink:0,
                   }}>{statusDisplay[s] || s}</span>
                 </div>
+
+                {/* Violation, on the pass itself. Cooldown = re-registered
+                    within 24h of a prior pass — confirmed from registration
+                    data alone, no camera needed. */}
+                {isCooldownViol && (
+                  <div style={{
+                    display:'flex',alignItems:'center',gap:8,
+                    fontSize:12,fontWeight:700,lineHeight:1.4,
+                    padding:'8px 10px',borderRadius:8,
+                    background:'rgba(239,68,68,.1)',
+                    border:'1px solid rgba(239,68,68,.35)',
+                    color:'#ef4444',
+                  }}>
+                    <span aria-hidden="true">⚠️</span>
+                    <span>Violation — re-registered within the 24-hour cooldown</span>
+                  </div>
+                )}
 
                 {/* Pass holder / company / phone line */}
                 <div style={{display:'flex',flexDirection:'column',gap:3}}>
@@ -12199,7 +12253,9 @@ function App() {
     return match ? match[1] : null;
   });
   const [tab, setTab] = useState(() => {
-    try { return localStorage.getItem('lotlogic_tab') || 'jobs'; } catch { return 'jobs'; }
+    // Jobs tab is hidden (camera-driven; unreliable until cameras read 100% of
+    // cars). Land on Lots and coerce any persisted 'jobs' so nobody opens it.
+    try { const t = localStorage.getItem('lotlogic_tab'); return (!t || t === 'jobs') ? 'lots' : t; } catch { return 'lots'; }
   });
   const [lots, setLots] = useState([]);
   const [lotStates, setLotStates] = useState({});
@@ -12341,7 +12397,7 @@ function App() {
     if (realtimeRef.current) { supabase?.removeChannel(realtimeRef.current); realtimeRef.current = null; }
     if (alprRealtimeRef.current) { supabase?.removeChannel(alprRealtimeRef.current); alprRealtimeRef.current = null; }
     setOwner(null); setLots([]); setLotStates({}); setViolations([]); setAlprViolations([]); setPartners([]); setViewAs(null);
-    setTab('jobs');
+    setTab('lots');
     try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
   }
 
@@ -12553,7 +12609,7 @@ function App() {
   function handleViewAs(partner) {
     setViewAs(partner);
     setPartnerSwitcherOpen(false);
-    setTab('jobs');
+    setTab('lots');
     haptic('medium');
   }
   function exitViewAs() {
@@ -12581,7 +12637,7 @@ function App() {
   //   Analytics/Activity → summaries
   //   Earnings → $$
   const navTabs = isOwner ? [
-    { id: 'jobs',        label: 'Jobs',        badge: pending + alprPending },
+    // Jobs tab hidden until cameras read 100% — everything surfaces on the pass.
     { id: 'lots',        label: 'Lots',        badge: 0 },
     { id: 'analytics',   label: 'Analytics',   badge: 0 },
     { id: 'training',    label: 'Training',    badge: trainingBadge },
@@ -12593,7 +12649,6 @@ function App() {
     // Partner navigation. Earnings + Billing/Invoices are owner-only
     // surfaces — partners must NEVER see revenue_share, fee schedules,
     // or QuickBooks state. Removed 2026-04-28 per Gabe.
-    { id: 'jobs',     label: 'Jobs',     badge: pending + alprPending },
     { id: 'lots',     label: 'Lots',     badge: 0 },
     { id: 'activity', label: 'Activity', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
