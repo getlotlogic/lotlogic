@@ -9123,6 +9123,10 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   const isHistory = mode === 'history';
   const { addToast } = useToast();
   const [rows, setRows] = useState([]);
+  // Complete pass set for the cooldown flag only (the displayed `rows` are
+  // windowed in default mode, but a long-overstay prior can be created before
+  // that window). Kept separate so the display stays windowed.
+  const [cdPool, setCdPool] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
@@ -9286,9 +9290,13 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
             page: 1,
             page_size: 500,
           });
-      const [resOutcome, violOutcome] = await Promise.allSettled([
+      // Cooldown needs EVERY pass for the property. In history the display is
+      // already all of them; in default mode fetch them separately for the pool.
+      const poolFetch = isHistory ? Promise.resolve(null) : db.getAllParkingLog(propertyId, {});
+      const [resOutcome, violOutcome, poolOutcome] = await Promise.allSettled([
         logFetch,
         db.getOpenAlprViolations(propertyId),
+        poolFetch,
       ]);
       if (resOutcome.status === 'fulfilled') {
         const res = resOutcome.value;
@@ -9300,6 +9308,10 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
         const items = res.items || res.rows || [];
         setRows(items);
         setTotal(res.total ?? items.length);
+        if (isHistory) setCdPool(items);
+        else if (poolOutcome.status === 'fulfilled' && poolOutcome.value) {
+          setCdPool(poolOutcome.value.rows || poolOutcome.value.items || []);
+        }
       } else {
         // Log fetch failed — keep the previous rows on screen rather than
         // emptying the list. Operator should see the error banner instead.
@@ -9640,33 +9652,61 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   // share them, so they must never group together and fake a cooldown.
   const COOLDOWN_PLACEHOLDER_PLATES = new Set(['NOPLATE','TEMPTAG','NONE','NA','TEMP','UNKNOWN']);
   const isTestRow = (r) => /^test/i.test(r.company_name || '') || /^test/i.test(r.visitor_name || '');
+  // Every identity a pass carries: front plate, trailer plate, USDOT, MC. A
+  // truck that re-registers under a different front plate but the same trailer
+  // (or DOT/MC) is still the same truck. Placeholder/test rows never group.
+  const cooldownIdentities = (r) => {
+    const ids = [];
+    const fp = normalizePlateForSearch(r.plate_text);
+    if (fp && !COOLDOWN_PLACEHOLDER_PLATES.has(fp)) ids.push('PL:' + fp);
+    const bp = normalizePlateForSearch(r.normalized_back_plate || r.back_plate || '');
+    if (bp && !COOLDOWN_PLACEHOLDER_PLATES.has(bp)) ids.push('PL:' + bp);
+    const dot = String(r.usdot_number || '').replace(/\D/g, '');
+    if (dot) ids.push('DOT:' + dot);
+    const mc = String(r.mc_number || '').replace(/\D/g, '');
+    if (mc) ids.push('MC:' + mc);
+    return ids;
+  };
   const cooldownIds = (() => {
-    const byPlate = new Map();
-    for (const r of unionRows) {
-      const k = normalizePlateForSearch(r.plate_text);
-      if (!k || COOLDOWN_PLACEHOLDER_PLATES.has(k) || isTestRow(r)) continue;
-      if (!byPlate.has(k)) byPlate.set(k, []);
-      byPlate.get(k).push(r);
+    // Use the complete pool; merge in any just-loaded union rows it's missing.
+    let source = cdPool.length ? cdPool : unionRows;
+    if (cdPool.length && unionRows.length) {
+      const m = new Map();
+      for (const r of cdPool) m.set(r.id, r);
+      for (const r of unionRows) if (!m.has(r.id)) m.set(r.id, r);
+      source = Array.from(m.values());
+    }
+    const byId = new Map();
+    for (const r of source) {
+      if (isTestRow(r)) continue;
+      for (const k of cooldownIdentities(r)) {
+        if (!byId.has(k)) byId.set(k, []);
+        byId.get(k).push(r);
+      }
     }
     const flagged = new Set();
-    for (const list of byPlate.values()) {
-      if (list.length < 2) continue;
-      for (const r of list) {
-        const reg = new Date(r.created_at).getTime();
-        if (!reg) continue;
-        for (const o of list) {
-          if (o === r || !isRealStay(o)) continue;
+    for (const r of source) {
+      if (isTestRow(r)) continue;
+      const reg = new Date(r.created_at).getTime();
+      if (!reg) continue;
+      const seen = new Set();
+      let hit = false;
+      for (const k of cooldownIdentities(r)) {
+        for (const o of (byId.get(k) || [])) {
+          if (o.id === r.id || seen.has(o.id)) continue;
+          seen.add(o.id);
+          if (!isRealStay(o)) continue;
           const oReg = new Date(o.created_at).getTime();
           if (!(oReg < reg)) continue; // only an earlier registration counts
-          // The prior stay's end AS OF this registration. An exit only counts if
-          // it happened BEFORE this registration — a later closure (an overstay
-          // the camera closed days afterward) must not back-date the end and
-          // fake a cooldown. Otherwise fall back to the scheduled valid_until.
+          // Prior stay's end AS OF this registration. An exit only counts if it
+          // happened BEFORE this registration — a later closure (overstay closed
+          // days afterward) must not back-date the end and fake a cooldown.
           const ex = o.exited_at ? new Date(o.exited_at).getTime() : 0;
           const vu = o.valid_until ? new Date(o.valid_until).getTime() : 0;
           const end = (ex && ex <= reg) ? ex : vu;
-          if (end && end > reg - COOLDOWN_MS) { flagged.add(r.id); break; }
+          if (end && end > reg - COOLDOWN_MS) { flagged.add(r.id); hit = true; break; }
         }
+        if (hit) break;
       }
     }
     return flagged;
