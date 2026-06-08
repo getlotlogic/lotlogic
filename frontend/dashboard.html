@@ -9652,21 +9652,6 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   // share them, so they must never group together and fake a cooldown.
   const COOLDOWN_PLACEHOLDER_PLATES = new Set(['NOPLATE','TEMPTAG','NONE','NA','TEMP','UNKNOWN']);
   const isTestRow = (r) => /^test/i.test(r.company_name || '') || /^test/i.test(r.visitor_name || '');
-  // Every identity a pass carries: front plate, trailer plate, USDOT, MC. A
-  // truck that re-registers under a different front plate but the same trailer
-  // (or DOT/MC) is still the same truck. Placeholder/test rows never group.
-  const cooldownIdentities = (r) => {
-    const ids = [];
-    const fp = normalizePlateForSearch(r.plate_text);
-    if (fp && !COOLDOWN_PLACEHOLDER_PLATES.has(fp)) ids.push('PL:' + fp);
-    const bp = normalizePlateForSearch(r.normalized_back_plate || r.back_plate || '');
-    if (bp && !COOLDOWN_PLACEHOLDER_PLATES.has(bp)) ids.push('PL:' + bp);
-    const dot = String(r.usdot_number || '').replace(/\D/g, '');
-    if (dot) ids.push('DOT:' + dot);
-    const mc = String(r.mc_number || '').replace(/\D/g, '');
-    if (mc) ids.push('MC:' + mc);
-    return ids;
-  };
   const cooldownIds = (() => {
     // Use the complete pool; merge in any just-loaded union rows it's missing.
     let source = cdPool.length ? cdPool : unionRows;
@@ -9676,26 +9661,21 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
       for (const r of unionRows) if (!m.has(r.id)) m.set(r.id, r);
       source = Array.from(m.values());
     }
-    const byId = new Map();
+    const byPlate = new Map();
     for (const r of source) {
-      if (isTestRow(r)) continue;
-      for (const k of cooldownIdentities(r)) {
-        if (!byId.has(k)) byId.set(k, []);
-        byId.get(k).push(r);
-      }
+      const k = normalizePlateForSearch(r.plate_text);
+      if (!k || COOLDOWN_PLACEHOLDER_PLATES.has(k) || isTestRow(r)) continue;
+      if (!byPlate.has(k)) byPlate.set(k, []);
+      byPlate.get(k).push(r);
     }
     const flagged = new Set();
-    for (const r of source) {
-      if (isTestRow(r)) continue;
-      const reg = new Date(r.created_at).getTime();
-      if (!reg) continue;
-      const seen = new Set();
-      let hit = false;
-      for (const k of cooldownIdentities(r)) {
-        for (const o of (byId.get(k) || [])) {
-          if (o.id === r.id || seen.has(o.id)) continue;
-          seen.add(o.id);
-          if (!isRealStay(o)) continue;
+    for (const list of byPlate.values()) {
+      if (list.length < 2) continue;
+      for (const r of list) {
+        const reg = new Date(r.created_at).getTime();
+        if (!reg) continue;
+        for (const o of list) {
+          if (o === r || !isRealStay(o)) continue;
           const oReg = new Date(o.created_at).getTime();
           if (!(oReg < reg)) continue; // only an earlier registration counts
           // Prior stay's end AS OF this registration. An exit only counts if it
@@ -9704,9 +9684,8 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
           const ex = o.exited_at ? new Date(o.exited_at).getTime() : 0;
           const vu = o.valid_until ? new Date(o.valid_until).getTime() : 0;
           const end = (ex && ex <= reg) ? ex : vu;
-          if (end && end > reg - COOLDOWN_MS) { flagged.add(r.id); hit = true; break; }
+          if (end && end > reg - COOLDOWN_MS) { flagged.add(r.id); break; }
         }
-        if (hit) break;
       }
     }
     return flagged;
