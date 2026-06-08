@@ -21,7 +21,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
-import { plateSimilar } from "./sessions.ts";
+import { areCharsConfusable } from "./sessions.ts";
 import { insertWeakRead, findStaleGroups, flushGroup } from "./weak_plate_reads.ts";
 import { extractMmc, isMmcBlocked, handleMmcFailureStatus, type PrMmcData } from "./mmc.ts";
 
@@ -84,6 +84,32 @@ export const SC211_SIDECAR_FLOOR = 0.0;
 // Env-tunable; log-and-retune as data accumulates.
 const TRUCK_FUZZY_CANCEL_MIN = Number(Deno.env.get("TRUCK_FUZZY_CANCEL_MIN") ?? "0.65");
 
+// Max TOTAL differing character positions (OCR-confusable swaps + true edits
+// combined) for a fuzzy exit read to auto-close a pass. The old rule allowed
+// UNLIMITED confusable swaps + 1 true edit, so a read could ride several "free"
+// confusable swaps onto a different vehicle's plate — e.g. MBD8497 closed a
+// WBD3427 pass via M↔W + 8↔3 (both confusable) + 9↔2 (the 1 true edit) = 3
+// real differences. Bounding the TOTAL diffs to 2 rejects that cross-vehicle
+// case while still allowing genuine 1–2 char night OCR drift. 0 = exact only.
+// Env-tunable so the threshold can be retuned without a redeploy.
+const EXIT_MATCH_MAX_TOTAL_DIFFS = Number(Deno.env.get("EXIT_MATCH_MAX_TOTAL_DIFFS") ?? "2");
+
+// Tighter fuzzy predicate for the EXIT close path ONLY (not session burst-dedup,
+// which keeps using the looser plateSimilar). Same-length required; counts every
+// differing position, distinguishing confusable swaps from true edits, and caps
+// both: at most 1 true edit AND at most EXIT_MATCH_MAX_TOTAL_DIFFS total diffs.
+function exitFuzzyMatch(read: string, registered: string): boolean {
+  if (read.length !== registered.length) return false;
+  let trueEdits = 0;
+  let totalDiffs = 0;
+  for (let i = 0; i < read.length; i++) {
+    if (read[i] === registered[i]) continue;
+    totalDiffs++;
+    if (!areCharsConfusable(read[i], registered[i])) trueEdits++;
+  }
+  return trueEdits <= 1 && totalDiffs <= EXIT_MATCH_MAX_TOTAL_DIFFS;
+}
+
 // Group key for burst dedup. SC211s at the same gate share a group so
 // the best frame across cameras gets chosen as the winning read.
 function groupKeyFor(camera: CameraRow): string {
@@ -107,10 +133,11 @@ type PassMatch = {
 //      the camera's normalized read. Runs against every row first so a
 //      clean read of "ABC1234" never wrong-links to "ABC1235" via the
 //      fuzzy pass below.
-//   2. FUZZY — same-length plates that differ only in OCR-confusion
-//      pairs (C↔G, O↔0, I↔1, etc., curated from production drift) plus
-//      up to one true edit. plateSimilar(anchored=true) — the tight
-//      variant. Catches TS4467 onboard drift like "ABC1234" → "ABG1234".
+//   2. FUZZY — exitFuzzyMatch: same-length, ≤1 true edit AND ≤EXIT_MATCH_
+//      MAX_TOTAL_DIFFS total differing positions (confusable swaps now COUNT
+//      toward the cap, so they're no longer unlimited-free). Catches TS4467
+//      onboard drift like "ABC1234" → "ABG1234" but rejects multi-swap
+//      cross-vehicle matches like MBD8497 → WBD3427.
 //   3. PARTIAL — last-resort substring match (≥50% length overlap).
 //      Covers reads where the camera caught only part of the plate.
 //
@@ -174,7 +201,7 @@ async function findActiveUnexitedPass(
   //    matcher's loose budget (e.g. 2R028 fuzzy-matched 24023 on Honda).
   if (normalized.length >= 6) {
     for (const r of rows) {
-      if (candidates(r).some((p) => plateSimilar(p, normalized, true))) return wrap(r, true);
+      if (candidates(r).some((p) => exitFuzzyMatch(p, normalized))) return wrap(r, true);
     }
   }
   // 3) Partial substring path REMOVED for onboard / camera matching —

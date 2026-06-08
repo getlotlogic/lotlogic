@@ -204,7 +204,7 @@ const OCR_CONFUSIONS: Array<[string, string]> = (() => {
   return merged;
 })();
 
-function areCharsConfusable(a: string, b: string): boolean {
+export function areCharsConfusable(a: string, b: string): boolean {
   if (a === b) return true;
   for (const [x, y] of OCR_CONFUSIONS) {
     if ((a === x && b === y) || (a === y && b === x)) return true;
