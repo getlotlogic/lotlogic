@@ -61,8 +61,3 @@ verify_jwt = false
 # RUT pollers POST uptime here with their own shared secret.
 [functions.camera-watchdog]
 verify_jwt = false
-
-# Browser-called; verifies the backend-issued JWT itself, so the platform
-# JWT gate must be off (it would reject the dashboard's own token).
-[functions.walk-around-ocr]
-verify_jwt = false

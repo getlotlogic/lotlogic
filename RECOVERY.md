@@ -72,7 +72,7 @@ All are `verify_jwt=false` except `simbase-usage` + `test-resend-probe`. All nee
 camera-snapshot · pr-ingest · camera-debug · cron-sessions-sweep · cron-no-reg-sweep ·
 cron-plate-pair-learn · check-violations · notify-expiring-plates · tow-dispatch-email ·
 tow-confirm · tow-dispatch-sms · simbase-usage · weather-pull · weather-risk-eval ·
-camera-watchdog · walk-around-ocr · test-resend-probe (throwaway — can delete).
+camera-watchdog · test-resend-probe (throwaway — can delete).
 
 Deploy drift guard: before overwriting any function, diff against the deployed
 copy (`supabase functions download <slug>` or the MCP `get_edge_function`).
@@ -108,8 +108,8 @@ values only in the vault.
 ## 6. Cross-service coupling — get these wrong and things silently break
 - **`JWT_SECRET` is a 3-way coupling**: it must be byte-identical across (1) the
   Supabase JWT secret, (2) the backend (`JWT_SECRET`), and (3) the
-  `tow-dispatch-email` + `walk-around-ocr` edge functions. Mismatch → RLS rejects
-  every dashboard token (blank dashboard) and tow-action / walk-around links fail.
+  `tow-dispatch-email` edge function. Mismatch → RLS rejects
+  every dashboard token (blank dashboard) and tow-action links fail.
 - **`ENCRYPTION_KEY` (backend, Fernet)** encrypts QuickBooks OAuth tokens and
   camera passwords at rest. Lose/rotate it → must re-OAuth QuickBooks and re-enter
   camera creds. Preserve it across any redeploy/restore.
