@@ -48,3 +48,4 @@ yolo-dataset.zip
 camera-health-*.md
 .wrangler/
 supabase/.temp/
+!tests/package-lock.json

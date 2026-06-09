@@ -11631,10 +11631,12 @@ function ALPRPropertiesPage({ user }) {
     db.getProperties(user.id, user._role).then(p => { setProperties(p); setLoading(false); }).catch(() => setLoading(false));
   }, [user]);
 
-  // Fetch all 4 KPI counts for every visible property (best-effort, non-blocking)
+  // Fetch all 4 KPI counts for every visible property (best-effort, non-blocking).
+  // Re-fetched every 60s — the counts drift while the tab sits open (passes expire
+  // into the 3h window, cooldowns lapse) and nothing else invalidates them.
   useEffect(() => {
     if (!properties.length) return;
-    Promise.all(
+    const load = () => Promise.all(
       properties.map(async p => {
         // Per-property KPI counts. The no-reg count slot was wired to
         // /no-reg-violations (now retired). Hardcode to [] until the KPI
@@ -11695,6 +11697,9 @@ function ALPRPropertiesPage({ user }) {
       pairs.forEach(([id, kpi]) => { counts[id] = kpi; });
       setKpiCounts(counts);
     });
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
   }, [properties]);
 
   async function handleAdd(e) {
