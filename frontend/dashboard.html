@@ -9733,15 +9733,32 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     if (cdPool.length && unionRows.length) {
       const m = new Map();
       for (const r of cdPool) m.set(r.id, r);
-      for (const r of unionRows) if (!m.has(r.id)) m.set(r.id, r);
+      // Fresh row WINS for an existing id: an operator-cancel lands in unionRows
+      // first, so it must override a stale 'active' copy still in cdPool — else
+      // the cancelled pass keeps counting as a real prior stay and fakes a
+      // cooldown flag on the truck's next (legitimate) re-registration.
+      for (const r of unionRows) m.set(r.id, r);
       source = Array.from(m.values());
     }
     const byPlate = new Map();
+    const indexUnder = (key, r) => {
+      if (!byPlate.has(key)) byPlate.set(key, []);
+      const list = byPlate.get(key);
+      if (!list.includes(r)) list.push(r);
+    };
     for (const r of source) {
-      const k = normalizePlateForSearch(r.plate_text);
-      if (!k || COOLDOWN_PLACEHOLDER_PLATES.has(k) || isTestRow(r)) continue;
-      if (!byPlate.has(k)) byPlate.set(k, []);
-      byPlate.get(k).push(r);
+      if (isTestRow(r)) continue;
+      const fk = normalizePlateForSearch(r.plate_text);
+      if (fk && !COOLDOWN_PLACEHOLDER_PLATES.has(fk)) indexUnder(fk, r);
+      // Also key on the rear/trailer plate so a truck that registered once under
+      // its front (grille placard) and once under its rear plate still groups —
+      // otherwise swapping which plate is entered dodges the cooldown entirely.
+      // Min-length guard keeps short/noisy back reads from colliding unrelated
+      // trucks. (Trailers can move between tractors, so back-plate matching can
+      // rarely over-flag; the cooldown is a soft, operator-dismissable hint, not
+      // an automatic action, so favoring detection here is the right trade.)
+      const bk = r.back_plate ? normalizePlateForSearch(r.back_plate) : '';
+      if (bk && bk.length >= 4 && !COOLDOWN_PLACEHOLDER_PLATES.has(bk)) indexUnder(bk, r);
     }
     const flagged = new Set();
     for (const list of byPlate.values()) {
