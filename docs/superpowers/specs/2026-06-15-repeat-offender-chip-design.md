@@ -114,11 +114,20 @@ an RPC and an extension of the parking-log endpoint; either returns, per pass:
 
 ### 4. Unify `cooldownIds` (targeted cleanup, in scope)
 
-Replace the browser's render-time cooldown derivation (`cooldownIds`) with a read
-of the persisted `cooldown_flagged_at`. This removes the fragile
-recompute-every-render logic (the merge-order and front/back bugs we just patched
-live there) and makes the chip and the "re-registered within cooldown" violation
-banner agree by construction.
+The browser's render-time cooldown derivation (`cooldownIds`) drove a separate
+red "Violation — re-registered within the 24-hour cooldown" banner. The chip now
+reads the persisted `cooldown_flagged_at` directly and gates on the exact same
+condition, so the banner became a redundant second warning on every flagged row.
+Per "clean not cluttered," the banner, the `cooldownIds` derivation, and its
+`isCooldownViol` consumer were all removed — the chip is the single cooldown
+surface (and the fragile recompute-every-render logic, with the merge-order and
+front/back bugs once patched there, is gone with it).
+
+The same-truck matcher used by the flag is centralized in one immutable SQL
+function `public.cooldown_match_key(text)` (normalize → drop <4 chars → drop a
+placeholder/equipment denylist), called by the trigger, the backfill, and both
+parking-log read helpers, so the flag, the `prior_flag_count`, and the
+recent-visits list match the same trucks by construction.
 
 **Correction (post-implementation, 2026-06-15):** the original plan also keyed the
 `count_on_cooldown` RPC off `cooldown_flagged_at` so the "On Cooldown" tile, the

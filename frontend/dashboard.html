@@ -9005,7 +9005,7 @@ function CooldownChip({ passId, priorFlagCount }) {
       setLoading(true);
       try {
         const res = await apiFetch(`/visitor_passes/${passId}/recent-visits`);
-        setVisits(res.visits || res || []);
+        setVisits(Array.isArray(res) ? res : (res?.visits || []));
       } catch { setVisits([]); }
       finally { setLoading(false); }
     }
@@ -9013,7 +9013,7 @@ function CooldownChip({ passId, priorFlagCount }) {
   const suffix = priorFlagCount > 0 ? ` · flagged ${priorFlagCount}× before` : '';
   return (
     <div className="cooldown-chip-wrap">
-      <button className="parking-reg-badge cooldown" onClick={toggle}>
+      <button className="parking-reg-badge cooldown" onClick={toggle} aria-expanded={open}>
         ⚠ Re-registered within cooldown{suffix} {open ? '▴' : '▾'}
       </button>
       {open && (
@@ -9755,15 +9755,6 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     return tb - ta;
   });
 
-  // Cooldown violation — read the persisted flag set by the BEFORE INSERT
-  // trigger (+ backfill). Single source of truth: the chip, the "On Cooldown"
-  // tile, and the cooldown bucket all key off cooldown_flagged_at, so they
-  // agree by construction. unionRows carries the column (select('*') roster).
-  const cooldownIds = React.useMemo(() => {
-    const s = new Set();
-    for (const r of (unionRows || [])) if (r.cooldown_flagged_at) s.add(r.id);
-    return s;
-  }, [unionRows]);
 
   // Total displayed reflects whatever's actually on screen right now —
   // accounts for both search filter AND the pill drill-down.
@@ -10000,7 +9991,6 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
             const isViolation = s === 'expired';
             const isExpiring = bkt ? bkt === 'expiring' : s === 'expiring';
             const isAutoCleared = s === 'auto_cleared';
-            const isCooldownViol = cooldownIds.has(r.id);
             const driverLine = [r.visitor_name, r.company_name].filter(Boolean).join(' · ') || '—';
             const detailChips = [];
             if (r.parking_spot) detailChips.push({ label: 'Spot', value: r.parking_spot });
@@ -10066,23 +10056,6 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                     flexShrink:0,
                   }}>{dispLabel}</span>
                 </div>
-
-                {/* Violation, on the pass itself. Cooldown = re-registered
-                    within 24h of a prior pass — confirmed from registration
-                    data alone, no camera needed. */}
-                {isCooldownViol && (
-                  <div style={{
-                    display:'flex',alignItems:'center',gap:8,
-                    fontSize:12,fontWeight:700,lineHeight:1.4,
-                    padding:'8px 10px',borderRadius:8,
-                    background:'rgba(239,68,68,.1)',
-                    border:'1px solid rgba(239,68,68,.35)',
-                    color:'#ef4444',
-                  }}>
-                    <span aria-hidden="true">⚠️</span>
-                    <span>Violation — re-registered within the 24-hour cooldown</span>
-                  </div>
-                )}
 
                 {/* Pass holder / company / phone line */}
                 <div style={{display:'flex',flexDirection:'column',gap:3}}>
