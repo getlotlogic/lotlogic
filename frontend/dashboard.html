@@ -934,6 +934,10 @@
       opacity: .95; white-space: nowrap; color: #fff;
     }
     .cooldown-visits { margin-top: 8px; border-left: 2px solid rgba(251,191,36,.4); padding-left: 10px; display: flex; flex-direction: column; }
+    /* Violation summary — how badly the 24h cooldown was broken. */
+    .cooldown-breach { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.25); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+    .cooldown-breach-line { font-size: 13px; color: var(--text-primary); }
+    .cooldown-breach-emph { font-size: 12px; font-weight: 800; color: #ef4444; margin-top: 3px; }
     .cooldown-visits-head { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--text-muted); margin-bottom: 2px; }
     .cooldown-visits-loading, .cooldown-visits-empty { font-size: 12px; color: var(--text-muted); padding: 4px 0; }
     /* Clean log rows — a thumbnail only when there's a photo; otherwise just the
@@ -9024,7 +9028,7 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // (re-registered inside the cooldown window). Click toggles a lazy-fetched
 // list of the truck's recent visits from the owner/partner-scoped backend
 // endpoint. priorFlagCount > 0 appends "flagged N× before".
-function CooldownChip({ passId, priorFlagCount }) {
+function CooldownChip({ passId, priorFlagCount, registeredAt, priorEnd }) {
   const [open, setOpen] = React.useState(false);
   const [visits, setVisits] = React.useState(null); // null=unfetched, []=none
   const [loading, setLoading] = React.useState(false);
@@ -9039,15 +9043,35 @@ function CooldownChip({ passId, priorFlagCount }) {
       finally { setLoading(false); }
     }
   };
-  const suffix = priorFlagCount > 0 ? ` · flagged ${priorFlagCount}× before` : '';
+  // How badly the 24h cooldown was broken: they left at priorEnd, were allowed
+  // back at priorEnd+24h, but re-registered at registeredAt.
+  let breach = null;
+  if (registeredAt && priorEnd) {
+    const after = (new Date(registeredAt) - new Date(priorEnd)) / 3600000;
+    if (!isNaN(after) && after >= 0 && after < 24) breach = { after, before: 24 - after };
+  }
+  const countSuffix = priorFlagCount > 0 ? ` · ${priorFlagCount}× before` : '';
+  const msg = breach
+    ? `⚠ Back ${fmtHrsShort(breach.after)} after leaving — broke the 24h cooldown${countSuffix}`
+    : `⚠ Re-registered within cooldown${countSuffix}`;
   return (
     <div className="cooldown-chip-wrap">
       <button className="parking-reg-badge cooldown" onClick={toggle} aria-expanded={open}>
-        <span className="cooldown-chip-msg">⚠ Re-registered within cooldown{suffix}</span>
+        <span className="cooldown-chip-msg">{msg}</span>
         <span className="cooldown-chip-cta">{open ? 'Hide prior visits ▴' : 'See prior visits ▾'}</span>
       </button>
       {open && (
         <div className="cooldown-visits">
+          {breach && (
+            <div className="cooldown-breach">
+              <div className="cooldown-breach-line">
+                Left <b>{fmtCooldownDateTime(priorEnd)}</b> → re-registered <b>{fmtCooldownDateTime(registeredAt)}</b>
+              </div>
+              <div className="cooldown-breach-emph">
+                Back {fmtHrsShort(breach.after)} after leaving · {fmtHrsShort(breach.before)} before the 24-hour cooldown ended
+              </div>
+            </div>
+          )}
           <div className="cooldown-visits-head">Prior visits at this lot</div>
           {loading && <div className="cooldown-visits-loading">Loading…</div>}
           {visits && visits.length === 0 && !loading && (
@@ -9076,6 +9100,15 @@ function fmtStay(hours) {
   if (hours == null) return '';
   const days = Math.floor(hours / 24);
   return days >= 1 ? `${days}d` : `${Math.round(hours)}h`;
+}
+function fmtCooldownDateTime(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function fmtHrsShort(h) {
+  if (h == null || isNaN(h)) return '';
+  if (h < 1) return '<1h';
+  return `${Math.round(h)}h`;
 }
 
 // Inline vehicle image preview for a pass / violation row. Lazy-loads the best
@@ -10099,6 +10132,8 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                   <CooldownChip
                     passId={r.id}
                     priorFlagCount={r.prior_flag_count || 0}
+                    registeredAt={r.valid_from}
+                    priorEnd={r.cooldown_prior_end}
                   />
                 )}
 
