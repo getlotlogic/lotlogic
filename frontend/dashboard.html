@@ -909,8 +909,28 @@
 
     /* ── Repeat-offender cooldown chip ── */
     .cooldown-chip-wrap { margin-top: 4px; }
-    .cooldown-chip-wrap > .parking-reg-badge.cooldown { cursor: pointer; font-family: inherit; }
+    /* The chip is a BUTTON, not a status pill — make it look pressable so the
+       operator knows it unfolds the truck's prior-visit history (the proof). */
+    .cooldown-chip-wrap > .parking-reg-badge.cooldown {
+      cursor: pointer; font-family: inherit;
+      display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      text-transform: none; letter-spacing: 0; font-size: 12px;
+      padding: 7px 11px; border-radius: 10px; text-align: left;
+      transition: background .12s, border-color .12s;
+    }
+    .cooldown-chip-wrap > .parking-reg-badge.cooldown:hover {
+      background: rgba(251,191,36,.22); border-color: rgba(251,191,36,.55);
+    }
+    .cooldown-chip-wrap > .parking-reg-badge.cooldown:focus-visible {
+      outline: 2px solid rgba(251,191,36,.7); outline-offset: 1px;
+    }
+    .cooldown-chip-msg { font-weight: 700; }
+    .cooldown-chip-cta {
+      font-weight: 700; text-decoration: underline; text-underline-offset: 2px;
+      opacity: .95; white-space: nowrap;
+    }
     .cooldown-visits { margin-top: 6px; border-left: 2px solid rgba(251,191,36,.4); padding-left: 8px; display: flex; flex-direction: column; gap: 4px; }
+    .cooldown-visits-head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-bottom: 2px; }
     .cooldown-visits-loading, .cooldown-visits-empty { font-size: 12px; color: var(--text-muted); }
     .cooldown-visit-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
     .cooldown-visit-thumb { width: 40px; height: 28px; object-fit: cover; border-radius: 4px; }
@@ -9014,10 +9034,12 @@ function CooldownChip({ passId, priorFlagCount }) {
   return (
     <div className="cooldown-chip-wrap">
       <button className="parking-reg-badge cooldown" onClick={toggle} aria-expanded={open}>
-        ⚠ Re-registered within cooldown{suffix} {open ? '▴' : '▾'}
+        <span className="cooldown-chip-msg">⚠ Re-registered within cooldown{suffix}</span>
+        <span className="cooldown-chip-cta">{open ? 'Hide prior visits ▴' : 'See prior visits ▾'}</span>
       </button>
       {open && (
         <div className="cooldown-visits">
+          <div className="cooldown-visits-head">Prior visits at this lot — proof this truck was here before</div>
           {loading && <div className="cooldown-visits-loading">Loading…</div>}
           {visits && visits.length === 0 && !loading && (
             <div className="cooldown-visits-empty">No earlier visits on record.</div>
