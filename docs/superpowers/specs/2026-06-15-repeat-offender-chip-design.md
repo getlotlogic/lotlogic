@@ -114,12 +114,25 @@ an RPC and an extension of the parking-log endpoint; either returns, per pass:
 
 ### 4. Unify `cooldownIds` (targeted cleanup, in scope)
 
-Replace the browser's render-time cooldown derivation with a read of the
-persisted `cooldown_flagged_at`. This removes the fragile recompute-every-render
-logic (the merge-order and front/back bugs we just patched live there) and makes
-the chip, the "On Cooldown" tile, and the cooldown bucket all agree by
-construction. The `count_on_cooldown` RPC is updated to key off the persisted
-flag as well.
+Replace the browser's render-time cooldown derivation (`cooldownIds`) with a read
+of the persisted `cooldown_flagged_at`. This removes the fragile
+recompute-every-render logic (the merge-order and front/back bugs we just patched
+live there) and makes the chip and the "re-registered within cooldown" violation
+banner agree by construction.
+
+**Correction (post-implementation, 2026-06-15):** the original plan also keyed the
+`count_on_cooldown` RPC off `cooldown_flagged_at` so the "On Cooldown" tile, the
+parking-log bucket, and the chip would "all agree." That was a semantic error —
+they measure different things and were reverted to NOT share the flag:
+- The **"On Cooldown (Tow if seen)" tile** and the parking-log **`cooldown`
+  bucket** count trucks whose pass *ended* within the last 24h (recently departed,
+  tow-if-seen). This is a time-window enforcement metric. `count_on_cooldown`
+  stays time-based; the tile and bucket agree with each other.
+- The **chip + violation banner** (`cooldownIds` → `cooldown_flagged_at`) mark a
+  pass that is itself a *re-registration* within cooldown — an abuse marker, a
+  different population. These two agree with each other.
+Keying the tile off the abuse flag made it read 3 while the bucket showed 38.
+Only `cooldownIds` reads the persisted flag; the RPC does not.
 
 ## Edge cases
 
