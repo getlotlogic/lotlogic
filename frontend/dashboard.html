@@ -907,6 +907,16 @@
     .parking-reg-badge.cooldown { background: rgba(251,191,36,.12); color: #fbbf24; border: 1px solid rgba(251,191,36,.2); }
     .parking-reg-badge.cancelled { background: rgba(239,68,68,.12); color: #ef4444; border: 1px solid rgba(239,68,68,.2); }
 
+    /* ── Repeat-offender cooldown chip ── */
+    .cooldown-chip-wrap { margin-top: 4px; }
+    .cooldown-chip-wrap > .parking-reg-badge.cooldown { cursor: pointer; font-family: inherit; }
+    .cooldown-visits { margin-top: 6px; border-left: 2px solid rgba(251,191,36,.4); padding-left: 8px; display: flex; flex-direction: column; gap: 4px; }
+    .cooldown-visits-loading, .cooldown-visits-empty { font-size: 12px; color: var(--text-muted); }
+    .cooldown-visit-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+    .cooldown-visit-thumb { width: 40px; height: 28px; object-fit: cover; border-radius: 4px; }
+    .cooldown-visit-thumb.placeholder { background: var(--unknown-pattern); }
+    .cooldown-visit-flag { color: #fbbf24; font-weight: 700; }
+
     /* ── Property detail (Passes tab) shared styles ── */
     .pd-share-card {
       background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
@@ -8981,6 +8991,64 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // Data comes from the backend /visitor_passes/parking-log endpoint — the same
 // shape as the CSV export so the two never drift.
 
+// Repeat-offender chip. Renders ONLY when a pass carries cooldown_flagged_at
+// (re-registered inside the cooldown window). Click toggles a lazy-fetched
+// list of the truck's recent visits from the owner/partner-scoped backend
+// endpoint. priorFlagCount > 0 appends "flagged N× before".
+function CooldownChip({ passId, priorFlagCount }) {
+  const [open, setOpen] = React.useState(false);
+  const [visits, setVisits] = React.useState(null); // null=unfetched, []=none
+  const [loading, setLoading] = React.useState(false);
+  const toggle = async () => {
+    const next = !open; setOpen(next);
+    if (next && visits === null) {
+      setLoading(true);
+      try {
+        const res = await apiFetch(`/visitor_passes/${passId}/recent-visits`);
+        setVisits(Array.isArray(res) ? res : (res?.visits || []));
+      } catch { setVisits([]); }
+      finally { setLoading(false); }
+    }
+  };
+  const suffix = priorFlagCount > 0 ? ` · flagged ${priorFlagCount}× before` : '';
+  return (
+    <div className="cooldown-chip-wrap">
+      <button className="parking-reg-badge cooldown" onClick={toggle} aria-expanded={open}>
+        ⚠ Re-registered within cooldown{suffix} {open ? '▴' : '▾'}
+      </button>
+      {open && (
+        <div className="cooldown-visits">
+          {loading && <div className="cooldown-visits-loading">Loading…</div>}
+          {visits && visits.length === 0 && !loading && (
+            <div className="cooldown-visits-empty">No earlier visits on record.</div>
+          )}
+          {visits && visits.map(v => (
+            <div className="cooldown-visit-row" key={v.id}>
+              {v.photo_url
+                ? <img className="cooldown-visit-thumb" src={v.photo_url} alt="" />
+                : <div className="cooldown-visit-thumb placeholder" />}
+              <span className="cooldown-visit-date">{fmtVisitDate(v.date)}</span>
+              <span className="cooldown-visit-stay">{fmtStay(v.stay_hours)}</span>
+              <span className="cooldown-visit-outcome">{v.outcome}</span>
+              {v.flagged && <span className="cooldown-visit-flag">⚠ flagged</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function fmtVisitDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+function fmtStay(hours) {
+  if (hours == null) return '';
+  const days = Math.floor(hours / 24);
+  return days >= 1 ? `${days}d` : `${Math.round(hours)}h`;
+}
+
 // Inline vehicle image preview for a pass / violation row. Lazy-loads the best
 // camera frame on intersection (exact->back->fuzzy via getBestVehicleFrame) and
 // caches it in the parent's vehicleImageCache. MODULE-SCOPED (not nested in
@@ -9123,10 +9191,6 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   const isHistory = mode === 'history';
   const { addToast } = useToast();
   const [rows, setRows] = useState([]);
-  // Complete pass set for the cooldown flag only (the displayed `rows` are
-  // windowed in default mode, but a long-overstay prior can be created before
-  // that window). Kept separate so the display stays windowed.
-  const [cdPool, setCdPool] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
@@ -9304,10 +9368,6 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
         const items = res.items || res.rows || [];
         setRows(items);
         setTotal(res.total ?? items.length);
-        // History already loaded every pass — reuse it as the cooldown pool.
-        // (Default mode loads the pool once per property in a separate effect,
-        // NOT on every realtime/poll tick — see below.)
-        if (isHistory) setCdPool(items);
       } else {
         // Log fetch failed — keep the previous rows on screen rather than
         // emptying the list. Operator should see the error banner instead.
@@ -9333,21 +9393,6 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     }
     setLoading(false);
   }, [propertyId, filters]);
-
-  // Cooldown pool — the complete pass history for the property, fetched ONCE per
-  // property (default mode only; history mode's load already sets it). NOT tied
-  // to the realtime/poll `load`, so a busy lot doesn't re-sweep all history on
-  // every update. New passes still flag correctly: they arrive via the windowed
-  // rows + roster and are merged into the cooldown source, while this pool
-  // supplies the older priors (which don't change).
-  useEffect(() => {
-    if (isHistory || !propertyId) return;
-    let cancelled = false;
-    db.getAllParkingLog(propertyId, {})
-      .then((res) => { if (!cancelled) setCdPool(res.rows || res.items || []); })
-      .catch(() => { /* keep last pool; cooldown still works off unionRows */ });
-    return () => { cancelled = true; };
-  }, [propertyId, isHistory]);
 
   // Handler for the tow / no-tow confirmation modal. Calls the existing
   // backend endpoints (force-bill for tow-confirmation, mark-no-tow for
@@ -9710,78 +9755,6 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     return tb - ta;
   });
 
-  // Cooldown violation — DERIVED, no camera needed. A pass is flagged when the
-  // SAME plate has an earlier pass that ended (or was still active) within 24h
-  // before this one registered — i.e. they re-registered when they shouldn't be
-  // here yet. Surfaced on the pass itself (the Jobs tab is hidden); recomputed
-  // from the loaded passes every render so it can't silently fail like a stored
-  // flag. The prior pass always ended <24h earlier, so it's always loaded too.
-  const COOLDOWN_MS = 24 * 60 * 60 * 1000;
-  // A "real prior stay" the cooldown counts against. Exclude voided passes:
-  // operator-dismissed/removed and revoked aren't real stays, so they must not
-  // trigger a false cooldown flag. Only camera-detected closures count.
-  const isRealStay = (o) =>
-    o.status !== 'revoked' &&
-    !(o.status === 'cancelled' && !String(o.cancelled_by || '').startsWith('camera_exit'));
-  // Placeholder plates and test rows are NOT real identities — different trucks
-  // share them, so they must never group together and fake a cooldown.
-  const COOLDOWN_PLACEHOLDER_PLATES = new Set(['NOPLATE','TEMPTAG','NONE','NA','TEMP','UNKNOWN']);
-  const isTestRow = (r) => /^test/i.test(r.company_name || '') || /^test/i.test(r.visitor_name || '');
-  const cooldownIds = (() => {
-    // Use the complete pool; merge in any just-loaded union rows it's missing.
-    let source = cdPool.length ? cdPool : unionRows;
-    if (cdPool.length && unionRows.length) {
-      const m = new Map();
-      for (const r of cdPool) m.set(r.id, r);
-      // Fresh row WINS for an existing id: an operator-cancel lands in unionRows
-      // first, so it must override a stale 'active' copy still in cdPool — else
-      // the cancelled pass keeps counting as a real prior stay and fakes a
-      // cooldown flag on the truck's next (legitimate) re-registration.
-      for (const r of unionRows) m.set(r.id, r);
-      source = Array.from(m.values());
-    }
-    const byPlate = new Map();
-    const indexUnder = (key, r) => {
-      if (!byPlate.has(key)) byPlate.set(key, []);
-      const list = byPlate.get(key);
-      if (!list.includes(r)) list.push(r);
-    };
-    for (const r of source) {
-      if (isTestRow(r)) continue;
-      const fk = normalizePlateForSearch(r.plate_text);
-      if (fk && !COOLDOWN_PLACEHOLDER_PLATES.has(fk)) indexUnder(fk, r);
-      // Also key on the rear/trailer plate so a truck that registered once under
-      // its front (grille placard) and once under its rear plate still groups —
-      // otherwise swapping which plate is entered dodges the cooldown entirely.
-      // Min-length guard keeps short/noisy back reads from colliding unrelated
-      // trucks. (Trailers can move between tractors, so back-plate matching can
-      // rarely over-flag; the cooldown is a soft, operator-dismissable hint, not
-      // an automatic action, so favoring detection here is the right trade.)
-      const bk = r.back_plate ? normalizePlateForSearch(r.back_plate) : '';
-      if (bk && bk.length >= 4 && !COOLDOWN_PLACEHOLDER_PLATES.has(bk)) indexUnder(bk, r);
-    }
-    const flagged = new Set();
-    for (const list of byPlate.values()) {
-      if (list.length < 2) continue;
-      for (const r of list) {
-        const reg = new Date(r.created_at).getTime();
-        if (!reg) continue;
-        for (const o of list) {
-          if (o === r || !isRealStay(o)) continue;
-          const oReg = new Date(o.created_at).getTime();
-          if (!(oReg < reg)) continue; // only an earlier registration counts
-          // Prior stay's end AS OF this registration. An exit only counts if it
-          // happened BEFORE this registration — a later closure (overstay closed
-          // days afterward) must not back-date the end and fake a cooldown.
-          const ex = o.exited_at ? new Date(o.exited_at).getTime() : 0;
-          const vu = o.valid_until ? new Date(o.valid_until).getTime() : 0;
-          const end = (ex && ex <= reg) ? ex : vu;
-          if (end && end > reg - COOLDOWN_MS) { flagged.add(r.id); break; }
-        }
-      }
-    }
-    return flagged;
-  })();
 
   // Total displayed reflects whatever's actually on screen right now —
   // accounts for both search filter AND the pill drill-down.
@@ -10018,7 +9991,6 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
             const isViolation = s === 'expired';
             const isExpiring = bkt ? bkt === 'expiring' : s === 'expiring';
             const isAutoCleared = s === 'auto_cleared';
-            const isCooldownViol = cooldownIds.has(r.id);
             const driverLine = [r.visitor_name, r.company_name].filter(Boolean).join(' · ') || '—';
             const detailChips = [];
             if (r.parking_spot) detailChips.push({ label: 'Spot', value: r.parking_spot });
@@ -10085,28 +10057,21 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                   }}>{dispLabel}</span>
                 </div>
 
-                {/* Violation, on the pass itself. Cooldown = re-registered
-                    within 24h of a prior pass — confirmed from registration
-                    data alone, no camera needed. */}
-                {isCooldownViol && (
-                  <div style={{
-                    display:'flex',alignItems:'center',gap:8,
-                    fontSize:12,fontWeight:700,lineHeight:1.4,
-                    padding:'8px 10px',borderRadius:8,
-                    background:'rgba(239,68,68,.1)',
-                    border:'1px solid rgba(239,68,68,.35)',
-                    color:'#ef4444',
-                  }}>
-                    <span aria-hidden="true">⚠️</span>
-                    <span>Violation — re-registered within the 24-hour cooldown</span>
-                  </div>
-                )}
-
                 {/* Pass holder / company / phone line */}
                 <div style={{display:'flex',flexDirection:'column',gap:3}}>
                   <div style={{fontSize:13,color:'var(--text-primary)',fontWeight:600}}>{driverLine}</div>
                   {r.phone && <div style={{fontSize:12,color:'var(--text-muted)'}}>📞 {r.phone}</div>}
                 </div>
+
+                {/* Repeat-offender chip — only on passes the backend flagged as
+                    re-registered inside the cooldown window. Click expands the
+                    truck's recent visit history (lazy-fetched). */}
+                {r.cooldown_flagged_at && (
+                  <CooldownChip
+                    passId={r.id}
+                    priorFlagCount={r.prior_flag_count || 0}
+                  />
+                )}
 
                 {/* Status explainer. In bucket mode it only belongs on the
                     Recently-expired bucket — otherwise an "On Cooldown" row
