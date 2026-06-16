@@ -929,13 +929,18 @@
       font-weight: 700; text-decoration: underline; text-underline-offset: 2px;
       opacity: .95; white-space: nowrap;
     }
-    .cooldown-visits { margin-top: 6px; border-left: 2px solid rgba(251,191,36,.4); padding-left: 8px; display: flex; flex-direction: column; gap: 4px; }
-    .cooldown-visits-head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-bottom: 2px; }
-    .cooldown-visits-loading, .cooldown-visits-empty { font-size: 12px; color: var(--text-muted); }
-    .cooldown-visit-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
-    .cooldown-visit-thumb { width: 40px; height: 28px; object-fit: cover; border-radius: 4px; }
-    .cooldown-visit-thumb.placeholder { background: var(--unknown-pattern); }
-    .cooldown-visit-flag { color: #fbbf24; font-weight: 700; }
+    .cooldown-visits { margin-top: 8px; border-left: 2px solid rgba(251,191,36,.4); padding-left: 10px; display: flex; flex-direction: column; }
+    .cooldown-visits-head { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--text-muted); margin-bottom: 2px; }
+    .cooldown-visits-loading, .cooldown-visits-empty { font-size: 12px; color: var(--text-muted); padding: 4px 0; }
+    /* Clean log rows — a thumbnail only when there's a photo; otherwise just the
+       registration line (date · stay · outcome), no empty placeholder boxes. */
+    .cooldown-visit-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-secondary); padding: 6px 0; border-top: 1px solid var(--border); }
+    .cooldown-visit-row:first-child { border-top: none; }
+    .cooldown-visit-thumb { width: 46px; height: 32px; object-fit: cover; border-radius: 5px; flex: none; }
+    .cooldown-visit-date { font-weight: 700; color: var(--text-primary); min-width: 56px; }
+    .cooldown-visit-stay { color: var(--text-muted); }
+    .cooldown-visit-outcome { color: var(--text-muted); text-transform: capitalize; }
+    .cooldown-visit-flag { margin-left: auto; color: #fbbf24; font-weight: 700; font-size: 11px; }
 
     /* ── Property detail (Passes tab) shared styles ── */
     .pd-share-card {
@@ -9039,16 +9044,14 @@ function CooldownChip({ passId, priorFlagCount }) {
       </button>
       {open && (
         <div className="cooldown-visits">
-          <div className="cooldown-visits-head">Prior visits at this lot — proof this truck was here before</div>
+          <div className="cooldown-visits-head">Prior visits at this lot</div>
           {loading && <div className="cooldown-visits-loading">Loading…</div>}
           {visits && visits.length === 0 && !loading && (
             <div className="cooldown-visits-empty">No earlier visits on record.</div>
           )}
           {visits && visits.map(v => (
             <div className="cooldown-visit-row" key={v.id}>
-              {v.photo_url
-                ? <img className="cooldown-visit-thumb" src={v.photo_url} alt="" />
-                : <div className="cooldown-visit-thumb placeholder" />}
+              {v.photo_url && <img className="cooldown-visit-thumb" src={v.photo_url} alt="" />}
               <span className="cooldown-visit-date">{fmtVisitDate(v.date)}</span>
               <span className="cooldown-visit-stay">{fmtStay(v.stay_hours)}</span>
               <span className="cooldown-visit-outcome">{v.outcome}</span>
