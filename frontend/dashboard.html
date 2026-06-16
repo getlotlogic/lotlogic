@@ -9778,78 +9778,15 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     return tb - ta;
   });
 
-  // Cooldown violation — DERIVED, no camera needed. A pass is flagged when the
-  // SAME plate has an earlier pass that ended (or was still active) within 24h
-  // before this one registered — i.e. they re-registered when they shouldn't be
-  // here yet. Surfaced on the pass itself (the Jobs tab is hidden); recomputed
-  // from the loaded passes every render so it can't silently fail like a stored
-  // flag. The prior pass always ended <24h earlier, so it's always loaded too.
-  const COOLDOWN_MS = 24 * 60 * 60 * 1000;
-  // A "real prior stay" the cooldown counts against. Exclude voided passes:
-  // operator-dismissed/removed and revoked aren't real stays, so they must not
-  // trigger a false cooldown flag. Only camera-detected closures count.
-  const isRealStay = (o) =>
-    o.status !== 'revoked' &&
-    !(o.status === 'cancelled' && !String(o.cancelled_by || '').startsWith('camera_exit'));
-  // Placeholder plates and test rows are NOT real identities — different trucks
-  // share them, so they must never group together and fake a cooldown.
-  const COOLDOWN_PLACEHOLDER_PLATES = new Set(['NOPLATE','TEMPTAG','NONE','NA','TEMP','UNKNOWN']);
-  const isTestRow = (r) => /^test/i.test(r.company_name || '') || /^test/i.test(r.visitor_name || '');
-  const cooldownIds = (() => {
-    // Use the complete pool; merge in any just-loaded union rows it's missing.
-    let source = cdPool.length ? cdPool : unionRows;
-    if (cdPool.length && unionRows.length) {
-      const m = new Map();
-      for (const r of cdPool) m.set(r.id, r);
-      // Fresh row WINS for an existing id: an operator-cancel lands in unionRows
-      // first, so it must override a stale 'active' copy still in cdPool — else
-      // the cancelled pass keeps counting as a real prior stay and fakes a
-      // cooldown flag on the truck's next (legitimate) re-registration.
-      for (const r of unionRows) m.set(r.id, r);
-      source = Array.from(m.values());
-    }
-    const byPlate = new Map();
-    const indexUnder = (key, r) => {
-      if (!byPlate.has(key)) byPlate.set(key, []);
-      const list = byPlate.get(key);
-      if (!list.includes(r)) list.push(r);
-    };
-    for (const r of source) {
-      if (isTestRow(r)) continue;
-      const fk = normalizePlateForSearch(r.plate_text);
-      if (fk && !COOLDOWN_PLACEHOLDER_PLATES.has(fk)) indexUnder(fk, r);
-      // Also key on the rear/trailer plate so a truck that registered once under
-      // its front (grille placard) and once under its rear plate still groups —
-      // otherwise swapping which plate is entered dodges the cooldown entirely.
-      // Min-length guard keeps short/noisy back reads from colliding unrelated
-      // trucks. (Trailers can move between tractors, so back-plate matching can
-      // rarely over-flag; the cooldown is a soft, operator-dismissable hint, not
-      // an automatic action, so favoring detection here is the right trade.)
-      const bk = r.back_plate ? normalizePlateForSearch(r.back_plate) : '';
-      if (bk && bk.length >= 4 && !COOLDOWN_PLACEHOLDER_PLATES.has(bk)) indexUnder(bk, r);
-    }
-    const flagged = new Set();
-    for (const list of byPlate.values()) {
-      if (list.length < 2) continue;
-      for (const r of list) {
-        const reg = new Date(r.created_at).getTime();
-        if (!reg) continue;
-        for (const o of list) {
-          if (o === r || !isRealStay(o)) continue;
-          const oReg = new Date(o.created_at).getTime();
-          if (!(oReg < reg)) continue; // only an earlier registration counts
-          // Prior stay's end AS OF this registration. An exit only counts if it
-          // happened BEFORE this registration — a later closure (overstay closed
-          // days afterward) must not back-date the end and fake a cooldown.
-          const ex = o.exited_at ? new Date(o.exited_at).getTime() : 0;
-          const vu = o.valid_until ? new Date(o.valid_until).getTime() : 0;
-          const end = (ex && ex <= reg) ? ex : vu;
-          if (end && end > reg - COOLDOWN_MS) { flagged.add(r.id); break; }
-        }
-      }
-    }
-    return flagged;
-  })();
+  // Cooldown violation — read the persisted flag set by the BEFORE INSERT
+  // trigger (+ backfill). Single source of truth: the chip, the "On Cooldown"
+  // tile, and the cooldown bucket all key off cooldown_flagged_at, so they
+  // agree by construction. unionRows carries the column (select('*') roster).
+  const cooldownIds = React.useMemo(() => {
+    const s = new Set();
+    for (const r of (unionRows || [])) if (r.cooldown_flagged_at) s.add(r.id);
+    return s;
+  }, [unionRows]);
 
   // Total displayed reflects whatever's actually on screen right now —
   // accounts for both search filter AND the pill drill-down.
