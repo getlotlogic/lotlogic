@@ -65,8 +65,10 @@ form + portal views), keeping the truck-plaza system untouched (`property_type` 
   `/auth/request-password` → set-password link. Dashboards live behind this, auto-scoped.
 - **Onboarding a community (repeatable provisioning path):** create (1) the `properties`
   row (`property_type='apartment'`, address, `qr_code_id`, N Style `policy_text`),
-  (2) the leasing-office owner account, (3) set `tow_company_id` = N Style partner,
-  (4) generate the QR sign. Phase 1 does this via an admin provisioning step (script or
+  (2) the leasing-office owner account, (3) set **both `partner_id` AND `tow_company_id`
+  = the N Style partner** (the RLS chain scopes the tow partner via `partner_id`; setting
+  only `tow_company_id` leaves the partner unable to see any of the property's data —
+  verified during M1), (4) generate the QR sign. Phase 1 does this via an admin provisioning step (script or
   the existing dashboard); sub-project E later wraps it in an "Add Client" UI. The data
   model is shaped so E supports both apartments and commercial trucking with no rework.
 
