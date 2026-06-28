@@ -49,3 +49,7 @@ camera-health-*.md
 .wrangler/
 supabase/.temp/
 !tests/package-lock.json
+
+# esbuild/extract temp artifacts
+frontend/*.scriptblock.*
+*.scriptblock.*
