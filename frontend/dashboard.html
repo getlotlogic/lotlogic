@@ -10436,10 +10436,72 @@ function FeedbackModal({ propertyId, onClose }) {
   );
 }
 
+// ── In-page PII document viewer ──────────────────────────────
+// Renders an already-fetched (authed) blob INLINE rather than opening a new tab.
+// `window.open(blob:, '_blank', 'noopener')` is unreliable on mobile Safari
+// (leasing / N Style on phones) — with noopener it frequently refuses blob:
+// URLs and lands on a blank tab. The authed fetch-to-blob already happened in
+// the caller, so we just render the resulting object URL here: images via <img>,
+// PDFs via <iframe>. The object URL is revoked when the modal closes. Reuses the
+// overlay + focus-trap pattern from FeedbackModal.
+function DocViewerModal({ blob, label, onClose }) {
+  const dialogRef = useRef(null);
+  const titleId = useUid('doc-title');
+  useFocusTrap(dialogRef, true, onClose);
+
+  const [objectUrl, setObjectUrl] = useState(null);
+  useEffect(() => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    setObjectUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [blob]);
+
+  const isPdf = (blob?.type || '').includes('pdf');
+
+  return (
+    <div
+      onClick={onClose}
+      style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:1100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onClick={e => e.stopPropagation()}
+        style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:12,maxWidth:920,width:'100%',maxHeight:'92vh',display:'flex',flexDirection:'column',outline:'none'}}
+      >
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,gap:12}}>
+          <div id={titleId} style={{fontSize:15,fontWeight:800,color:'var(--text-primary)'}}>{label || 'Document'}</div>
+          <div style={{display:'flex',gap:8}}>
+            {objectUrl && (
+              <a href={objectUrl} download className="pd-share-btn" style={{textDecoration:'none'}}>Download</a>
+            )}
+            <button onClick={onClose} className="pd-share-btn">Close</button>
+          </div>
+        </div>
+        <div style={{flex:1,minHeight:0,overflow:'auto',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          {!objectUrl ? (
+            <div style={{padding:24,fontSize:13,color:'var(--text-faint)'}}>Loading…</div>
+          ) : isPdf ? (
+            <iframe src={objectUrl} title={label || 'Document'} style={{width:'100%',height:'80vh',border:'none',borderRadius:6}} />
+          ) : (
+            <img src={objectUrl} alt={label || 'Document'} style={{maxWidth:'100%',maxHeight:'80vh',objectFit:'contain',display:'block'}} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ApartmentPermits({ property }) {
   const propertyId = property?.id;
   const { addToast } = useToast();
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  // Currently-open PII document ({ blob, label }) for the in-page viewer.
+  const [docView, setDocView] = useState(null);
   const [data, setData] = useState({ residents: [], guests: [] });
   const [loading, setLoading] = useState(true);
   // id of the row currently mid-action, so we can disable its buttons.
@@ -10462,22 +10524,20 @@ function ApartmentPermits({ property }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Opens a PII doc in a new tab via blob URL. Revokes the URL after a beat
-  // so the browser has time to load it but the blob doesn't linger.
-  const viewDoc = useCallback(async (kind, id, which) => {
+  // Fetches a PII doc (authed) to a blob, then opens it in the in-page viewer
+  // modal. We do NOT window.open a blob: URL — mobile Safari refuses it under
+  // noopener and lands on a blank tab. The modal owns the object URL lifecycle
+  // (created on mount, revoked on close).
+  const viewDoc = useCallback(async (kind, id, which, label) => {
     const key = `${kind}:${id}:${which}`;
     setDocBusy(key);
-    let url = null;
     try {
       const blob = await fetchDocBlob(kind, id, which);
-      url = URL.createObjectURL(blob);
-      const win = window.open(url, '_blank', 'noopener');
-      if (!win) addToast('Pop-up blocked — allow pop-ups to view the document.', 'error');
+      setDocView({ blob, label });
     } catch (e) {
       addToast(e.message || 'Could not load document.', 'error');
     } finally {
       setDocBusy(null);
-      if (url) setTimeout(() => URL.revokeObjectURL(url), 60000);
     }
   }, [addToast]);
 
@@ -10549,7 +10609,7 @@ function ApartmentPermits({ property }) {
           const key = `${kind}:${row.id}:${which}`;
           return (
             <button key={which} disabled={docBusy === key}
-              onClick={() => viewDoc(kind, row.id, which)}
+              onClick={() => viewDoc(kind, row.id, which, label)}
               style={{fontSize:11,fontWeight:700,padding:'3px 9px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-inset)',color:'var(--text-primary)',cursor:docBusy===key?'wait':'pointer',opacity:docBusy===key?0.6:1}}>
               {docBusy === key ? 'Loading…' : `View ${label}`}
             </button>
@@ -10562,6 +10622,7 @@ function ApartmentPermits({ property }) {
   return (
     <div style={{display:'flex',flexDirection:'column',gap:18}}>
       {feedbackOpen && <FeedbackModal propertyId={propertyId} onClose={() => setFeedbackOpen(false)} />}
+      {docView && <DocViewerModal blob={docView.blob} label={docView.label} onClose={() => setDocView(null)} />}
       {/* ── Pending approval queue ── */}
       <div>
         <div className="pd-section-head">
