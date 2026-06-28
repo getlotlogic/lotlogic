@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Parking Registration</title>
+  <!-- reCAPTCHA v3. The site key is a PUBLIC value by design; security relies
+       only on the server-side RECAPTCHA_SECRET_KEY. Keep Vercel env
+       RECAPTCHA_SITE_KEY in sync with the value below.
+       TODO: update this constant if you rotate the reCAPTCHA site. -->
+  <meta name="recaptcha-site-key" content="6LdaAb4sAAAAACd5g-pYqnQBWHdvMmGCufwtEQnE">
+  <script src="https://www.google.com/recaptcha/api.js?render=6LdaAb4sAAAAACd5g-pYqnQBWHdvMmGCufwtEQnE" async defer></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500,50;9..144,700,50;9..144,800,80;9..144,900,80&family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #F2EAD8;
+      --paper-2: #EADFC7;
+      --paper-3: #DFD2B5;
+      --ink: #1F1B14;
+      --ink-2: #3D3528;
+      --ink-3: #6F6450;
+      --amber: #D97706;
+      --amber-soft: #FBBF24;
+      --terra: #C97A4A;
+      --terra-deep: #9A5530;
+      --status-ok: #4A7A48;
+      --status-no: #B14535;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: -.005em;
+      background-image:
+        radial-gradient(circle at 12% 18%, rgba(31,27,20,0.025) 0 1.2px, transparent 1.5px),
+        radial-gradient(circle at 78% 62%, rgba(31,27,20,0.02) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 42% 88%, rgba(31,27,20,0.018) 0 0.8px, transparent 1.2px);
+      background-size: 240px 240px, 320px 320px, 200px 200px;
+    }
+    .card {
+      background: var(--paper);
+      border: 1.5px solid var(--ink);
+      padding: 32px 28px;
+      max-width: 440px;
+      width: 100%;
+    }
+    .logo { text-align: center; margin-bottom: 24px; }
+    .logo .shield { display: inline-flex; align-items: center; justify-content: center; transform: rotate(-6deg); margin-bottom: 12px; }
+    .logo .shield svg { display: block; }
+    .logo h1 {
+      font-family: 'Fraunces', Georgia, serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 36px;
+      letter-spacing: -.02em;
+      line-height: 1;
+      color: var(--ink);
+      text-transform: none;
+    }
+    .logo h1 span { color: var(--amber); font-style: italic; }
+    .property-name {
+      text-align: center;
+      font-size: 14px;
+      color: var(--ink-3);
+      margin-bottom: 28px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
+    }
+    .property-name strong {
+      display: block;
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 80;
+      font-style: italic;
+      font-size: 22px;
+      color: var(--ink);
+      margin-top: 6px;
+      letter-spacing: -.01em;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink-3);
+      margin-bottom: 6px;
+      margin-top: 16px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    label .required { color: var(--status-no); margin-left: 2px; }
+    label .optional { opacity: .7; font-weight: normal; text-transform: none; letter-spacing: 0; }
+    input, select {
+      width: 100%;
+      padding: 12px 14px;
+      background: var(--paper-2);
+      border: 1.5px solid var(--ink);
+      border-radius: 0;
+      color: var(--ink);
+      font-size: 16px;
+      font-family: inherit;
+      outline: none;
+      transition: background 0.15s;
+    }
+    input:focus, select:focus { background: var(--paper-3); }
+    input::placeholder { color: var(--ink-3); }
+    select { appearance: none; cursor: pointer; }
+    select option { background: var(--paper); color: var(--ink); }
+    input[type=file] {
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      cursor: pointer;
+    }
+    input[type=file]::file-selector-button {
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--ink);
+      color: var(--paper);
+      border: none;
+      border-radius: 999px;
+      padding: 7px 14px;
+      margin-right: 12px;
+      cursor: pointer;
+    }
+    .plate-input {
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      font-size: 22px;
+      text-align: center;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      background: var(--amber-soft);
+    }
+    .plate-input:focus { background: var(--amber-soft); }
+    .submit-btn {
+      width: 100%;
+      padding: 14px;
+      background: var(--ink);
+      color: var(--paper);
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 24px;
+      font-family: inherit;
+      transition: background 0.15s;
+    }
+    .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .submit-btn:hover:not(:disabled) { background: var(--terra-deep); border-color: var(--terra-deep); }
+    .choice-btn {
+      width: 100%;
+      padding: 18px 16px;
+      background: var(--paper-2);
+      color: var(--ink);
+      border: 1.5px solid var(--ink);
+      border-radius: 0;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 14px;
+      font-family: inherit;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: background 0.15s;
+    }
+    .choice-btn:hover { background: var(--paper-3); }
+    .choice-btn .sub { display: block; font-size: 12px; font-weight: 500; color: var(--ink-3); margin-top: 4px; font-family: 'DM Mono', ui-monospace, monospace; letter-spacing: .02em; }
+    .choice-btn .arrow { font-size: 22px; color: var(--amber); }
+    .back-link {
+      display: inline-block;
+      margin-top: 18px;
+      background: none;
+      border: none;
+      color: var(--ink-3);
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 12px;
+      letter-spacing: .04em;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .file-hint {
+      font-size: 11px;
+      color: var(--ink-3);
+      margin-top: 4px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .02em;
+    }
+    .vehicle-block {
+      border: 1.5px dashed var(--ink-3);
+      padding: 14px 16px 18px;
+      margin-top: 16px;
+    }
+    .vehicle-block .vehicle-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 12px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+    }
+    .vehicle-block .remove-vehicle {
+      background: none;
+      border: none;
+      color: var(--status-no);
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 12px;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .add-vehicle-btn {
+      width: 100%;
+      padding: 11px;
+      background: none;
+      color: var(--ink);
+      border: 1.5px dashed var(--ink);
+      border-radius: 0;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 16px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
+    }
+    .add-vehicle-btn:hover { background: var(--paper-2); }
+    .hint {
+      text-align: center;
+      font-size: 12px;
+      color: var(--ink-3);
+      margin-top: 14px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
+    }
+    .error {
+      background: rgba(177,69,53,0.12);
+      border: 1.5px solid var(--status-no);
+      color: var(--status-no);
+      padding: 12px 14px;
+      font-size: 13px;
+      margin-top: 16px;
+      text-align: center;
+    }
+    .progress {
+      text-align: center;
+      font-size: 12px;
+      color: var(--ink-3);
+      margin-top: 12px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
+    }
+    .success-card { text-align: center; }
+    .success-icon {
+      width: 64px;
+      height: 64px;
+      border: 2px solid var(--status-ok);
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 18px;
+    }
+    .success-icon svg { width: 32px; height: 32px; stroke: var(--status-ok); fill: none; stroke-width: 2.5; }
+    .success-card h2 {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 28px;
+      letter-spacing: -.015em;
+      color: var(--ink);
+      margin-bottom: 10px;
+      line-height: 1.05;
+    }
+    .success-card h2 em { font-style: italic; color: var(--amber); }
+    .success-card p { font-size: 15px; color: var(--ink-2); line-height: 1.55; }
+    .success-card p em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 600, "SOFT" 50;
+    }
+    .success-ref {
+      display: inline-block;
+      background: var(--amber-soft);
+      border: 1.5px solid var(--ink);
+      color: var(--ink);
+      padding: 10px 22px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      margin: 18px 0;
+    }
+    .pending-badge {
+      display: inline-block;
+      background: var(--paper-2);
+      border: 1.5px solid var(--amber);
+      color: var(--amber);
+      padding: 8px 16px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 12px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      font-weight: 600;
+      margin-top: 14px;
+    }
+    .success-detail {
+      font-size: 12px;
+      color: var(--ink-3);
+      margin-top: 10px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
+    }
+    .loading-state {
+      text-align: center;
+      padding: 40px 0;
+      color: var(--ink-3);
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-variation-settings: "opsz" 14, "wght" 500, "SOFT" 50;
+      font-size: 16px;
+    }
+    .not-found { text-align: center; padding: 20px 0; }
+    .not-found h2 {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 22px;
+      color: var(--status-no);
+      margin-bottom: 10px;
+      letter-spacing: -.01em;
+    }
+    .not-found p { font-size: 14px; color: var(--ink-2); line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card" id="app">
+    <div class="loading-state">Loading the form…</div>
+  </div>
+
+  <script>
+    // Raw fetch against Supabase PostgREST — matches visit.html / resident.html.
+    // The supabase-js SDK opens a realtime WebSocket on createClient() that can
+    // hang on strict networks and leave the page stuck on "Loading...".
+    const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
+    // Backend base. File uploads + reCAPTCHA-gated registration route through
+    // the backend so the token can be verified server-side and the file lands
+    // in private storage before any pending row is created.
+    const BACKEND_URL = 'https://lotlogic-backend-production.up.railway.app';
+
+    // reCAPTCHA v3 site key. Public by Google's design; mirrored in the <meta>
+    // tag in <head>. See visit.html for the rotation / env-sync note.
+    const RECAPTCHA_SITE_KEY =
+      (document.querySelector('meta[name=recaptcha-site-key]')?.content)
+      || '6LdaAb4sAAAAACd5g-pYqnQBWHdvMmGCufwtEQnE';
+
+    async function getRecaptchaToken(action) {
+      if (!window.grecaptcha || typeof grecaptcha.ready !== 'function') {
+        return null;
+      }
+      return new Promise((resolve, reject) => {
+        try {
+          grecaptcha.ready(() => {
+            grecaptcha.execute(RECAPTCHA_SITE_KEY, { action }).then(resolve, reject);
+          });
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }
+
+    async function pgRest(path, init = {}, timeoutMs = 10000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(SUPABASE_URL + '/rest/v1' + path, {
+          ...init,
+          signal: ctrl.signal,
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+            'Content-Type': 'application/json',
+            ...(init.headers || {}),
+          },
+        });
+        const text = await res.text();
+        const body = text ? JSON.parse(text) : null;
+        if (!res.ok) {
+          const err = new Error((body && body.message) || ('HTTP ' + res.status));
+          err.code = body && body.code;
+          err.details = body && body.details;
+          err.status = res.status;
+          throw err;
+        }
+        return body;
+      } finally { clearTimeout(t); }
+    }
+
+    // POST JSON to a public backend /register endpoint. Normalizes errors so
+    // callers can dispatch on err.status / err.detail. reCAPTCHA rejects come
+    // back as 400 with detail "recaptcha:<reason>".
+    async function backendRegister(path, payload, timeoutMs = 15000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(BACKEND_URL + path, {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const text = await res.text();
+        const body = text ? JSON.parse(text) : null;
+        if (!res.ok) {
+          const detail = body && (body.detail || body.message);
+          const err = new Error(typeof detail === 'string' ? detail : ('HTTP ' + res.status));
+          err.status = res.status;
+          err.detail = detail;
+          throw err;
+        }
+        return body;
+      } finally { clearTimeout(t); }
+    }
+
+    // Upload a single file to the backend via multipart, gated by a fresh
+    // reCAPTCHA token (action apartment_upload). Returns the storage key the
+    // register payload references. `kind` ∈ id|lease|plate.
+    async function uploadFile(file, kind, timeoutMs = 30000) {
+      const recaptchaToken = await getRecaptchaToken('apartment_upload').catch(() => null);
+      if (!recaptchaToken) {
+        throw new Error('Please retry — automated-access check failed.');
+      }
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('property_id', property.id);
+      fd.append('kind', kind);
+      fd.append('recaptcha_token', recaptchaToken);
+
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(BACKEND_URL + '/apartment/uploads', {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: { Accept: 'application/json' }, // let the browser set the multipart boundary
+          body: fd,
+        });
+        const text = await res.text();
+        const body = text ? JSON.parse(text) : null;
+        if (!res.ok) {
+          const detail = body && (body.detail || body.message);
+          const err = new Error(typeof detail === 'string' ? detail : ('Upload failed (HTTP ' + res.status + ')'));
+          err.status = res.status;
+          throw err;
+        }
+        if (!body || !body.key) {
+          throw new Error('Upload did not return a file reference. Please try again.');
+        }
+        return body.key;
+      } finally { clearTimeout(t); }
+    }
+
+    function friendlyErrorMessage(err) {
+      const msg = (err && err.message) || '';
+      if (msg.startsWith('recaptcha:') || /automated-access check failed/i.test(msg)) {
+        return 'Please retry — automated-access check failed.';
+      }
+      if (err && err.name === 'AbortError') {
+        return 'Request timed out. Please try again.';
+      }
+      return msg || 'Something went wrong. Please try again.';
+    }
+
+    const app = document.getElementById('app');
+
+    // QR code id comes from /apt.html/<qr> in the URL, but we also accept
+    // ?qr=<id> so a shared / emailed link like /apt.html?qr=... still works.
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    const qrCodeId = (pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null)
+      || new URLSearchParams(window.location.search).get('qr');
+
+    let property = null;
+
+    async function init() {
+      if (!qrCodeId) {
+        showNotFound('Invalid Link', 'This registration link is not valid.');
+        return;
+      }
+      try {
+        const rows = await pgRest(`/properties?select=id,name,address,property_type,policy_phone&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`);
+        const data = Array.isArray(rows) ? rows[0] : null;
+        if (!data) {
+          showNotFound('Property Not Found', 'This registration link is not valid or has expired.');
+          return;
+        }
+        property = data;
+        showLanding();
+      } catch (err) {
+        console.error('init error:', err);
+        showConnectionError(err);
+      }
+    }
+
+    function logoHtml() {
+      return `
+        <div class="logo">
+          <div class="shield"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/></svg></div>
+          <h1>LotL<span>o</span>gic</h1>
+        </div>`;
+    }
+
+    function showConnectionError(err) {
+      const detail = err && (err.name === 'AbortError' ? 'Request timed out.' : (err.message || 'Network error.'));
+      app.innerHTML = `
+        ${logoHtml()}
+        <div class="not-found">
+          <h2>Can't reach our server.</h2>
+          <p>${escapeHtml(detail)}</p>
+          <p>Check your connection — then give it another go.</p>
+          <button id="retryBtn" class="submit-btn" style="margin-top:18px">Try again →</button>
+        </div>
+      `;
+      const btn = document.getElementById('retryBtn');
+      if (btn) btn.addEventListener('click', () => {
+        app.innerHTML = '<div class="loading-state">Loading the form…</div>';
+        init();
+      });
+    }
+
+    function showNotFound(title, message) {
+      app.innerHTML = `
+        ${logoHtml()}
+        <div class="not-found">
+          <h2>${escapeHtml(title)}</h2>
+          <p>${escapeHtml(message)}</p>
+        </div>
+      `;
+    }
+
+    // ── Landing: Resident vs Guest ──────────────────────────────────────
+    function showLanding() {
+      app.innerHTML = `
+        ${logoHtml()}
+        <div class="property-name">
+          register to park at
+          <strong>${escapeHtml(property.name)}</strong>
+        </div>
+        <button type="button" class="choice-btn" id="chooseResident">
+          <span>I'm a Resident<span class="sub">I live here</span></span>
+          <span class="arrow">→</span>
+        </button>
+        <button type="button" class="choice-btn" id="chooseGuest">
+          <span>I'm a Guest<span class="sub">visiting someone here</span></span>
+          <span class="arrow">→</span>
+        </button>
+      `;
+      document.getElementById('chooseResident').addEventListener('click', showResidentForm);
+      document.getElementById('chooseGuest').addEventListener('click', showGuestForm);
+    }
+
+    // ── Resident form ───────────────────────────────────────────────────
+    let vehicleCount = 0;
+
+    function vehicleBlockHtml(index, removable) {
+      return `
+        <div class="vehicle-block" data-vehicle="${index}">
+          <div class="vehicle-head">
+            <span>Vehicle ${index}</span>
+            ${removable ? `<button type="button" class="remove-vehicle" data-remove="${index}">remove</button>` : ''}
+          </div>
+          <label>License Plate <span class="required">*</span></label>
+          <input type="text" class="plate-input v-plate" placeholder="ABC 1234" maxlength="10" autocomplete="off" required>
+          <label>Plate Photo <span class="required">*</span></label>
+          <input type="file" class="v-plate-photo" accept="image/*,application/pdf" required>
+          <div class="file-hint">Photo of the plate. Choose from your library or files.</div>
+        </div>`;
+    }
+
+    function showResidentForm() {
+      vehicleCount = 0;
+      app.innerHTML = `
+        ${logoHtml()}
+        <div class="property-name">
+          resident registration<br>
+          <strong>${escapeHtml(property.name)}</strong>
+        </div>
+        <form id="residentForm">
+          <label for="r_name">Full Name <span class="required">*</span></label>
+          <input type="text" id="r_name" placeholder="Jane Smith" required maxlength="80">
+
+          <label for="r_unit">Unit # <span class="required">*</span></label>
+          <input type="text" id="r_unit" placeholder="e.g. 214" required maxlength="20">
+
+          <label for="r_phone">Phone Number <span class="required">*</span></label>
+          <input type="tel" id="r_phone" placeholder="(555) 123-4567" required>
+
+          <label for="r_email">Email <span class="required">*</span></label>
+          <input type="email" id="r_email" placeholder="you@example.com" required>
+
+          <div id="r_vehicles"></div>
+          <button type="button" class="add-vehicle-btn" id="addVehicleBtn">+ add another vehicle</button>
+
+          <label for="r_id">Photo ID <span class="required">*</span></label>
+          <input type="file" id="r_id" accept="image/*,application/pdf" required>
+          <div class="file-hint">Driver's license or state ID.</div>
+
+          <label for="r_lease">Lease <span class="required">*</span></label>
+          <input type="file" id="r_lease" accept="image/*,application/pdf" required>
+          <div class="file-hint">A photo or PDF of your lease.</div>
+
+          <button type="submit" class="submit-btn" id="submitBtn">Submit for approval →</button>
+          <div class="hint">PENDING APPROVAL</div>
+          <div id="progressMsg" class="progress"></div>
+          <div id="errorMsg"></div>
+        </form>
+        <button type="button" class="back-link" id="backLink">← back</button>
+      `;
+
+      addVehicle(); // first vehicle is not removable
+      document.getElementById('addVehicleBtn').addEventListener('click', () => addVehicle());
+      document.getElementById('residentForm').addEventListener('submit', handleResidentSubmit);
+      document.getElementById('backLink').addEventListener('click', showLanding);
+    }
+
+    function addVehicle() {
+      vehicleCount += 1;
+      const removable = vehicleCount > 1;
+      const wrap = document.getElementById('r_vehicles');
+      wrap.insertAdjacentHTML('beforeend', vehicleBlockHtml(vehicleCount, removable));
+      if (removable) {
+        const btn = wrap.querySelector(`[data-remove="${vehicleCount}"]`);
+        if (btn) btn.addEventListener('click', () => {
+          const block = wrap.querySelector(`[data-vehicle="${btn.dataset.remove}"]`);
+          if (block) block.remove();
+        });
+      }
+    }
+
+    // ── Guest form ──────────────────────────────────────────────────────
+    function showGuestForm() {
+      newIdempotencyKey();
+      const hourOptions = [];
+      for (let h = 1; h <= 72; h += 1) {
+        const sel = h === 24 ? ' selected' : '';
+        hourOptions.push(`<option value="${h}"${sel}>${h} hour${h === 1 ? '' : 's'}${h === 72 ? ' (maximum)' : ''}</option>`);
+      }
+      app.innerHTML = `
+        ${logoHtml()}
+        <div class="property-name">
+          guest registration<br>
+          <strong>${escapeHtml(property.name)}</strong>
+        </div>
+        <form id="guestForm">
+          <label for="g_name">Full Name <span class="required">*</span></label>
+          <input type="text" id="g_name" placeholder="Jane Smith" required maxlength="80">
+
+          <label for="g_unit">Unit You're Visiting <span class="required">*</span></label>
+          <input type="text" id="g_unit" placeholder="e.g. 214" required maxlength="20">
+
+          <label for="g_phone">Phone Number <span class="required">*</span></label>
+          <input type="tel" id="g_phone" placeholder="(555) 123-4567" required>
+
+          <label for="g_email">Email <span class="required">*</span></label>
+          <input type="email" id="g_email" placeholder="you@example.com" required>
+
+          <label for="g_plate">License Plate <span class="required">*</span></label>
+          <input type="text" id="g_plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
+
+          <label for="g_plate_photo">Plate Photo <span class="required">*</span></label>
+          <input type="file" id="g_plate_photo" accept="image/*,application/pdf" required>
+          <div class="file-hint">Photo of the plate. Choose from your library or files.</div>
+
+          <label for="g_id">Photo ID <span class="required">*</span></label>
+          <input type="file" id="g_id" accept="image/*,application/pdf" required>
+          <div class="file-hint">Driver's license or state ID.</div>
+
+          <label for="g_hours">How long will you be here? <span class="required">*</span></label>
+          <select id="g_hours" required>${hourOptions.join('')}</select>
+
+          <button type="submit" class="submit-btn" id="submitBtn">Submit for approval →</button>
+          <div class="hint">MAXIMUM STAY · 72 HOURS</div>
+          <div id="progressMsg" class="progress"></div>
+          <div id="errorMsg"></div>
+        </form>
+        <button type="button" class="back-link" id="backLink">← back</button>
+      `;
+
+      document.getElementById('guestForm').addEventListener('submit', handleGuestSubmit);
+      document.getElementById('backLink').addEventListener('click', showLanding);
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+    let idempotencyKey = null;
+    function newIdempotencyKey() {
+      idempotencyKey = (crypto.randomUUID && crypto.randomUUID()) ||
+        (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
+    }
+
+    function normalizePlate(s) {
+      return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    }
+    function normalizePhone(s) {
+      const digits = (s || '').replace(/\D/g, '');
+      if (digits.length === 10) return '+1' + digits;
+      if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+      if (digits.startsWith('+')) return s;
+      return digits ? ('+' + digits) : '';
+    }
+
+    function setProgress(text) {
+      const el = document.getElementById('progressMsg');
+      if (el) el.textContent = text || '';
+    }
+
+    let submitting = false;
+
+    // ── Resident submit ─────────────────────────────────────────────────
+    async function handleResidentSubmit(e) {
+      e.preventDefault();
+      if (submitting) return;
+      submitting = true;
+      const btn = document.getElementById('submitBtn');
+      const errorDiv = document.getElementById('errorMsg');
+      errorDiv.innerHTML = '';
+      btn.disabled = true;
+      btn.textContent = 'Submitting…';
+
+      try {
+        const holderName = document.getElementById('r_name').value.trim();
+        const unitNumber = document.getElementById('r_unit').value.trim();
+        const phone = normalizePhone(document.getElementById('r_phone').value);
+        const email = document.getElementById('r_email').value.trim();
+
+        if (!holderName) throw new Error('Please enter your full name.');
+        if (!unitNumber) throw new Error('Please enter your unit number.');
+        if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
+        if (!email) throw new Error('Please enter your email.');
+
+        // Collect vehicles (plate + plate-photo per block).
+        const blocks = Array.from(document.querySelectorAll('#r_vehicles .vehicle-block'));
+        const vehicles = [];
+        for (const block of blocks) {
+          const plate = normalizePlate(block.querySelector('.v-plate').value);
+          const photoInput = block.querySelector('.v-plate-photo');
+          const photoFile = photoInput.files && photoInput.files[0];
+          if (!plate || plate.length < 2) throw new Error('Please enter a valid license plate for every vehicle.');
+          if (!photoFile) throw new Error('Please attach a plate photo for every vehicle.');
+          vehicles.push({ plate, photoFile });
+        }
+        if (vehicles.length === 0) throw new Error('Please add at least one vehicle.');
+
+        const idInput = document.getElementById('r_id');
+        const leaseInput = document.getElementById('r_lease');
+        const idFile = idInput.files && idInput.files[0];
+        const leaseFile = leaseInput.files && leaseInput.files[0];
+        if (!idFile) throw new Error('Please attach a photo of your ID.');
+        if (!leaseFile) throw new Error('Please attach your lease.');
+
+        // Upload shared docs once, then per-vehicle plate photos.
+        setProgress('Uploading ID…');
+        const idDocUrl = await uploadFile(idFile, 'id');
+        setProgress('Uploading lease…');
+        const leaseDocUrl = await uploadFile(leaseFile, 'lease');
+
+        // Register each vehicle as its own pending resident plate. They share
+        // the uploaded ID + lease; each has its own plate photo.
+        for (let i = 0; i < vehicles.length; i += 1) {
+          const v = vehicles[i];
+          setProgress(`Uploading plate photo ${i + 1} of ${vehicles.length}…`);
+          const platePhotoUrl = await uploadFile(v.photoFile, 'plate');
+
+          setProgress(`Submitting vehicle ${i + 1} of ${vehicles.length}…`);
+          const recaptchaToken = await getRecaptchaToken('plate_register').catch(() => null);
+          if (!recaptchaToken) throw new Error('Please retry — automated-access check failed.');
+
+          await backendRegister('/resident_plates/register', {
+            property_id: property.id,
+            plate_text: v.plate,
+            holder_name: holderName,
+            holder_role: 'resident',
+            unit_number: unitNumber,
+            phone: phone,
+            email: email,
+            id_doc_url: idDocUrl,
+            lease_doc_url: leaseDocUrl,
+            plate_photo_url: platePhotoUrl,
+            recaptcha_token: recaptchaToken,
+          });
+        }
+
+        setProgress('');
+        showSuccess({ refId: null });
+      } catch (err) {
+        setProgress('');
+        errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
+        btn.disabled = false;
+        btn.textContent = 'Submit for approval →';
+        submitting = false;
+      }
+    }
+
+    // ── Guest submit ────────────────────────────────────────────────────
+    async function handleGuestSubmit(e) {
+      e.preventDefault();
+      if (submitting) return;
+      submitting = true;
+      const btn = document.getElementById('submitBtn');
+      const errorDiv = document.getElementById('errorMsg');
+      errorDiv.innerHTML = '';
+      btn.disabled = true;
+      btn.textContent = 'Submitting…';
+
+      try {
+        const visitorName = document.getElementById('g_name').value.trim();
+        const hostUnit = document.getElementById('g_unit').value.trim();
+        const phone = normalizePhone(document.getElementById('g_phone').value);
+        const email = document.getElementById('g_email').value.trim();
+        const plateText = normalizePlate(document.getElementById('g_plate').value);
+        const stayHours = parseInt(document.getElementById('g_hours').value, 10);
+
+        if (!visitorName) throw new Error('Please enter your full name.');
+        if (!hostUnit) throw new Error('Please enter the unit you are visiting.');
+        if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
+        if (!email) throw new Error('Please enter your email.');
+        if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
+        if (!stayHours || stayHours < 1 || stayHours > 72) throw new Error('Choose how long you will be parked (1–72 hours).');
+
+        const plateInput = document.getElementById('g_plate_photo');
+        const idInput = document.getElementById('g_id');
+        const platePhotoFile = plateInput.files && plateInput.files[0];
+        const idFile = idInput.files && idInput.files[0];
+        if (!platePhotoFile) throw new Error('Please attach a plate photo.');
+        if (!idFile) throw new Error('Please attach a photo of your ID.');
+
+        setProgress('Uploading plate photo…');
+        const platePhotoUrl = await uploadFile(platePhotoFile, 'plate');
+        setProgress('Uploading ID…');
+        const idPhotoUrl = await uploadFile(idFile, 'id');
+
+        setProgress('Submitting…');
+        const recaptchaToken = await getRecaptchaToken('pass_register').catch(() => null);
+        if (!recaptchaToken) throw new Error('Please retry — automated-access check failed.');
+
+        const result = await backendRegister('/visitor_passes/register', {
+          property_id: property.id,
+          plate_text: plateText,
+          visitor_name: visitorName,
+          host_unit: hostUnit,
+          phone: phone,
+          email: email,
+          id_photo_url: idPhotoUrl,
+          plate_photo_url: platePhotoUrl,
+          stay_hours: stayHours,
+          submission_idempotency_key: idempotencyKey,
+          recaptcha_token: recaptchaToken,
+        });
+
+        setProgress('');
+        const refId = (result && result.reference_id ? result.reference_id.toString().toUpperCase() : null);
+        showSuccess({ refId });
+      } catch (err) {
+        setProgress('');
+        errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
+        btn.disabled = false;
+        btn.textContent = 'Submit for approval →';
+        submitting = false;
+      }
+    }
+
+    function showSuccess(opts) {
+      const refId = opts && opts.refId;
+      const phone = property.policy_phone ? escapeHtml(property.policy_phone) : null;
+      app.innerHTML = `
+        <div class="success-card">
+          <div class="success-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </div>
+          <h2>Request <em>submitted.</em></h2>
+          <p>Your registration for <em>${escapeHtml(property.name)}</em> is in. The leasing office or towing company will review it — you'll be notified.</p>
+          ${refId ? `<div class="success-ref">${escapeHtml(refId)}</div>` : ''}
+          <div class="pending-badge">Pending approval</div>
+          ${phone ? `<div class="success-detail">QUESTIONS? CALL ${phone}</div>` : ''}
+        </div>
+      `;
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : str;
+      return div.innerHTML;
+    }
+
+    init();
+  </script>
+</body>
+</html>

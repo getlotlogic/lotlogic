@@ -4,6 +4,7 @@
     { "source": "/perm/:path*", "destination": "/resident.html" },
     { "source": "/visit/:path*", "destination": "/visit.html" },
     { "source": "/register/:path*", "destination": "/resident.html" },
+    { "source": "/apt/:path*", "destination": "/apt.html" },
     { "source": "/app", "destination": "/dashboard.html" },
     { "source": "/app/:path*", "destination": "/dashboard.html" }
   ],
