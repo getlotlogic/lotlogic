@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Plate Lookup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500,50;9..144,700,50;9..144,800,80;9..144,900,80&family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #F2EAD8;
+      --paper-2: #EADFC7;
+      --paper-3: #DFD2B5;
+      --ink: #1F1B14;
+      --ink-2: #3D3528;
+      --ink-3: #6F6450;
+      --amber: #D97706;
+      --amber-soft: #FBBF24;
+      --terra: #C97A4A;
+      --terra-deep: #9A5530;
+      --status-ok: #4A7A48;
+      --status-ok-bg: rgba(74,122,72,0.14);
+      --status-warn: #B97D1E;
+      --status-warn-bg: rgba(217,119,6,0.14);
+      --status-no: #B14535;
+      --status-no-bg: rgba(177,69,53,0.14);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 20px;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: -.005em;
+      background-image:
+        radial-gradient(circle at 12% 18%, rgba(31,27,20,0.025) 0 1.2px, transparent 1.5px),
+        radial-gradient(circle at 78% 62%, rgba(31,27,20,0.02) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 42% 88%, rgba(31,27,20,0.018) 0 0.8px, transparent 1.2px);
+      background-size: 240px 240px, 320px 320px, 200px 200px;
+    }
+    .card {
+      background: var(--paper);
+      border: 1.5px solid var(--ink);
+      padding: 28px 24px;
+      max-width: 460px;
+      width: 100%;
+      margin-top: 24px;
+    }
+    .logo { text-align: center; margin-bottom: 22px; }
+    .logo h1 {
+      font-family: 'Fraunces', Georgia, serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 32px;
+      letter-spacing: -.02em;
+      line-height: 1;
+      color: var(--ink);
+    }
+    .logo h1 span { color: var(--amber); font-style: italic; }
+    .logo .tag {
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 11px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-top: 8px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink-3);
+      margin-bottom: 6px;
+      margin-top: 16px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    input, select {
+      width: 100%;
+      padding: 12px 14px;
+      background: var(--paper-2);
+      border: 1.5px solid var(--ink);
+      border-radius: 0;
+      color: var(--ink);
+      font-size: 16px;
+      font-family: inherit;
+      outline: none;
+      transition: background 0.15s;
+    }
+    input:focus, select:focus { background: var(--paper-3); }
+    input::placeholder { color: var(--ink-3); }
+    select { appearance: none; cursor: pointer; }
+    select option { background: var(--paper); color: var(--ink); }
+    .plate-input {
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      font-size: 28px;
+      text-align: center;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      background: var(--amber-soft);
+      padding: 16px 14px;
+    }
+    .plate-input:focus { background: var(--amber-soft); }
+    .btn {
+      width: 100%;
+      padding: 15px;
+      background: var(--ink);
+      color: var(--paper);
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 22px;
+      font-family: inherit;
+      transition: background 0.15s;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn:hover:not(:disabled) { background: var(--terra-deep); border-color: var(--terra-deep); }
+    .error {
+      background: var(--status-no-bg);
+      border: 1.5px solid var(--status-no);
+      color: var(--status-no);
+      padding: 12px 14px;
+      font-size: 13px;
+      margin-top: 16px;
+      text-align: center;
+    }
+    .muted {
+      text-align: center;
+      font-size: 12px;
+      color: var(--ink-3);
+      margin-top: 14px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
+    }
+    .link-btn {
+      background: none; border: none; color: var(--amber);
+      font-family: inherit; font-size: 13px; cursor: pointer;
+      text-decoration: underline; padding: 0; margin-top: 16px;
+    }
+    /* Verdict result — big + glanceable */
+    .result {
+      margin-top: 24px;
+      border: 2px solid var(--ink);
+      padding: 28px 22px;
+      text-align: center;
+    }
+    .result.ok { border-color: var(--status-ok); background: var(--status-ok-bg); }
+    .result.warn { border-color: var(--status-warn); background: var(--status-warn-bg); }
+    .result.no { border-color: var(--status-no); background: var(--status-no-bg); }
+    .result .glyph { font-size: 56px; line-height: 1; margin-bottom: 10px; }
+    .result.ok .glyph, .result.ok .headline { color: var(--status-ok); }
+    .result.warn .glyph, .result.warn .headline { color: var(--status-warn); }
+    .result.no .glyph, .result.no .headline { color: var(--status-no); }
+    .result .headline {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 26px;
+      letter-spacing: -.015em;
+      line-height: 1.1;
+    }
+    .result .sub {
+      font-size: 16px;
+      color: var(--ink-2);
+      margin-top: 10px;
+      line-height: 1.45;
+    }
+    .result .plate {
+      display: inline-block;
+      background: var(--paper);
+      border: 1.5px solid var(--ink);
+      color: var(--ink);
+      padding: 8px 18px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      margin-top: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card" id="app">
+    <div class="muted">Loading…</div>
+  </div>
+
+  <script>
+    // Standalone authenticated in-lot tool. Vanilla JS + raw fetch (no React,
+    // no realtime WebSocket) so it loads instantly on a phone in the field.
+    const BACKEND_URL = 'https://lotlogic-backend-production.up.railway.app';
+    const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
+    // Anon key is the PostgREST apikey gate; per-row scoping comes from the
+    // user's JWT presented as the Authorization bearer (RLS reads its claims).
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
+
+    const app = document.getElementById('app');
+
+    // ── Session helpers — SAME localStorage shape the dashboard uses, so a
+    // session created here carries over to dashboard.html and vice-versa.
+    function getSession() {
+      try { return JSON.parse(localStorage.getItem('lotlogic_session') || 'null'); }
+      catch { return null; }
+    }
+    function getToken() {
+      return getSession()?._token ?? null;
+    }
+    function setSession(obj) {
+      localStorage.setItem('lotlogic_session', JSON.stringify(obj));
+    }
+    function clearSession() {
+      try { localStorage.removeItem('lotlogic_session'); } catch {}
+    }
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    // ── Auth ───────────────────────────────────────────────────────────────
+    async function authLogin(email, password) {
+      const r = await fetch(BACKEND_URL + '/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      let body = null;
+      try { body = await r.json(); } catch {}
+      if (!r.ok) {
+        const detail = body && body.detail;
+        let msg;
+        if (Array.isArray(detail)) {
+          msg = detail.map(d => (d && typeof d === 'object' ? d.msg : String(d)))
+                      .filter(Boolean).join(', ') || 'Sign-in failed.';
+        } else if (typeof detail === 'string') {
+          msg = detail;
+        } else {
+          msg = 'Sign-in failed (' + r.status + ')';
+        }
+        const err = new Error(msg);
+        err.status = r.status;
+        throw err;
+      }
+      return body;
+    }
+
+    // ── Properties (RLS-scoped via the user's JWT, exactly like the dashboard
+    // reads `properties` through PostgREST) ─────────────────────────────────
+    async function fetchProperties() {
+      const token = getToken();
+      const r = await fetch(
+        SUPABASE_URL + '/rest/v1/properties?select=id,name,address&order=name.asc',
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: 'Bearer ' + token,
+          },
+        },
+      );
+      if (r.status === 401) { clearSession(); renderLogin(); throw new Error('Session expired'); }
+      if (!r.ok) throw new Error('Could not load properties (' + r.status + ')');
+      return r.json();
+    }
+
+    // ── Lookup ──────────────────────────────────────────────────────────────
+    async function lookup(propertyId, plate) {
+      const token = getToken();
+      const url = BACKEND_URL + '/apartment/passes/lookup'
+        + '?property_id=' + encodeURIComponent(propertyId)
+        + '&plate=' + encodeURIComponent(plate);
+      const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+      if (r.status === 401) { clearSession(); renderLogin('Session expired — sign in again.'); throw new Error('Session expired'); }
+      if (!r.ok) {
+        let msg = 'Lookup failed (' + r.status + ')';
+        try { const b = await r.json(); if (b.detail) msg = b.detail; } catch {}
+        throw new Error(msg);
+      }
+      return r.json();
+    }
+
+    // ── Views ─────────────────────────────────────────────────────────────
+    function renderLogin(notice) {
+      app.innerHTML = `
+        <div class="logo">
+          <h1>Lot<span>logic</span></h1>
+          <div class="tag">In-lot plate lookup</div>
+        </div>
+        ${notice ? '<div class="error">' + esc(notice) + '</div>' : ''}
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username" placeholder="you@nstyle.com">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" placeholder="••••••••">
+        <button class="btn" id="loginBtn">Sign in</button>
+        <div id="loginErr"></div>
+      `;
+      const btn = document.getElementById('loginBtn');
+      const errBox = document.getElementById('loginErr');
+      const submit = async () => {
+        const email = document.getElementById('email').value.trim();
+        const password = document.getElementById('password').value;
+        if (!email || !password) { errBox.innerHTML = '<div class="error">Enter your email and password.</div>'; return; }
+        btn.disabled = true; btn.textContent = 'Signing in…'; errBox.innerHTML = '';
+        try {
+          const session = await authLogin(email, password);
+          setSession(session); // same shape the dashboard stores (incl. _token)
+          renderTool();
+        } catch (e) {
+          errBox.innerHTML = '<div class="error">' + esc(e.message) + '</div>';
+          btn.disabled = false; btn.textContent = 'Sign in';
+        }
+      };
+      btn.addEventListener('click', submit);
+      document.getElementById('password').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+    }
+
+    async function renderTool() {
+      app.innerHTML = `
+        <div class="logo">
+          <h1>Lot<span>logic</span></h1>
+          <div class="tag">In-lot plate lookup</div>
+        </div>
+        <div class="muted">Loading properties…</div>
+      `;
+      let props;
+      try {
+        props = await fetchProperties();
+      } catch (e) {
+        if (e.message === 'Session expired') return;
+        app.innerHTML += '<div class="error">' + esc(e.message) + '</div>';
+        return;
+      }
+      const options = (props || []).map(p =>
+        '<option value="' + esc(p.id) + '">' + esc(p.name || p.address || p.id) + '</option>'
+      ).join('');
+      app.innerHTML = `
+        <div class="logo">
+          <h1>Lot<span>logic</span></h1>
+          <div class="tag">In-lot plate lookup</div>
+        </div>
+        ${(props && props.length)
+          ? `<label for="property">Property</label>
+             <select id="property">${options}</select>`
+          : '<div class="error">No properties are assigned to this account.</div>'}
+        <label for="plate">License plate</label>
+        <input id="plate" class="plate-input" type="text" inputmode="latin"
+               autocapitalize="characters" autocomplete="off" placeholder="ABC1234">
+        <button class="btn" id="checkBtn" ${(props && props.length) ? '' : 'disabled'}>Check</button>
+        <div id="result"></div>
+        <button class="link-btn" id="signOut">Sign out</button>
+      `;
+      const checkBtn = document.getElementById('checkBtn');
+      const resultBox = document.getElementById('result');
+      const run = async () => {
+        const propertyId = document.getElementById('property')?.value;
+        const plate = document.getElementById('plate').value.trim();
+        if (!propertyId || !plate) { resultBox.innerHTML = '<div class="error">Pick a property and enter a plate.</div>'; return; }
+        checkBtn.disabled = true; checkBtn.textContent = 'Checking…'; resultBox.innerHTML = '';
+        try {
+          const out = await lookup(propertyId, plate);
+          resultBox.innerHTML = renderVerdict(out);
+        } catch (e) {
+          if (e.message === 'Session expired') return;
+          resultBox.innerHTML = '<div class="error">' + esc(e.message) + '</div>';
+        } finally {
+          checkBtn.disabled = false; checkBtn.textContent = 'Check';
+        }
+      };
+      checkBtn.addEventListener('click', run);
+      document.getElementById('plate').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+      document.getElementById('signOut').addEventListener('click', () => { clearSession(); renderLogin(); });
+    }
+
+    function renderVerdict(out) {
+      const d = out.detail || {};
+      if (out.verdict === 'resident') {
+        return `<div class="result ok">
+          <div class="glyph">✓</div>
+          <div class="headline">Permitted</div>
+          <div class="sub">Resident${d.unit ? ' · Unit ' + esc(d.unit) : ''}${d.name ? '<br>' + esc(d.name) : ''}</div>
+          ${d.plate ? '<div class="plate">' + esc(d.plate) + '</div>' : ''}
+        </div>`;
+      }
+      if (out.verdict === 'guest') {
+        const hrs = d.hours_left;
+        return `<div class="result ok">
+          <div class="glyph">✓</div>
+          <div class="headline">Permitted</div>
+          <div class="sub">Guest${d.unit ? ' · Unit ' + esc(d.unit) : ''}${(hrs != null) ? '<br>' + esc(hrs) + 'h left' : ''}</div>
+        </div>`;
+      }
+      if (out.verdict === 'expired_guest') {
+        return `<div class="result warn">
+          <div class="glyph">!</div>
+          <div class="headline">Expired pass</div>
+          <div class="sub">Was registered — the parking window has passed.</div>
+        </div>`;
+      }
+      // not_registered
+      return `<div class="result no">
+        <div class="glyph">✗</div>
+        <div class="headline">Not registered</div>
+        <div class="sub">No active pass — eligible to tow.</div>
+        ${d.plate ? '<div class="plate">' + esc(d.plate) + '</div>' : ''}
+      </div>`;
+    }
+
+    // ── Boot ──────────────────────────────────────────────────────────────
+    if (getToken()) {
+      renderTool();
+    } else {
+      renderLogin();
+    }
+  </script>
+</body>
+</html>
