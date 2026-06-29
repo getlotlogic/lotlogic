@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LotLogic Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500,50;9..144,700,50;9..144,800,80;9..144,900,80&family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root {
+      --paper: #F2EAD8;
+      --paper-2: #EADFC7;
+      --paper-3: #DFD2B5;
+      --ink: #1F1B14;
+      --ink-2: #3D3528;
+      --ink-3: #6F6450;
+      --amber: #D97706;
+      --amber-soft: #FBBF24;
+      --terra: #C97A4A;
+      --terra-deep: #9A5530;
+      --status-ok: #4A7A48;
+      --status-ok-bg: rgba(74,122,72,0.14);
+      --status-warn: #B97D1E;
+      --status-warn-bg: rgba(217,119,6,0.14);
+      --status-no: #B14535;
+      --status-no-bg: rgba(177,69,53,0.14);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: -.005em;
+      background-image:
+        radial-gradient(circle at 12% 18%, rgba(31,27,20,0.025) 0 1.2px, transparent 1.5px),
+        radial-gradient(circle at 78% 62%, rgba(31,27,20,0.02) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 42% 88%, rgba(31,27,20,0.018) 0 0.8px, transparent 1.2px);
+      background-size: 240px 240px, 320px 320px, 200px 200px;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 22px 80px; }
+    .center { display: flex; align-items: flex-start; justify-content: center; padding: 20px; }
+    .card {
+      background: var(--paper);
+      border: 1.5px solid var(--ink);
+      padding: 28px 24px;
+      max-width: 440px;
+      width: 100%;
+      margin-top: 40px;
+    }
+    .logo h1 {
+      font-family: 'Fraunces', Georgia, serif;
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+      font-size: 30px;
+      letter-spacing: -.02em;
+      line-height: 1;
+      color: var(--ink);
+    }
+    .logo h1 span { color: var(--amber); font-style: italic; }
+    .logo .tag {
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 11px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-top: 8px;
+    }
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1.5px solid var(--ink); padding-bottom: 16px; margin-bottom: 22px;
+      flex-wrap: wrap; gap: 12px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink-3);
+      margin-bottom: 6px;
+      margin-top: 16px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    input, select, textarea {
+      width: 100%;
+      padding: 11px 13px;
+      background: var(--paper-2);
+      border: 1.5px solid var(--ink);
+      border-radius: 0;
+      color: var(--ink);
+      font-size: 15px;
+      font-family: inherit;
+      outline: none;
+      transition: background 0.15s;
+    }
+    input:focus, select:focus, textarea:focus { background: var(--paper-3); }
+    input::placeholder { color: var(--ink-3); }
+    select { appearance: none; cursor: pointer; }
+    select option { background: var(--paper); color: var(--ink); }
+    .btn {
+      padding: 13px 20px;
+      background: var(--ink);
+      color: var(--paper);
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s;
+    }
+    .btn.full { width: 100%; margin-top: 22px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn:hover:not(:disabled) { background: var(--terra-deep); border-color: var(--terra-deep); }
+    .btn.ghost {
+      background: none; color: var(--ink); padding: 8px 16px; font-size: 13px;
+    }
+    .btn.ghost:hover:not(:disabled) { background: var(--paper-3); color: var(--ink); border-color: var(--ink); }
+    .error {
+      background: var(--status-no-bg);
+      border: 1.5px solid var(--status-no);
+      color: var(--status-no);
+      padding: 12px 14px;
+      font-size: 13px;
+      margin-top: 16px;
+    }
+    .success {
+      background: var(--status-ok-bg);
+      border: 1.5px solid var(--status-ok);
+      color: var(--status-ok);
+      padding: 12px 14px;
+      font-size: 13px;
+      margin-top: 16px;
+    }
+    .muted {
+      font-size: 12px;
+      color: var(--ink-3);
+      font-family: 'DM Mono', ui-monospace, monospace;
+      letter-spacing: .04em;
+    }
+    .tabs { display: flex; gap: 8px; margin-bottom: 22px; flex-wrap: wrap; }
+    .tab {
+      background: var(--paper-2);
+      border: 1.5px solid var(--ink);
+      color: var(--ink-2);
+      padding: 9px 18px;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 12px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .tab.active { background: var(--ink); color: var(--paper); }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th {
+      text-align: left;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 11px;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      font-weight: 500;
+      padding: 10px 12px;
+      border-bottom: 1.5px solid var(--ink);
+    }
+    td { padding: 11px 12px; border-bottom: 1px solid var(--paper-3); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    .badge {
+      display: inline-block;
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 10.5px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      padding: 3px 9px;
+      border: 1.5px solid var(--ink);
+      font-weight: 500;
+    }
+    .badge.apartment { background: var(--status-ok-bg); border-color: var(--status-ok); color: var(--status-ok); }
+    .badge.truck_plaza { background: var(--status-warn-bg); border-color: var(--status-warn); color: var(--status-warn); }
+    .section-title {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 50;
+      font-size: 22px;
+      margin-bottom: 4px;
+    }
+    .panel { border: 1.5px solid var(--ink); padding: 22px; background: var(--paper); }
+    .panel + .panel { margin-top: 18px; }
+    .subhead {
+      font-family: 'DM Mono', ui-monospace, monospace;
+      font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--ink-3); margin: 22px 0 2px; font-weight: 500;
+      border-top: 1px dashed var(--ink-3); padding-top: 18px;
+    }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+    .linkbox {
+      display: flex; gap: 8px; align-items: stretch; margin-top: 8px;
+    }
+    .linkbox input {
+      font-family: 'DM Mono', ui-monospace, monospace; font-size: 12px;
+    }
+    .copybtn {
+      flex: 0 0 auto; padding: 0 16px; background: var(--ink); color: var(--paper);
+      border: 1.5px solid var(--ink); cursor: pointer; font-family: inherit;
+      font-size: 13px; font-weight: 700;
+    }
+    .copybtn:hover { background: var(--terra-deep); border-color: var(--terra-deep); }
+    .fb-body { font-size: 14px; line-height: 1.45; color: var(--ink-2); white-space: pre-wrap; }
+    .fb-meta { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
+    .fb-status { width: auto; min-width: 120px; padding: 7px 10px; font-size: 13px; }
+    .empty { padding: 30px; text-align: center; color: var(--ink-3); font-family: 'DM Mono', ui-monospace, monospace; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="root"><div class="center"><div class="muted" style="margin-top:60px;">Loading…</div></div></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    // ── Backend + session ───────────────────────────────────────────────────
+    // SAME API origin + localStorage shape the dashboard + lookup pages use, so
+    // a platform-admin session created here (or there) carries over. Admin reads
+    // go through the BACKEND only — never the Supabase client, whose RLS would
+    // scope results down to a single tenant.
+    const API = 'https://lotlogic-backend-production.up.railway.app';
+    const SESSION_KEY = 'lotlogic_session';
+
+    function getToken() {
+      try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null')?._token ?? null; }
+      catch { return null; }
+    }
+    function clearSession() {
+      try { localStorage.removeItem(SESSION_KEY); } catch {}
+    }
+
+    // Auth-expired signal — any 401 clears the session and bounces to sign-in.
+    class AuthError extends Error {}
+
+    async function apiFetch(path, options = {}) {
+      const token = getToken();
+      const headers = { ...(options.headers || {}) };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const r = await fetch(API + path, { ...options, headers });
+      if (r.status === 401) {
+        clearSession();
+        const e = new AuthError('Session expired — sign in again.');
+        e.status = 401;
+        throw e;
+      }
+      let body = null;
+      try { body = await r.json(); } catch {}
+      if (!r.ok) {
+        let msg = `Server error (${r.status})`;
+        const detail = body && body.detail;
+        if (Array.isArray(detail)) {
+          msg = detail.map(d => (d && typeof d === 'object' ? d.msg : String(d))).filter(Boolean).join(', ') || msg;
+        } else if (typeof detail === 'string') msg = detail;
+        else if (body && body.error) msg = body.error;
+        const err = new Error(msg);
+        err.status = r.status;
+        throw err;
+      }
+      return body;
+    }
+
+    async function authLogin(email, password) {
+      const r = await fetch(API + '/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      let body = null;
+      try { body = await r.json(); } catch {}
+      if (!r.ok) {
+        const detail = body && body.detail;
+        let pretty;
+        if (Array.isArray(detail)) {
+          const msgs = detail.map(d => (d && typeof d === 'object' ? d.msg : String(d))).filter(Boolean);
+          pretty = msgs.length ? msgs.join(', ') : 'Please check your email and try again.';
+        } else if (typeof detail === 'string') pretty = detail;
+        else pretty = `Sign-in failed (${r.status})`;
+        const err = new Error(pretty);
+        err.status = r.status;
+        throw err;
+      }
+      return body; // { token, expires_in, subject:{...} }
+    }
+
+    // Store the session in the SAME shape the dashboard writes so the two share
+    // a login. We only need _token here; the rest is best-effort metadata.
+    function storeSession(res, emailFallback) {
+      const base = res.subject || {};
+      const role = base.type === 'partner' ? 'partner' : 'owner';
+      const session = {
+        id: base.id,
+        email: base.email || emailFallback,
+        business_name: base.display_name,
+        is_admin: !!base.is_admin,
+        is_platform_admin: !!base.is_platform_admin,
+        _role: role,
+        _token: res.token,
+        _expires_in: res.expires_in,
+      };
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch {}
+    }
+
+    // ── Sign-in screen ──────────────────────────────────────────────────────
+    function SignIn({ notAdmin, onSignedIn }) {
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState('');
+
+      async function submit(e) {
+        e.preventDefault();
+        const trimmed = email.trim();
+        if (!trimmed || !password) { setError('Enter your email and password.'); return; }
+        setBusy(true); setError('');
+        try {
+          const res = await authLogin(trimmed, password);
+          storeSession(res, trimmed);
+          onSignedIn();
+        } catch (err) {
+          if (err.status === 401) setError('Invalid email or password.');
+          else setError(err.message || "Can't connect right now.");
+        } finally { setBusy(false); }
+      }
+
+      return (
+        <div className="center">
+          <div className="card">
+            <div className="logo">
+              <h1>Lot<span>logic</span></h1>
+              <div className="tag">Admin · internal console</div>
+            </div>
+            <div style={{ fontFamily: 'Fraunces, serif', fontSize: '20px', marginTop: '20px' }}>
+              Admin sign-in required
+            </div>
+            {notAdmin && (
+              <div className="error">This account is not a platform admin.</div>
+            )}
+            <form onSubmit={submit}>
+              <label htmlFor="email">Email</label>
+              <input id="email" type="email" autoComplete="username"
+                value={email} onChange={e => setEmail(e.target.value)} placeholder="you@lotlogicparking.com" />
+              <label htmlFor="password">Password</label>
+              <input id="password" type="password" autoComplete="current-password"
+                value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+              <button className="btn full" type="submit" disabled={busy}>
+                {busy ? 'Signing in…' : 'Sign in'}
+              </button>
+            </form>
+            {error && <div className="error">{error}</div>}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Copyable secret (setup link) ────────────────────────────────────────
+    function CopyLink({ label, url }) {
+      const [copied, setCopied] = useState(false);
+      function copy() {
+        navigator.clipboard?.writeText(url).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1600);
+        }).catch(() => {});
+      }
+      return (
+        <div style={{ marginTop: '14px' }}>
+          <div className="muted">{label}</div>
+          <div className="linkbox">
+            <input readOnly value={url} onFocus={e => e.target.select()} />
+            <button type="button" className="copybtn" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Clients ─────────────────────────────────────────────────────────────
+    function ClientsTab({ onAuthExpired }) {
+      const [rows, setRows] = useState(null);
+      const [error, setError] = useState('');
+
+      const load = useCallback(async () => {
+        setError('');
+        try {
+          const data = await apiFetch('/admin/clients');
+          setRows(Array.isArray(data) ? data : (data?.clients || []));
+        } catch (err) {
+          if (err instanceof AuthError) return onAuthExpired();
+          setError(err.message);
+          setRows([]);
+        }
+      }, [onAuthExpired]);
+
+      useEffect(() => { load(); }, [load]);
+
+      if (rows === null && !error) return <div className="empty">Loading clients…</div>;
+
+      return (
+        <div>
+          <div className="topbar" style={{ border: 'none', paddingBottom: 0, marginBottom: '14px' }}>
+            <div className="section-title">Clients</div>
+            <button className="btn ghost" onClick={load}>Refresh</button>
+          </div>
+          {error && <div className="error">{error}</div>}
+          <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
+            {rows && rows.length ? (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th><th>Type</th><th>Owner</th><th>Partner</th>
+                    <th>Active passes</th><th>Open violations</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(c => (
+                    <tr key={c.id}>
+                      <td>{c.name || '—'}<div className="fb-meta">{c.address || ''}</div></td>
+                      <td><span className={'badge ' + (c.property_type || '')}>{c.property_type || '—'}</span></td>
+                      <td>{c.owner_email || '—'}</td>
+                      <td>{c.partner_email || '—'}</td>
+                      <td>{c.active_pass_count ?? 0}</td>
+                      <td>{c.open_violation_count ?? 0}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (!error && <div className="empty">No clients yet.</div>)}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Onboard ─────────────────────────────────────────────────────────────
+    function OnboardTab({ onAuthExpired }) {
+      const [name, setName] = useState('');
+      const [address, setAddress] = useState('');
+      const [propertyType, setPropertyType] = useState('apartment');
+      const [ownerOn, setOwnerOn] = useState(true);
+      const [ownerName, setOwnerName] = useState('');
+      const [ownerEmail, setOwnerEmail] = useState('');
+      const [partnerOn, setPartnerOn] = useState(false);
+      const [partnerName, setPartnerName] = useState('');
+      const [partnerEmail, setPartnerEmail] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState('');
+      const [result, setResult] = useState(null);
+
+      async function submit(e) {
+        e.preventDefault();
+        if (!name.trim() || !address.trim()) { setError('Property name and address are required.'); return; }
+        setBusy(true); setError(''); setResult(null);
+        const payload = {
+          property: { name: name.trim(), address: address.trim(), property_type: propertyType },
+          owner: ownerOn ? { name: ownerName.trim(), email: ownerEmail.trim() } : null,
+          partner: partnerOn ? { name: partnerName.trim(), email: partnerEmail.trim() } : null,
+          existing_partner_id: null,
+        };
+        try {
+          const res = await apiFetch('/admin/clients', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          setResult(res);
+          // Reset the form; the success block carries the setup links.
+          setName(''); setAddress('');
+          setOwnerName(''); setOwnerEmail('');
+          setPartnerName(''); setPartnerEmail(''); setPartnerOn(false);
+        } catch (err) {
+          if (err instanceof AuthError) return onAuthExpired();
+          setError(err.message);
+        } finally { setBusy(false); }
+      }
+
+      return (
+        <div>
+          <div className="section-title" style={{ marginBottom: '14px' }}>Onboard a property</div>
+
+          {result && (
+            <div className="panel" style={{ marginBottom: '18px' }}>
+              <div className="success" style={{ marginTop: 0 }}>Property created.</div>
+              {(result.owner?.setup_link || result.partner?.setup_link) ? (
+                <>
+                  <p className="muted" style={{ marginTop: '12px' }}>
+                    Share these setup links once — they set the account password. Treat them like a secret.
+                  </p>
+                  {result.owner?.setup_link && <CopyLink label="Owner setup link" url={result.owner.setup_link} />}
+                  {result.partner?.setup_link && <CopyLink label="Partner setup link" url={result.partner.setup_link} />}
+                </>
+              ) : (
+                <p className="muted" style={{ marginTop: '12px' }}>No new accounts created (no setup links to share).</p>
+              )}
+            </div>
+          )}
+
+          <form onSubmit={submit} className="panel">
+            <label htmlFor="pname">Property name</label>
+            <input id="pname" value={name} onChange={e => setName(e.target.value)} placeholder="Maple Court Apartments" />
+            <label htmlFor="paddr">Address</label>
+            <input id="paddr" value={address} onChange={e => setAddress(e.target.value)} placeholder="123 Main St, Charlotte NC" />
+            <label htmlFor="ptype">Property type</label>
+            <select id="ptype" value={propertyType} onChange={e => setPropertyType(e.target.value)}>
+              <option value="apartment">apartment</option>
+              <option value="truck_plaza">truck_plaza</option>
+            </select>
+
+            <div className="subhead">
+              <label style={{ margin: 0, textTransform: 'none', letterSpacing: 0, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--ink)' }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={ownerOn} onChange={e => setOwnerOn(e.target.checked)} />
+                Create an owner account
+              </label>
+            </div>
+            {ownerOn && (
+              <div className="row2">
+                <div>
+                  <label htmlFor="oname">Owner name</label>
+                  <input id="oname" value={ownerName} onChange={e => setOwnerName(e.target.value)} />
+                </div>
+                <div>
+                  <label htmlFor="oemail">Owner email</label>
+                  <input id="oemail" type="email" value={ownerEmail} onChange={e => setOwnerEmail(e.target.value)} />
+                </div>
+              </div>
+            )}
+
+            <div className="subhead">
+              <label style={{ margin: 0, textTransform: 'none', letterSpacing: 0, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--ink)' }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={partnerOn} onChange={e => setPartnerOn(e.target.checked)} />
+                Create a partner account
+              </label>
+            </div>
+            {partnerOn && (
+              <>
+                <div className="row2">
+                  <div>
+                    <label htmlFor="prname">Partner name</label>
+                    <input id="prname" value={partnerName} onChange={e => setPartnerName(e.target.value)} />
+                  </div>
+                  <div>
+                    <label htmlFor="premail">Partner email</label>
+                    <input id="premail" type="email" value={partnerEmail} onChange={e => setPartnerEmail(e.target.value)} />
+                  </div>
+                </div>
+                <p className="muted" style={{ marginTop: '10px' }}>
+                  For apartments, the partner is also set as the tow company.
+                </p>
+              </>
+            )}
+
+            <button className="btn full" type="submit" disabled={busy}>
+              {busy ? 'Creating…' : 'Create property'}
+            </button>
+            {error && <div className="error">{error}</div>}
+          </form>
+        </div>
+      );
+    }
+
+    // ── Feedback ────────────────────────────────────────────────────────────
+    const STATUSES = ['open', 'triaged', 'closed'];
+
+    function FeedbackRow({ item, onAuthExpired }) {
+      const [status, setStatus] = useState(item.status || 'open');
+      const [saving, setSaving] = useState(false);
+      const [error, setError] = useState('');
+
+      async function change(next) {
+        const prev = status;
+        setStatus(next); setSaving(true); setError('');
+        try {
+          await apiFetch(`/admin/feedback/${item.id}`, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ status: next }),
+          });
+        } catch (err) {
+          if (err instanceof AuthError) return onAuthExpired();
+          setStatus(prev); setError(err.message);
+        } finally { setSaving(false); }
+      }
+
+      return (
+        <tr>
+          <td>
+            {item.property_name || '—'}
+            <div className="fb-meta">{item.account_type || ''}{item.submitted_by ? ' · ' + item.submitted_by : ''}</div>
+          </td>
+          <td><span className="badge" style={{ borderColor: 'var(--ink-3)', color: 'var(--ink-2)' }}>{item.kind || '—'}</span></td>
+          <td style={{ maxWidth: '360px' }}>
+            <div className="fb-body">{item.body || ''}</div>
+            <div className="fb-meta" style={{ marginTop: '6px' }}>{fmtDate(item.created_at)}</div>
+          </td>
+          <td>
+            <select className="fb-status" value={status} disabled={saving} onChange={e => change(e.target.value)}>
+              {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {error && <div className="fb-meta" style={{ color: 'var(--status-no)', marginTop: '4px' }}>{error}</div>}
+          </td>
+        </tr>
+      );
+    }
+
+    function fmtDate(s) {
+      if (!s) return '';
+      const d = new Date(s);
+      if (isNaN(d)) return s;
+      return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+
+    function FeedbackTab({ onAuthExpired }) {
+      const [rows, setRows] = useState(null);
+      const [error, setError] = useState('');
+
+      const load = useCallback(async () => {
+        setError('');
+        try {
+          const data = await apiFetch('/admin/feedback');
+          setRows(Array.isArray(data) ? data : (data?.feedback || []));
+        } catch (err) {
+          if (err instanceof AuthError) return onAuthExpired();
+          setError(err.message); setRows([]);
+        }
+      }, [onAuthExpired]);
+
+      useEffect(() => { load(); }, [load]);
+
+      if (rows === null && !error) return <div className="empty">Loading feedback…</div>;
+
+      return (
+        <div>
+          <div className="topbar" style={{ border: 'none', paddingBottom: 0, marginBottom: '14px' }}>
+            <div className="section-title">Feedback</div>
+            <button className="btn ghost" onClick={load}>Refresh</button>
+          </div>
+          {error && <div className="error">{error}</div>}
+          <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
+            {rows && rows.length ? (
+              <table>
+                <thead>
+                  <tr><th>Property</th><th>Kind</th><th>Message</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                  {rows.map(item => <FeedbackRow key={item.id} item={item} onAuthExpired={onAuthExpired} />)}
+                </tbody>
+              </table>
+            ) : (!error && <div className="empty">No feedback.</div>)}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Console shell ───────────────────────────────────────────────────────
+    function Console({ email, onSignOut, onAuthExpired }) {
+      const [tab, setTab] = useState('clients');
+      return (
+        <div className="wrap">
+          <div className="topbar">
+            <div className="logo">
+              <h1>Lot<span>logic</span></h1>
+              <div className="tag">Admin · internal console</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              {email && <span className="muted">{email}</span>}
+              <button className="btn ghost" onClick={onSignOut}>Sign out</button>
+            </div>
+          </div>
+          <div className="tabs">
+            <button className={'tab' + (tab === 'clients' ? ' active' : '')} onClick={() => setTab('clients')}>Clients</button>
+            <button className={'tab' + (tab === 'onboard' ? ' active' : '')} onClick={() => setTab('onboard')}>Onboard</button>
+            <button className={'tab' + (tab === 'feedback' ? ' active' : '')} onClick={() => setTab('feedback')}>Feedback</button>
+          </div>
+          {tab === 'clients' && <ClientsTab onAuthExpired={onAuthExpired} />}
+          {tab === 'onboard' && <OnboardTab onAuthExpired={onAuthExpired} />}
+          {tab === 'feedback' && <FeedbackTab onAuthExpired={onAuthExpired} />}
+        </div>
+      );
+    }
+
+    // ── Root ────────────────────────────────────────────────────────────────
+    // gate states: 'loading' | 'signin' | 'notadmin' | 'admin'
+    function App() {
+      const [gate, setGate] = useState('loading');
+      const [email, setEmail] = useState('');
+
+      const checkAdmin = useCallback(async () => {
+        if (!getToken()) { setGate('signin'); return; }
+        try {
+          const who = await apiFetch('/admin/whoami');
+          setEmail(who?.email || '');
+          setGate('admin');
+        } catch (err) {
+          if (err.status === 401) { clearSession(); setGate('signin'); return; }
+          if (err.status === 403) { setGate('notadmin'); return; }
+          // Other errors (network/5xx): treat as sign-in needed rather than trap.
+          setGate('signin');
+        }
+      }, []);
+
+      useEffect(() => { checkAdmin(); }, [checkAdmin]);
+
+      const onAuthExpired = useCallback(() => { clearSession(); setGate('signin'); }, []);
+      const onSignOut = useCallback(() => { clearSession(); setEmail(''); setGate('signin'); }, []);
+
+      if (gate === 'loading') {
+        return <div className="center"><div className="muted" style={{ marginTop: '60px' }}>Loading…</div></div>;
+      }
+      if (gate === 'admin') {
+        return <Console email={email} onSignOut={onSignOut} onAuthExpired={onAuthExpired} />;
+      }
+      // signin or notadmin — both render the sign-in screen; notadmin adds a note.
+      return <SignIn notAdmin={gate === 'notadmin'} onSignedIn={checkAdmin} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

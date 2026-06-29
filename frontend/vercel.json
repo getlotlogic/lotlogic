@@ -6,6 +6,7 @@
     { "source": "/register/:path*", "destination": "/resident.html" },
     { "source": "/apt/:path*", "destination": "/apt.html" },
     { "source": "/lookup", "destination": "/lookup.html" },
+    { "source": "/admin", "destination": "/admin.html" },
     { "source": "/app", "destination": "/dashboard.html" },
     { "source": "/app/:path*", "destination": "/dashboard.html" }
   ],
