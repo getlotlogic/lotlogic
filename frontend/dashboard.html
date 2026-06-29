@@ -10595,6 +10595,14 @@ function ApartmentPermits({ property }) {
     <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{txt || '—'}</span>
   );
   const fmtTime = (t) => t ? new Date(t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
+  // tag_expiration is a bare "YYYY-MM-DD" date — parse as local (not UTC) so the
+  // displayed day doesn't shift backwards in western timezones.
+  const fmtTagDate = (d) => {
+    if (!d) return '';
+    const [y, m, day] = String(d).split('-').map(Number);
+    if (!y || !m || !day) return d;
+    return new Date(y, m - 1, day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  };
 
   const docButtons = (row, kind) => {
     const docs = [
@@ -10734,9 +10742,16 @@ function ApartmentPermits({ property }) {
                       {plateChip(g.plate_text)}
                       {g.host_unit && <span style={{fontSize:12,color:'var(--text-primary)',fontWeight:600}}>Unit {g.host_unit}</span>}
                       {g.visitor_name && <span style={{fontSize:12,color:'var(--text-muted)'}}>{g.visitor_name}</span>}
+                      {g.is_temp_tag && (
+                        <span style={{fontSize:11,fontWeight:700,padding:'3px 8px',borderRadius:20,background:'rgba(148,163,184,.15)',color:'var(--text-muted)',border:'1px solid var(--border)',whiteSpace:'nowrap'}}>Temp tag</span>
+                      )}
+                      {g.tag_expired && (
+                        <span style={{fontSize:11,fontWeight:700,padding:'3px 8px',borderRadius:20,background:'rgba(239,68,68,.12)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',whiteSpace:'nowrap'}}>EXPIRED</span>
+                      )}
                     </div>
                     <div style={{fontSize:11,color:'var(--text-faint)',marginTop:3}}>
                       {g.valid_until ? <>Expires {fmtTime(g.valid_until)}</> : 'No expiry'}
+                      {g.is_temp_tag && g.tag_expiration && <> · tag expires {fmtTagDate(g.tag_expiration)}</>}
                     </div>
                   </div>
                   <div style={{display:'flex',alignItems:'center',gap:8}}>

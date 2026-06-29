@@ -378,15 +378,40 @@
       document.getElementById('signOut').addEventListener('click', () => { clearSession(); renderLogin(); });
     }
 
+    // tag_expiration is a bare "YYYY-MM-DD" date — parse as local (not UTC) so
+    // the displayed day doesn't shift backwards in western timezones.
+    function fmtTagDate(s) {
+      if (!s) return '';
+      const parts = String(s).split('-').map(Number);
+      if (parts.length !== 3 || parts.some(n => !n)) return s;
+      return new Date(parts[0], parts[1] - 1, parts[2])
+        .toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    // Extra "Temp tag" line shown beneath the verdict block when the matched
+    // pass is on a paper / temporary tag. Expired tags surface the 48-hr-warning
+    // tow path in amber/red. Returns '' for non-temp-tag results.
+    function tempTagLine(d) {
+      if (!d || !d.is_temp_tag) return '';
+      if (d.tag_expired) {
+        return `<div style="margin-top:12px;color:var(--status-no);font-weight:600;font-size:14px;line-height:1.45;">`
+          + `Temp tag EXPIRED — eligible for the expired-tag (48-hr-warning) tow path.</div>`;
+      }
+      const exp = fmtTagDate(d.tag_expiration);
+      return `<div style="margin-top:12px;color:var(--ink-3);font-size:14px;">`
+        + `Temp tag${exp ? ' · expires ' + esc(exp) : ''}</div>`;
+    }
+
     function renderVerdict(out) {
       const d = out.detail || {};
+      const tag = tempTagLine(d);
       if (out.verdict === 'resident') {
         return `<div class="result ok">
           <div class="glyph">✓</div>
           <div class="headline">Permitted</div>
           <div class="sub">Resident${d.unit ? ' · Unit ' + esc(d.unit) : ''}${d.name ? '<br>' + esc(d.name) : ''}</div>
           ${d.plate ? '<div class="plate">' + esc(d.plate) + '</div>' : ''}
-        </div>`;
+        </div>${tag}`;
       }
       if (out.verdict === 'guest') {
         const hrs = d.hours_left;
@@ -394,14 +419,14 @@
           <div class="glyph">✓</div>
           <div class="headline">Permitted</div>
           <div class="sub">Guest${d.unit ? ' · Unit ' + esc(d.unit) : ''}${(hrs != null) ? '<br>' + esc(hrs) + 'h left' : ''}</div>
-        </div>`;
+        </div>${tag}`;
       }
       if (out.verdict === 'expired_guest') {
         return `<div class="result warn">
           <div class="glyph">!</div>
           <div class="headline">Expired pass</div>
           <div class="sub">Was registered — the parking window has passed.</div>
-        </div>`;
+        </div>${tag}`;
       }
       // not_registered
       return `<div class="result no">
@@ -409,7 +434,7 @@
         <div class="headline">Not registered</div>
         <div class="sub">No active pass — eligible to tow.</div>
         ${d.plate ? '<div class="plate">' + esc(d.plate) + '</div>' : ''}
-      </div>`;
+      </div>${tag}`;
     }
 
     // ── Boot ──────────────────────────────────────────────────────────────
