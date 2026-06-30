@@ -22,16 +22,23 @@
       --amber-soft: #FBBF24;
       --terra: #C97A4A;
       --terra-deep: #9A5530;
+      --sage: #7A9171;
+      --sage-bg: rgba(122,145,113,0.16);
+      --terra-bg: rgba(201,122,74,0.16);
       --status-ok: #4A7A48;
       --status-ok-bg: rgba(74,122,72,0.14);
       --status-warn: #B97D1E;
       --status-warn-bg: rgba(217,119,6,0.14);
       --status-no: #B14535;
       --status-no-bg: rgba(177,69,53,0.14);
+      --mono: 'DM Mono', ui-monospace, SFMono-Regular, monospace;
+      --serif: 'Fraunces', Georgia, serif;
+      --sans: 'Manrope', system-ui, -apple-system, sans-serif;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
-      font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+      font-family: var(--sans);
       background: var(--paper);
       color: var(--ink);
       min-height: 100vh;
@@ -43,52 +50,89 @@
         radial-gradient(circle at 42% 88%, rgba(31,27,20,0.018) 0 0.8px, transparent 1.2px);
       background-size: 240px 240px, 320px 320px, 200px 200px;
     }
-    .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 22px 80px; }
+    /* Top accent bar — the editorial spine of the page */
+    body::before {
+      content: '';
+      position: fixed; top: 0; left: 0; right: 0; height: 4px;
+      background: var(--ink);
+      z-index: 50;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 34px 22px 90px; }
     .center { display: flex; align-items: flex-start; justify-content: center; padding: 20px; }
+
+    /* ── Entrance choreography ──────────────────────────────────────── */
+    @keyframes riseIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .enter { opacity: 0; animation: riseIn .55s cubic-bezier(.2,.7,.2,1) both; }
+    .enter.d1 { animation-delay: .04s; }
+    .enter.d2 { animation-delay: .12s; }
+    .enter.d3 { animation-delay: .20s; }
+
+    /* ── Sign-in card ───────────────────────────────────────────────── */
     .card {
       background: var(--paper);
       border: 1.5px solid var(--ink);
-      padding: 28px 24px;
-      max-width: 440px;
+      padding: 34px 30px;
+      max-width: 448px;
       width: 100%;
-      margin-top: 40px;
+      margin-top: 56px;
+      position: relative;
+      box-shadow: 7px 7px 0 var(--paper-3);
     }
+
+    /* ── Masthead wordmark ──────────────────────────────────────────── */
     .logo h1 {
-      font-family: 'Fraunces', Georgia, serif;
+      font-family: var(--serif);
       font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
-      font-size: 30px;
-      letter-spacing: -.02em;
+      font-size: 34px;
+      letter-spacing: -.025em;
       line-height: 1;
       color: var(--ink);
     }
     .logo h1 span { color: var(--amber); font-style: italic; }
     .logo .tag {
-      font-family: 'DM Mono', ui-monospace, monospace;
+      font-family: var(--mono);
       font-size: 11px;
-      letter-spacing: .12em;
+      letter-spacing: .14em;
       text-transform: uppercase;
       color: var(--ink-3);
-      margin-top: 8px;
+      margin-top: 9px;
     }
+    .masthead {
+      display: flex; align-items: flex-end; justify-content: space-between;
+      gap: 18px; flex-wrap: wrap;
+      border-bottom: 1.5px solid var(--ink);
+      padding-bottom: 18px; margin-bottom: 26px;
+    }
+    .masthead .who {
+      display: flex; align-items: center; gap: 14px;
+      padding-bottom: 2px;
+    }
+    .masthead .who .muted { color: var(--ink-2); }
     .topbar {
       display: flex; align-items: center; justify-content: space-between;
       border-bottom: 1.5px solid var(--ink); padding-bottom: 16px; margin-bottom: 22px;
       flex-wrap: wrap; gap: 12px;
     }
+
+    /* ── Form atoms ─────────────────────────────────────────────────── */
     label {
       display: block;
-      font-size: 12px;
-      font-weight: 600;
+      font-size: 11.5px;
+      font-weight: 500;
       color: var(--ink-3);
-      margin-bottom: 6px;
-      margin-top: 16px;
-      font-family: 'DM Mono', ui-monospace, monospace;
-      letter-spacing: .08em;
+      margin-bottom: 7px;
+      margin-top: 18px;
+      font-family: var(--mono);
+      letter-spacing: .1em;
       text-transform: uppercase;
     }
     input, select, textarea {
       width: 100%;
-      padding: 11px 13px;
+      padding: 12px 14px;
       background: var(--paper-2);
       border: 1.5px solid var(--ink);
       border-radius: 0;
@@ -96,14 +140,43 @@
       font-size: 15px;
       font-family: inherit;
       outline: none;
-      transition: background 0.15s;
+      transition: background .15s, box-shadow .15s;
     }
     input:focus, select:focus, textarea:focus { background: var(--paper-3); }
+    input:focus-visible, select:focus-visible, textarea:focus-visible,
+    .btn:focus-visible, .copybtn:focus-visible, .tab:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--amber);
+    }
     input::placeholder { color: var(--ink-3); }
-    select { appearance: none; cursor: pointer; }
+    select {
+      appearance: none; cursor: pointer; padding-right: 38px;
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--ink) 50%),
+        linear-gradient(135deg, var(--ink) 50%, transparent 50%);
+      background-position:
+        calc(100% - 17px) calc(50% + 1px),
+        calc(100% - 12px) calc(50% + 1px);
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
     select option { background: var(--paper); color: var(--ink); }
+    input[type="checkbox"] {
+      appearance: none; -webkit-appearance: none;
+      width: 18px; height: 18px; min-width: 18px; padding: 0;
+      border: 1.5px solid var(--ink); background: var(--paper-2);
+      display: inline-grid; place-content: center; cursor: pointer;
+      transition: background .12s;
+    }
+    input[type="checkbox"]:checked { background: var(--ink); }
+    input[type="checkbox"]:checked::after {
+      content: ''; width: 9px; height: 5px;
+      border-left: 2px solid var(--paper); border-bottom: 2px solid var(--paper);
+      transform: rotate(-45deg) translate(1px, -1px);
+    }
+
     .btn {
-      padding: 13px 20px;
+      padding: 13px 22px;
       background: var(--ink);
       color: var(--paper);
       border: 1.5px solid var(--ink);
@@ -112,15 +185,17 @@
       font-weight: 700;
       cursor: pointer;
       font-family: inherit;
-      transition: background 0.15s;
+      transition: background .15s, color .15s, transform .12s, border-color .15s;
     }
-    .btn.full { width: 100%; margin-top: 22px; }
+    .btn.full { width: 100%; margin-top: 24px; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn:hover:not(:disabled) { background: var(--terra-deep); border-color: var(--terra-deep); }
+    .btn:hover:not(:disabled) { background: var(--terra-deep); border-color: var(--terra-deep); transform: translateY(-1px); }
+    .btn:active:not(:disabled) { transform: translateY(0); }
     .btn.ghost {
-      background: none; color: var(--ink); padding: 8px 16px; font-size: 13px;
+      background: none; color: var(--ink); padding: 8px 16px; font-size: 12px;
+      font-family: var(--mono); letter-spacing: .06em; text-transform: uppercase; font-weight: 500;
     }
-    .btn.ghost:hover:not(:disabled) { background: var(--paper-3); color: var(--ink); border-color: var(--ink); }
+    .btn.ghost:hover:not(:disabled) { background: var(--ink); color: var(--paper); border-color: var(--ink); transform: none; }
     .error {
       background: var(--status-no-bg);
       border: 1.5px solid var(--status-no);
@@ -133,87 +208,282 @@
       background: var(--status-ok-bg);
       border: 1.5px solid var(--status-ok);
       color: var(--status-ok);
-      padding: 12px 14px;
+      padding: 11px 14px;
       font-size: 13px;
       margin-top: 16px;
+      font-family: var(--mono);
+      letter-spacing: .04em;
+      display: flex; align-items: center; gap: 8px;
     }
     .muted {
       font-size: 12px;
       color: var(--ink-3);
-      font-family: 'DM Mono', ui-monospace, monospace;
+      font-family: var(--mono);
       letter-spacing: .04em;
     }
-    .tabs { display: flex; gap: 8px; margin-bottom: 22px; flex-wrap: wrap; }
+    .signin-head {
+      font-family: var(--serif);
+      font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 50;
+      font-size: 23px; letter-spacing: -.015em;
+      margin-top: 26px;
+    }
+
+    /* ── Tab bar ────────────────────────────────────────────────────── */
+    .tabs {
+      display: flex; gap: 4px; margin-bottom: 26px; flex-wrap: wrap;
+      border-bottom: 1.5px solid var(--ink);
+      padding-bottom: 0;
+    }
     .tab {
-      background: var(--paper-2);
-      border: 1.5px solid var(--ink);
-      color: var(--ink-2);
-      padding: 9px 18px;
-      font-family: 'DM Mono', ui-monospace, monospace;
+      background: none;
+      border: none;
+      color: var(--ink-3);
+      padding: 11px 18px 13px;
+      margin-bottom: -1.5px;
+      font-family: var(--mono);
       font-size: 12px;
-      letter-spacing: .08em;
+      letter-spacing: .1em;
       text-transform: uppercase;
       cursor: pointer;
       font-weight: 500;
+      position: relative;
+      transition: color .15s;
     }
-    .tab.active { background: var(--ink); color: var(--paper); }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .tab::after {
+      content: ''; position: absolute; left: 0; right: 0; bottom: 0;
+      height: 3px; background: var(--ink);
+      transform: scaleX(0); transform-origin: center;
+      transition: transform .2s cubic-bezier(.2,.7,.2,1);
+    }
+    .tab:hover { color: var(--ink); }
+    .tab.active { color: var(--ink); }
+    .tab.active::after { transform: scaleX(1); }
+
+    /* ── Section header (mono kicker + count) ───────────────────────── */
+    .sec-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 12px; flex-wrap: wrap; margin-bottom: 16px;
+    }
+    .sec-kicker {
+      display: flex; align-items: baseline; gap: 12px;
+    }
+    .sec-kicker .eyebrow {
+      font-family: var(--mono);
+      font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+      color: var(--ink-3);
+    }
+    .sec-kicker .count {
+      font-family: var(--mono);
+      font-size: 11px; letter-spacing: .06em;
+      color: var(--ink);
+      background: var(--paper-3);
+      border: 1.5px solid var(--ink);
+      padding: 1px 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .section-title {
+      font-family: var(--serif);
+      font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 50;
+      font-size: 30px;
+      letter-spacing: -.02em;
+      line-height: 1;
+    }
+
+    /* ── Editorial data table ───────────────────────────────────────── */
+    .table-wrap { border: 1.5px solid var(--ink); background: var(--paper); overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 720px; }
     th {
       text-align: left;
-      font-family: 'DM Mono', ui-monospace, monospace;
-      font-size: 11px;
-      letter-spacing: .07em;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      letter-spacing: .1em;
       text-transform: uppercase;
       color: var(--ink-3);
       font-weight: 500;
-      padding: 10px 12px;
+      padding: 12px 16px;
       border-bottom: 1.5px solid var(--ink);
+      background: var(--paper-2);
+      white-space: nowrap;
     }
-    td { padding: 11px 12px; border-bottom: 1px solid var(--paper-3); vertical-align: top; }
+    th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td { padding: 16px; border-bottom: 1px solid var(--paper-3); vertical-align: top; }
+    tbody tr { transition: background .12s; }
+    tbody tr:hover { background: var(--paper-2); }
     tr:last-child td { border-bottom: none; }
+    .cell-primary {
+      font-size: 15px; font-weight: 700; color: var(--ink);
+      letter-spacing: -.01em; line-height: 1.25;
+    }
+    .cell-sub {
+      font-size: 12.5px; color: var(--ink-3); margin-top: 3px; line-height: 1.35;
+    }
+    .cell-mono {
+      font-family: var(--mono); font-size: 12.5px; color: var(--ink-2);
+      letter-spacing: -.01em; word-break: break-word;
+    }
+    .num-val { font-family: var(--mono); font-size: 14px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+    .num-val.zero { color: var(--ink-3); }
+    .num-val.hot {
+      color: var(--status-no); font-weight: 500;
+      background: var(--status-no-bg);
+      padding: 2px 8px; border: 1.5px solid var(--status-no);
+    }
+
+    /* ── Pills / badges ─────────────────────────────────────────────── */
     .badge {
       display: inline-block;
-      font-family: 'DM Mono', ui-monospace, monospace;
+      font-family: var(--mono);
       font-size: 10.5px;
-      letter-spacing: .06em;
+      letter-spacing: .07em;
       text-transform: uppercase;
-      padding: 3px 9px;
+      padding: 3px 10px;
       border: 1.5px solid var(--ink);
       font-weight: 500;
+      white-space: nowrap;
     }
-    .badge.apartment { background: var(--status-ok-bg); border-color: var(--status-ok); color: var(--status-ok); }
-    .badge.truck_plaza { background: var(--status-warn-bg); border-color: var(--status-warn); color: var(--status-warn); }
-    .section-title {
-      font-family: 'Fraunces', serif;
-      font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 50;
-      font-size: 22px;
-      margin-bottom: 4px;
-    }
-    .panel { border: 1.5px solid var(--ink); padding: 22px; background: var(--paper); }
+    .badge.apartment { background: var(--sage-bg); border-color: var(--sage); color: #4d6347; }
+    .badge.truck_plaza { background: var(--terra-bg); border-color: var(--terra); color: var(--terra-deep); }
+
+    /* ── Panels / onboard form ──────────────────────────────────────── */
+    .panel { border: 1.5px solid var(--ink); padding: 26px; background: var(--paper); }
     .panel + .panel { margin-top: 18px; }
-    .subhead {
-      font-family: 'DM Mono', ui-monospace, monospace;
-      font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
-      color: var(--ink-3); margin: 22px 0 2px; font-weight: 500;
-      border-top: 1px dashed var(--ink-3); padding-top: 18px;
+    .fieldset { padding-top: 6px; }
+    .fieldset + .fieldset { margin-top: 8px; }
+    .group-head {
+      display: flex; align-items: center; gap: 12px;
+      font-family: var(--mono);
+      font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+      color: var(--ink-3); font-weight: 500;
+      margin: 26px 0 4px;
+      padding-top: 20px;
+      border-top: 1.5px solid var(--paper-3);
     }
-    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
-    .linkbox {
-      display: flex; gap: 8px; align-items: stretch; margin-top: 8px;
+    .group-head:first-of-type { margin-top: 8px; padding-top: 0; border-top: none; }
+    .group-head .num-tag {
+      font-family: var(--mono); font-size: 10px; color: var(--paper);
+      background: var(--ink); width: 18px; height: 18px;
+      display: inline-grid; place-content: center; flex: 0 0 auto;
     }
-    .linkbox input {
-      font-family: 'DM Mono', ui-monospace, monospace; font-size: 12px;
+    .toggle-line {
+      margin: 0; text-transform: none; letter-spacing: 0; font-size: 14px;
+      font-family: var(--sans); font-weight: 600;
+      display: flex; align-items: center; gap: 10px; color: var(--ink);
+      cursor: pointer;
     }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
+    @media (max-width: 600px) { .row2 { grid-template-columns: 1fr; } }
+    .hint { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); letter-spacing: .02em; margin-top: 12px; line-height: 1.45; }
+
+    /* ── The valet stub / setup pass ────────────────────────────────── */
+    .stub-intro {
+      font-family: var(--mono); font-size: 12px; color: var(--ink-2);
+      letter-spacing: .02em; line-height: 1.5; margin: 14px 0 4px;
+    }
+    .stub {
+      position: relative;
+      margin-top: 16px;
+      background: var(--paper-2);
+      border: 1.5px dashed var(--ink);
+      padding: 16px 18px 18px;
+    }
+    /* perforation notches on the left/right edges */
+    .stub::before, .stub::after {
+      content: ''; position: absolute; top: 50%; width: 16px; height: 16px;
+      background: var(--paper); border: 1.5px solid var(--ink); border-radius: 999px;
+      transform: translateY(-50%);
+    }
+    .stub::before { left: -9px; }
+    .stub::after  { right: -9px; }
+    .stub-top {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; flex-wrap: wrap;
+      border-bottom: 1.5px dashed var(--ink-3);
+      padding-bottom: 12px; margin-bottom: 13px;
+    }
+    .stub-stamp {
+      font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
+      text-transform: uppercase; font-weight: 500; color: var(--terra-deep);
+      border: 1.5px solid var(--terra-deep); padding: 4px 9px;
+      transform: rotate(-1.5deg); white-space: nowrap;
+    }
+    .stub-role {
+      font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--ink-3);
+    }
+    .stub-body { display: flex; gap: 10px; align-items: stretch; }
+    .stub-token {
+      flex: 1 1 auto; min-width: 0;
+      font-family: var(--mono); font-size: 12px;
+      letter-spacing: -.01em; color: var(--ink);
+      background: var(--paper); border: 1.5px solid var(--ink);
+      padding: 11px 13px;
+    }
+    .stub-token:focus { background: var(--paper-3); }
     .copybtn {
-      flex: 0 0 auto; padding: 0 16px; background: var(--ink); color: var(--paper);
-      border: 1.5px solid var(--ink); cursor: pointer; font-family: inherit;
-      font-size: 13px; font-weight: 700;
+      flex: 0 0 auto; padding: 0 18px; background: var(--ink); color: var(--paper);
+      border: 1.5px solid var(--ink); cursor: pointer;
+      font-family: var(--mono); font-size: 12px; letter-spacing: .08em;
+      text-transform: uppercase; font-weight: 500;
+      transition: background .15s, transform .12s;
     }
     .copybtn:hover { background: var(--terra-deep); border-color: var(--terra-deep); }
-    .fb-body { font-size: 14px; line-height: 1.45; color: var(--ink-2); white-space: pre-wrap; }
-    .fb-meta { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
-    .fb-status { width: auto; min-width: 120px; padding: 7px 10px; font-size: 13px; }
-    .empty { padding: 30px; text-align: center; color: var(--ink-3); font-family: 'DM Mono', ui-monospace, monospace; font-size: 13px; }
+    .copybtn:active { transform: translateY(1px); }
+
+    /* ── Feedback editorial list ────────────────────────────────────── */
+    .fb-list { border: 1.5px solid var(--ink); background: var(--paper); }
+    .fb-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px 16px;
+      padding: 20px;
+      border-bottom: 1px solid var(--paper-3);
+      transition: background .12s;
+    }
+    .fb-item:hover { background: var(--paper-2); }
+    .fb-item:last-child { border-bottom: none; }
+    .fb-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .fb-prop {
+      font-family: var(--serif);
+      font-variation-settings: "opsz" 40, "wght" 700, "SOFT" 50;
+      font-size: 16px; letter-spacing: -.01em; color: var(--ink);
+    }
+    .fb-body { font-size: 14px; line-height: 1.5; color: var(--ink-2); white-space: pre-wrap; margin-top: 8px; }
+    .fb-meta { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .04em; margin-top: 9px; }
+    .fb-chip { border-width: 1.5px; }
+    .fb-chip.bug { background: var(--terra-bg); border-color: var(--terra-deep); color: var(--terra-deep); }
+    .fb-chip.feature { background: var(--sage-bg); border-color: var(--sage); color: #4d6347; }
+    .fb-control { grid-column: 2; grid-row: 1 / span 3; align-self: start; }
+    .fb-status { width: auto; min-width: 124px; padding: 8px 30px 8px 12px; font-size: 13px; font-family: var(--mono); letter-spacing: .04em; }
+    @media (max-width: 540px) {
+      .fb-item { grid-template-columns: 1fr; }
+      .fb-control { grid-column: 1; grid-row: auto; margin-top: 12px; }
+    }
+
+    /* ── Empty / loading states ─────────────────────────────────────── */
+    .empty {
+      padding: 48px 30px; text-align: center; color: var(--ink-3);
+      font-family: var(--mono); font-size: 13px; letter-spacing: .04em;
+    }
+    .empty .empty-mark {
+      font-family: var(--serif);
+      font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 80;
+      font-size: 22px; color: var(--ink-2); margin-bottom: 8px;
+      letter-spacing: -.01em; font-style: italic;
+    }
+    .loading-state {
+      padding: 44px 30px; text-align: center;
+      font-family: var(--mono); font-size: 13px; color: var(--ink-3);
+      letter-spacing: .08em; text-transform: uppercase;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, .enter, .tab::after, .loading-state, .btn { animation: none !important; transition: none !important; }
+      .enter { opacity: 1 !important; transform: none !important; }
+      .tab.active::after { transform: scaleX(1); }
+    }
   </style>
 </head>
 <body>
@@ -333,14 +603,12 @@
 
       return (
         <div className="center">
-          <div className="card">
+          <div className="card enter d1">
             <div className="logo">
-              <h1>Lot<span>logic</span></h1>
+              <h1>Lot<span>l</span>ogic</h1>
               <div className="tag">Admin · internal console</div>
             </div>
-            <div style={{ fontFamily: 'Fraunces, serif', fontSize: '20px', marginTop: '20px' }}>
-              Admin sign-in required
-            </div>
+            <div className="signin-head">Admin sign-in required</div>
             {notAdmin && (
               <div className="error">This account is not a platform admin.</div>
             )}
@@ -361,7 +629,7 @@
       );
     }
 
-    // ── Copyable secret (setup link) ────────────────────────────────────────
+    // ── Setup link, rendered as a tear-off valet stub ───────────────────────
     function CopyLink({ label, url }) {
       const [copied, setCopied] = useState(false);
       function copy() {
@@ -371,10 +639,13 @@
         }).catch(() => {});
       }
       return (
-        <div style={{ marginTop: '14px' }}>
-          <div className="muted">{label}</div>
-          <div className="linkbox">
-            <input readOnly value={url} onFocus={e => e.target.select()} />
+        <div className="stub">
+          <div className="stub-top">
+            <span className="stub-role">{label}</span>
+            <span className="stub-stamp">Setup pass — share once</span>
+          </div>
+          <div className="stub-body">
+            <input className="stub-token" readOnly value={url} onFocus={e => e.target.select()} />
             <button type="button" className="copybtn" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
           </div>
         </div>
@@ -400,39 +671,58 @@
 
       useEffect(() => { load(); }, [load]);
 
-      if (rows === null && !error) return <div className="empty">Loading clients…</div>;
+      if (rows === null && !error) return <div className="loading-state">Loading clients…</div>;
 
       return (
         <div>
-          <div className="topbar" style={{ border: 'none', paddingBottom: 0, marginBottom: '14px' }}>
-            <div className="section-title">Clients</div>
+          <div className="sec-head">
+            <div className="sec-kicker">
+              <span className="section-title">Clients</span>
+              {rows && rows.length > 0 && (
+                <span className="count">{rows.length}{rows.length === 1 ? ' property' : ' properties'}</span>
+              )}
+            </div>
             <button className="btn ghost" onClick={load}>Refresh</button>
           </div>
           {error && <div className="error">{error}</div>}
-          <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
-            {rows && rows.length ? (
+          {rows && rows.length ? (
+            <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Name</th><th>Type</th><th>Owner</th><th>Partner</th>
-                    <th>Active passes</th><th>Open violations</th>
+                    <th>Property</th><th>Type</th><th>Owner</th><th>Partner</th>
+                    <th className="num">Active passes</th><th className="num">Open violations</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(c => (
-                    <tr key={c.id}>
-                      <td>{c.name || '—'}<div className="fb-meta">{c.address || ''}</div></td>
-                      <td><span className={'badge ' + (c.property_type || '')}>{c.property_type || '—'}</span></td>
-                      <td>{c.owner_email || '—'}</td>
-                      <td>{c.partner_email || '—'}</td>
-                      <td>{c.active_pass_count ?? 0}</td>
-                      <td>{c.open_violation_count ?? 0}</td>
-                    </tr>
-                  ))}
+                  {rows.map(c => {
+                    const open = c.open_violation_count ?? 0;
+                    const active = c.active_pass_count ?? 0;
+                    return (
+                      <tr key={c.id}>
+                        <td>
+                          <div className="cell-primary">{c.name || '—'}</div>
+                          {c.address ? <div className="cell-sub">{c.address}</div> : null}
+                        </td>
+                        <td><span className={'badge ' + (c.property_type || '')}>{c.property_type || '—'}</span></td>
+                        <td><span className="cell-mono">{c.owner_email || '—'}</span></td>
+                        <td><span className="cell-mono">{c.partner_email || '—'}</span></td>
+                        <td className="num"><span className={'num-val' + (active ? '' : ' zero')}>{active}</span></td>
+                        <td className="num"><span className={'num-val' + (open > 0 ? ' hot' : ' zero')}>{open}</span></td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
-            ) : (!error && <div className="empty">No clients yet.</div>)}
-          </div>
+            </div>
+          ) : (!error && (
+            <div className="table-wrap">
+              <div className="empty">
+                <div className="empty-mark">Nothing on the books yet.</div>
+                Onboard a property to see it here.
+              </div>
+            </div>
+          ))}
         </div>
       );
     }
@@ -481,78 +771,91 @@
 
       return (
         <div>
-          <div className="section-title" style={{ marginBottom: '14px' }}>Onboard a property</div>
+          <div className="sec-head">
+            <div className="sec-kicker">
+              <span className="section-title">Onboard a property</span>
+            </div>
+          </div>
 
           {result && (
             <div className="panel" style={{ marginBottom: '18px' }}>
-              <div className="success" style={{ marginTop: 0 }}>Property created.</div>
+              <div className="success">Property created.</div>
               {(result.owner?.setup_link || result.partner?.setup_link) ? (
                 <>
-                  <p className="muted" style={{ marginTop: '12px' }}>
-                    Share these setup links once — they set the account password. Treat them like a secret.
+                  <p className="stub-intro">
+                    Tear off each pass and hand it over. The link sets the account password — it works once, so treat it like a secret.
                   </p>
-                  {result.owner?.setup_link && <CopyLink label="Owner setup link" url={result.owner.setup_link} />}
-                  {result.partner?.setup_link && <CopyLink label="Partner setup link" url={result.partner.setup_link} />}
+                  {result.owner?.setup_link && <CopyLink label="Owner" url={result.owner.setup_link} />}
+                  {result.partner?.setup_link && <CopyLink label="Partner" url={result.partner.setup_link} />}
                 </>
               ) : (
-                <p className="muted" style={{ marginTop: '12px' }}>No new accounts created (no setup links to share).</p>
+                <p className="hint">No new accounts created (no setup links to share).</p>
               )}
             </div>
           )}
 
           <form onSubmit={submit} className="panel">
-            <label htmlFor="pname">Property name</label>
-            <input id="pname" value={name} onChange={e => setName(e.target.value)} placeholder="Maple Court Apartments" />
-            <label htmlFor="paddr">Address</label>
-            <input id="paddr" value={address} onChange={e => setAddress(e.target.value)} placeholder="123 Main St, Charlotte NC" />
-            <label htmlFor="ptype">Property type</label>
-            <select id="ptype" value={propertyType} onChange={e => setPropertyType(e.target.value)}>
-              <option value="apartment">apartment</option>
-              <option value="truck_plaza">truck_plaza</option>
-            </select>
-
-            <div className="subhead">
-              <label style={{ margin: 0, textTransform: 'none', letterSpacing: 0, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--ink)' }}>
-                <input type="checkbox" style={{ width: 'auto' }} checked={ownerOn} onChange={e => setOwnerOn(e.target.checked)} />
-                Create an owner account
-              </label>
+            <div className="fieldset">
+              <div className="group-head"><span className="num-tag">1</span>Property</div>
+              <label htmlFor="pname">Property name</label>
+              <input id="pname" value={name} onChange={e => setName(e.target.value)} placeholder="Maple Court Apartments" />
+              <label htmlFor="paddr">Address</label>
+              <input id="paddr" value={address} onChange={e => setAddress(e.target.value)} placeholder="123 Main St, Charlotte NC" />
+              <label htmlFor="ptype">Property type</label>
+              <select id="ptype" value={propertyType} onChange={e => setPropertyType(e.target.value)}>
+                <option value="apartment">apartment</option>
+                <option value="truck_plaza">truck_plaza</option>
+              </select>
             </div>
-            {ownerOn && (
-              <div className="row2">
-                <div>
-                  <label htmlFor="oname">Owner name</label>
-                  <input id="oname" value={ownerName} onChange={e => setOwnerName(e.target.value)} />
-                </div>
-                <div>
-                  <label htmlFor="oemail">Owner email</label>
-                  <input id="oemail" type="email" value={ownerEmail} onChange={e => setOwnerEmail(e.target.value)} />
-                </div>
+
+            <div className="fieldset">
+              <div className="group-head">
+                <span className="num-tag">2</span>
+                <label className="toggle-line">
+                  <input type="checkbox" checked={ownerOn} onChange={e => setOwnerOn(e.target.checked)} />
+                  Create an owner account
+                </label>
               </div>
-            )}
-
-            <div className="subhead">
-              <label style={{ margin: 0, textTransform: 'none', letterSpacing: 0, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--ink)' }}>
-                <input type="checkbox" style={{ width: 'auto' }} checked={partnerOn} onChange={e => setPartnerOn(e.target.checked)} />
-                Create a partner account
-              </label>
-            </div>
-            {partnerOn && (
-              <>
+              {ownerOn && (
                 <div className="row2">
                   <div>
-                    <label htmlFor="prname">Partner name</label>
-                    <input id="prname" value={partnerName} onChange={e => setPartnerName(e.target.value)} />
+                    <label htmlFor="oname">Owner name</label>
+                    <input id="oname" value={ownerName} onChange={e => setOwnerName(e.target.value)} />
                   </div>
                   <div>
-                    <label htmlFor="premail">Partner email</label>
-                    <input id="premail" type="email" value={partnerEmail} onChange={e => setPartnerEmail(e.target.value)} />
+                    <label htmlFor="oemail">Owner email</label>
+                    <input id="oemail" type="email" value={ownerEmail} onChange={e => setOwnerEmail(e.target.value)} />
                   </div>
                 </div>
-                <p className="muted" style={{ marginTop: '10px' }}>
-                  For apartments, the partner is also set as the tow company.
-                </p>
-              </>
-            )}
+              )}
+            </div>
+
+            <div className="fieldset">
+              <div className="group-head">
+                <span className="num-tag">3</span>
+                <label className="toggle-line">
+                  <input type="checkbox" checked={partnerOn} onChange={e => setPartnerOn(e.target.checked)} />
+                  Create a partner account
+                </label>
+              </div>
+              {partnerOn && (
+                <>
+                  <div className="row2">
+                    <div>
+                      <label htmlFor="prname">Partner name</label>
+                      <input id="prname" value={partnerName} onChange={e => setPartnerName(e.target.value)} />
+                    </div>
+                    <div>
+                      <label htmlFor="premail">Partner email</label>
+                      <input id="premail" type="email" value={partnerEmail} onChange={e => setPartnerEmail(e.target.value)} />
+                    </div>
+                  </div>
+                  <p className="hint">
+                    For apartments, the partner is also set as the tow company.
+                  </p>
+                </>
+              )}
+            </div>
 
             <button className="btn full" type="submit" disabled={busy}>
               {busy ? 'Creating…' : 'Create property'}
@@ -586,24 +889,28 @@
         } finally { setSaving(false); }
       }
 
+      const kind = (item.kind || '').toLowerCase();
+      const chipClass = kind === 'bug' ? ' bug' : (kind === 'feature' ? ' feature' : '');
+
       return (
-        <tr>
-          <td>
-            {item.property_name || '—'}
-            <div className="fb-meta">{item.account_type || ''}{item.submitted_by ? ' · ' + item.submitted_by : ''}</div>
-          </td>
-          <td><span className="badge" style={{ borderColor: 'var(--ink-3)', color: 'var(--ink-2)' }}>{item.kind || '—'}</span></td>
-          <td style={{ maxWidth: '360px' }}>
+        <div className="fb-item">
+          <div>
+            <div className="fb-head">
+              <span className="fb-prop">{item.property_name || '—'}</span>
+              <span className={'badge fb-chip' + chipClass}>{item.kind || '—'}</span>
+            </div>
             <div className="fb-body">{item.body || ''}</div>
-            <div className="fb-meta" style={{ marginTop: '6px' }}>{fmtDate(item.created_at)}</div>
-          </td>
-          <td>
+            <div className="fb-meta">
+              {item.account_type || ''}{item.submitted_by ? ' · ' + item.submitted_by : ''}{' · ' + fmtDate(item.created_at)}
+            </div>
+          </div>
+          <div className="fb-control">
             <select className="fb-status" value={status} disabled={saving} onChange={e => change(e.target.value)}>
               {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            {error && <div className="fb-meta" style={{ color: 'var(--status-no)', marginTop: '4px' }}>{error}</div>}
-          </td>
-        </tr>
+            {error && <div className="fb-meta" style={{ color: 'var(--status-no)', marginTop: '6px' }}>{error}</div>}
+          </div>
+        </div>
       );
     }
 
@@ -631,27 +938,32 @@
 
       useEffect(() => { load(); }, [load]);
 
-      if (rows === null && !error) return <div className="empty">Loading feedback…</div>;
+      if (rows === null && !error) return <div className="loading-state">Loading feedback…</div>;
 
       return (
         <div>
-          <div className="topbar" style={{ border: 'none', paddingBottom: 0, marginBottom: '14px' }}>
-            <div className="section-title">Feedback</div>
+          <div className="sec-head">
+            <div className="sec-kicker">
+              <span className="section-title">Feedback</span>
+              {rows && rows.length > 0 && (
+                <span className="count">{rows.length}{rows.length === 1 ? ' note' : ' notes'}</span>
+              )}
+            </div>
             <button className="btn ghost" onClick={load}>Refresh</button>
           </div>
           {error && <div className="error">{error}</div>}
-          <div className="panel" style={{ padding: 0, overflowX: 'auto' }}>
-            {rows && rows.length ? (
-              <table>
-                <thead>
-                  <tr><th>Property</th><th>Kind</th><th>Message</th><th>Status</th></tr>
-                </thead>
-                <tbody>
-                  {rows.map(item => <FeedbackRow key={item.id} item={item} onAuthExpired={onAuthExpired} />)}
-                </tbody>
-              </table>
-            ) : (!error && <div className="empty">No feedback.</div>)}
-          </div>
+          {rows && rows.length ? (
+            <div className="fb-list">
+              {rows.map(item => <FeedbackRow key={item.id} item={item} onAuthExpired={onAuthExpired} />)}
+            </div>
+          ) : (!error && (
+            <div className="fb-list">
+              <div className="empty">
+                <div className="empty-mark">No notes from the field.</div>
+                Feedback submitted by owners and partners lands here.
+              </div>
+            </div>
+          ))}
         </div>
       );
     }
@@ -661,24 +973,26 @@
       const [tab, setTab] = useState('clients');
       return (
         <div className="wrap">
-          <div className="topbar">
+          <div className="masthead enter d1">
             <div className="logo">
-              <h1>Lot<span>logic</span></h1>
+              <h1>Lot<span>l</span>ogic</h1>
               <div className="tag">Admin · internal console</div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div className="who">
               {email && <span className="muted">{email}</span>}
               <button className="btn ghost" onClick={onSignOut}>Sign out</button>
             </div>
           </div>
-          <div className="tabs">
+          <div className="tabs enter d2">
             <button className={'tab' + (tab === 'clients' ? ' active' : '')} onClick={() => setTab('clients')}>Clients</button>
             <button className={'tab' + (tab === 'onboard' ? ' active' : '')} onClick={() => setTab('onboard')}>Onboard</button>
             <button className={'tab' + (tab === 'feedback' ? ' active' : '')} onClick={() => setTab('feedback')}>Feedback</button>
           </div>
-          {tab === 'clients' && <ClientsTab onAuthExpired={onAuthExpired} />}
-          {tab === 'onboard' && <OnboardTab onAuthExpired={onAuthExpired} />}
-          {tab === 'feedback' && <FeedbackTab onAuthExpired={onAuthExpired} />}
+          <div className="enter d3">
+            {tab === 'clients' && <ClientsTab onAuthExpired={onAuthExpired} />}
+            {tab === 'onboard' && <OnboardTab onAuthExpired={onAuthExpired} />}
+            {tab === 'feedback' && <FeedbackTab onAuthExpired={onAuthExpired} />}
+          </div>
         </div>
       );
     }
