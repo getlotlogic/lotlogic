@@ -409,7 +409,7 @@
         return `<div class="result ok">
           <div class="glyph">✓</div>
           <div class="headline">Permitted</div>
-          <div class="sub">Resident${d.unit ? ' · Unit ' + esc(d.unit) : ''}${d.name ? '<br>' + esc(d.name) : ''}</div>
+          <div class="sub">Parking pass${d.unit ? ' · Unit ' + esc(d.unit) : ''}${d.name ? '<br>' + esc(d.name) : ''}</div>
           ${d.plate ? '<div class="plate">' + esc(d.plate) + '</div>' : ''}
         </div>${tag}`;
       }
@@ -418,14 +418,14 @@
         return `<div class="result ok">
           <div class="glyph">✓</div>
           <div class="headline">Permitted</div>
-          <div class="sub">Guest${d.unit ? ' · Unit ' + esc(d.unit) : ''}${(hrs != null) ? '<br>' + esc(hrs) + 'h left' : ''}</div>
+          <div class="sub">Parking pass${d.unit ? ' · Unit ' + esc(d.unit) : ''}${(hrs != null) ? ' · ' + esc(hrs) + 'h left' : ''}</div>
         </div>${tag}`;
       }
       if (out.verdict === 'expired_guest') {
         return `<div class="result warn">
           <div class="glyph">!</div>
           <div class="headline">Expired pass</div>
-          <div class="sub">Was registered — the parking window has passed.</div>
+          <div class="sub">Pass expired${d.unit ? ' · Unit ' + esc(d.unit) : ''}</div>
         </div>${tag}`;
       }
       // not_registered

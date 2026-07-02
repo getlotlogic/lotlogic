@@ -584,11 +584,11 @@
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <button type="button" class="choice-btn" id="chooseResident">
-          <span>I'm a Resident<span class="sub">I live here</span></span>
+          <span>I live here<span class="sub">I live here</span></span>
           <span class="arrow">→</span>
         </button>
         <button type="button" class="choice-btn" id="chooseGuest">
-          <span>I'm a Guest<span class="sub">visiting someone here</span></span>
+          <span>I'm visiting<span class="sub">visiting someone here</span></span>
           <span class="arrow">→</span>
         </button>
       `;
@@ -619,7 +619,7 @@
       app.innerHTML = `
         ${logoHtml()}
         <div class="property-name">
-          resident registration<br>
+          Registration<br>
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="residentForm">
@@ -685,7 +685,7 @@
       app.innerHTML = `
         ${logoHtml()}
         <div class="property-name">
-          guest registration<br>
+          Registration<br>
           <strong>${escapeHtml(property.name)}</strong>
         </div>
         <form id="guestForm">
@@ -750,6 +750,7 @@
     function newIdempotencyKey() {
       idempotencyKey = (crypto.randomUUID && crypto.randomUUID()) ||
         (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
+      return idempotencyKey;
     }
 
     function normalizePlate(s) {
@@ -771,6 +772,14 @@
     let submitting = false;
 
     // ── Resident submit ─────────────────────────────────────────────────
+    // Per-submission idempotency for the multi-vehicle loop. A mid-loop failure
+    // + resubmit must NOT re-register the vehicles that already succeeded, and
+    // must reuse the SAME idempotency key per vehicle so the backend absorbs the
+    // retry as a duplicate (it returns the existing pending row). We key both the
+    // idempotency keys and the succeeded-flags by vehicle index, and only reset
+    // them when a genuinely fresh batch is submitted (plate set changed) — a
+    // retry of the same batch reuses them and skips already-succeeded vehicles.
+    let residentSubmissionKeys = null;    // { batchSig, keys: {idx: key}, done: {idx: bool} }
     async function handleResidentSubmit(e) {
       e.preventDefault();
       if (submitting) return;
@@ -812,6 +821,18 @@
         if (!idFile) throw new Error('Please attach a photo of your ID.');
         if (!leaseFile) throw new Error('Please attach your lease.');
 
+        // Establish per-submission idempotency state. `batchSig` is the set of
+        // plates being submitted; if it changed since the last attempt this is a
+        // genuinely fresh batch, so mint new keys and clear the done-flags. If it
+        // matches, this is a retry — reuse the keys and skip vehicles that already
+        // landed. Generate a stable key per vehicle ONCE per batch.
+        const batchSig = vehicles.map((v) => v.plate).join('|');
+        if (!residentSubmissionKeys || residentSubmissionKeys.batchSig !== batchSig) {
+          const keys = {};
+          for (let i = 0; i < vehicles.length; i += 1) keys[i] = newIdempotencyKey();
+          residentSubmissionKeys = { batchSig, keys, done: {} };
+        }
+
         // Upload shared docs once, then per-vehicle plate photos.
         setProgress('Uploading ID…');
         const idDocUrl = await uploadFile(idFile, 'id');
@@ -819,8 +840,10 @@
         const leaseDocUrl = await uploadFile(leaseFile, 'lease');
 
         // Register each vehicle as its own pending resident plate. They share
-        // the uploaded ID + lease; each has its own plate photo.
+        // the uploaded ID + lease; each has its own plate photo. Skip any vehicle
+        // that already succeeded in a prior attempt of this same batch.
         for (let i = 0; i < vehicles.length; i += 1) {
+          if (residentSubmissionKeys.done[i]) continue;
           const v = vehicles[i];
           setProgress(`Uploading plate photo ${i + 1} of ${vehicles.length}…`);
           const platePhotoUrl = await uploadFile(v.photoFile, 'plate');
@@ -829,6 +852,13 @@
           const recaptchaToken = await getRecaptchaToken('plate_register').catch(() => null);
           if (!recaptchaToken) throw new Error('Please retry — automated-access check failed.');
 
+          // NOTE: the backend ResidentPlateRegisterRequest model uses
+          // extra="forbid" and does NOT (yet) accept submission_idempotency_key,
+          // so we do not send it — doing so would 422. Retries are made safe by
+          // (a) skipping already-succeeded vehicles above and (b) the backend's
+          // (property_id, plate_text) uniqueness returning the existing pending
+          // row on a duplicate. The per-vehicle key is retained for when the
+          // model accepts it.
           await backendRegister('/resident_plates/register', {
             property_id: property.id,
             plate_text: v.plate,
@@ -842,8 +872,11 @@
             plate_photo_url: platePhotoUrl,
             recaptcha_token: recaptchaToken,
           });
+          residentSubmissionKeys.done[i] = true;
         }
 
+        // Full batch landed — clear state so a brand-new submission starts fresh.
+        residentSubmissionKeys = null;
         setProgress('');
         showSuccess({ refId: null });
       } catch (err) {

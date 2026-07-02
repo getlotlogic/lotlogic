@@ -10336,6 +10336,11 @@ async function fetchDocBlob(kind, id, which) {
   const res = await fetch(`${API}/apartment/docs/${kind}/${id}/${which}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
+  if (res.status === 401) {
+    // Match apiFetch: dead session → clear it and bounce to login, don't just toast.
+    try { localStorage.removeItem('lotlogic_session'); } catch {}
+    window.dispatchEvent(new CustomEvent('lotlogic:auth-expired'));
+  }
   if (!res.ok) {
     let msg = `Could not load document (${res.status})`;
     try { const b = await res.json(); if (b.detail) msg = b.detail; } catch {}
@@ -10486,7 +10491,7 @@ function DocViewerModal({ blob, label, onClose }) {
           {!objectUrl ? (
             <div style={{padding:24,fontSize:13,color:'var(--text-faint)'}}>Loading…</div>
           ) : isPdf ? (
-            <iframe src={objectUrl} title={label || 'Document'} style={{width:'100%',height:'80vh',border:'none',borderRadius:6}} />
+            <iframe src={objectUrl} title={label || 'Document'} sandbox="" style={{width:'100%',height:'80vh',border:'none',borderRadius:6}} />
           ) : (
             <img src={objectUrl} alt={label || 'Document'} style={{maxWidth:'100%',maxHeight:'80vh',objectFit:'contain',display:'block'}} />
           )}
@@ -10691,12 +10696,12 @@ function ApartmentPermits({ property }) {
       <div>
         <div className="pd-section-head">
           <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-            <span className="pd-section-title">Residents</span>
+            <span className="pd-section-title">Long-term passes</span>
             <span className="pd-section-count">{approvedResidents.length}</span>
           </div>
         </div>
         {!loading && approvedResidents.length === 0 ? (
-          <div className="pd-empty">No approved residents</div>
+          <div className="pd-empty">No long-term passes yet</div>
         ) : (
           <div style={{display:'flex',flexDirection:'column',gap:6}}>
             {approvedResidents.map(r => {
@@ -10723,12 +10728,12 @@ function ApartmentPermits({ property }) {
       <div>
         <div className="pd-section-head">
           <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-            <span className="pd-section-title">Guests</span>
+            <span className="pd-section-title">Short-term passes</span>
             <span className="pd-section-count">{activeGuests.length}</span>
           </div>
         </div>
         {!loading && activeGuests.length === 0 ? (
-          <div className="pd-empty">No active guest passes</div>
+          <div className="pd-empty">No short-term passes yet</div>
         ) : (
           <div style={{display:'flex',flexDirection:'column',gap:6}}>
             {activeGuests.map(g => {
