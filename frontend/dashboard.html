@@ -11249,7 +11249,9 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         {(() => {
           const chips = [
             { id: 'all',     label: 'All' },
-            { id: 'noreg',   label: 'No Registration Evidence Package' },
+            // No-registration evidence is a camera-enforcement concept — truck
+            // plaza only. Apartments are registration-based and don't get it.
+            ...(isTruckPlaza ? [{ id: 'noreg', label: 'No Registration Evidence Package' }] : []),
             // ActivePassTracker chip removed entirely — the component was
             // deleted in the parking-pass consolidation. The Parking Log
             // is the single source of truth now.
@@ -11522,7 +11524,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
       )}
 
       {/* SC211: Possible no parking pass — brand-v2 drill-down panel, inline within property detail */}
-      {showSection('noreg') && noRegViolations.length > 0 && (() => {
+      {isTruckPlaza && showSection('noreg') && noRegViolations.length > 0 && (() => {
         const flaggedCount = noRegViolations.filter(r => r.status === 'flagged').length;
         return (
           <div style={{marginBottom:16}}>
@@ -12343,22 +12345,8 @@ function ALPRPropertiesPage({ user }) {
                     </>
                   ) : (
                     <>
-                      <button
-                        className={`kpi-paper ${openJobs > 0 ? 'amber' : 'calm'}`}
-                        onClick={() => setSelectedId(p.id)}
-                        aria-label={`Open jobs for ${p.name}`}
-                      >
-                        <div className="top-row"><div className="val">{openJobs}</div><div className="chev">›</div></div>
-                        <div className="label">Open Jobs</div>
-                      </button>
-                      <button
-                        className={`kpi-paper ${overstays > 0 ? 'amber' : 'calm'}`}
-                        onClick={() => setSelectedId(p.id)}
-                        aria-label={`Overstays for ${p.name}`}
-                      >
-                        <div className="top-row"><div className="val">{overstays}</div><div className="chev">›</div></div>
-                        <div className="label">Overstays</div>
-                      </button>
+                      {/* Apartments only need "Registered" — Open Jobs / Overstays
+                          are enforcement/truck-plaza concepts and are omitted. */}
                       <button
                         className="kpi-paper green"
                         onClick={() => setDrillState({ propId: p.id, drill: 'registered' })}
