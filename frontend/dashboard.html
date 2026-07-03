@@ -2985,6 +2985,27 @@ const db = {
     if (!error && data) return data;
     return [];
   },
+  // Platform-admin variant of getPartnersForOwner: every active tow partner
+  // referenced by ANY lot or property (no owner filter), so the "View as
+  // Partner" switcher lists e.g. N Style Towing (the apartment tow partner on
+  // Stevensons, which the leasing office owns — not the admin) alongside NMLD.
+  // Admin RLS already returns all rows, so this stays scoped to real partners.
+  async getAllPartnersForAdmin() {
+    if (!supabase) return [];
+    const [lotsRes, propsRes] = await Promise.all([
+      supabase.from('lots').select('partner_id').eq('active', true),
+      supabase.from('properties').select('tow_company_id, partner_id'),
+    ]);
+    const ids = new Set([
+      ...((lotsRes.data || []).map(l => l.partner_id).filter(Boolean)),
+      ...((propsRes.data || []).flatMap(p => [p.tow_company_id, p.partner_id]).filter(Boolean)),
+    ]);
+    if (ids.size === 0) return [];
+    const { data, error } = await supabase
+      .from('enforcement_partners').select('*').in('id', [...ids]).eq('active', true);
+    if (!error && data) return data;
+    return [];
+  },
   // ── Permits ────────────────────────────────────────────────
   async getPermits(lotId) {
     if (supabase) {
@@ -12351,7 +12372,7 @@ function ALPRPropertiesPage({ user }) {
                 </div>
 
                 <div className="lot-foot-paper">
-                  <button onClick={() => setSelectedId(p.id)}>{user?._role === 'partner' ? 'View parking passes' : 'View cameras'} <span className="arr">›</span></button>
+                  <button onClick={() => setSelectedId(p.id)}>View property <span className="arr">›</span></button>
                 </div>
               </article>
             );
@@ -12988,7 +13009,12 @@ function App() {
       // properties.tow_company_id so ALPR-only properties (no lots row)
       // still surface their tow operator in the partner switcher.
       if (o._role === 'owner') {
-        db.getPartnersForOwner(o.id).then(p => setPartners(p)).catch(() => {});
+        // Platform admins see every property, including apartment lots owned by
+        // leasing offices — so pull partners across ALL properties (getAllPartnersForAdmin)
+        // to surface e.g. N Style Towing in "View as Partner". Regular owners
+        // stay scoped to their own properties' partners.
+        (o.is_platform_admin ? db.getAllPartnersForAdmin() : db.getPartnersForOwner(o.id))
+          .then(p => setPartners(p)).catch(() => {});
       }
 
       const [states, violsArrays] = await Promise.all([
