@@ -12858,6 +12858,363 @@ function TrainingPage({ user, isOwner }) {
   );
 }
 
+// ── Platform-admin console (folded in from admin.html) ────────────
+// Cross-tenant client overview, one-transaction onboarding, and feedback
+// triage. Admin-only: the router gates this on isPlatformAdmin. Every read/
+// write goes through the BACKEND (apiFetch) — never the Supabase client,
+// whose RLS would scope results down to a single tenant.
+const ADMIN_STATUSES = ['open', 'triaged', 'closed'];
+
+function fmtAdminDate(s) {
+  if (!s) return '';
+  const d = new Date(s);
+  if (isNaN(d)) return s;
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+// tag_expiration is a bare "YYYY-MM-DD" date — parse as LOCAL (not UTC) so the
+// displayed day doesn't shift backwards in western timezones. Ported verbatim
+// from lookup.html.
+function fmtTagDate(s) {
+  if (!s) return '';
+  const parts = String(s).split('-').map(Number);
+  if (parts.length !== 3 || parts.some(n => !n)) return s;
+  return new Date(parts[0], parts[1] - 1, parts[2])
+    .toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// A one-time setup link (password-reset token URL) rendered with a copy button.
+function AdminSetupLink({ label, url }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    navigator.clipboard?.writeText(url).then(() => {
+      setCopied(true); setTimeout(() => setCopied(false), 1600);
+    }).catch(() => {});
+  }
+  return (
+    <div style={{ marginTop: 12, border: '1px dashed var(--border)', borderRadius: 10, padding: '12px 14px', background: 'var(--bg-primary)' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>{label} · setup link — share once</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input readOnly value={url} onFocus={e => e.target.select()} style={{ flex: '1 1 auto', minWidth: 0, fontFamily: 'ui-monospace, monospace', fontSize: 12, padding: '9px 11px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)' }} />
+        <button type="button" onClick={copy} style={{ flex: '0 0 auto', padding: '0 16px', background: 'var(--accent)', color: '#1a1a1a', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>{copied ? 'Copied' : 'Copy'}</button>
+      </div>
+    </div>
+  );
+}
+
+function AdminClientsTab() {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    setError('');
+    try {
+      const data = await apiFetch('/admin/clients');
+      setRows(Array.isArray(data) ? data : (data?.clients || []));
+    } catch (err) { if (err.status !== 401) { setError(err.message); setRows([]); } }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  if (rows === null && !error) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>Loading clients…</div>;
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div className="section-title" style={{ fontSize: 20 }}>Clients{rows && rows.length ? ` · ${rows.length}` : ''}</div>
+        <button onClick={load} style={{ background: 'transparent', color: 'var(--text-faint)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Refresh</button>
+      </div>
+      {error && <div style={{ background: 'rgba(217,83,79,.12)', border: '1px solid #D9534F', color: '#D9534F', borderRadius: 8, padding: '10px 12px', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+      {rows && rows.length ? (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-card)' }}>
+          {rows.map((c, i) => {
+            const open = c.open_violation_count ?? 0;
+            const active = c.active_pass_count ?? 0;
+            return (
+              <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '1.6fr .8fr 1fr auto auto', gap: 12, alignItems: 'center', padding: '14px 16px', borderTop: i ? '1px solid var(--border-subtle)' : 'none' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 14 }}>{c.name || '—'}</div>
+                  {c.address ? <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>{c.address}</div> : null}
+                </div>
+                <div><span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-faint)' }}>{c.property_type || '—'}</span></div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', wordBreak: 'break-word' }}>
+                  <div>{c.owner_email || '—'}</div>
+                  {c.partner_email ? <div style={{ color: 'var(--text-faint)', marginTop: 2 }}>{c.partner_email}</div> : null}
+                </div>
+                <div style={{ textAlign: 'right', fontSize: 13, color: active ? 'var(--text-primary)' : 'var(--text-faint)' }} title="Active passes">{active}<span style={{ fontSize: 10, color: 'var(--text-faint)', display: 'block' }}>passes</span></div>
+                <div style={{ textAlign: 'right', fontSize: 13, fontWeight: open ? 700 : 400, color: open ? '#D9534F' : 'var(--text-faint)' }} title="Open violations">{open}<span style={{ fontSize: 10, color: 'var(--text-faint)', display: 'block' }}>open</span></div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (!error && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13, border: '1px solid var(--border)', borderRadius: 12 }}>Nothing on the books yet. Onboard a property to see it here.</div>)}
+    </div>
+  );
+}
+
+function AdminOnboardTab() {
+  const [name, setName] = useState('');
+  const [address, setAddress] = useState('');
+  const [propertyType, setPropertyType] = useState('apartment');
+  const [ownerOn, setOwnerOn] = useState(true);
+  const [ownerName, setOwnerName] = useState('');
+  const [ownerEmail, setOwnerEmail] = useState('');
+  const [partnerOn, setPartnerOn] = useState(false);
+  const [partnerName, setPartnerName] = useState('');
+  const [partnerEmail, setPartnerEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
+
+  const inputStyle = { width: '100%', padding: '11px 13px', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 14, marginBottom: 12 };
+  const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 6 };
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!name.trim() || !address.trim()) { setError('Property name and address are required.'); return; }
+    setBusy(true); setError(''); setResult(null);
+    const payload = {
+      property: { name: name.trim(), address: address.trim(), property_type: propertyType },
+      owner: ownerOn ? { name: ownerName.trim(), email: ownerEmail.trim() } : null,
+      partner: partnerOn ? { name: partnerName.trim(), email: partnerEmail.trim() } : null,
+      existing_partner_id: null,
+    };
+    try {
+      const res = await apiFetch('/admin/clients', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      setResult(res);
+      setName(''); setAddress(''); setOwnerName(''); setOwnerEmail(''); setPartnerName(''); setPartnerEmail(''); setPartnerOn(false);
+    } catch (err) { if (err.status !== 401) setError(err.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div>
+      <div className="section-title" style={{ fontSize: 20, marginBottom: 14 }}>Onboard a property</div>
+      {result && (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 16, background: 'var(--bg-card)' }}>
+          <div style={{ color: '#3FA45B', fontWeight: 700, fontSize: 14 }}>✓ Property created.</div>
+          {(result.owner?.setup_link || result.partner?.setup_link) ? (
+            <>
+              <p style={{ fontSize: 12, color: 'var(--text-faint)', margin: '10px 0 2px', lineHeight: 1.5 }}>Hand each setup link to the account holder. It sets their password and works once — treat it like a secret.</p>
+              {result.owner?.setup_link && <AdminSetupLink label="Owner" url={result.owner.setup_link} />}
+              {result.partner?.setup_link && <AdminSetupLink label="Partner" url={result.partner.setup_link} />}
+            </>
+          ) : <p style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 10 }}>No new accounts created (no setup links to share).</p>}
+        </div>
+      )}
+      <form onSubmit={submit} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 20, background: 'var(--bg-card)' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 12 }}>1 · Property</div>
+        <label style={labelStyle}>Property name</label>
+        <input style={inputStyle} value={name} onChange={e => setName(e.target.value)} placeholder="Maple Court Apartments" />
+        <label style={labelStyle}>Address</label>
+        <input style={inputStyle} value={address} onChange={e => setAddress(e.target.value)} placeholder="123 Main St, Charlotte NC" />
+        <label style={labelStyle}>Property type</label>
+        <select style={inputStyle} value={propertyType} onChange={e => setPropertyType(e.target.value)}>
+          <option value="apartment">apartment</option>
+          <option value="truck_plaza">truck_plaza</option>
+        </select>
+
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.08em', margin: '18px 0 12px', paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', textTransform: 'none', letterSpacing: 0, fontSize: 14, color: 'var(--text-primary)' }}>
+            <input type="checkbox" checked={ownerOn} onChange={e => setOwnerOn(e.target.checked)} /> 2 · Create an owner account
+          </label>
+        </div>
+        {ownerOn && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><label style={labelStyle}>Owner name</label><input style={inputStyle} value={ownerName} onChange={e => setOwnerName(e.target.value)} /></div>
+            <div><label style={labelStyle}>Owner email</label><input style={inputStyle} type="email" value={ownerEmail} onChange={e => setOwnerEmail(e.target.value)} /></div>
+          </div>
+        )}
+
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.08em', margin: '6px 0 12px', paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', textTransform: 'none', letterSpacing: 0, fontSize: 14, color: 'var(--text-primary)' }}>
+            <input type="checkbox" checked={partnerOn} onChange={e => setPartnerOn(e.target.checked)} /> 3 · Create a partner (tow company) account
+          </label>
+        </div>
+        {partnerOn && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div><label style={labelStyle}>Partner name</label><input style={inputStyle} value={partnerName} onChange={e => setPartnerName(e.target.value)} /></div>
+              <div><label style={labelStyle}>Partner email</label><input style={inputStyle} type="email" value={partnerEmail} onChange={e => setPartnerEmail(e.target.value)} /></div>
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--text-faint)', marginBottom: 4 }}>For apartments, the partner is also set as the tow company.</p>
+          </>
+        )}
+
+        <button type="submit" disabled={busy} style={{ width: '100%', marginTop: 18, padding: '13px', background: 'var(--accent)', color: '#1a1a1a', border: 'none', borderRadius: 999, fontWeight: 700, fontSize: 15, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>
+          {busy ? 'Creating…' : 'Create property'}
+        </button>
+        {error && <div style={{ background: 'rgba(217,83,79,.12)', border: '1px solid #D9534F', color: '#D9534F', borderRadius: 8, padding: '10px 12px', fontSize: 13, marginTop: 12 }}>{error}</div>}
+      </form>
+    </div>
+  );
+}
+
+function AdminFeedbackRow({ item }) {
+  const [status, setStatus] = useState(item.status || 'open');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  async function change(next) {
+    const prev = status;
+    setStatus(next); setSaving(true); setError('');
+    try {
+      await apiFetch(`/admin/feedback/${item.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: next }) });
+    } catch (err) { setStatus(prev); if (err.status !== 401) setError(err.message); } finally { setSaving(false); }
+  }
+  const kind = (item.kind || '').toLowerCase();
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, padding: '16px', borderTop: '1px solid var(--border-subtle)' }}>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 14 }}>{item.property_name || '—'}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', padding: '2px 8px', borderRadius: 6, background: kind === 'bug' ? 'rgba(217,83,79,.14)' : 'rgba(63,164,91,.14)', color: kind === 'bug' ? '#D9534F' : '#3FA45B' }}>{item.kind || '—'}</span>
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 8, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{item.body || ''}</div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 8 }}>{item.account_type || ''}{item.submitted_by ? ' · ' + item.submitted_by : ''}{' · ' + fmtAdminDate(item.created_at)}</div>
+        {error && <div style={{ fontSize: 11, color: '#D9534F', marginTop: 6 }}>{error}</div>}
+      </div>
+      <select value={status} disabled={saving} onChange={e => change(e.target.value)} style={{ alignSelf: 'start', padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13 }}>
+        {ADMIN_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function AdminFeedbackTab() {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    setError('');
+    try {
+      const data = await apiFetch('/admin/feedback');
+      setRows(Array.isArray(data) ? data : (data?.feedback || []));
+    } catch (err) { if (err.status !== 401) { setError(err.message); setRows([]); } }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  if (rows === null && !error) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>Loading feedback…</div>;
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div className="section-title" style={{ fontSize: 20 }}>Feedback{rows && rows.length ? ` · ${rows.length}` : ''}</div>
+        <button onClick={load} style={{ background: 'transparent', color: 'var(--text-faint)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Refresh</button>
+      </div>
+      {error && <div style={{ background: 'rgba(217,83,79,.12)', border: '1px solid #D9534F', color: '#D9534F', borderRadius: 8, padding: '10px 12px', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+      {rows && rows.length ? (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-card)' }}>
+          {rows.map(item => <AdminFeedbackRow key={item.id} item={item} />)}
+        </div>
+      ) : (!error && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13, border: '1px solid var(--border)', borderRadius: 12 }}>No notes from the field yet.</div>)}
+    </div>
+  );
+}
+
+function AdminConsolePage({ user }) {
+  const [sub, setSub] = useState('clients');
+  const tabBtn = (id, label) => (
+    <button onClick={() => setSub(id)} style={{ background: sub === id ? 'var(--bg-card)' : 'transparent', color: sub === id ? 'var(--text-primary)' : 'var(--text-faint)', border: '1px solid ' + (sub === id ? 'var(--border)' : 'transparent'), borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>{label}</button>
+  );
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto' }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 18, flexWrap: 'wrap' }}>
+        {tabBtn('clients', 'Clients')}
+        {tabBtn('onboard', 'Onboard')}
+        {tabBtn('feedback', 'Feedback')}
+      </div>
+      {sub === 'clients' && <AdminClientsTab />}
+      {sub === 'onboard' && <AdminOnboardTab />}
+      {sub === 'feedback' && <AdminFeedbackTab />}
+    </div>
+  );
+}
+
+// ── In-lot plate lookup (folded in from lookup.html) ──────────────
+// Partner-facing field tool: pick an apartment property, punch a plate, get a
+// glanceable Permitted / Expired / Not-registered verdict from the backend
+// apartment lookup (RLS-scoped to the partner's own properties via apiFetch).
+function PlateLookupVerdict({ out }) {
+  const d = (out && out.detail) || {};
+  const tag = d.is_temp_tag ? (
+    d.tag_expired
+      ? <div style={{ marginTop: 12, color: '#D9534F', fontWeight: 600, fontSize: 14, lineHeight: 1.45 }}>Temp tag EXPIRED — eligible for the expired-tag (48-hr-warning) tow path.</div>
+      : <div style={{ marginTop: 12, color: 'var(--text-faint)', fontSize: 14 }}>Temp tag{d.tag_expiration ? ' · expires ' + fmtTagDate(d.tag_expiration) : ''}</div>
+  ) : null;
+  let tone = { border: '#D9534F', bg: 'rgba(217,83,79,.12)', fg: '#D9534F' };
+  let glyph = '✗', headline = 'Not registered', sub = 'No active pass — eligible to tow.';
+  if (out.verdict === 'resident') { tone = { border: '#3FA45B', bg: 'rgba(63,164,91,.12)', fg: '#3FA45B' }; glyph = '✓'; headline = 'Permitted'; sub = 'Parking pass' + (d.unit ? ' · Unit ' + d.unit : '') + (d.name ? ' · ' + d.name : ''); }
+  else if (out.verdict === 'guest') { tone = { border: '#3FA45B', bg: 'rgba(63,164,91,.12)', fg: '#3FA45B' }; glyph = '✓'; headline = 'Permitted'; sub = 'Parking pass' + (d.unit ? ' · Unit ' + d.unit : '') + (d.hours_left != null ? ' · ' + d.hours_left + 'h left' : ''); }
+  else if (out.verdict === 'expired_guest') { tone = { border: 'var(--accent)', bg: 'rgba(251,191,36,.12)', fg: 'var(--accent-dark)' }; glyph = '!'; headline = 'Expired pass'; sub = 'Pass expired' + (d.unit ? ' · Unit ' + d.unit : ''); }
+  return (
+    <div style={{ marginTop: 20, border: '2px solid ' + tone.border, background: tone.bg, borderRadius: 12, padding: '24px 20px', textAlign: 'center' }}>
+      <div style={{ fontSize: 48, lineHeight: 1, color: tone.fg, marginBottom: 8 }}>{glyph}</div>
+      <div style={{ fontWeight: 800, fontSize: 24, color: tone.fg }}>{headline}</div>
+      <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 8, lineHeight: 1.4 }}>{sub}</div>
+      {d.plate && <div style={{ display: 'inline-block', marginTop: 14, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)', padding: '8px 16px', borderRadius: 8, fontFamily: 'ui-monospace, monospace', fontSize: 18, fontWeight: 700, letterSpacing: '.08em' }}>{d.plate}</div>}
+      {tag}
+    </div>
+  );
+}
+
+function PlateLookupPage({ user }) {
+  // Load the partner's OWN properties (RLS-scoped by tow_company_id via
+  // db.getProperties) — same source ALPRPropertiesPage uses. The App-level
+  // `lots` state comes from the `lots` table, which has no property_type and
+  // doesn't include the apartment registry rows, so we must not use it here.
+  const [properties, setProperties] = useState(null); // null = still loading
+  const [propertyId, setPropertyId] = useState('');
+  const [plate, setPlate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    db.getProperties(user.id, user._role)
+      .then(p => {
+        if (!alive) return;
+        const apts = scopePropsToPartner(p || [], user).filter(x => x.property_type === 'apartment');
+        setProperties(apts);
+        setPropertyId(apts[0]?.id || '');
+      })
+      .catch(() => { if (alive) setProperties([]); });
+    return () => { alive = false; };
+  }, [user.id, user._role]);
+
+  async function run() {
+    const pl = plate.trim();
+    if (!propertyId || !pl) { setError('Pick a property and enter a plate.'); return; }
+    setBusy(true); setError(''); setResult(null);
+    try {
+      const out = await apiFetch(`/apartment/passes/lookup?property_id=${encodeURIComponent(propertyId)}&plate=${encodeURIComponent(pl)}`);
+      setResult(out);
+    } catch (err) { if (err.status !== 401) setError(err.message || 'Lookup failed.'); } finally { setBusy(false); }
+  }
+
+  const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', margin: '16px 0 6px' };
+  return (
+    <div style={{ maxWidth: 460, margin: '0 auto' }}>
+      <div className="section-title" style={{ fontSize: 22, marginBottom: 4 }}>Plate lookup</div>
+      <div style={{ fontSize: 13, color: 'var(--text-faint)', marginBottom: 8 }}>Check a plate against the property's registered passes.</div>
+      {properties === null ? (
+        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>Loading properties…</div>
+      ) : properties.length === 0 ? (
+        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13, border: '1px solid var(--border)', borderRadius: 12 }}>No apartment properties assigned to this account.</div>
+      ) : (
+        <>
+          <label style={labelStyle}>Property</label>
+          <select value={propertyId} onChange={e => setPropertyId(e.target.value)} style={{ width: '100%', padding: '12px 14px', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 15 }}>
+            {properties.map(p => <option key={p.id} value={p.id}>{p.name || p.address || p.id}</option>)}
+          </select>
+          <label style={labelStyle}>License plate</label>
+          <input value={plate} onChange={e => setPlate(e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter') run(); }}
+            autoCapitalize="characters" autoComplete="off" placeholder="ABC1234"
+            style={{ width: '100%', padding: '16px 14px', background: 'var(--accent)', color: '#1a1a1a', border: '1px solid var(--border)', borderRadius: 8, fontSize: 26, fontWeight: 700, textAlign: 'center', letterSpacing: '.1em', fontFamily: 'ui-monospace, monospace' }} />
+          <button onClick={run} disabled={busy} style={{ width: '100%', marginTop: 18, padding: '15px', background: 'var(--text-primary)', color: 'var(--bg-primary)', border: 'none', borderRadius: 999, fontWeight: 700, fontSize: 16, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>
+            {busy ? 'Checking…' : 'Check'}
+          </button>
+          {error && <div style={{ background: 'rgba(217,83,79,.12)', border: '1px solid #D9534F', color: '#D9534F', borderRadius: 8, padding: '10px 12px', fontSize: 13, marginTop: 16, textAlign: 'center' }}>{error}</div>}
+          {result && <PlateLookupVerdict out={result} />}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────
 function App() {
   const { addToast } = useToast();
@@ -13298,7 +13655,9 @@ function App() {
   const NavIconInvoices = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('path', {d:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'}), React.createElement('polyline', {points:'14 2 14 8 20 8'}), React.createElement('line', {x1:'8',y1:'13',x2:'16',y2:'13'}), React.createElement('line', {x1:'8',y1:'17',x2:'12',y2:'17'}));
   const NavIconAnalytics = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('line', {x1:'18',y1:'20',x2:'18',y2:'10'}), React.createElement('line', {x1:'12',y1:'20',x2:'12',y2:'4'}), React.createElement('line', {x1:'6',y1:'20',x2:'6',y2:'14'}));
   const NavIconTow = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('path', {d:'M10 17h4V5H2v12h3'}), React.createElement('path', {d:'M20 17h2v-3.34a4 4 0 0 0-1.17-2.83L19 9h-5'}), React.createElement('circle', {cx:'7.5',cy:'17.5',r:'2.5'}), React.createElement('circle', {cx:'17.5',cy:'17.5',r:'2.5'}));
-  const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, training: NavIconAnalytics, towactivity: NavIconTow };
+  const NavIconAdmin = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('path', {d:'M12 2l7 4v6c0 4.4-3 7.5-7 9-4-1.5-7-4.6-7-9V6z'}));
+  const NavIconLookup = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('circle', {cx:'11',cy:'11',r:'7'}), React.createElement('line', {x1:'21',y1:'21',x2:'16.65',y2:'16.65'}));
+  const navIcons = { overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, training: NavIconAnalytics, towactivity: NavIconTow, admin: NavIconAdmin, lookup: NavIconLookup };
   // Tab roles (kept intentionally narrow so each surface has one meaning):
   //   Jobs     → every violation needing action (enforcement + ALPR unified)
   //   Lots     → register + manage properties (plates, passes, cameras, plate detections)
@@ -13312,12 +13671,18 @@ function App() {
     { id: 'towactivity', label: 'Tow truck',   badge: 0 },
     { id: 'earnings',    label: 'Earnings',    badge: 0 },
     { id: 'invoices',    label: 'Billing',     badge: 0 },
+    // Platform-admin only: the internal console (clients / onboard / feedback),
+    // folded in from admin.html. Gated again at render on isPlatformAdmin.
+    ...(isPlatformAdmin ? [{ id: 'admin', label: 'Admin', badge: 0 }] : []),
     { id: 'account',     label: 'Account',     badge: 0 },
   ] : [
     // Partner navigation. Earnings + Billing/Invoices are owner-only
     // surfaces — partners must NEVER see revenue_share, fee schedules,
     // or QuickBooks state. Removed 2026-04-28 per Gabe.
     { id: 'lots',     label: 'Lots',     badge: 0 },
+    // In-lot plate lookup, folded in from lookup.html — the tow partner's
+    // field tool. Shows for a partner login and when an admin views-as-partner.
+    { id: 'lookup',   label: 'Lookup',   badge: 0 },
     { id: 'activity', label: 'Activity', badge: 0 },
     { id: 'account',  label: 'Account',  badge: 0 },
   ];
@@ -13461,6 +13826,8 @@ function App() {
           {tab === 'earnings' && isOwner && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
           {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} isPlatformAdmin={isPlatformAdmin} />}
+          {tab === 'admin' && isPlatformAdmin && <AdminConsolePage user={owner} />}
+          {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={owner} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
