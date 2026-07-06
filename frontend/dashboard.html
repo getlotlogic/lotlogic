@@ -12392,9 +12392,9 @@ function TowActivityPage({ user }) {
     if (!supabase) return;
     try {
       const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-      const { data: partners } = await supabase
-        .from('enforcement_partners')
-        .select('id, company_name, tow_truck_plates');
+      // Scope to THIS owner's tow partners only — never read the full
+      // enforcement_partners table (which would surface other tow companies' plates).
+      const partners = await db.getPartnersForOwner(user.id);
       const allPlates = (partners || []).flatMap(p => p.tow_truck_plates || []).filter(Boolean);
       setPlates(allPlates);
 

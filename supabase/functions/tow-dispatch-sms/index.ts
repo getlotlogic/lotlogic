@@ -77,6 +77,14 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
+  // Internal-only: gate on INTERNAL_TOKEN so a guessed violation UUID can't be
+  // used to burn Twilio quota or SMS a partner. Matches tow-dispatch-email.
+  const internalToken = Deno.env.get("INTERNAL_TOKEN") ?? "";
+  const provided = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!internalToken || provided !== internalToken) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
   const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
   const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
   const fromNumber = Deno.env.get("TWILIO_FROM_NUMBER");
@@ -124,6 +132,19 @@ serve(async (req) => {
   if (partErr || !partner) return json({ error: "Tow company not found", detail: partErr?.message }, 404);
   if (!partner.active) return json({ error: "Tow company inactive" }, 409);
   if (!partner.phone) return json({ error: "Tow company has no phone number" }, 409);
+
+  // Atomic claim: flip sms_sent_at NULL→now BEFORE Twilio so two concurrent
+  // invocations can't both send. Only the winner (whoever flips it) proceeds.
+  const claimTs = new Date().toISOString();
+  const { data: claimed } = await supabase
+    .from("alpr_violations")
+    .update({ sms_sent_at: claimTs, status: "dispatched", dispatched_at: claimTs })
+    .eq("id", violation.id)
+    .is("sms_sent_at", null)
+    .select("id");
+  if (!claimed || claimed.length === 0) {
+    return json({ status: "already_sent" }, 200);
+  }
 
   const { data: triggerEvent } = await supabase
     .from("plate_events")
@@ -190,16 +211,18 @@ serve(async (req) => {
   });
 
   if (twilioRes.status < 200 || twilioRes.status >= 300) {
+    // Release the claim so a later retry can resend.
+    await supabase
+      .from("alpr_violations")
+      .update({ sms_sent_at: null, status: violation.status, dispatched_at: null })
+      .eq("id", violation.id)
+      .eq("sms_sent_at", claimTs);
     return json(
       { error: "Twilio send failed", twilio_status: twilioRes.status, twilio_body: twilioRes.body },
       502,
     );
   }
-
-  await supabase
-    .from("alpr_violations")
-    .update({ sms_sent_at: new Date().toISOString(), status: "dispatched", dispatched_at: new Date().toISOString() })
-    .eq("id", violation.id);
+  // sms_sent_at / status already stamped by the atomic claim above.
 
   return json(
     {
