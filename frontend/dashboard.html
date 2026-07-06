@@ -9899,7 +9899,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
           autoFocus
           value={searchText}
           onChange={e => setSearchText(e.target.value)}
-          placeholder="Search plate, driver, company, phone, spot, or ref ID…"
+          placeholder="Search plate, name, company, phone, spot, or ref ID…"
           style={{
             width:'100%', padding:'14px 44px 14px 44px',
             background:'var(--bg-card)', border:'1.5px solid var(--border)',
@@ -10042,7 +10042,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
           </div>
           <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4,maxWidth:480,margin:'4px auto 0'}}>
             {hasSearch
-              ? <>Try a shorter chunk of the plate, just the driver's first name, or the company. Phone numbers also work.</>
+              ? <>Try a shorter chunk of the plate, just the first name, or the company. Phone numbers also work.</>
               : ((err || rosterError)
                   ? <>Connection issue — the list refreshes automatically every minute. Tap “Retry now” above if it persists.</>
                   : (useBuckets
@@ -10317,7 +10317,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
           "showing 500 of 540" count would contradict the header + cards. */}
       {!loading && isHistory && total > rows.length && (
         <div style={{fontSize:11,color:'#facc15',padding:'8px 12px',background:'rgba(250,204,21,.08)',border:'1px solid rgba(250,204,21,.3)',borderRadius:8}}>
-          Showing {rows.length.toLocaleString()} of {total.toLocaleString()} passes. Search by plate, driver, or company to find any specific registration.
+          Showing {rows.length.toLocaleString()} of {total.toLocaleString()} passes. Search by plate, name, or company to find any specific registration.
         </div>
       )}
 

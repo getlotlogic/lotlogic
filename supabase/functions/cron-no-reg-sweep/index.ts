@@ -95,12 +95,15 @@ export async function sweepViolations(db: any, now: Date = new Date()) {
   return transitions;
 }
 
-if (import.meta.main) {
-  serve(async () => {
-    const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    const t = await sweepViolations(db);
-    return new Response(JSON.stringify({ ok: true, ...t }), {
-      headers: { "Content-Type": "application/json" },
-    });
+// serve() must be registered unconditionally: under the Supabase edge runtime the
+// module is not the direct entrypoint, so `import.meta.main` is false and gating
+// serve() on it left the HTTP handler dead — the cron POSTed and nothing ran, so
+// no_registration_violations rows never advanced past `pending`. (This function
+// only does internal status housekeeping — no tow dispatch or notifications.)
+serve(async () => {
+  const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const t = await sweepViolations(db);
+  return new Response(JSON.stringify({ ok: true, ...t }), {
+    headers: { "Content-Type": "application/json" },
   });
-}
+});
