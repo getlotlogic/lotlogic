@@ -4579,8 +4579,78 @@ function ImageZoom({ src, alt, onClose }) {
 }
 
 // ── Violation Proof Modal — iMessage-style full-screen photo viewer ──
+// Detection bbox colors — module scope so the hoisted ProofImage can read it
+// (the component-local copies inside the modals shadow this harmlessly).
+const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
+
 // Uses React Portal to render directly on document.body, bypassing all
 // ancestor transforms that would trap position:fixed.
+function ProofImage({ src, label, detection, timestamp }) {
+  const imgRef = useRef(null);
+  const wrapRef = useRef(null);
+  const [loaded, setLoaded] = useState(false);
+  const [coverPos, setCoverPos] = useState(null);
+
+  const calcCover = useCallback(() => {
+    const img = imgRef.current;
+    const wrap = wrapRef.current;
+    if (!img || !wrap || !img.naturalWidth) return;
+    const cW = wrap.clientWidth, cH = wrap.clientHeight;
+    const nW = img.naturalWidth, nH = img.naturalHeight;
+    const scale = Math.max(cW / nW, cH / nH);
+    const rW = nW * scale, rH = nH * scale;
+    setCoverPos({ offX: (cW - rW) / 2, offY: (cH - rH) / 2, rW, rH });
+  }, []);
+
+  const det = detection;
+  const cls = det ? (det.class || 'vehicle').toLowerCase() : 'car';
+  const color = DET_COLORS[cls] || '#3b82f6';
+
+  return (
+    <div style={{flex:'1 1 0', minWidth:0}}>
+      <div style={{fontSize:10, fontWeight:600, color:'rgba(255,255,255,.5)', marginBottom:6, textTransform:'uppercase', letterSpacing:'.06em', display:'flex', alignItems:'center', gap:6}}>
+        {label}
+        {timestamp && <span style={{fontWeight:500, color:'rgba(255,255,255,.3)', textTransform:'none', letterSpacing:0, fontSize:10}}>{timestamp}</span>}
+      </div>
+      <div ref={wrapRef} style={{position:'relative', borderRadius:10, overflow:'hidden', background:'#111', aspectRatio:'16/9', maxHeight:'calc(100vh - 120px)'}}>
+        {src ? (
+          <>
+            <img ref={imgRef} src={src} alt={label}
+              onLoad={() => { setLoaded(true); setTimeout(calcCover, 0); }}
+              style={{width:'100%', height:'100%', objectFit:'cover', display: loaded ? 'block' : 'none'}}
+            />
+            {!loaded && (
+              <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center'}}>
+                <div className="spin" style={{marginRight:8}} />
+                <span style={{color:'rgba(255,255,255,.3)', fontSize:12}}>Loading…</span>
+              </div>
+            )}
+            {loaded && det && coverPos && (() => {
+              const [x1, y1, x2, y2] = det.bbox;
+              const px = coverPos.offX + x1 * coverPos.rW;
+              const py = coverPos.offY + y1 * coverPos.rH;
+              const pw = (x2 - x1) * coverPos.rW;
+              const ph = (y2 - y1) * coverPos.rH;
+              return (
+                <div style={{
+                  position:'absolute', left:px, top:py, width:pw, height:ph,
+                  border:`2px solid ${color}`, borderRadius:3,
+                  pointerEvents:'none', boxSizing:'border-box',
+                }} />
+              );
+            })()}
+          </>
+        ) : (
+          <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
+            {label === 'Current' && <div className="spin" />}
+            <span style={{color:'rgba(255,255,255,.3)', fontSize:12}}>{label === 'Current' ? 'Loading live view\u2026' : 'No snapshot'}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, cameraZones, matchedDetection, tunnelSnapshotUrl, onClose, onAutoGone }) {
   if (!violation) return null;
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
@@ -4641,71 +4711,8 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
     return () => { document.removeEventListener('keydown', handler); document.body.style.overflow = ''; };
   }, [onClose]);
 
-  function ProofImage({ src, label, detection, timestamp }) {
-    const imgRef = useRef(null);
-    const wrapRef = useRef(null);
-    const [loaded, setLoaded] = useState(false);
-    const [coverPos, setCoverPos] = useState(null);
-
-    const calcCover = useCallback(() => {
-      const img = imgRef.current;
-      const wrap = wrapRef.current;
-      if (!img || !wrap || !img.naturalWidth) return;
-      const cW = wrap.clientWidth, cH = wrap.clientHeight;
-      const nW = img.naturalWidth, nH = img.naturalHeight;
-      const scale = Math.max(cW / nW, cH / nH);
-      const rW = nW * scale, rH = nH * scale;
-      setCoverPos({ offX: (cW - rW) / 2, offY: (cH - rH) / 2, rW, rH });
-    }, []);
-
-    const det = detection;
-    const cls = det ? (det.class || 'vehicle').toLowerCase() : 'car';
-    const color = DET_COLORS[cls] || '#3b82f6';
-
-    return (
-      <div style={{flex:'1 1 0', minWidth:0}}>
-        <div style={{fontSize:10, fontWeight:600, color:'rgba(255,255,255,.5)', marginBottom:6, textTransform:'uppercase', letterSpacing:'.06em', display:'flex', alignItems:'center', gap:6}}>
-          {label}
-          {timestamp && <span style={{fontWeight:500, color:'rgba(255,255,255,.3)', textTransform:'none', letterSpacing:0, fontSize:10}}>{timestamp}</span>}
-        </div>
-        <div ref={wrapRef} style={{position:'relative', borderRadius:10, overflow:'hidden', background:'#111', aspectRatio:'16/9', maxHeight:'calc(100vh - 120px)'}}>
-          {src ? (
-            <>
-              <img ref={imgRef} src={src} alt={label}
-                onLoad={() => { setLoaded(true); setTimeout(calcCover, 0); }}
-                style={{width:'100%', height:'100%', objectFit:'cover', display: loaded ? 'block' : 'none'}}
-              />
-              {!loaded && (
-                <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center'}}>
-                  <div className="spin" style={{marginRight:8}} />
-                  <span style={{color:'rgba(255,255,255,.3)', fontSize:12}}>Loading…</span>
-                </div>
-              )}
-              {loaded && det && coverPos && (() => {
-                const [x1, y1, x2, y2] = det.bbox;
-                const px = coverPos.offX + x1 * coverPos.rW;
-                const py = coverPos.offY + y1 * coverPos.rH;
-                const pw = (x2 - x1) * coverPos.rW;
-                const ph = (y2 - y1) * coverPos.rH;
-                return (
-                  <div style={{
-                    position:'absolute', left:px, top:py, width:pw, height:ph,
-                    border:`2px solid ${color}`, borderRadius:3,
-                    pointerEvents:'none', boxSizing:'border-box',
-                  }} />
-                );
-              })()}
-            </>
-          ) : (
-            <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8}}>
-              {label === 'Current' && <div className="spin" />}
-              <span style={{color:'rgba(255,255,255,.3)', fontSize:12}}>{label === 'Current' ? 'Loading live view\u2026' : 'No snapshot'}</span>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
+  // ProofImage is hoisted to module scope (above ViolationProofModal) so it
+  // isn't redefined every render — that remounted it and flashed the images.
 
   const initialTime = violation.detected_at ? new Date(violation.detected_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '';
 
