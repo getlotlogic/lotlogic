@@ -28,14 +28,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # No `cache: 'npm'` — tests/package-lock.json is gitignored
-          # (per root CLAUDE.md), so setup-node was failing with
-          # "Some specified paths were not resolved, unable to cache
-          # dependencies" on every run. The `npm ci || npm install`
-          # below tolerates a missing lockfile, so we just skip caching.
+          # tests/package-lock.json IS tracked (root .gitignore re-includes it via
+          # `!tests/package-lock.json`), so enable npm caching keyed on it.
+          cache: 'npm'
+          cache-dependency-path: tests/package-lock.json
 
       - name: Install deps
-        run: npm ci || npm install
+        # Strict install from the committed lockfile — a broken/out-of-date
+        # lockfile should FAIL, not silently fall back to a floating install.
+        run: npm ci
 
       - name: Install browsers
         run: npx playwright install --with-deps chromium webkit
