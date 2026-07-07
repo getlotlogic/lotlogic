@@ -59,7 +59,9 @@ test.describe('property access control @access', () => {
     expect(bLots.ok()).toBeTruthy();
     const bBody = await bLots.json();
     const bItems = Array.isArray(bBody) ? bBody : bBody.items ?? [];
-    test.skip(bItems.length === 0, 'owner B has no lots assigned — cannot run cross-tenant lookup');
+    // The seed gives owner B a lot (with_lot:true). ASSERT it rather than skip —
+    // a cross-tenant isolation check must never silently pass on an empty seed.
+    expect(bItems.length, 'seed must assign owner B a lot for the cross-tenant check').toBeGreaterThan(0);
 
     const victimLotId = bItems[0].id;
     const res = await request.get(`${API_URL}/lots/${victimLotId}`, {
@@ -76,7 +78,7 @@ test.describe('property access control @access', () => {
       headers: { Authorization: `Bearer ${b.token}` },
     });
     const bItems = (await bLots.json()).items ?? (await bLots.json());
-    test.skip(!Array.isArray(bItems) || bItems.length === 0, 'owner B has no lots');
+    expect(Array.isArray(bItems) && bItems.length > 0, 'seed must assign owner B a lot for the cross-tenant check').toBeTruthy();
 
     const victimLotId = bItems[0].id;
     const res = await request.get(`${API_URL}/violations?lot_id=${victimLotId}`, {
@@ -116,7 +118,7 @@ test.describe('property access control @access', () => {
     });
     const bBody = await bLots.json();
     const bItems = Array.isArray(bBody) ? bBody : bBody.items ?? [];
-    test.skip(bItems.length === 0, 'owner B has no lots');
+    expect(bItems.length, 'seed must assign owner B a lot for the cross-tenant check').toBeGreaterThan(0);
     const victimLotId = bItems[0].id;
 
     await loginAs(page, accounts.ownerA());
