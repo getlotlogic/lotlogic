@@ -7276,6 +7276,9 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
   // `properties` pre-query in refresh — feeds the property filter dropdown
   // and provides fallback labels if the FK join doesn't hydrate.
   const [propMap, setPropMap] = React.useState({});
+  // True when the violations fetch hit its page ceiling. Never let a
+  // truncated queue read as an empty one on a surface that gates billing.
+  const [truncated, setTruncated] = React.useState(false);
 
   const ownerId = user?.id;
   const role = user?._role === 'partner' ? 'partner' : 'owner';
@@ -7297,15 +7300,33 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       // Window is driven by the operator-selected range, clamped 1-90 days.
       const winDays = Math.max(1, Math.min(90, rangeDays || 7));
       const since = new Date(Date.now() - winDays * 86400000).toISOString();
-      const { data, error } = await supabase
-        .from('alpr_violations')
-        .select('id, property_id, plate_text, status, action_taken, action_channel, action_at, tow_confirmed_at, tow_confirmation, billing_held_at, force_bill_at, invoiced_at, dispatched_at, sms_sent_at, violation_type, created_at, notes, plate_event_id, quickbooks_invoice_id, properties(name, tow_company_id)')
-        .in('property_id', propIds)
-        .gte('created_at', since)
-        .order('created_at', { ascending: false })
-        .limit(400);
-      if (error) throw new Error(error.message);
-      const baseRows = data || [];
+      // PAGE, don't cap. These rows drive the seven Confirmation Review queues,
+      // and those queues gate invoicing. A single .limit(400) over an
+      // operator-selectable window (up to 90 days, multi-property) silently
+      // dropped the OLDEST rows — precisely the ones aging toward the weekly
+      // invoicing run — so "Possible fraud: 0" could mean "not fetched" while
+      // reading as "all clear". There is no truncation banner on this surface
+      // to catch it either.
+      const VIOL_PAGE = 500;
+      const VIOL_MAX_PAGES = 20; // 10k rows; guards a runaway query
+      const baseRows = [];
+      let violTruncated = false;
+      for (let page = 0; page < VIOL_MAX_PAGES; page++) {
+        const { data, error } = await supabase
+          .from('alpr_violations')
+          .select('id, property_id, plate_text, status, action_taken, action_channel, action_at, tow_confirmed_at, tow_confirmation, billing_held_at, force_bill_at, invoiced_at, dispatched_at, sms_sent_at, violation_type, created_at, notes, plate_event_id, quickbooks_invoice_id, properties(name, tow_company_id)')
+          .in('property_id', propIds)
+          .gte('created_at', since)
+          .order('created_at', { ascending: false })
+          .range(page * VIOL_PAGE, page * VIOL_PAGE + VIOL_PAGE - 1);
+        if (error) throw new Error(error.message);
+        baseRows.push(...(data || []));
+        if (!data || data.length < VIOL_PAGE) break;
+        if (page === VIOL_MAX_PAGES - 1) violTruncated = true;
+      }
+      // Surfaced in the UI — if we ever DO truncate, say so rather than
+      // letting a short queue read as an empty one.
+      setTruncated(violTruncated);
 
       // Batch-fetch joined plate_events in two buckets:
       //   (1) the original detection snapshot (alpr_violations.plate_event_id)
@@ -7332,14 +7353,25 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       const plateTexts = Array.from(new Set(baseRows.map(r => (r.plate_text || '').trim().toUpperCase()).filter(Boolean)));
       const passesByKey = {};
       if (plateTexts.length > 0 && propIds.length > 0) {
-        const { data: passes, error: passesErr } = await supabase
-          .from('visitor_passes')
-          .select('id, property_id, plate_text, visitor_name, company_name, parking_spot, phone, valid_from, valid_until, status, policy_acknowledged_at, stay_days, created_at')
-          .in('property_id', propIds)
-          .in('plate_text', plateTexts)
-          .order('created_at', { ascending: false })
-          .limit(500);
-        if (passesErr) throw new Error(passesErr.message);
+        // Paged, not capped. A truncated join here is worse than a missing
+        // row: the violation renders with NO matching pass, which in a queue
+        // whose entire purpose is "was this truck actually registered when we
+        // towed it" is indistinguishable from "there was never a pass" — a
+        // fraud-queue false positive pointed at a real customer.
+        const PASS_PAGE = 500;
+        const passes = [];
+        for (let page = 0; page < 20; page++) {
+          const { data: chunk, error: passesErr } = await supabase
+            .from('visitor_passes')
+            .select('id, property_id, plate_text, visitor_name, company_name, parking_spot, phone, valid_from, valid_until, status, policy_acknowledged_at, stay_days, created_at')
+            .in('property_id', propIds)
+            .in('plate_text', plateTexts)
+            .order('created_at', { ascending: false })
+            .range(page * PASS_PAGE, page * PASS_PAGE + PASS_PAGE - 1);
+          if (passesErr) throw new Error(passesErr.message);
+          passes.push(...(chunk || []));
+          if (!chunk || chunk.length < PASS_PAGE) break;
+        }
         (passes || []).forEach(p => {
           const key = p.property_id + '|' + (p.plate_text || '').trim().toUpperCase();
           // First write wins — passes are ordered newest-first.
@@ -7750,7 +7782,8 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
           background: TONE_COLORS.blue.bg, color: TONE_COLORS.blue.fg, border: `1px solid ${TONE_COLORS.blue.border}`,
         }
       }, summary.held + ' held / force-billed'),
-      rows !== null && summary.total > 0 && summary.fraud === 0 && summary.verify === 0 && React.createElement('span', {
+      // Only claim "all clear" when we actually saw the whole window.
+      rows !== null && !truncated && summary.total > 0 && summary.fraud === 0 && summary.verify === 0 && React.createElement('span', {
         style: { color: TONE_COLORS.green.fg, fontSize: 11, fontWeight: 600 },
       }, 'All clear — no disputes in this window.'),
       React.createElement('span', { style: { flex: 1 } }),
@@ -7759,6 +7792,16 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
         style: { fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: busy ? 'wait' : 'pointer' }
       }, busy ? 'Refreshing…' : 'Refresh now'),
     ),
+
+    // Honest truncation notice. A short queue must never be mistaken for an
+    // empty one on the surface that decides who gets invoiced.
+    truncated && React.createElement('div', {
+      style: {
+        fontSize: 12, fontWeight: 600, padding: '8px 12px', borderRadius: 8,
+        background: TONE_COLORS.amber.bg, color: TONE_COLORS.amber.fg,
+        border: `1px solid ${TONE_COLORS.amber.border}`, marginBottom: 10,
+      },
+    }, '⚠️ This window has more violations than we loaded. The queue counts below are incomplete — narrow the date range for an accurate review.'),
 
     rows === null ? null :
     REVIEW_QUEUES.map(q => {
@@ -12464,9 +12507,18 @@ function TowActivityPage({ user }) {
       const allPlates = (partners || []).flatMap(p => p.tow_truck_plates || []).filter(Boolean);
       setPlates(allPlates);
 
-      // Pull every plate_event whose normalized_plate matches any canonical
-      // tow plate OR a Lev≤2 OCR variant. The DB-side levenshtein extension
-      // lets us push the fuzzy match into SQL rather than scanning client-side.
+      // Candidate fetch. This deliberately does NOT try to express the fuzzy
+      // match in PostgREST: `normalized_plate.eq.X` is exact, and an earlier
+      // comment here claimed the DB-side levenshtein extension was doing the
+      // widening. It was not — the client-side variant filter below ran over
+      // an already-exact result set and could only ever re-confirm rows the
+      // server had matched exactly. OCR-drifted sightings never appeared, and
+      // an empty page was indistinguishable from "no truck came".
+      //
+      // So: pull the window (exact plate hits + anything the ingest pipeline
+      // already stamped partner_truck), then widen client-side. When canonical
+      // plates are on file we also pull the unfiltered window so the variant
+      // filter has something to work on.
       const orClauses = allPlates.map(p => `normalized_plate.eq.${p}`).join(',');
       // Guard the empty case: with no canonical plates registered, `orClauses`
       // is '' and `.or(',match_status.eq.partner_truck')` is a malformed
@@ -12476,38 +12528,62 @@ function TowActivityPage({ user }) {
       const orFilter = orClauses
         ? `${orClauses},match_status.eq.partner_truck`
         : 'match_status.eq.partner_truck';
-      const { data: evs } = await supabase
-        .from('plate_events')
-        .select('id, created_at, normalized_plate, plate_text, confidence, image_url, match_status, camera_id, raw_data, property_id')
-        .gte('created_at', since)
-        .or(orFilter)
-        .order('created_at', { ascending: false })
-        .limit(1000);
+      const SELECT_COLS = 'id, created_at, normalized_plate, plate_text, confidence, image_url, match_status, camera_id, raw_data, property_id';
+      const [exactRes, windowRes] = await Promise.all([
+        supabase.from('plate_events').select(SELECT_COLS)
+          .gte('created_at', since).or(orFilter)
+          .order('created_at', { ascending: false }).limit(1000),
+        // Unfiltered window, only when there are canonical plates to compare
+        // against. Bounded by the same 1000-row cap.
+        allPlates.length
+          ? supabase.from('plate_events').select(SELECT_COLS)
+              .gte('created_at', since)
+              .order('created_at', { ascending: false }).limit(1000)
+          : Promise.resolve({ data: [] }),
+      ]);
+      const seen = new Set();
+      const pool = [...(exactRes.data || []), ...(windowRes.data || [])].filter(e => {
+        if (seen.has(e.id)) return false;
+        seen.add(e.id); return true;
+      });
 
-      // Lev≤2 client-side filter for OCR variants beyond exact matches
-      const isFuzzyMatch = (read) => {
-        if (!read) return false;
+      // OCR-variant test. Deliberately TIGHTER than the Lev≤2 the old (dead)
+      // code claimed: same length required, and at most ONE edit.
+      //
+      // Lev≤2 on a 6-7 char alphanumeric plate admits thousands of strings —
+      // any two substitutions. This surface exists to establish that a partner
+      // truck was physically on site, and it feeds billing. A civilian plate
+      // two OCR characters from a tow plate, presented with photo evidence as
+      // a "tow truck sighting", is worse than a missed sighting. Same-length
+      // Lev≤1 matches the anchored rule used elsewhere in the pipeline
+      // (sessions.ts plateSimilar).
+      const variantOf = (read) => {
+        if (!read) return null;
         for (const canonical of allPlates) {
-          if (read === canonical) return true;
-          if (Math.abs(read.length - canonical.length) > 2) continue;
-          // simple Lev≤2
-          const m = canonical.length, n = read.length;
-          let prev = Array.from({ length: n + 1 }, (_, i) => i);
-          for (let i = 1; i <= m; i++) {
-            const curr = [i, ...Array(n).fill(0)];
-            for (let j = 1; j <= n; j++) {
-              const cost = canonical[i - 1] === read[j - 1] ? 0 : 1;
-              curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
-            }
-            prev = curr;
+          if (read === canonical) return null; // exact, not a variant
+          if (read.length !== canonical.length) continue;
+          let diffs = 0;
+          for (let i = 0; i < read.length; i++) {
+            if (read[i] !== canonical[i] && ++diffs > 1) break;
           }
-          if (prev[n] <= 2) return true;
+          if (diffs === 1) return canonical;
         }
-        return false;
+        return null;
       };
-      const matched = (evs || []).filter(e =>
-        e.match_status === 'partner_truck' || isFuzzyMatch(e.normalized_plate || '')
-      );
+      const isExact = (read) => allPlates.includes(read);
+
+      const matched = pool.reduce((acc, e) => {
+        const read = e.normalized_plate || '';
+        if (e.match_status === 'partner_truck' || isExact(read)) {
+          acc.push({ ...e, _variantOf: null });
+        } else {
+          const canonical = variantOf(read);
+          // Flagged, not hidden — the operator decides. See the OCR VARIANT
+          // chip on the row.
+          if (canonical) acc.push({ ...e, _variantOf: canonical });
+        }
+        return acc;
+      }, []);
       setEvents(matched);
 
       const camIds = [...new Set(matched.map(e => e.camera_id).filter(Boolean))];
@@ -12594,7 +12670,18 @@ function TowActivityPage({ user }) {
                     {exact || v.frames[0].normalized_plate || '—'}
                   </span>
                   {!exact && (
-                    <span style={{marginLeft:8,fontSize:10,padding:'2px 6px',background:'rgba(168,85,247,.15)',color:'#a855f7',borderRadius:3,fontWeight:700}}>FUZZY</span>
+                    // Name the plate this is a suspected OCR variant of. A bare
+                    // "FUZZY" told the operator the read was inexact but not
+                    // what it was matched against — and this evidence feeds
+                    // billing, so "close to WHAT" is the operative question.
+                    <span
+                      title="One character different from a registered tow-truck plate — not an exact match"
+                      style={{marginLeft:8,fontSize:10,padding:'2px 6px',background:'rgba(168,85,247,.15)',color:'#a855f7',borderRadius:3,fontWeight:700}}
+                    >
+                      {v.frames.find(f => f._variantOf)?._variantOf
+                        ? `OCR VARIANT OF ${v.frames.find(f => f._variantOf)._variantOf}`
+                        : 'FUZZY'}
+                    </span>
                   )}
                 </div>
                 <div style={{fontSize:12,color:'var(--text-muted)', fontFamily:'ui-monospace,monospace'}}>
