@@ -2509,6 +2509,10 @@ LIABILITY NOTICE — The property owner and tow operator are not responsible for
 // ── Supabase data layer (with Rails API fallback) ─────────────
 // Real Supabase table names: lot_owners, enforcement_partners, lots, cameras,
 // violations, snapshots, camera_zones
+// Safety cap on the active-roster query. Not expected to bind — see
+// getActiveRoster, which warns if it ever does.
+const ACTIVE_ROSTER_CAP = 500;
+
 const db = {
   async getOwners(email) {
     if (supabase) {
@@ -3336,7 +3340,11 @@ const db = {
   //
   // The predicate is the canonical one, identical to the backend contract:
   //   status = 'active'  AND  exited_at IS NULL  AND  (valid_until IS NULL OR valid_until > now)
-  // No date window, no pagination cap that could hide a pass. RLS scopes
+  // No date window. There IS a 500-row safety cap below — it is not expected
+  // to bind (this is only trucks currently on the lot; Charlotte runs ~27),
+  // but it is a cap, and three surfaces treat this function as the single
+  // source of truth for "who is registered". If it ever binds we warn loudly
+  // rather than silently under-reporting the roster. RLS scopes
   // visitor_passes to the property's owner AND tow partner, so the same query
   // is correct for every role. Throws on error so callers can keep the last
   // known roster on screen rather than blanking.
@@ -3355,8 +3363,11 @@ const db = {
       .eq('status', 'active')
       .is('exited_at', null)
       .order('created_at', { ascending: false })
-      .limit(500);
+      .limit(ACTIVE_ROSTER_CAP);
     if (error) throw error;
+    if ((data || []).length >= ACTIVE_ROSTER_CAP) {
+      console.warn(`[roster] getActiveRoster hit the ${ACTIVE_ROSTER_CAP}-row cap for property ${propertyId} — the roster is being truncated and counts derived from it are low.`);
+    }
     const now = Date.now();
     return (data || [])
       // Canonical window predicate: no expiry, or expiry still ahead of now.
@@ -9073,7 +9084,7 @@ function CooldownChip({ passId, priorFlagCount, registeredAt, priorEnd }) {
   }
   const countSuffix = priorFlagCount > 0 ? ` · ${priorFlagCount}× before` : '';
   const msg = breach
-    ? `⚠ Back ${fmtHrsShort(breach.after)} after leaving — broke the 24h cooldown${countSuffix}`
+    ? `⚠ Re-registered ${fmtHrsShort(breach.after)} after the prior pass ended — inside the 24h cooldown${countSuffix}`
     : `⚠ Re-registered within cooldown${countSuffix}`;
   return (
     <div className="cooldown-chip-wrap">
@@ -9086,10 +9097,13 @@ function CooldownChip({ passId, priorFlagCount, registeredAt, priorEnd }) {
           {breach && (
             <div className="cooldown-breach">
               <div className="cooldown-breach-line">
-                Left <b>{fmtCooldownDateTime(priorEnd)}</b> → re-registered <b>{fmtCooldownDateTime(registeredAt)}</b>
+                Prior pass ended <b>{fmtCooldownDateTime(priorEnd)}</b> → re-registered <b>{fmtCooldownDateTime(registeredAt)}</b>
               </div>
               <div className="cooldown-breach-emph">
-                Back {fmtHrsShort(breach.after)} after leaving · {fmtHrsShort(breach.before)} before the 24-hour cooldown ended
+                Re-registered {fmtHrsShort(breach.after)} after the prior pass ended · {fmtHrsShort(breach.before)} before the 24-hour cooldown cleared
+              </div>
+              <div className="cooldown-breach-line" style={{marginTop:6,color:'var(--text-muted)',fontSize:11}}>
+                Based on registration times. Camera evidence is shown separately when a read exists — this flag is not, by itself, proof the truck was on the lot.
               </div>
             </div>
           )}
@@ -9383,8 +9397,16 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
 
     // Plate: ≥2 alphanumeric chars to avoid noise (typing "ab" shouldn't
     // match every plate containing AB; typing "abc" should).
-    if (qPlate.length >= 2 && normalizePlateForSearch(row.plate_text).includes(qPlate)) {
-      matched.push('plate');
+    // Tractors register a front plate AND a trailer (rear) plate, and the card
+    // renders both — an operator reading the trailer placard must be able to
+    // find the truck by it. Searching plate_text alone returned "No matches"
+    // for a registered, on-cooldown truck whose trailer plate was on screen.
+    if (qPlate.length >= 2) {
+      if (normalizePlateForSearch(row.plate_text).includes(qPlate)) {
+        matched.push('plate');
+      } else if (normalizePlateForSearch(row.back_plate).includes(qPlate)) {
+        matched.push('trailer');
+      }
     }
     // Driver name on the visitor pass.
     if ((row.visitor_name || '').toLowerCase().includes(qLower)) matched.push('name');
@@ -9578,11 +9600,20 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   async function handleExport() {
     setExporting(true);
     try {
-      // Export honours the date/status range only. The smart search box is
-      // pure UI and isn't sent to the backend — exporting "all matches" of
-      // a free-text query reliably needs a backend column-aware filter we
-      // don't have yet, so the CSV reflects the date window unfiltered.
-      const blob = await db.getParkingLog(propertyId, { ...filters, format: 'csv' });
+      // The backend DOES have a column-aware plate filter (front OR trailer,
+      // both normalized), so a plate-shaped search is exported faithfully.
+      // It has no filter for name/company/phone/spot/ref — for those the CSV
+      // still covers the date window, and we say so out loud rather than
+      // handing over a file that quietly disagrees with the screen.
+      const exportParams = { ...filters, format: 'csv' };
+      const searchIsPlateShaped = /^[A-Za-z0-9\s-]{2,}$/.test(trimmedSearch)
+        && normalizePlateForSearch(trimmedSearch).length >= 2;
+      if (hasSearch && searchIsPlateShaped) {
+        exportParams.plate = normalizePlateForSearch(trimmedSearch);
+      } else if (hasSearch) {
+        addToast('Export covers the date range — the text search is not applied to CSV', 'info');
+      }
+      const blob = await db.getParkingLog(propertyId, exportParams);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -9848,6 +9879,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   // Pretty labels for the "matched: X" chip on each result.
   const matchedFieldLabel = {
     plate: 'plate',
+    trailer: 'trailer plate',
     name: 'name',
     company: 'company',
     phone: 'phone',
@@ -10530,6 +10562,9 @@ function ApartmentPermits({ property }) {
   const [docView, setDocView] = useState(null);
   const [data, setData] = useState({ residents: [], guests: [] });
   const [loading, setLoading] = useState(true);
+  // Non-null when the last refresh failed — distinguishes "nothing pending"
+  // from "we don't know what's pending".
+  const [loadErr, setLoadErr] = useState(null);
   // id of the row currently mid-action, so we can disable its buttons.
   const [busy, setBusy] = useState(null);
   const [docBusy, setDocBusy] = useState(null);
@@ -10541,7 +10576,12 @@ function ApartmentPermits({ property }) {
     try {
       const res = await apiFetch(`/apartment/passes/permits?property_id=${propertyId}`);
       setData({ residents: res.residents || [], guests: res.guests || [] });
+      setLoadErr(null);
     } catch (e) {
+      // Record the failure so the queue can say "couldn't load" instead of
+      // rendering the initial empty state as "Nothing waiting for review" —
+      // a confident false negative backed only by a toast that auto-dismisses.
+      setLoadErr(e.message || 'Could not load');
       addToast('Could not load permits. ' + (e.message || ''), 'error');
     } finally {
       setLoading(false);
@@ -10671,6 +10711,11 @@ function ApartmentPermits({ property }) {
         </div>
         {loading ? (
           <div className="pd-empty">Loading…</div>
+        ) : loadErr ? (
+          <div className="pd-empty" style={{color:'#b45309'}}>
+            ⚠️ Couldn't load the approval queue — this is not "nothing pending".{' '}
+            <button onClick={refresh} className="pd-share-btn" style={{marginLeft:6}}>Retry</button>
+          </div>
         ) : pending.length === 0 ? (
           <div className="pd-empty">Nothing waiting for review</div>
         ) : (
@@ -11175,11 +11220,18 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   }
 
   async function handleRemovePlate(id) {
-    await db.removeResidentPlate(id);
-    // Use functional setState so a realtime event landing between click and
-    // commit doesn't get clobbered by the closure-captured `plates`. Mirrors
-    // handleApprovePlate below.
-    setPlates(prev => prev.filter(p => p.id !== id));
+    // An unguarded failure here was indistinguishable from a mis-click: the
+    // await rejected, the row stayed on screen, and the operator got nothing
+    // but an unhandled rejection in the console. Mirrors handleApprovePlate.
+    try {
+      await db.removeResidentPlate(id);
+      // Use functional setState so a realtime event landing between click and
+      // commit doesn't get clobbered by the closure-captured `plates`.
+      setPlates(prev => prev.filter(p => p.id !== id));
+      addToast('Parking pass removed', 'success');
+    } catch (err) {
+      addToast('Failed to remove. ' + (err.message || ''), 'error');
+    }
   }
 
   async function handleApprovePlate(id) {
@@ -12106,6 +12158,10 @@ function scopePropsToPartner(props, user) {
 
 function ALPRPropertiesPage({ user }) {
   const { addToast } = useToast();
+  // Property deletion cascades to plates, cameras and passes. Partners enforce
+  // lots, they don't own them — and an admin impersonating a partner arrives
+  // here with _role === 'partner' too, so this single check covers both.
+  const canDelete = user?._role === 'owner';
   const [properties, setProperties] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -12302,10 +12358,20 @@ function ALPRPropertiesPage({ user }) {
                     <span className={`lot-pill-paper ${pillCls}`}>
                       <span className="dot"></span>{pillLabel}
                     </span>
+                    {/* Owners only. This cascades to every plate, camera and
+                        pass on the property, so a tow partner (or an admin in
+                        "View as Partner") must never be shown the control —
+                        previously it rendered for everyone and relied purely
+                        on RLS to reject the write. Tap target raised off 10px:
+                        it sits directly under the status pill on a mobile-first
+                        card, and a mis-tap there was unrecoverable. */}
+                    {canDelete && (
                     <button
-                      onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete "' + p.name + '"? This removes all its plates, cameras, and passes.')) return; try { await db.deleteProperty(p.id); setProperties(properties.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to delete. ' + (err.message || ''), 'error'); } }}
-                      style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'2px 8px',fontSize:10,fontWeight:700,cursor:'pointer'}}
+                      aria-label={`Delete property ${p.name}`}
+                      onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete "' + p.name + '"? This removes all its plates, cameras, and passes.')) return; try { await db.deleteProperty(p.id); setProperties(prev => prev.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to delete. ' + (err.message || ''), 'error'); } }}
+                      style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'6px 10px',marginTop:2,fontSize:11,fontWeight:700,cursor:'pointer'}}
                     >Delete</button>
+                    )}
                   </div>
                 </div>
 
@@ -13464,8 +13530,7 @@ function App() {
     };
   }); // eslint-disable-line -- intentionally re-runs to capture latest handlePullRefresh/showPTR
 
-  // Training tab badge — count of unlabeled sidecar-rejected frames.
-  // Active inferred_plate_pairs count — drives the Training tab badge.
+  // Unreviewed inferred_plate_pairs count — drives the Training tab badge.
   // Refreshed every 60s so it tracks the cron-plate-pair-learn output.
   // Owner-only; partners never see this tab.
   const [trainingBadge, setTrainingBadge] = useState(0);
@@ -13474,10 +13539,16 @@ function App() {
     let cancelled = false;
     async function refreshTrainingBadge() {
       try {
+        // Must mirror the tab's default "unverified" filter exactly
+        // (dismissed_at IS NULL AND verified_at IS NULL). Counting only on
+        // dismissed_at meant every pair the operator verified stayed in the
+        // badge forever — the badge read "40" while the tab it pointed at
+        // said "Nothing to review", so operators learned to ignore it.
         const { count, error } = await supabase
           .from('inferred_plate_pairs')
           .select('id', { count: 'exact', head: true })
-          .is('dismissed_at', null);
+          .is('dismissed_at', null)
+          .is('verified_at', null);
         if (!error && !cancelled) setTrainingBadge(count || 0);
       } catch { /* ignore */ }
     }
