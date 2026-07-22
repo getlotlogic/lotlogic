@@ -267,6 +267,30 @@
       (document.querySelector('meta[name=recaptcha-site-key]')?.content)
       || '6LdaAb4sAAAAACd5g-pYqnQBWHdvMmGCufwtEQnE';
 
+    // Same region-suffix stripping as visit.html — drivers append the plate's
+    // state ("PB36041 ON") and the stored suffix makes the plate unmatchable
+    // by the cameras. Strip standalone trailing region tokens from RAW input
+    // before separator-stripping destroys the token boundary.
+    const REGION_TOKENS = new Set((
+      'AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC ' +
+      'AB BC MB NB NL NS NT NU ON PE QC SK YT ' +
+      'ALABAMA ALASKA ARIZONA ARKANSAS CALIFORNIA COLORADO CONNECTICUT DELAWARE FLORIDA GEORGIA HAWAII IDAHO ILLINOIS INDIANA IOWA KANSAS KENTUCKY LOUISIANA MAINE MARYLAND MASSACHUSETTS MICHIGAN MINNESOTA MISSISSIPPI MISSOURI MONTANA NEBRASKA NEVADA OHIO OKLAHOMA OREGON PENNSYLVANIA TENNESSEE TEXAS UTAH VERMONT VIRGINIA WASHINGTON WISCONSIN WYOMING ' +
+      'ONTARIO QUEBEC ALBERTA SASKATCHEWAN MANITOBA YUKON'
+    ).split(' '));
+    ['NEW HAMPSHIRE','NEW JERSEY','NEW MEXICO','NEW YORK','NORTH CAROLINA','NORTH DAKOTA','SOUTH CAROLINA','SOUTH DAKOTA','RHODE ISLAND','WEST VIRGINIA','NOVA SCOTIA','NEW BRUNSWICK','BRITISH COLUMBIA','PRINCE EDWARD','NORTHWEST TERRITORIES'].forEach(r => REGION_TOKENS.add(r));
+    function normalizePlate(s) {
+      let tokens = String(s || '').trim().toUpperCase().split(/[\s,.\-\/]+/).filter(Boolean);
+      let changed = true;
+      while (changed && tokens.length > 1) {
+        changed = false;
+        const last = tokens[tokens.length - 1];
+        const lastTwo = tokens.length > 2 ? tokens[tokens.length - 2] + ' ' + last : null;
+        if (lastTwo && REGION_TOKENS.has(lastTwo)) { tokens.pop(); tokens.pop(); changed = true; }
+        else if (REGION_TOKENS.has(last)) { tokens.pop(); changed = true; }
+      }
+      return tokens.join('').replace(/[^A-Z0-9]/g, '');
+    }
+
     async function getRecaptchaToken(action) {
       if (!window.grecaptcha || typeof grecaptcha.ready !== 'function') {
         return null;
@@ -469,10 +493,12 @@
       try {
         const holderName = document.getElementById('holderName').value.trim();
         const plateRaw = document.getElementById('plate').value.trim();
-        const plateText = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const plateText = normalizePlate(plateRaw);
         const backPlateRaw = (document.getElementById('backPlate')?.value || '').trim();
-        const backPlateText = backPlateRaw ? backPlateRaw.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
-        if (backPlateText && backPlateText.length < 2) throw new Error('Back plate must be at least 2 characters, or leave it blank.');
+        const backPlateText = backPlateRaw ? normalizePlate(backPlateRaw) : '';
+        if (REGION_TOKENS.has(plateText)) throw new Error('That looks like a state, not a plate — enter the plate characters only.');
+        if (backPlateText && REGION_TOKENS.has(backPlateText)) throw new Error('The back plate looks like a state name, not a plate — enter the plate characters only, or leave it blank.');
+        if (backPlateText && backPlateText.length < 4) throw new Error('Back plate must be at least 4 characters, or leave it blank.');
         if (backPlateText && backPlateText === plateText) throw new Error('Back plate must differ from the front plate, or leave it blank.');
         const phone = document.getElementById('phone').value.trim();
 
