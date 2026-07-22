@@ -9352,19 +9352,24 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   // Backend-side filters: date range + status. Changes require an Apply because
   // they refetch from the server. Search text is separate state below and is
   // pure client-side (live filter on already-fetched rows).
+  // LOCAL calendar date, not toISOString().slice(0,10) — that's the UTC date,
+  // which after ~8pm Eastern is already tomorrow. The UTC version shifted
+  // date_from a day forward every evening, trimming the earliest local day
+  // off the 4-day ops window right when the night shift was using it.
+  const localDay = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const [filters, setFilters] = useState(() => {
     const today = new Date();
     // History mode = the permanent record: NO lower bound (empty date_from →
     // backend returns all-time), so nothing is ever dropped/forgotten.
     if (isHistory) {
-      return { date_from: '', date_to: today.toISOString().slice(0, 10), status: '' };
+      return { date_from: '', date_to: localDay(today), status: '' };
     }
     // Default ops view: last 4 days. Older passes are historical and clutter
     // the working queue (and live in the History tab). Adjustable via date_from.
     const fourDaysAgo = new Date(today.getTime() - 4 * 24 * 60 * 60 * 1000);
     return {
-      date_from: fourDaysAgo.toISOString().slice(0, 10),
-      date_to: today.toISOString().slice(0, 10),
+      date_from: localDay(fourDaysAgo),
+      date_to: localDay(today),
       status: '',
     };
   });
@@ -9679,8 +9684,8 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     const ninetyDaysAgo = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
     const next = {
       ...filters,
-      date_from: ninetyDaysAgo.toISOString().slice(0, 10),
-      date_to: today.toISOString().slice(0, 10),
+      date_from: localDay(ninetyDaysAgo),
+      date_to: localDay(today),
     };
     setWidening(true);
     setFilters(next);
@@ -10387,12 +10392,18 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
           and filter client-side as the operator types, so server-side
           pages no longer apply. If a property genuinely sees >500 passes
           in a 7-day window we'll surface a warning and re-introduce paging. */}
-      {/* Only meaningful in History (the full record). In bucket/Parking-Log
-          mode the list is the four roster-driven buckets, so a windowed
-          "showing 500 of 540" count would contradict the header + cards. */}
-      {!loading && isHistory && total > rows.length && (
+      {/* Shown in BOTH modes. This was previously gated to History only, on
+          the theory that a "showing 500 of 540" line would contradict the
+          bucket cards — but the resolution chosen was to hide the discrepancy,
+          which meant On Cooldown / Expiring counts silently undercounted past
+          500 rows with no visible signal. An honest warning beats a quietly
+          wrong bucket count on a surface that drives tow decisions. The
+          roster union still guarantees currently-registered trucks appear. */}
+      {!loading && total > rows.length && (
         <div style={{fontSize:11,color:'#facc15',padding:'8px 12px',background:'rgba(250,204,21,.08)',border:'1px solid rgba(250,204,21,.3)',borderRadius:8}}>
-          Showing {rows.length.toLocaleString()} of {total.toLocaleString()} passes. Search by plate, name, or company to find any specific registration.
+          {isHistory
+            ? <>Showing {rows.length.toLocaleString()} of {total.toLocaleString()} passes. Search by plate, name, or company to find any specific registration.</>
+            : <>This window holds more passes than the {rows.length.toLocaleString()} loaded — bucket counts may run low. Currently-registered trucks always appear; use History for the complete record.</>}
         </div>
       )}
 
@@ -10916,7 +10927,6 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   const [newCam, setNewCam] = useState({ name: '', location_description: '' });
   const [newApiKey, setNewApiKey] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [visitorPasses, setVisitorPasses] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState(null);
   const [passTotalCount, setPassTotalCount] = useState(0);
@@ -10966,12 +10976,11 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
     setLoading(true);
-    const [prop, pl, cam, ev, vp, pCount, os, ah] = await Promise.all([
+    const [prop, pl, cam, ev, pCount, os, ah] = await Promise.all([
       db.getProperty(propertyId),
       db.getResidentPlates(propertyId),
       db.getALPRCameras(propertyId),
       db.getRecentPlateEvents(propertyId, 50),
-      db.getVisitorPasses(propertyId, { limit: 50 }),
       db.countVisitorPasses(propertyId),
       db.getOpenSessions(propertyId),
       db.getActiveHolds(propertyId),
@@ -10980,7 +10989,6 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
     setPlates(pl);
     setCameras(cam);
     setEvents(ev);
-    setVisitorPasses(vp);
     setPassTotalCount(pCount);
     setOpenSessions(os);
     setActiveHolds(ah);
@@ -11116,14 +11124,14 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
     return () => document.removeEventListener('visibilitychange', onVis);
   }, [refreshPlates]);
 
-  // ── Visitor passes (new /visit submissions land here) ──
+  // ── Pass count (new /visit submissions bump it) ──
+  // This used to also fetch a 50-row visitorPasses list into state that
+  // NOTHING rendered (the consumer was ActivePassTracker, deleted when the
+  // roster became the single source of truth). The dead fetch ran every 20s
+  // plus on every realtime event. Only the count is still consumed.
   const refreshVisitorPasses = useCallback(async () => {
     if (!propertyId) return;
-    const [vp, count] = await Promise.all([
-      db.getVisitorPasses(propertyId, { limit: 50 }),
-      db.countVisitorPasses(propertyId),
-    ]);
-    setVisitorPasses(vp);
+    const count = await db.countVisitorPasses(propertyId);
     setPassTotalCount(count);
   }, [propertyId]);
   useIntervalFetch(refreshVisitorPasses, 20000, [refreshVisitorPasses]);
@@ -12496,9 +12504,17 @@ function TowActivityPage({ user }) {
   const [loading, setLoading] = useState(true);
   const [hours, setHours] = useState(72);
   const [lightbox, setLightbox] = useState(null);
+  // Escape closes the evidence viewer — it was mouse-dismiss only, which made
+  // it a keyboard trap for anyone reviewing evidence without a pointer.
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e) => { if (e.key === 'Escape') setLightbox(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightbox]);
 
   const load = useCallback(async () => {
-    if (!supabase) return;
+    if (!supabase || !user?.id) return;
     try {
       const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
       // Scope to THIS owner's tow partners only — never read the full
@@ -12506,6 +12522,18 @@ function TowActivityPage({ user }) {
       const partners = await db.getPartnersForOwner(user.id);
       const allPlates = (partners || []).flatMap(p => p.tow_truck_plates || []).filter(Boolean);
       setPlates(allPlates);
+
+      // Property scoping for the event queries below. For an owner session RLS
+      // already scopes plate_events — but a PLATFORM ADMIN's JWT sees every
+      // tenant, and the `match_status.eq.partner_truck` fallback had no
+      // property filter at all, so an admin opening this tab pulled other
+      // tenants' tow sightings. Explicit .in('property_id', …) makes the
+      // scope structural instead of an accident of who's logged in.
+      const props = await db.getProperties(user.id, user._role);
+      const propIds = (props || [])
+        .filter(p => !p.owner_id || p.owner_id === user.id)
+        .map(p => p.id);
+      if (propIds.length === 0) { setEvents([]); setLoading(false); return; }
 
       // Candidate fetch. This deliberately does NOT try to express the fuzzy
       // match in PostgREST: `normalized_plate.eq.X` is exact, and an earlier
@@ -12531,12 +12559,14 @@ function TowActivityPage({ user }) {
       const SELECT_COLS = 'id, created_at, normalized_plate, plate_text, confidence, image_url, match_status, camera_id, raw_data, property_id';
       const [exactRes, windowRes] = await Promise.all([
         supabase.from('plate_events').select(SELECT_COLS)
+          .in('property_id', propIds)
           .gte('created_at', since).or(orFilter)
           .order('created_at', { ascending: false }).limit(1000),
         // Unfiltered window, only when there are canonical plates to compare
         // against. Bounded by the same 1000-row cap.
         allPlates.length
           ? supabase.from('plate_events').select(SELECT_COLS)
+              .in('property_id', propIds)
               .gte('created_at', since)
               .order('created_at', { ascending: false }).limit(1000)
           : Promise.resolve({ data: [] }),
@@ -12595,7 +12625,7 @@ function TowActivityPage({ user }) {
       console.warn('TowActivityPage.load failed', err.message);
     }
     setLoading(false);
-  }, [hours]);
+  }, [hours, user?.id, user?._role]);
   useEffect(() => { setLoading(true); load(); }, [load]);
   useEffect(() => {
     const t = setInterval(load, 60_000);
@@ -12724,7 +12754,7 @@ function TowActivityPage({ user }) {
         })}
       </div>
       {lightbox && (
-        <div onClick={() => setLightbox(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:20,cursor:'zoom-out'}}>
+        <div role="dialog" aria-modal="true" aria-label="Evidence photo viewer — press Escape to close" onClick={() => setLightbox(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:20,cursor:'zoom-out'}}>
           <div style={{maxWidth:'90vw',maxHeight:'90vh'}} onClick={e => e.stopPropagation()}>
             <img src={lightbox.url} alt={lightbox.plate} style={{maxWidth:'90vw',maxHeight:'80vh',display:'block',borderRadius:8}} />
             <div style={{color:'#fff',marginTop:12,fontSize:14,textAlign:'center'}}>
@@ -12758,6 +12788,13 @@ function TrainingPage({ user, isOwner }) {
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(null);
   const [lightbox, setLightbox] = useState(null); // { url, plate, camera, ts }
+  // Escape closes the evidence viewer (was mouse-dismiss only — keyboard trap).
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e) => { if (e.key === 'Escape') setLightbox(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightbox]);
 
   const load = useCallback(async () => {
     if (!supabase) return;
@@ -12844,7 +12881,13 @@ function TrainingPage({ user, isOwner }) {
     const camName = cameras[camId] || (camId ? camId.slice(0, 6) : '—');
     return (
       <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Reviewing these photos IS the Training task — they must be
+            keyboard-operable, not click-only. Same pattern as EarningsPage. */}
         <div
+          role={ev?.image_url ? 'button' : undefined}
+          tabIndex={ev?.image_url ? 0 : undefined}
+          aria-label={ev?.image_url ? `View evidence photo for plate ${plate} from ${camName}` : undefined}
+          onKeyDown={(e) => { if (ev?.image_url && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setLightbox({ url: ev.image_url, plate, camera: camName, ts: ev.created_at }); } }}
           style={{
             aspectRatio: '16/9',
             background: '#0a0a0a',
@@ -12986,6 +13029,7 @@ function TrainingPage({ user, isOwner }) {
 
       {lightbox && (
         <div
+          role="dialog" aria-modal="true" aria-label="Evidence photo viewer — press Escape to close"
           onClick={() => setLightbox(null)}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,.85)', zIndex: 1000,
@@ -13328,14 +13372,23 @@ function PlateLookupPage({ user }) {
     return () => { alive = false; };
   }, [user.id, user._role]);
 
+  // Monotonic token: this lookup renders a tow-eligibility verdict, so a slow
+  // response from a PREVIOUS plate must never overwrite the current one.
+  // (Holding Enter, or typing plate → Enter → correcting → Enter, put two
+  // requests in flight and whichever RETURNED last won.) Same reqRef pattern
+  // as useActiveRoster.
+  const lookupReqRef = React.useRef(0);
   async function run() {
     const pl = plate.trim();
+    if (busy) return; // Enter key had no busy guard — the button did
     if (!propertyId || !pl) { setError('Pick a property and enter a plate.'); return; }
+    const req = ++lookupReqRef.current;
     setBusy(true); setError(''); setResult(null);
     try {
       const out = await apiFetch(`/apartment/passes/lookup?property_id=${encodeURIComponent(propertyId)}&plate=${encodeURIComponent(pl)}`);
-      setResult(out);
-    } catch (err) { if (err.status !== 401) setError(err.message || 'Lookup failed.'); } finally { setBusy(false); }
+      if (req === lookupReqRef.current) setResult(out);
+    } catch (err) { if (req === lookupReqRef.current && err.status !== 401) setError(err.message || 'Lookup failed.'); }
+    finally { if (req === lookupReqRef.current) setBusy(false); }
   }
 
   const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', margin: '16px 0 6px' };
@@ -13667,11 +13720,18 @@ function App() {
   }, [owner, loadData, autoRefresh, refreshInterval]);
 
   // Fast snapshot poll (every 10s) — refreshes latest_snapshot for cameras with active violations
-  // so departure banners on cards update without waiting for the full 30s loadData cycle
+  // so departure banners on cards update without waiting for the full 30s loadData cycle.
+  // `violations` is read through a ref, NOT the dependency array: it's a new array
+  // on every load, so depending on it tore the interval down and re-ran an
+  // immediate all-camera poll on every refresh/realtime event — a request
+  // amplifier stacked on top of the 30s loadData cycle. The ref keeps one
+  // stable 10s cadence while activeCamIds() always sees current violations.
+  const violationsRef = React.useRef(violations);
+  violationsRef.current = violations;
   useEffect(() => {
     if (!supabase || !owner) return;
     const activeCamIds = () => {
-      const pending = violations.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status));
+      const pending = violationsRef.current.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status));
       return [...new Set(pending.map(v => v.camera_id).filter(Boolean))];
     };
     const pollSnapshots = async () => {
@@ -13727,7 +13787,7 @@ function App() {
     pollSnapshots(); // run immediately on mount, don't wait 10s
     const iv = setInterval(pollSnapshots, 10000);
     return () => clearInterval(iv);
-  }, [owner, violations]);
+  }, [owner]);
 
   // Subscribe to realtime violation changes
   useEffect(() => {
