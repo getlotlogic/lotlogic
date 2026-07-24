@@ -9210,8 +9210,13 @@ function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
   const containerRef = useRef(null);
   const [viewer, setViewer] = useState(null); // startIndex when open
   const entry = cache[pass.id];
+  // A FAILED fetch is retryable after 15s; a successful empty result is
+  // permanent. Without this split, one transient Supabase 503 stamped
+  // {empty} into the cache for every strip on screen and ALL pass photos
+  // vanished until a full reload happened to land in a healthy window.
+  const retryable = entry?.failedAt && (Date.now() - entry.failedAt > 15000);
   useEffect(() => {
-    if (entry) return; // loaded, loading, or known-empty
+    if (entry && !retryable) return; // loaded, loading, or known-empty
     const el = containerRef.current;
     if (!el || !pass.id) return;
     const obs = new IntersectionObserver((entries) => {
@@ -9235,7 +9240,7 @@ function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
           }
           setCache(c => ({ ...c, [pass.id]: photos.length ? { photos } : { empty: true } }));
         } catch {
-          setCache(c => ({ ...c, [pass.id]: { empty: true } }));
+          setCache(c => ({ ...c, [pass.id]: { empty: true, failedAt: Date.now() } }));
         }
       })();
     }, { rootMargin: '200px' });
