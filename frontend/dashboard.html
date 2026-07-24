@@ -9285,8 +9285,14 @@ function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
           })}
         </div>
       )}
-      {viewer !== null && (
-        <PassPhotoViewer photos={photos} startIndex={viewer} plate={pass.plate_text} exitEventId={pass.exited_via_plate_event_id} onClose={() => setViewer(null)} />
+      {/* PORTAL, not inline: this strip sits inside overflow:hidden with an
+          animated (transformed) ancestor, which turns position:fixed into
+          position:fixed-relative-to-the-card — the viewer rendered as a dark
+          smear squeezed into the card column. document.body escapes all of it.
+          Same pattern as the existing ReactDOM.createPortal overlay. */}
+      {viewer !== null && ReactDOM.createPortal(
+        <PassPhotoViewer photos={photos} startIndex={viewer} plate={pass.plate_text} exitEventId={pass.exited_via_plate_event_id} onClose={() => setViewer(null)} />,
+        document.body
       )}
     </div>
   );
