@@ -3543,6 +3543,20 @@ const db = {
     if (error || !data || data.length === 0) return null;
     return data[0];
   },
+  // Every camera frame linked to a pass (entry, exit, retro-linked — all of
+  // them), oldest first. Feeds the PassPhotoStrip; one query per card, lazy.
+  async getPassPhotos(passId) {
+    if (!supabase || !passId) return [];
+    const { data, error } = await supabase
+      .from('plate_events')
+      .select('id, image_url, created_at, alpr_cameras:camera_id(name)')
+      .eq('visitor_pass_id', passId)
+      .not('image_url', 'is', null)
+      .order('created_at', { ascending: true })
+      .limit(10);
+    if (error) throw error;
+    return (data || []).map(e => ({ id: e.id, url: e.image_url, at: e.created_at, camera: e.alpr_cameras?.name || null }));
+  },
   // The exact camera frame that closed a pass (the exit/departure proof),
   // fetched by the pass's exited_via_plate_event_id. Returns image + camera + time.
   async getExitFrame(plateEventId) {
@@ -7020,80 +7034,6 @@ function SnapsLightbox({ snaps, startIndex, plate, onClose }) {
 // "Seen on camera before registering" evidence block. Shows the snapshot
 // inline (objectFit:contain so nothing is cropped) and opens a fullscreen
 // overlay on click for the full uncropped frame. Esc / outside-click closes.
-function FirstSeenEvidence({ plate, imageUrl, firstSeenAt, registeredAt, compact }) {
-  const [open, setOpen] = useState(false);
-  // Entry vs exit is just timing: a read within the arrival grace of
-  // registration is the truck coming IN (entry photo); a later read is it
-  // leaving (exit photo). Grace mirrors the backend EXIT_MIN_DWELL_MINUTES.
-  const GRACE_MIN = 30;
-  const readVsRegMin = firstSeenAt && registeredAt
-    ? (new Date(firstSeenAt).getTime() - new Date(registeredAt).getTime()) / 60000
-    : 0;
-  const isEntry = readVsRegMin <= GRACE_MIN;
-  const kindLabel = isEntry ? '📷 Entry photo' : '🚪 Exit photo';
-  const kindNoun = isEntry ? 'entry photo' : 'exit photo';
-  const whenLabel = firstSeenAt
-    ? new Date(firstSeenAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-    : '';
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
-  return (
-    <div style={{
-      border: '1px solid var(--border)',
-      background: 'transparent',
-      borderRadius: 10, padding: compact ? 8 : 10,
-      display: 'flex', flexDirection: 'column', gap: compact ? 6 : 8,
-    }}>
-      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-        <span style={{fontSize: compact ? 10 : 11,fontWeight:800,padding:'3px 8px',borderRadius:12,background:'var(--bg-inset)',color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'.06em'}}>
-          {kindLabel}
-        </span>
-        <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:600}}>
-          {whenLabel}
-        </span>
-      </div>
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-        aria-label={`Enlarge ${kindNoun} for ${plate || 'unknown plate'}`}
-        title="Click to see full image"
-        style={{display:'block',width:'100%',padding:0,border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',background:'#000',cursor:'zoom-in'}}
-      >
-        <img
-          src={imageUrl}
-          alt={`${plate || ''} ${kindNoun}`}
-          loading="lazy"
-          style={{display:'block',width:'100%',height: compact ? 140 : 180,objectFit:'contain',background:'#000'}}
-        />
-      </button>
-      {open && (
-        <div
-          onClick={() => setOpen(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-label={kindNoun}
-          style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:1200,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
-        >
-          <div onClick={(e) => e.stopPropagation()} style={{maxWidth:'min(1200px, 98vw)',maxHeight:'94vh',display:'flex',flexDirection:'column',gap:8,alignItems:'center'}}>
-            <img src={imageUrl} alt={plate || 'snapshot'} style={{maxWidth:'100%',maxHeight:'82vh',objectFit:'contain',borderRadius:6,border:'1px solid rgba(255,255,255,.12)',background:'#000'}} />
-            <div style={{display:'flex',justifyContent:'space-between',gap:12,width:'100%',color:'#e5e7eb',fontSize:13,fontWeight:600}}>
-              <span>{plate || 'snapshot'} · {whenLabel}</span>
-              <div style={{display:'flex',gap:8}}>
-                <a href={imageUrl} download target="_blank" rel="noopener noreferrer"
-                   style={{color:'#fbbf24',textDecoration:'none',fontWeight:700,padding:'4px 10px',borderRadius:6,border:'1px solid rgba(251,191,36,.5)'}}>Open in new tab</a>
-                <button onClick={() => setOpen(false)} style={{background:'rgba(255,255,255,.12)',color:'#fff',border:'1px solid rgba(255,255,255,.25)',borderRadius:6,padding:'4px 12px',fontWeight:700,cursor:'pointer'}}>Close</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // Full-screen image viewer. Reuses the focus-trap + ESC handling from PR #75
 // via the shared useFocusTrap hook so keyboard users can dismiss the overlay
@@ -9196,133 +9136,162 @@ function fmtHrsShort(h) {
 // is a new function object every parent render, which makes React unmount/remount
 // every instance and re-create its IntersectionObserver on each setCache call.
 // Cache + setter come in as props so the parent still owns the state.
-function VehicleImage({ rowId, plateText, backPlate, propertyId, cache, setCache, fromTs, untilTs }) {
-  const containerRef = useRef(null);
-  const entry = cache[rowId];
+// ── Pass photos: ONE presentation for every camera frame on a pass ─────────
+// Replaces the old three-way split (FirstSeenEvidence / VehicleImage /
+// ExitImage) — three widgets, three styles, one of them not expandable at
+// all. Per the standing design rule, every camera frame is just "the
+// vehicle's photo": the strip renders however many the pass has in one
+// uniform grid, and everything opens in one full-screen viewer with swipe
+// (phone), arrow keys (desktop), counter and caption.
+function PassPhotoViewer({ photos, startIndex, plate, exitEventId, onClose }) {
+  const [i, setI] = useState(startIndex || 0);
+  const touchX = useRef(null);
+  const n = photos.length;
+  const cur = photos[i] || photos[0];
   useEffect(() => {
-    if (entry) return; // already loaded, loading, or known-empty
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight') setI(v => Math.min(n - 1, v + 1));
+      else if (e.key === 'ArrowLeft') setI(v => Math.max(0, v - 1));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [n, onClose]);
+  if (!cur) return null;
+  const cap = (p) => `${p.camera || 'camera'} · ${p.at ? new Date(p.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}${p.id === exitEventId ? ' · exit read' : ''}`;
+  return (
+    <div
+      role="dialog" aria-modal="true" aria-label={`Photos for ${plate || 'parking pass'} — swipe or use arrow keys, Escape closes`}
+      onClick={onClose}
+      onTouchStart={(e) => { touchX.current = e.touches[0].clientX; }}
+      onTouchEnd={(e) => {
+        if (touchX.current == null) return;
+        const dx = e.changedTouches[0].clientX - touchX.current;
+        touchX.current = null;
+        if (dx < -40) setI(v => Math.min(n - 1, v + 1));
+        else if (dx > 40) setI(v => Math.max(0, v - 1));
+      }}
+      style={{position:'fixed',inset:0,background:'rgba(0,0,0,.92)',zIndex:1000,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'16px 8px'}}
+    >
+      <button
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        aria-label="Close photo viewer"
+        style={{position:'absolute',top:'max(10px, env(safe-area-inset-top))',right:12,width:44,height:44,borderRadius:22,border:'1px solid rgba(255,255,255,.3)',background:'rgba(0,0,0,.5)',color:'#fff',fontSize:20,cursor:'pointer',zIndex:2}}
+      >✕</button>
+      <div onClick={(e) => e.stopPropagation()} style={{maxWidth:'96vw',display:'flex',flexDirection:'column',alignItems:'center',gap:10}}>
+        <img src={cur.url} alt={cap(cur)} style={{maxWidth:'96vw',maxHeight:'76vh',objectFit:'contain',borderRadius:8,background:'#000'}} />
+        <div style={{color:'#fff',fontSize:14,textAlign:'center',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',justifyContent:'center'}}>
+          <span style={{fontFamily:'ui-monospace, monospace',fontWeight:800,letterSpacing:1}}>{plate || ''}</span>
+          <span style={{opacity:.85}}>{cap(cur)}</span>
+          {n > 1 && <span style={{opacity:.7,fontVariantNumeric:'tabular-nums'}}>{i + 1} / {n}</span>}
+        </div>
+        {n > 1 && (
+          <div style={{display:'flex',alignItems:'center',gap:14}}>
+            <button onClick={() => setI(v => Math.max(0, v - 1))} disabled={i === 0} aria-label="Previous photo"
+              style={{width:44,height:44,borderRadius:22,border:'1px solid rgba(255,255,255,.3)',background:'rgba(255,255,255,.08)',color:'#fff',fontSize:18,cursor:i===0?'default':'pointer',opacity:i===0?.35:1}}>←</button>
+            <div style={{display:'flex',gap:6}} aria-hidden="true">
+              {photos.slice(0, 10).map((p, d) => (
+                <span key={p.id || d} style={{width:8,height:8,borderRadius:4,background:d===i?'#fff':'rgba(255,255,255,.35)'}} />
+              ))}
+            </div>
+            <button onClick={() => setI(v => Math.min(n - 1, v + 1))} disabled={i === n - 1} aria-label="Next photo"
+              style={{width:44,height:44,borderRadius:22,border:'1px solid rgba(255,255,255,.3)',background:'rgba(255,255,255,.08)',color:'#fff',fontSize:18,cursor:i===n-1?'default':'pointer',opacity:i===n-1?.35:1}}>→</button>
+          </div>
+        )}
+        {/* Preload neighbours so swiping never shows a blank frame */}
+        {photos[i + 1] && <img src={photos[i + 1].url} alt="" style={{display:'none'}} />}
+        {photos[i - 1] && <img src={photos[i - 1].url} alt="" style={{display:'none'}} />}
+      </div>
+    </div>
+  );
+}
+
+function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
+  const containerRef = useRef(null);
+  const [viewer, setViewer] = useState(null); // startIndex when open
+  const entry = cache[pass.id];
+  useEffect(() => {
+    if (entry) return; // loaded, loading, or known-empty
     const el = containerRef.current;
-    if (!el || !propertyId || !plateText) return;
+    if (!el || !pass.id) return;
     const obs = new IntersectionObserver((entries) => {
       if (!entries[0].isIntersecting) return;
       obs.disconnect();
-      setCache(c => ({ ...c, [rowId]: { loading: true } }));
-      db.getBestVehicleFrame(propertyId, plateText, backPlate, fromTs, untilTs).then(ev => {
-        if (ev?.image_url) {
-          setCache(c => ({
-            ...c,
-            [rowId]: {
-              url: ev.image_url,
-              capturedAt: ev.created_at,
-              cameraName: ev.camera_name || null,
-              make: ev.vehicle_make || null,
-              model: ev.vehicle_model || null,
-              color: ev.vehicle_color || null,
-              type: ev.vehicle_type || null,
-            },
-          }));
-        } else {
-          setCache(c => ({ ...c, [rowId]: { empty: true } }));
+      setCache(c => ({ ...c, [pass.id]: { loading: true } }));
+      (async () => {
+        try {
+          let photos = await db.getPassPhotos(pass.id);
+          // A pass can carry a photo pointer without a linked event row
+          // (older backfills) — keep it, deduped.
+          if (pass.first_seen_image_url && !photos.some(p => p.url === pass.first_seen_image_url)) {
+            photos.unshift({ id: pass.first_seen_event_id, url: pass.first_seen_image_url, at: pass.first_seen_at || null, camera: null });
+          }
+          // No linked photos at all → the old best-frame fuzzy fallback, so
+          // properties/passes that only ever had window-matched frames keep
+          // their picture.
+          if (photos.length === 0 && propertyId && pass.plate_text) {
+            const ev = await db.getBestVehicleFrame(propertyId, pass.plate_text, pass.back_plate, pass.valid_from, pass.valid_until);
+            if (ev?.image_url) photos = [{ id: ev.id || 'best', url: ev.image_url, at: ev.created_at, camera: ev.camera_name || null }];
+          }
+          setCache(c => ({ ...c, [pass.id]: photos.length ? { photos } : { empty: true } }));
+        } catch {
+          setCache(c => ({ ...c, [pass.id]: { empty: true } }));
         }
-      }).catch(() => {
-        setCache(c => ({ ...c, [rowId]: { empty: true } }));
-      });
+      })();
     }, { rootMargin: '200px' });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [rowId, plateText, backPlate, entry, propertyId, setCache, fromTs, untilTs]);
+  }, [pass.id, entry, propertyId, setCache]);
 
-  // Skip rendering entirely when known-empty so rows stay tight on properties
-  // without ALPR cameras.
   if (entry?.empty) return null;
-
+  const photos = entry?.photos || [];
+  const MAX_TILES = 4;
+  const shown = photos.length > MAX_TILES ? photos.slice(0, MAX_TILES) : photos;
+  const hidden = photos.length - shown.length;
+  const capText = (p) => `${p.camera || 'camera'}${p.at ? ' · ' + new Date(p.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}`;
   return (
     <div ref={containerRef} style={{
-      position:'relative',
-      // NEVER display:none while idle — a display:none element never reports as
-      // intersecting, which deadlocks the IntersectionObserver lazy-load (the
-      // fetch could never start). Idle = 1px + transparent (observable but
-      // invisible); 80px while loading; image height once loaded. Known-empty
-      // returns null above.
-      background: (entry?.url || entry?.loading) ? 'var(--bg-inset)' : 'transparent',
-      borderRadius:8,
-      overflow:'hidden',
-      minHeight: entry?.url ? 0 : (entry?.loading ? 80 : 1),
+      // Same observable-while-idle trick as before: display:none never
+      // intersects, so idle = 1px transparent.
+      minHeight: photos.length ? 0 : (entry?.loading ? 64 : 1),
+      background: entry?.loading ? 'var(--bg-inset)' : 'transparent',
+      borderRadius: 8, position: 'relative', overflow: 'hidden',
     }}>
       {entry?.loading && (
-        <div style={{
-          position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',
-          fontSize:11,color:'var(--text-faint)',letterSpacing:'.04em',textTransform:'uppercase',
-        }}>Loading camera frame…</div>
+        <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,color:'var(--text-faint)',letterSpacing:'.04em',textTransform:'uppercase'}}>Loading photos…</div>
       )}
-      {entry?.url && (
-        <>
-          <img
-            src={entry.url}
-            alt={`Vehicle ${plateText}`}
-            loading="lazy"
-            style={{display:'block',width:'100%',height:'auto',objectFit:'contain'}}
-          />
-          <div style={{
-            position:'absolute',bottom:0,left:0,right:0,
-            padding:'4px 8px',
-            background:'linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0))',
-            fontSize:10,color:'#fff',
-            display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,
-          }}>
-            <span style={{fontWeight:700,letterSpacing:'.03em'}}>📷 {entry.cameraName || 'camera'}</span>
-            <span style={{opacity:.85}}>{entry.capturedAt ? new Date(entry.capturedAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}</span>
-          </div>
-        </>
+      {photos.length > 0 && (
+        <div style={{display:'grid',gap:6,gridTemplateColumns: photos.length === 1 ? '1fr' : 'repeat(auto-fill, minmax(150px, 1fr))'}}>
+          {shown.map((p, idx) => {
+            const isLastWithMore = hidden > 0 && idx === shown.length - 1;
+            return (
+              <button
+                key={p.id || idx}
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setViewer(idx); }}
+                aria-label={`View photo ${idx + 1} of ${photos.length} for ${pass.plate_text || 'parking pass'} — ${capText(p)}`}
+                style={{position:'relative',display:'block',width:'100%',padding:0,border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',background:'#000',cursor:'zoom-in',aspectRatio:'16/9'}}
+              >
+                <img src={p.url} alt="" loading="lazy" style={{position:'absolute',inset:0,width:'100%',height:'100%',objectFit: photos.length === 1 ? 'contain' : 'cover'}} />
+                <span style={{position:'absolute',bottom:0,left:0,right:0,padding:'3px 7px',background:'linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0))',fontSize:10,color:'#fff',textAlign:'left',display:'flex',justifyContent:'space-between',gap:6}}>
+                  <span style={{fontWeight:700,letterSpacing:'.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📷 {capText(p)}</span>
+                  {p.id === pass.exited_via_plate_event_id && <span style={{fontWeight:700}}>exit</span>}
+                </span>
+                {isLastWithMore && (
+                  <span style={{position:'absolute',inset:0,background:'rgba(0,0,0,.55)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:18,fontWeight:800}}>+{hidden} more</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {viewer !== null && (
+        <PassPhotoViewer photos={photos} startIndex={viewer} plate={pass.plate_text} exitEventId={pass.exited_via_plate_event_id} onClose={() => setViewer(null)} />
       )}
     </div>
   );
 }
 
-// ExitImage — the exact camera frame that closed a pass (departure proof),
-// keyed by exited_via_plate_event_id. Lazy-loaded on intersection like
-// VehicleImage; self-contained local state. Renders nothing if no frame exists.
-function ExitImage({ plateEventId, plate }) {
-  const containerRef = useRef(null);
-  const [st, setSt] = useState(null); // null | {loading} | {url,...} | {empty}
-  useEffect(() => {
-    if (st || !plateEventId) return;
-    const el = containerRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver((entries) => {
-      if (!entries[0].isIntersecting) return;
-      obs.disconnect();
-      setSt({ loading: true });
-      db.getExitFrame(plateEventId)
-        .then((ev) => setSt(ev?.image_url ? { url: ev.image_url, capturedAt: ev.created_at, cameraName: ev.camera_name } : { empty: true }))
-        .catch(() => setSt({ empty: true }));
-    }, { rootMargin: '200px' });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [plateEventId, st]);
-  if (st?.empty) return null;
-  return (
-    <div ref={containerRef} style={{
-      position:'relative',
-      background: (st?.url || st?.loading) ? 'var(--bg-inset)' : 'transparent',
-      borderRadius:8, overflow:'hidden',
-      minHeight: st?.url ? 0 : (st?.loading ? 80 : 1),
-    }}>
-      {st?.loading && (
-        <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,color:'var(--text-faint)',letterSpacing:'.04em',textTransform:'uppercase'}}>Loading exit photo…</div>
-      )}
-      {st?.url && (
-        <>
-          <img src={st.url} alt={`Exit ${plate}`} loading="lazy" style={{display:'block',width:'100%',height:'auto',objectFit:'contain'}} />
-          <div style={{position:'absolute',bottom:0,left:0,right:0,padding:'4px 8px',background:'linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0))',fontSize:10,color:'#fff',display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8}}>
-            <span style={{fontWeight:700,letterSpacing:'.03em'}}>🚪 Exit · {st.cameraName || 'camera'}</span>
-            <span style={{opacity:.85}}>{st.capturedAt ? new Date(st.capturedAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}</span>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
   // mode='history' → the permanent, all-time record (no date lower bound): every
@@ -9430,9 +9399,9 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     return (s || '').replace(/\D/g, '');
   }
 
-  // VehicleImage is defined at module scope (search `function VehicleImage`)
-  // so it keeps a stable component identity across this component's frequent
-  // re-renders. It takes the cache + setter as props.
+  // PassPhotoStrip is defined at module scope so it keeps a stable component
+  // identity across this component's frequent re-renders; it takes the photo
+  // cache + setter as props.
   // Returns the list of field names this row matched on, or [] if no match.
   // An empty/whitespace-only query is treated as "no filter" by the caller,
   // so we don't bother here.
@@ -10274,33 +10243,13 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                   </div>
                 )}
 
-                {/* Entry photo — the camera frame of the vehicle on the lot
-                    (first_seen_event_id). One plain presentation for every pass;
-                    click the image to see the full uncropped frame. */}
-                {r.first_seen_image_url && (
-                  <FirstSeenEvidence
-                    plate={r.plate_text}
-                    imageUrl={r.first_seen_image_url}
-                    firstSeenAt={r.first_seen_at}
-                    registeredAt={r.created_at}
-                  />
-                )}
-
-                {/* Vehicle / entry photo (best camera frame in the visit window),
-                    lazy-loaded on intersection. Shown on EVERY row that doesn't
-                    already have a dedicated pre-registration (entry) frame above
-                    — so every truck we saw carries a picture, not just the
-                    expired ones. Renders nothing if the camera never caught it. */}
-                {!r.first_seen_image_url && (
-                  <VehicleImage rowId={r.id} plateText={r.plate_text} backPlate={r.back_plate} propertyId={propertyId} cache={vehicleImageCache} setCache={setVehicleImageCache} fromTs={r.valid_from} untilTs={r.valid_until} />
-                )}
-
-                {/* Exit / departure proof — the exact frame that closed this
-                    pass (the camera read at exited_via_plate_event_id). Always
-                    attached when we have it; renders nothing otherwise. */}
-                {r.exited_via_plate_event_id && (
-                  <ExitImage plateEventId={r.exited_via_plate_event_id} plate={r.plate_text} />
-                )}
+                {/* ALL of this pass's camera photos — entry, exit, retro-linked
+                    — in one uniform strip. One photo renders full-width; more
+                    render as equal tiles (2-up on phones); >4 collapses into a
+                    "+N more" tile. Tap anything for the full-screen viewer
+                    (swipe / arrow keys / Escape). Replaces the old three-widget
+                    split, one of which wasn't expandable at all. */}
+                <PassPhotoStrip pass={r} propertyId={propertyId} cache={vehicleImageCache} setCache={setVehicleImageCache} />
 
                 {/* Time range */}
                 <div style={{display:'grid',gridTemplateColumns: r.exited_at ? '1fr auto 1fr auto 1fr' : '1fr auto 1fr',alignItems:'center',gap:10,padding:'10px 12px',background:'var(--bg-inset)',borderRadius:8,fontSize:11}}>
