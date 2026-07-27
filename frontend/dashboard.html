@@ -3458,6 +3458,15 @@ const db = {
       body: JSON.stringify(reason ? { reason } : {}),
     });
   },
+  // Records that a tow happened (action_taken='tow') — allowed for owners AND
+  // tow partners. NOT force-bill: that stays an owner-only billing override.
+  async markViolationTowed(id, reason) {
+    return apiFetch(`/violations/${id}/mark-towed`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
   async markViolationNoTow(id, reason) {
     return apiFetch(`/violations/${id}/mark-no-tow`, {
       method: 'POST',
@@ -9248,46 +9257,48 @@ function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
     return () => obs.disconnect();
   }, [pass.id, entry, propertyId, setCache]);
 
-  if (entry?.empty) return null;
+  if (entry?.empty && !entry?.failedAt) return null;
   const photos = entry?.photos || [];
-  const MAX_TILES = 4;
-  const shown = photos.length > MAX_TILES ? photos.slice(0, MAX_TILES) : photos;
-  const hidden = photos.length - shown.length;
+  // FIXED-HEIGHT strip — this is the layout-shift fix. The old variable-height
+  // grid popped in after lazy-load and shoved the No tow / Mark towed buttons
+  // 100-300px mid-reach; operators reported taps landing on the wrong thing.
+  // Now: if the pass is KNOWN to have a photo at first paint
+  // (first_seen_image_url), the row's space is reserved synchronously, so
+  // loading in the photos changes NOTHING about the card's geometry. All
+  // photos render in one horizontally-scrollable row at the same height.
+  const STRIP_H = 140;
+  const reserve = photos.length > 0 || !!pass.first_seen_image_url || !!entry?.loading;
   const capText = (p) => `${p.camera || 'camera'}${p.at ? ' · ' + new Date(p.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}`;
   return (
     <div ref={containerRef} style={{
-      // Same observable-while-idle trick as before: display:none never
-      // intersects, so idle = 1px transparent.
-      minHeight: photos.length ? 0 : (entry?.loading ? 64 : 1),
-      background: entry?.loading ? 'var(--bg-inset)' : 'transparent',
+      // Observable-while-idle: display:none never intersects, so idle = 1px.
+      height: reserve ? STRIP_H : 1,
+      background: reserve && !photos.length ? 'var(--bg-inset)' : 'transparent',
       borderRadius: 8, position: 'relative', overflow: 'hidden',
     }}>
-      {entry?.loading && (
+      {reserve && !photos.length && (
         <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,color:'var(--text-faint)',letterSpacing:'.04em',textTransform:'uppercase'}}>Loading photos…</div>
       )}
       {photos.length > 0 && (
-        <div style={{display:'grid',gap:6,gridTemplateColumns: photos.length === 1 ? '1fr' : 'repeat(auto-fill, minmax(150px, 1fr))'}}>
-          {shown.map((p, idx) => {
-            const isLastWithMore = hidden > 0 && idx === shown.length - 1;
-            return (
-              <button
-                key={p.id || idx}
-                type="button"
-                onClick={(e) => { e.stopPropagation(); setViewer(idx); }}
-                aria-label={`View photo ${idx + 1} of ${photos.length} for ${pass.plate_text || 'parking pass'} — ${capText(p)}`}
-                style={{position:'relative',display:'block',width:'100%',padding:0,border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',background:'#000',cursor:'zoom-in',aspectRatio:'16/9'}}
-              >
-                <img src={p.url} alt="" loading="lazy" style={{position:'absolute',inset:0,width:'100%',height:'100%',objectFit: photos.length === 1 ? 'contain' : 'cover'}} />
-                <span style={{position:'absolute',bottom:0,left:0,right:0,padding:'3px 7px',background:'linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0))',fontSize:10,color:'#fff',textAlign:'left',display:'flex',justifyContent:'space-between',gap:6}}>
-                  <span style={{fontWeight:700,letterSpacing:'.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📷 {capText(p)}</span>
-                  {p.id === pass.exited_via_plate_event_id && <span style={{fontWeight:700}}>exit</span>}
-                </span>
-                {isLastWithMore && (
-                  <span style={{position:'absolute',inset:0,background:'rgba(0,0,0,.55)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:18,fontWeight:800}}>+{hidden} more</span>
-                )}
-              </button>
-            );
-          })}
+        <div style={{display:'flex',gap:6,height:'100%',overflowX:'auto',WebkitOverflowScrolling:'touch',scrollSnapType:'x proximity'}}>
+          {photos.map((p, idx) => (
+            <button
+              key={p.id || idx}
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setViewer(idx); }}
+              aria-label={`View photo ${idx + 1} of ${photos.length} for ${pass.plate_text || 'parking pass'} — ${capText(p)}`}
+              style={{position:'relative',display:'block',flex:'0 0 auto',height:'100%',aspectRatio:'16/9',padding:0,border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',background:'#000',cursor:'zoom-in',scrollSnapAlign:'start'}}
+            >
+              <img src={p.url} alt="" loading="lazy" style={{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover'}} />
+              <span style={{position:'absolute',bottom:0,left:0,right:0,padding:'3px 7px',background:'linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0))',fontSize:10,color:'#fff',textAlign:'left',display:'flex',justifyContent:'space-between',gap:6}}>
+                <span style={{fontWeight:700,letterSpacing:'.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📷 {capText(p)}</span>
+                {p.id === pass.exited_via_plate_event_id && <span style={{fontWeight:700}}>exit</span>}
+              </span>
+            </button>
+          ))}
+          {photos.length > 1 && (
+            <span aria-hidden="true" style={{position:'sticky',right:0,alignSelf:'flex-start',marginLeft:-34,padding:'2px 7px',background:'rgba(0,0,0,.6)',color:'#fff',fontSize:10,fontWeight:800,borderRadius:8}}>{photos.length}📷</span>
+          )}
         </div>
       )}
       {/* PORTAL, not inline: this strip sits inside overflow:hidden with an
@@ -9555,12 +9566,32 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
     try {
       const note = reason || `${label} from Parking Log`;
       if (payload.violation_id) {
-        if (kind === 'tow') {
-          await db.forceBillViolation(payload.violation_id, note);
-          addToast('Marked towed — billing released', 'success');
-        } else {
-          await db.markViolationNoTow(payload.violation_id, note);
-          addToast('Marked no-tow', 'success');
+        try {
+          if (kind === 'tow') {
+            // Partners RECORD the tow (feeds the confirmation/billing
+            // pipeline); owners release billing directly. The old code
+            // called force-bill for everyone — and force-bill 404s partner
+            // JWTs by design ("Violation not found"), so the tow partner's
+            // one critical tap failed every time a violation was open.
+            if (isOwner) {
+              await db.forceBillViolation(payload.violation_id, note);
+              addToast('Marked towed — billing released', 'success');
+            } else {
+              await db.markViolationTowed(payload.violation_id, note);
+              addToast('Marked towed', 'success');
+            }
+          } else {
+            await db.markViolationNoTow(payload.violation_id, note);
+            addToast('Marked no-tow', 'success');
+          }
+        } catch (e) {
+          // Stale violation id (closed between page load and the tap by a
+          // cron sweep or email action) — the tap must still succeed. Fall
+          // through to closing the pass with an audit note.
+          if (payload.pass_id && /not found/i.test(String(e.message || ''))) {
+            await db.cancelVisitorPass(payload.pass_id, `${label} (violation already closed): ${note}`);
+            addToast(`${label} (pass closed)`, 'success');
+          } else { throw e; }
         }
       } else {
         // No linked violation — close the pass with a clear audit note.
