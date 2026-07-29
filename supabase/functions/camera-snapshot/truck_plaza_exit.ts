@@ -139,6 +139,12 @@ type PassMatch = {
   // (and stamped it on the pass), we want to link the camera-detected
   // exit to that existing row instead of inserting a duplicate.
   overstay_violation_id: string | null;
+  // App-booked passes (NMLD app) are created BEFORE the truck arrives, so
+  // their valid_from is a policy start, not the registration moment. Their
+  // first camera read is the ARRIVAL and must not close the pass; the
+  // entry_seen_at stamp is what flips subsequent reads back to exits.
+  registration_source: string | null;
+  entry_seen_at: string | null;
 };
 
 // Active visitor_pass that hasn't been marked exited. Three-pass matcher
@@ -174,10 +180,12 @@ async function findActiveUnexitedPass(
     back_plate: string | null;
     normalized_back_plate: string | null;
     overstay_violation_id: string | null;
+    registration_source: string | null;
+    entry_seen_at: string | null;
   };
   const { data, error } = await db
     .from("visitor_passes")
-    .select("id,valid_until,valid_from,plate_text,back_plate,normalized_back_plate,overstay_violation_id")
+    .select("id,valid_until,valid_from,plate_text,back_plate,normalized_back_plate,overstay_violation_id,registration_source,entry_seen_at")
     .eq("property_id", propertyId)
     // active OR expired: pass_expiry.py may have soft-expired a pass before the
     // camera caught the exit. We must still match it to close it out. cancelled/
@@ -188,7 +196,15 @@ async function findActiveUnexitedPass(
     .limit(200);
   if (error) throw error;
   const rows = ((data ?? []) as Row[]).filter((r) => {
-    if (r.valid_from && new Date(r.valid_from) > now) return false;
+    if (r.valid_from && new Date(r.valid_from) > now) {
+      // Post-dated passes are unmatchable — EXCEPT app bookings within an
+      // hour of their start: trucks arrive early. The first early read hits
+      // the arrival gate (entry stamp + photo, no close); a close before the
+      // window can then only happen >30min after that stamped entry, i.e.
+      // the truck genuinely drove out again.
+      const earlyMs = new Date(r.valid_from).getTime() - now.getTime();
+      if (r.registration_source !== "app" || earlyMs > 60 * 60_000) return false;
+    }
     return true;
   });
   if (rows.length === 0) return null;
@@ -206,6 +222,8 @@ async function findActiveUnexitedPass(
     valid_from: r.valid_from ?? null,
     fuzzy,
     overstay_violation_id: r.overstay_violation_id ?? null,
+    registration_source: r.registration_source ?? null,
+    entry_seen_at: r.entry_seen_at ?? null,
   });
   // 1) Exact
   for (const r of rows) {
@@ -613,8 +631,15 @@ export async function handleTruckPlazaExit(args: {
 
   let tow: { partner_id: string } | null = null;
   let pass: PassMatch | null = null;
+  // Set when a read is an app-booked pass's ARRIVAL (no entry_seen_at yet):
+  // the pass gets entry_seen_at stamped after the plate_event insert instead
+  // of being closed as an exit.
+  let appArrivalPassId: string | null = null;
   let crossCameraUnification: { sourceCameraId: string; sourcePlate: string; deltaSec: number } | null = null;
   let verifiedPairMatch: { pairedPlate: string; pairId: string; verifiedBy: string | null } | null = null;
+  // Trusted match captured for photo-linking (see the fill-when-null stamp
+  // after the plate_event insert). Set below, after the fuzzy-confidence gate.
+  let entryPhotoPassId: string | null = null;
   if (resolved) {
     tow = await findTowTruckMatch(db, camera.property_id, resolved.normalized);
     if (!tow) {
@@ -683,12 +708,61 @@ export async function handleTruckPlazaExit(args: {
         pass = null;
       }
 
-      // MINIMUM-DWELL GUARD — applies to ALL match tiers. A read within
-      // EXIT_MIN_DWELL_MINUTES of the pass's registration is the truck ARRIVING
-      // (no entry/exit direction gate at Charlotte), not leaving — so it must
-      // not close the pass. This is the fix for passes being cancelled
-      // instantly after registration by their own arrival read.
-      if (pass && pass.valid_from) {
+      // Capture the trusted match for photo-linking BEFORE the dwell guard may
+      // null it. The dwell guard declines to CLOSE an arrival read, but that
+      // read is still a valid "first seen on lot" photo for the pass. Untrusted
+      // low-confidence fuzzy reads were already nulled just above, so only
+      // exact / cross-camera / verified-pair / >=0.65-fuzzy matches reach here.
+      entryPhotoPassId = pass?.id ?? null;
+
+      // APP-BOOKING ARRIVAL GATE — passes booked ahead in the NMLD app
+      // (registration_source='app') are created BEFORE the truck is on the
+      // lot, so valid_from is a policy start, not the registration moment,
+      // and the dwell guard below (anchored on valid_from) cannot protect
+      // them. Rule: while the pass has no entry_seen_at, a camera read IS
+      // the arrival — stamp it (below, after the plate_event insert) and do
+      // not close the pass. Once entry is stamped, reads inside
+      // EXIT_MIN_DWELL_MINUTES of it are still the same arrival transit
+      // (multi-frame gate cluster); anything later is the genuine exit.
+      if (pass && pass.registration_source === "app") {
+        if (!pass.entry_seen_at) {
+          // BOUNDED: only reads in the FIRST HALF of the pass window count as
+          // the arrival. Charlotte's capture gap means an arrival can go
+          // unread entirely — if the first matched read lands in the back
+          // half of the window, it is far more likely the truck's EXIT
+          // (arrival missed) than an extremely late arrival, and treating it
+          // as arrival would strand the pass open forever (no further reads
+          // ever come). Back-half reads fall through and close as exits —
+          // the plaza's default behavior.
+          const startMs = pass.valid_from ? new Date(pass.valid_from).getTime() : now.getTime();
+          const midMs = startMs + (new Date(pass.valid_until).getTime() - startMs) / 2;
+          if (now.getTime() <= midMs) {
+            console.log(
+              `truck_plaza_exit: read "${resolved.normalized}" → app pass ${pass.id} has no entry yet (first-half window) — ARRIVAL, stamping entry (no cancel)`,
+            );
+            appArrivalPassId = pass.id;
+            pass = null;
+          } else {
+            console.log(
+              `truck_plaza_exit: read "${resolved.normalized}" → app pass ${pass.id} no entry recorded but past window midpoint — treating as EXIT (arrival was likely missed)`,
+            );
+          }
+        } else {
+          const sinceEntryMin = (now.getTime() - new Date(pass.entry_seen_at).getTime()) / 60000;
+          if (sinceEntryMin < EXIT_MIN_DWELL_MINUTES) {
+            console.log(
+              `truck_plaza_exit: read "${resolved.normalized}" → app pass ${pass.id} only ${sinceEntryMin.toFixed(1)}min after entry (< ${EXIT_MIN_DWELL_MINUTES}min) — still the arrival transit (no cancel)`,
+            );
+            pass = null;
+          }
+        }
+      } else if (pass && pass.valid_from) {
+        // MINIMUM-DWELL GUARD — applies to ALL match tiers (QR-registered
+        // passes, where valid_from == registration time). A read within
+        // EXIT_MIN_DWELL_MINUTES of the pass's registration is the truck
+        // ARRIVING (no entry/exit direction gate at Charlotte), not leaving —
+        // so it must not close the pass. This is the fix for passes being
+        // cancelled instantly after registration by their own arrival read.
         const dwellMin = (now.getTime() - new Date(pass.valid_from).getTime()) / 60000;
         if (dwellMin < EXIT_MIN_DWELL_MINUTES) {
           console.log(
@@ -779,6 +853,41 @@ export async function handleTruckPlazaExit(args: {
   }).select("id").single();
   if (evIns.error) throw evIns.error;
   const plateEventId = evIns.data.id as string;
+
+  // Fill-when-null: stamp this read as the pass's "first seen on lot" photo
+  // (the dashboard thumbnail). Photo-only — never overwrites an existing photo,
+  // never touches pass state, enforcement, or the exit decision. This is the
+  // ONLY place the truck-plaza path links visitor_passes.first_seen_event_id,
+  // and it deliberately runs for arrival reads (dwell-declined) as well as
+  // exits, so a registered truck the camera reads gets a dashboard photo even
+  // if it never produces a clean exit read.
+  if (entryPhotoPassId) {
+    const photoUpd = await db.from("visitor_passes")
+      .update({ first_seen_event_id: plateEventId })
+      .eq("id", entryPhotoPassId)
+      .is("first_seen_event_id", null);
+    if (photoUpd.error) {
+      console.warn(
+        `truck_plaza_exit: first_seen photo stamp failed for pass ${entryPhotoPassId}: ${photoUpd.error.message}`,
+      );
+    }
+  }
+
+  // App-booking arrival stamp. Fill-when-null like the photo stamp: only the
+  // FIRST read ever sets entry_seen_at, so a lost race between two frames of
+  // the same transit can't move the entry time. Once set, later reads pass
+  // the arrival gate above and close the pass as a normal exit.
+  if (appArrivalPassId) {
+    const entryUpd = await db.from("visitor_passes")
+      .update({ entry_seen_at: now.toISOString() })
+      .eq("id", appArrivalPassId)
+      .is("entry_seen_at", null);
+    if (entryUpd.error) {
+      console.warn(
+        `truck_plaza_exit: entry stamp failed for app pass ${appArrivalPassId}: ${entryUpd.error.message}`,
+      );
+    }
+  }
 
   // 5b. No tow + no pass → return the drop, but the plate_event row above
   //     is now durable. Later visitor_pass registrations at this property
