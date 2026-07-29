@@ -424,7 +424,7 @@ async function sweepUnexitedPassesForOverstay(): Promise<number> {
   // Join via property_type filter — only truck_plaza properties participate.
   const { data: passes, error } = await db
     .from("visitor_passes")
-    .select("id, property_id, plate_text, valid_until, properties!inner(property_type)")
+    .select("id, property_id, plate_text, valid_until, registration_source, entry_seen_at, properties!inner(property_type)")
     .is("exited_at", null)
     .is("overstay_violation_id", null)
     .in("status", ["active", "expired"])
@@ -436,6 +436,17 @@ async function sweepUnexitedPassesForOverstay(): Promise<number> {
 
   let fired = 0;
   for (const p of passes) {
+    // App-booked NO-SHOW: the pass was created before arrival (mobile app),
+    // and no camera ever recorded an entry — there is no truck on the lot to
+    // tow. QR passes can't hit this (registration happens on-lot); for them
+    // a missing exit still means "presumed present". Skip entirely: the pass
+    // just expires via pass_expiry, no violation, no dispatch.
+    const src = (p as { registration_source?: string | null }).registration_source;
+    const entrySeen = (p as { entry_seen_at?: string | null }).entry_seen_at;
+    if (src === "app" && !entrySeen) {
+      console.log(`overstay_sweep: app pass ${p.id} expired with no recorded arrival (no-show) — skipping violation/dispatch`);
+      continue;
+    }
     const stale = String((p as { valid_until: string }).valid_until) < staleCutoffIso;
     // Insert the violation. plate_event_id is null — there's no read; this
     // is a time-based fire. The eventual exit read in truck_plaza_exit will

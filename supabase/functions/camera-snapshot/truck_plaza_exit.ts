@@ -206,7 +206,17 @@ async function findActiveUnexitedPass(
       if (r.registration_source !== "app" || earlyMs > 60 * 60_000) return false;
     }
     return true;
-  });
+  })
+    // STARTED passes outrank future-grace passes. Without this, a plate's
+    // upcoming app booking (matchable 60min early, newest valid_from sorts
+    // first) would swallow the EXIT read of that same plate's currently
+    // active pass — stranding the active pass into a false overstay
+    // dispatch. Within each group the query's valid_from DESC order holds.
+    .sort((a, b) => {
+      const aStarted = !a.valid_from || new Date(a.valid_from) <= now ? 0 : 1;
+      const bStarted = !b.valid_from || new Date(b.valid_from) <= now ? 0 : 1;
+      return aStarted - bStarted;
+    });
   if (rows.length === 0) return null;
 
   const candidates = (r: Row): string[] => {
@@ -635,6 +645,9 @@ export async function handleTruckPlazaExit(args: {
   // the pass gets entry_seen_at stamped after the plate_event insert instead
   // of being closed as an exit.
   let appArrivalPassId: string | null = null;
+  // Set when an app-booked truck that arrived early drives out again BEFORE
+  // its window starts: entry_seen_at is cleared instead of the pass closing.
+  let appPreStartDepartPassId: string | null = null;
   let crossCameraUnification: { sourceCameraId: string; sourcePlate: string; deltaSec: number } | null = null;
   let verifiedPairMatch: { pairedPlate: string; pairId: string; verifiedBy: string | null } | null = null;
   // Trusted match captured for photo-linking (see the fill-when-null stamp
@@ -753,6 +766,17 @@ export async function handleTruckPlazaExit(args: {
             console.log(
               `truck_plaza_exit: read "${resolved.normalized}" → app pass ${pass.id} only ${sinceEntryMin.toFixed(1)}min after entry (< ${EXIT_MIN_DWELL_MINUTES}min) — still the arrival transit (no cancel)`,
             );
+            pass = null;
+          } else if (pass.valid_from && new Date(pass.valid_from) > now) {
+            // Truck arrived early (grace window), then drove out again BEFORE
+            // its booked window started — e.g. left to grab dinner. Closing
+            // here would cancel a PREPAID pass that never began (no refund
+            // path). Instead un-stamp the entry: the pass stays intact and
+            // their return re-stamps a fresh arrival.
+            console.log(
+              `truck_plaza_exit: read "${resolved.normalized}" → app pass ${pass.id} left before its booked start — clearing entry, pass stays intact (no cancel)`,
+            );
+            appPreStartDepartPassId = pass.id;
             pass = null;
           }
         }
@@ -885,6 +909,20 @@ export async function handleTruckPlazaExit(args: {
     if (entryUpd.error) {
       console.warn(
         `truck_plaza_exit: entry stamp failed for app pass ${appArrivalPassId}: ${entryUpd.error.message}`,
+      );
+    }
+  }
+
+  // Pre-start departure: clear the early-arrival entry so the pass survives
+  // untouched and the truck's return re-stamps a fresh arrival.
+  if (appPreStartDepartPassId) {
+    const clearUpd = await db.from("visitor_passes")
+      .update({ entry_seen_at: null })
+      .eq("id", appPreStartDepartPassId)
+      .not("entry_seen_at", "is", null);
+    if (clearUpd.error) {
+      console.warn(
+        `truck_plaza_exit: entry clear failed for app pass ${appPreStartDepartPassId}: ${clearUpd.error.message}`,
       );
     }
   }
