@@ -380,6 +380,18 @@ export function extractGenericJsonPayload(obj: Record<string, unknown>): Extract
   // field names rather than relying on the permissive walker.
   const rootKeys = Object.keys(obj);
 
+  // Camera's own object-tracker box (C4467 payloads carry it) — persisted
+  // so the dashboard can crop busy frames to the vehicle that was read.
+  const camBox =
+    obj.coordinate_x1 != null
+      ? {
+          x1: Number(obj.coordinate_x1), y1: Number(obj.coordinate_y1),
+          x2: Number(obj.coordinate_x2), y2: Number(obj.coordinate_y2),
+          res_w: Number(obj.resolution_w ?? 0) || null,
+          res_h: Number(obj.resolution_h ?? 0) || null,
+        }
+      : null;
+
   return {
     bytes,
     cameraHint,
@@ -389,6 +401,7 @@ export function extractGenericJsonPayload(obj: Record<string, unknown>): Extract
         root_keys: rootKeys,
         image_bytes: bytes.byteLength,
       },
+      cam_box: camBox,
     },
   };
 }

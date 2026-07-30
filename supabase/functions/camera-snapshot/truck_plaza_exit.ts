@@ -65,7 +65,7 @@ export type TruckPlazaResult =
   | { outcome: "partner_truck_sighting"; partner_id: string; plate_event_id: string; sighting_id: string; plate: string; confidence: number }
   | { outcome: "buffered"; weak_read_id: string; opportunistic_flushed: number };
 
-type ResolvedPlate = { raw: string; normalized: string; confidence: number | null; source: "onboard" | "pr"; mmc?: PrMmcData; mmcRequested?: boolean };
+type ResolvedPlate = { raw: string; normalized: string; confidence: number | null; source: "onboard" | "pr"; mmc?: PrMmcData; mmcRequested?: boolean; prPlateBox?: unknown; prVehicleBox?: unknown };
 
 // Sidecar threshold. Below this confidence we drop the frame outright;
 // at-or-above buffers into weak_plate_reads for best-of-N selection in
@@ -411,7 +411,7 @@ async function callPlateRecognizerCloud(
   bytes: Uint8Array,
   mmcEnabled = false,
   mmcBackoffMinutes = 60,
-): Promise<{ plate: string; confidence: number; mmc?: PrMmcData; mmcRequested: boolean } | null> {
+): Promise<{ plate: string; confidence: number; mmc?: PrMmcData; mmcRequested: boolean; plateBox?: unknown; vehicleBox?: unknown } | null> {
   if (!token) return null;
 
   const buildForm = (withMmc: boolean): FormData => {
@@ -478,6 +478,10 @@ async function callPlateRecognizerCloud(
     confidence:   best.score as number,
     mmc:          mmcRequested ? extractMmc(best) : undefined,
     mmcRequested,
+    // Frame-position evidence: lets the dashboard crop a busy multi-vehicle
+    // frame to the vehicle that actually produced this read.
+    plateBox:     best.box ?? undefined,
+    vehicleBox:   (best.vehicle as Record<string, unknown> | undefined)?.box ?? undefined,
   };
 }
 
@@ -543,7 +547,7 @@ export async function handleTruckPlazaExit(args: {
     if (prNorm.length < 4) {
       return { outcome: "dropped", reason: "pr_plate_too_short" };
     }
-    resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr", mmc: undefined, mmcRequested: false };
+    resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr", mmc: undefined, mmcRequested: false, prPlateBox: prResult.plateBox, prVehicleBox: prResult.vehicleBox };
     // Fall through to section 3 (tow truck + pass matching).
   }
 
@@ -630,7 +634,7 @@ export async function handleTruckPlazaExit(args: {
     if (prResult && prResult.plate && prResult.confidence >= PR_RESOLVE_FLOOR) {
       const prNorm = normalizePlate(prResult.plate);
       if (prNorm.length >= 4) {
-        resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr", mmc: prResult.mmc, mmcRequested: prResult.mmcRequested };
+        resolved = { raw: prResult.plate, normalized: prNorm, confidence: prResult.confidence, source: "pr", mmc: prResult.mmc, mmcRequested: prResult.mmcRequested, prPlateBox: prResult.plateBox, prVehicleBox: prResult.vehicleBox };
       } else {
         return { outcome: "dropped", reason: `low_conf_pr_short_${resolved.confidence.toFixed(2)}` };
       }
@@ -870,6 +874,8 @@ export async function handleTruckPlazaExit(args: {
       // (verified by victor@…)".
       verified_pair_match: verifiedPairMatch,
       overstay,
+      plate_box: resolved.prPlateBox ?? null,
+      vehicle_box: resolved.prVehicleBox ?? null,
       ...(payload.rawMeta ?? {}),
     },
     match_status: matchStatus,
