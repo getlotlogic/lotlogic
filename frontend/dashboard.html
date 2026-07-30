@@ -3562,13 +3562,16 @@ const db = {
     if (!supabase || !passId) return [];
     const { data, error } = await supabase
       .from('plate_events')
-      .select('id, image_url, created_at, alpr_cameras:camera_id(name)')
+      // The three box fields let thumbnails crop a busy multi-vehicle frame
+      // to the vehicle that actually produced the read (only newer events
+      // carry them; older rows crop to nothing = full frame as before).
+      .select('id, image_url, created_at, plate_box:raw_data->plate_box, vehicle_box:raw_data->vehicle_box, cam_box:raw_data->cam_box, alpr_cameras:camera_id(name)')
       .eq('visitor_pass_id', passId)
       .not('image_url', 'is', null)
       .order('created_at', { ascending: true })
       .limit(10);
     if (error) throw error;
-    return (data || []).map(e => ({ id: e.id, url: e.image_url, at: e.created_at, camera: e.alpr_cameras?.name || null }));
+    return (data || []).map(e => ({ id: e.id, url: e.image_url, at: e.created_at, camera: e.alpr_cameras?.name || null, box: e.vehicle_box || e.cam_box || e.plate_box || null }));
   },
   // The exact camera frame that closed a pass (the exit/departure proof),
   // fetched by the pass's exited_via_plate_event_id. Returns image + camera + time.
@@ -9219,6 +9222,33 @@ function PassPhotoViewer({ photos, startIndex, plate, exitEventId, onClose }) {
   );
 }
 
+// Thumbnail that zooms toward the vehicle that produced the read. `box` is
+// either a PR box {xmin,ymin,xmax,ymax} (pixels of the original frame) or a
+// camera tracker box {x1,y1,x2,y2,res_w,res_h}. Without a box (older events)
+// it renders exactly like the plain cover image. Full-frame evidence stays
+// available in the viewer — only the thumbnail crops.
+function CroppedImg({ src, box }) {
+  const [dims, setDims] = useState(null);
+  const base = {position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover'};
+  let style = base;
+  if (box && dims) {
+    const x1 = box.xmin ?? box.x1, y1 = box.ymin ?? box.y1;
+    const x2 = box.xmax ?? box.x2, y2 = box.ymax ?? box.y2;
+    const W = box.res_w || dims.w, H = box.res_h || dims.h;
+    if ([x1, y1, x2, y2].every(v => typeof v === 'number' && isFinite(v)) && W > 0 && H > 0 && x2 > x1 && y2 > y1) {
+      const cx = ((x1 + x2) / 2 / W) * 100;
+      const cy = ((y1 + y2) / 2 / H) * 100;
+      const boxFrac = Math.max((x2 - x1) / W, (y2 - y1) / H);
+      // Zoom so the vehicle fills most of the tile; cap so tiny plate-only
+      // boxes don't blow up into unrecognizable pixels.
+      const zoom = Math.min(Math.max(0.45 / Math.max(boxFrac, 0.02), 1), 3.5);
+      style = { ...base, objectPosition: `${cx}% ${cy}%`, transformOrigin: `${cx}% ${cy}%`, transform: `scale(${zoom})` };
+    }
+  }
+  return <img src={src} alt="" loading="lazy" style={style}
+    onLoad={box ? (e) => setDims({ w: e.target.naturalWidth, h: e.target.naturalHeight }) : undefined} />;
+}
+
 function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
   const containerRef = useRef(null);
   const [viewer, setViewer] = useState(null); // startIndex when open
@@ -9293,7 +9323,7 @@ function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
               aria-label={`View photo ${idx + 1} of ${photos.length} for ${pass.plate_text || 'parking pass'} — ${capText(p)}`}
               style={{position:'relative',display:'block',flex:'0 0 auto',height:'100%',aspectRatio:'16/9',padding:0,border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',background:'#000',cursor:'zoom-in',scrollSnapAlign:'start'}}
             >
-              <img src={p.url} alt="" loading="lazy" style={{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover'}} />
+              <CroppedImg src={p.url} box={p.box} />
               <span style={{position:'absolute',bottom:0,left:0,right:0,padding:'3px 7px',background:'linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0))',fontSize:10,color:'#fff',textAlign:'left',display:'flex',justifyContent:'space-between',gap:6}}>
                 <span style={{fontWeight:700,letterSpacing:'.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📷 {capText(p)}</span>
                 {p.id === pass.exited_via_plate_event_id && <span style={{fontWeight:700}}>exit</span>}
