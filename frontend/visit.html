@@ -552,13 +552,17 @@ The property and tow operator are not liable for any damage to trucks, trailers,
 
           <div style="margin-top:18px;background:#1F1B14;color:#F4ECD8;border:1.5px solid #1F1B14;padding:16px 18px;font-size:13px;line-height:1.55;letter-spacing:.02em;">
             <div style="font-family:'Fraunces',serif;font-style:italic;font-size:16px;margin-bottom:10px;color:#F4ECD8;">Towing enforced — please read the rules.</div>
-            <!-- The property's official posted policy, shown as the actual signed document image.
+            <!-- The property's official posted policy, rendered as a document image.
                  Keyed by qr_code_id so each property can drop in /policy/<qr>.jpg. Falls back to
-                 the text policy only if no image exists for this property. -->
-            <img src="/policy/${escapeHtml(qrCodeId)}.jpg"
-                 alt="Official truck parking policies"
-                 style="width:100%;height:auto;display:block;border-radius:6px;background:#FFFFFF;"
-                 onerror="this.style.display='none';var f=document.getElementById('policyTextFallback');if(f)f.style.display='block';" />
+                 the text policy only if no image exists for this property. The page viewport
+                 blocks pinch-zoom, so the wrapping link opens the full-size image in a new tab. -->
+            <a href="/policy/${escapeHtml(qrCodeId)}.jpg" target="_blank" rel="noopener" id="policyImgLink" style="display:block;">
+              <img src="/policy/${escapeHtml(qrCodeId)}.jpg"
+                   alt="Official truck parking policies — tap to open full size"
+                   style="width:100%;height:auto;display:block;border-radius:6px;background:#FFFFFF;"
+                   onerror="var l=document.getElementById('policyImgLink');if(l)l.style.display='none';var h=document.getElementById('policyImgHint');if(h)h.style.display='none';var f=document.getElementById('policyTextFallback');if(f)f.style.display='block';" />
+            </a>
+            <div id="policyImgHint" style="margin-top:6px;font-size:11.5px;color:#D9C9A6;text-align:center;">Tap the document to open it full size.</div>
             <div id="policyTextFallback" style="display:none;white-space:pre-wrap;max-height:260px;overflow:auto;color:#F4ECD8;font-size:12.5px;line-height:1.5;background:#171309;border:1px solid #2A241A;border-radius:6px;padding:12px 14px;">${escapeHtml(property.policy_text || DEFAULT_TRUCK_PLAZA_POLICY)}</div>
             <div style="margin-top:12px;font-size:12px;color:#D9C9A6;">NMLD Towing &middot; ${escapeHtml(property.policy_phone || '(269) 217-6208')} &middot; Truck parking rules are in effect 24/7.</div>
             <div style="margin-top:10px;font-size:12px;color:#D9C9A6;">By submitting you confirm you have read and agree to all parking policies shown above and understand the liability notice.</div>

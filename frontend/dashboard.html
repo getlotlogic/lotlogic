@@ -2492,7 +2492,10 @@ function normalizeViolation(v) {
 }
 
 // ── Truck plaza default policy template ──────────────────────
-// Source of truth is the matching constant in frontend/visit.html. Keep in sync.
+// This copy is what actually reaches drivers: it is persisted into
+// properties.policy_text on truck-plaza create/save, and visit.html prefers
+// policy_text over its own fallback constant. Keep in sync with the matching
+// constant in frontend/visit.html AND with any existing policy_text rows.
 const DEFAULT_TRUCK_PLAZA_POLICY = `TRUCK PARKING POLICIES
 
 1. DROPPED TRAILERS — No dropped trailers.
@@ -2505,7 +2508,7 @@ const DEFAULT_TRUCK_PLAZA_POLICY = `TRUCK PARKING POLICIES
 
 TOWING ENFORCED — Violation of any of the above parking policies will result in towing at the vehicle owner's expense. Property management has authorized the property's tow operator to enforce these parking policies.
 
-LIABILITY NOTICE — The property and tow operator are not liable for any damage to trucks, trailers, or personal vehicles occurring on the property or resulting from towing. By agreeing below, you confirm you have read these policies and agree to follow them.`;
+LIABILITY NOTICE — The property and tow operator are not liable for any damage to trucks, trailers, or personal vehicles occurring on the property or resulting from towing. By registering, you agree to follow all parking policies and understand this liability notice.`;
 
 // ── Supabase data layer (with Rails API fallback) ─────────────
 // Real Supabase table names: lot_owners, enforcement_partners, lots, cameras,
