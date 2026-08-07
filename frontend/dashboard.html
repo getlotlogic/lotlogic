@@ -144,6 +144,27 @@
     @media (max-width: 640px) {
       .admin-client-row { grid-template-columns: 1fr auto !important; row-gap: 6px !important; }
       .admin-client-row > div { overflow-wrap: anywhere; }
+      /* Billing confirmation-review rows: stack instead of crushing the text
+         column to ~50px between thumbnails and the action stack. */
+      .cr-row { grid-template-columns: 1fr !important; }
+      .cr-row > div:last-child { flex-direction: row !important; flex-wrap: wrap; align-items: center !important; }
+      /* Admin onboard two-up input grids: single column on phones. */
+      .admin-form-grid { grid-template-columns: 1fr !important; }
+    }
+    /* 9 nav tabs must fit 390px: allow shrink + compact labels. */
+    @media (max-width: 480px) {
+      .nav-item { min-width: 0; padding: 10px 2px 8px; }
+      .nav-label { font-size: 8px; letter-spacing: .02em; max-width: 100%;
+                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    }
+    /* iOS zooms the page for any focused input under 16px — one rule covers
+       every search/settings/admin input at phone width. */
+    @media (max-width: 430px) {
+      input, select, textarea { font-size: 16px !important; }
+    }
+    /* Money-action buttons get real touch targets on touch devices. */
+    @media (pointer: coarse) {
+      .cr-btn-destructive, .cr-btn-neutral { min-height: 40px; padding: 8px 14px; }
     }
     /* Display + mono utility classes — opt-in via className on key
        headlines, plate text, and timestamps. */
@@ -746,6 +767,8 @@
       background: var(--bg-card); border-radius: 20px 20px 0 0; width: 100%; max-width: 640px;
       max-height: 90vh; overflow-y: auto; animation: slideUp .3s ease;
       border: 1px solid var(--border); border-bottom: none;
+      padding-bottom: env(safe-area-inset-bottom);
+      overscroll-behavior: contain;
     }
     .viol-modal-handle { width: 36px; height: 4px; background: var(--text-ghost); border-radius: 2px; margin: 10px auto 0; }
     .viol-modal-img { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: var(--snapshot-bg); display: block; }
@@ -4347,8 +4370,8 @@ function cleanMmc(v) {
 // Truck / Big Truck / SUV / Van); onboard returns coarse Truck / Car / Van. Map
 // to a clean label + a glyph for an at-a-glance read on the pass card.
 const VEHICLE_TYPE_META = {
-  'big truck': ['Big Truck', '🚛'], 'semi': ['Semi', '🚛'], 'truck': ['Truck', '🚛'],
-  'pickup truck': ['Pickup', '🛻'], 'pickup': ['Pickup', '🛻'],
+  'big truck': ['Big Truck', ''], 'semi': ['Semi', ''], 'truck': ['Truck', ''],
+  'pickup truck': ['Pickup', ''], 'pickup': ['Pickup', ''],
   'van': ['Van', '🚐'], 'minivan': ['Minivan', '🚐'],
   'suv': ['SUV', '🚙'], 'sedan': ['Sedan', '🚗'], 'car': ['Car', '🚗'],
   'motorcycle': ['Motorcycle', '🏍️'], 'bus': ['Bus', '🚌'],
@@ -4780,7 +4803,7 @@ function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, c
       }}>
         {/* Close button — top right, iMessage style */}
         <button onClick={onClose} style={{
-          position:'fixed', top:16, right:16, width:32, height:32, borderRadius:'50%',
+          position:'fixed', top:'max(16px, env(safe-area-inset-top))', right:16, width:44, height:44, borderRadius:'50%',
           background:'rgba(255,255,255,.12)', border:'none', color:'#fff', fontSize:16,
           cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
           zIndex:10000,
@@ -5166,7 +5189,7 @@ function CrossCameraSightings({ plate, propertyId, when, excludeCameraIds = [], 
       <div style={{fontSize:11,fontWeight:800,letterSpacing:'.05em',textTransform:'uppercase',color:'#7c2d12',marginBottom:6}}>
         Other-camera sightings near {fmtDateTime(when)} ({rows.length})
       </div>
-      <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4}}>
+      <div style={{display:'flex',gap:8,overflowX:'auto',WebkitOverflowScrolling:'touch',paddingBottom:4}}>
         {rows.map(r => {
           const delta = Math.round((new Date(r.created_at).getTime() - new Date(when).getTime()) / 1000);
           const sign = delta >= 0 ? '+' : '−';
@@ -5313,12 +5336,12 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
 
   // Status badge config for dedup state machine
   const statusBadge = {
-    alerted:      { label: 'Active',         color: '#ef4444', bg: 'rgba(239,68,68,.12)',  icon: '🔴' },
-    pending:      { label: 'Active',         color: '#ef4444', bg: 'rgba(239,68,68,.12)',  icon: '🔴' },
+    alerted:      { label: 'Active',         color: '#ef4444', bg: 'rgba(239,68,68,.12)',  icon: '●' },
+    pending:      { label: 'Active',         color: '#ef4444', bg: 'rgba(239,68,68,.12)',  icon: '●' },
     dispatched:   { label: 'Awaiting tow co', color: '#fbbf24', bg: 'rgba(251,191,36,.14)', icon: '🟠' },
     acknowledged: { label: 'Acknowledged',   color: '#f59e0b', bg: 'rgba(245,158,11,.12)', icon: '🟡' },
-    cleared:      { label: 'Cleared',      color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
-    resolved:     { label: 'Resolved',     color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✅' },
+    cleared:      { label: 'Cleared',      color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✓' },
+    resolved:     { label: 'Resolved',     color: '#4ade80', bg: 'rgba(74,222,128,.12)', icon: '✓' },
     departed:     { label: 'Cancelled — Vehicle Left', color: '#6b7280', bg: 'rgba(107,114,128,.12)', icon: '🚫' },
   };
 
@@ -6215,7 +6238,7 @@ function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, o
                     ) : null}
                     {v.zone_id && <span className="job-tag">Zone <strong>{v.zone_id}</strong></span>}
                     {v.status === 'cleared' ? (
-                      <span className="job-tag" style={{color:'#4ade80'}}>✅ <strong style={{color:'#4ade80'}}>Cleared</strong>{v.duration_seconds ? ` · ${Math.round(v.duration_seconds / 60)}m` : ''}</span>
+                      <span className="job-tag" style={{color:'#4ade80'}}>✓ <strong style={{color:'#4ade80'}}>Cleared</strong>{v.duration_seconds ? ` · ${Math.round(v.duration_seconds / 60)}m` : ''}</span>
                     ) : (v.status === 'departed' || v.action_taken === 'already_gone') ? (
                       <span className="job-tag" style={{color:'#6b7280'}}>🚫 <strong style={{color:'#6b7280'}}>Vehicle Left</strong></span>
                     ) : (
@@ -6545,7 +6568,7 @@ function InvoicesPage({ lots, partners: partnersProp, user, isOwner = true, isPl
     // confirmation review, no QB surface to switch to.
     isOwner && React.createElement('div', {
       style: {
-        display: 'flex', gap: 18, borderBottom: '1px solid var(--border)',
+        display: 'flex', gap: 18, flexWrap: 'wrap', borderBottom: '1px solid var(--border)',
         marginBottom: 16,
       }
     },
@@ -7481,7 +7504,7 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
       }
     }
 
-    return React.createElement('div', {
+    return React.createElement('div', { className: 'cr-row', 
       key: r.id,
       style: {
         padding: '10px 12px', borderBottom: '1px solid var(--border)',
@@ -7765,7 +7788,7 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
         background: TONE_COLORS.amber.bg, color: TONE_COLORS.amber.fg,
         border: `1px solid ${TONE_COLORS.amber.border}`, marginBottom: 10,
       },
-    }, '⚠️ This window has more violations than we loaded. The queue counts below are incomplete — narrow the date range for an accurate review.'),
+    }, 'This window has more violations than we loaded. The queue counts below are incomplete — narrow the date range for an accurate review.'),
 
     rows === null ? null :
     REVIEW_QUEUES.map(q => {
@@ -8196,7 +8219,7 @@ function OperatorActivityPage({ violations, lots }) {
                         <div style={{fontSize:14, fontWeight:700, color:'var(--text-primary)'}}>{lot?.name || 'Unknown Lot'}</div>
                         <div style={{fontSize:12, color:'var(--text-faint)'}}>{fmtTime(v.resolved_at || v.detected_at)}</div>
                       </div>
-                      <span style={{padding:'4px 10px', borderRadius:20, fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'.04em', color:col, background:col + '15', border:`1px solid ${col}33`}}>
+                      <span style={{padding:'8px 12px',minHeight:36, borderRadius:20, fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'.04em', color:col, background:col + '15', border:`1px solid ${col}33`}}>
                         {(v.action_taken || 'handled').replace(/_/g, ' ')}
                       </span>
                     </div>
@@ -8382,7 +8405,7 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
             </div>
             <div style={{flex:'1 1 200px', display:'flex', flexWrap:'wrap', gap:6}}>
               {(os.partner.tow_truck_plates || []).length === 0 ? (
-                <span style={{fontSize:11, fontWeight:600, color:'#b45309', background:'rgba(251,191,36,.12)', border:'1px solid rgba(251,191,36,.35)', borderRadius:14, padding:'4px 10px'}}>
+                <span style={{fontSize:11, fontWeight:600, color:'#b45309', background:'rgba(251,191,36,.12)', border:'1px solid rgba(251,191,36,.35)', borderRadius:14, padding:'8px 12px',minHeight:36}}>
                   ⚠ none registered — every tow requires manual confirm
                 </span>
               ) : (
@@ -9027,7 +9050,7 @@ function SightingStrip({ sightings, cameras, nowTick }) {
           <span style={{fontSize:10,fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(251,191,36,.12)',color:'#fbbf24',border:'1px solid rgba(251,191,36,.25)'}}>{lowConfCount} LOW CONFIDENCE</span>
         )}
       </div>
-      <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:2}}>
+      <div style={{display:'flex',gap:6,overflowX:'auto',WebkitOverflowScrolling:'touch',paddingBottom:2}}>
         {sorted.slice(0, 10).map(ev => {
           const cam = cameraById[ev.camera_id];
           const conf = typeof ev.confidence === 'number' ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) : null;
@@ -9333,13 +9356,13 @@ function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
             >
               <CroppedImg src={p.url} box={p.box} />
               <span style={{position:'absolute',bottom:0,left:0,right:0,padding:'3px 7px',background:'linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0))',fontSize:10,color:'#fff',textAlign:'left',display:'flex',justifyContent:'space-between',gap:6}}>
-                <span style={{fontWeight:700,letterSpacing:'.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📷 {capText(p)}</span>
+                <span style={{fontWeight:700,letterSpacing:'.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{capText(p)}</span>
                 {p.id === pass.exited_via_plate_event_id && <span style={{fontWeight:700}}>exit</span>}
               </span>
             </button>
           ))}
           {photos.length > 1 && (
-            <span aria-hidden="true" style={{position:'sticky',right:0,alignSelf:'flex-start',marginLeft:-34,padding:'2px 7px',background:'rgba(0,0,0,.6)',color:'#fff',fontSize:10,fontWeight:800,borderRadius:8}}>{photos.length}📷</span>
+            <span aria-hidden="true" style={{position:'sticky',right:0,alignSelf:'flex-start',marginLeft:-34,padding:'2px 7px',background:'rgba(0,0,0,.6)',color:'#fff',fontSize:10,fontWeight:800,borderRadius:8}}>{photos.length} photos</span>
           )}
         </div>
       )}
@@ -10016,7 +10039,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
         color:'var(--text-primary)',
         lineHeight:1.4,
       }}>
-        <span style={{fontSize:18}} aria-hidden="true">🚛</span>
+        
         <span><strong>The system runs itself — except for one tap.</strong> Pull a truck, <strong>mark towed</strong> on its pass. It's the one input the system can't run without — skip it and it <strong style={{fontSize:14}}>breaks</strong>.</span>
       </div>
 
@@ -10029,8 +10052,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
       <div style={{position:'relative'}}>
         <input
           type="text"
-          autoFocus
-          value={searchText}
+                    value={searchText}
           onChange={e => setSearchText(e.target.value)}
           placeholder="Search plate, name, company, phone, spot, or ref ID…"
           style={{
@@ -10066,8 +10088,8 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
           roster on screen. It auto-recovers on the next 60s poll. */}
       {(err || rosterError) && (
         <div style={{padding:'10px 12px',background:'rgba(245,158,11,.1)',border:'1px solid rgba(245,158,11,.35)',borderRadius:8,color:'var(--text-primary)',fontSize:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-          <span>⚠️ Couldn't refresh from the server — showing the last known roster. Retrying automatically…</span>
-          <button type="button" onClick={() => { load(); refreshRoster(); }} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:6,border:'1px solid var(--border)',background:'transparent',color:'var(--text-primary)',cursor:'pointer',fontFamily:'inherit'}}>Retry now</button>
+          <span>Couldn't refresh from the server — showing the last known roster. Retrying automatically…</span>
+          <button type="button" onClick={() => { load(); refreshRoster(); }} style={{fontSize:12,fontWeight:700,padding:'8px 12px',minHeight:36,borderRadius:6,border:'1px solid var(--border)',background:'transparent',color:'var(--text-primary)',cursor:'pointer',fontFamily:'inherit'}}>Retry now</button>
         </div>
       )}
 
@@ -10169,7 +10191,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
         <div style={{padding:40,textAlign:'center',color:'var(--text-muted)',fontSize:13,background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>Loading…</div>
       ) : sortedMatches.length === 0 ? (
         <div style={{padding:40,textAlign:'center',background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12}}>
-          <div style={{width:48,height:48,borderRadius:12,background:'rgba(96,165,250,.1)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px',fontSize:22}}>📋</div>
+          <div style={{width:48,height:48,borderRadius:12,background:'rgba(96,165,250,.1)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px',fontSize:22,color:'var(--text-faint)'}}>▤</div>
           <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>
             {hasSearch ? `No matches for "${trimmedSearch}"` : ((err || rosterError) ? "Couldn't load the roster" : (useBuckets ? 'Nothing active or recently expired' : 'No passes for these filters'))}
           </div>
@@ -10194,7 +10216,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
           )}
         </div>
       ) : (
-        <div style={{display:'grid',gap:10,gridTemplateColumns:'repeat(auto-fill, minmax(380px, 1fr))'}}>
+        <div style={{display:'grid',gap:10,gridTemplateColumns:'repeat(auto-fill, minmax(min(380px, 100%), 1fr))'}}>
           {sortedMatches.map(({ row: r, matched }) => {
             const s = deriveStatus(r);
             // Parking Log (bucket) mode badges the bucket; History badges the
@@ -10407,7 +10429,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                               title="Confirm tow happened — releases billing for the partner"
                               style={{minHeight:44,background:'#ef4444',color:'#fff',border:'1px solid #ef4444',borderRadius:8,padding:'10px 14px',fontSize:13,fontWeight:800,cursor:rowBusy?'wait':'pointer',opacity:rowBusy?0.55:1,fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}
                             >
-                              <span aria-hidden="true">🚛</span> Mark towed
+                              Mark towed
                             </button>
                           </>
                         );
@@ -10800,7 +10822,7 @@ function ApartmentPermits({ property }) {
           <div className="pd-empty">Loading…</div>
         ) : loadErr ? (
           <div className="pd-empty" style={{color:'#b45309'}}>
-            ⚠️ Couldn't load the approval queue — this is not "nothing pending".{' '}
+            Couldn't load the approval queue — this is not "nothing pending".{' '}
             <button onClick={refresh} className="pd-share-btn" style={{marginLeft:6}}>Retry</button>
           </div>
         ) : pending.length === 0 ? (
@@ -11375,7 +11397,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
       {/* Top section filter — pick what's visible below. Sticks to the top of
           the property page; default "All" shows everything. */}
       <div style={{
-        position: 'sticky', top: 0, zIndex: 30,
+        position: 'sticky', top: 'calc(58px + env(safe-area-inset-top))', zIndex: 30,
         display: 'flex', gap: 6, flexWrap: 'wrap',
         padding: '10px 4px',
         background: 'var(--bg-page, var(--bg-card))',
@@ -12182,8 +12204,8 @@ function RegisteredDrill({ propertyId, propertyName, onBack }) {
             screen and offer a retry, never a misleading empty state. */}
         {err && (
           <div style={{margin:'0 0 10px',padding:'10px 12px',background:'rgba(245,158,11,.1)',border:'1px solid rgba(245,158,11,.35)',borderRadius:8,color:'var(--ink-1-paper, var(--text-primary))',fontSize:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-            <span>⚠️ Couldn't refresh — showing the last known roster.</span>
-            <button type="button" onClick={() => load()} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:6,border:'1px solid var(--border)',background:'transparent',color:'inherit',cursor:'pointer',fontFamily:'inherit'}}>Retry now</button>
+            <span>Couldn't refresh — showing the last known roster.</span>
+            <button type="button" onClick={() => load()} style={{fontSize:12,fontWeight:700,padding:'8px 12px',minHeight:36,borderRadius:6,border:'1px solid var(--border)',background:'transparent',color:'inherit',cursor:'pointer',fontFamily:'inherit'}}>Retry now</button>
           </div>
         )}
 
@@ -12214,7 +12236,7 @@ function RegisteredDrill({ propertyId, propertyName, onBack }) {
                     <span className="reg-live-paper">● ACTIVE</span>
                     <div style={{display:'flex',alignItems:'center',gap:8}}>
                       {(row.valid_from || row.starts_at) && <span style={{fontSize:11,color:'var(--ink-3-paper)'}}>Since {new Date(row.valid_from || row.starts_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
-                      <button onClick={() => setConfirmId(row.id)} aria-label="Remove parking pass" style={{fontSize:11,fontWeight:600,padding:'4px 9px',borderRadius:6,border:'1px solid var(--border-strong-paper)',background:'transparent',color:'var(--red-paper)',cursor:'pointer',letterSpacing:'.02em'}}>Remove</button>
+                      <button onClick={() => setConfirmId(row.id)} aria-label="Remove parking pass" style={{fontSize:12,fontWeight:600,padding:'8px 12px',minHeight:36,borderRadius:6,border:'1px solid var(--border-strong-paper)',background:'transparent',color:'var(--red-paper)',cursor:'pointer',letterSpacing:'.02em'}}>Remove</button>
                     </div>
                   </>
                 )}
@@ -12999,7 +13021,7 @@ function TrainingPage({ user, isOwner }) {
       )}
 
       {!loading && pairs.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(360px, 100%), 1fr))', gap: 16 }}>
           {pairs.map(pair => {
             const confPct = Math.round(Number(pair.confidence || 0) * 100);
             const confColor = confPct >= 85 ? '#16a34a' : confPct >= 70 ? '#0284c7' : '#9ca3af';
@@ -13246,7 +13268,7 @@ function AdminOnboardTab() {
           </label>
         </div>
         {ownerOn && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="admin-form-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div><label style={labelStyle}>Owner name</label><input style={inputStyle} value={ownerName} onChange={e => setOwnerName(e.target.value)} /></div>
             <div><label style={labelStyle}>Owner email</label><input style={inputStyle} type="email" value={ownerEmail} onChange={e => setOwnerEmail(e.target.value)} /></div>
           </div>
@@ -13259,7 +13281,7 @@ function AdminOnboardTab() {
         </div>
         {partnerOn && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div className="admin-form-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div><label style={labelStyle}>Partner name</label><input style={inputStyle} value={partnerName} onChange={e => setPartnerName(e.target.value)} /></div>
               <div><label style={labelStyle}>Partner email</label><input style={inputStyle} type="email" value={partnerEmail} onChange={e => setPartnerEmail(e.target.value)} /></div>
             </div>
