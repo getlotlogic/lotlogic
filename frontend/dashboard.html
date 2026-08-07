@@ -13445,7 +13445,7 @@ function PartnerAppPage() {
         <div style={{position:'relative', width:414, height:868, padding:12, background:'#101113', border:'1px solid var(--border)', borderRadius:54, boxShadow:'0 24px 60px rgba(0,0,0,.5), inset 0 0 0 2px #2A2C31'}}>
           <div style={{position:'absolute', width:96, height:26, borderRadius:13, background:'#101113', top:22, left:'50%', transform:'translateX(-50%)', zIndex:2}} />
           <div style={{position:'absolute', width:110, height:5, borderRadius:3, background:'#3A3D44', bottom:11, left:'50%', transform:'translateX(-50%)', zIndex:2}} />
-          <iframe key={frameKey} src={NMLD_APP_URL} title="NMLD Parking live preview" loading="lazy"
+          <iframe key={frameKey} src={NMLD_APP_URL + "?embed=1"} title="NMLD Parking live preview" loading="lazy"
             onLoad={() => { setLoaded(true); setFailed(false); }}
             style={{width:390, height:818, border:0, borderRadius:'40px 40px 14px 14px', background:'#F2EAD8', opacity: loaded ? 1 : 0, transition:'opacity .3s'}} />
           {!loaded && !failed && (
