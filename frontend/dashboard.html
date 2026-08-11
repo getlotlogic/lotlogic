@@ -8579,7 +8579,56 @@ function PartnerFeeEditor({ user }) {
   );
 }
 
-function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) {
+function ChangePasswordSection() {
+  const [open, setOpen] = React.useState(false);
+  const [cur, setCur] = React.useState('');
+  const [next, setNext] = React.useState('');
+  const [confirm, setConfirm] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [done, setDone] = React.useState(false);
+  const { addToast } = useToast();
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr('');
+    if (next.length < 8) { setErr('New password must be at least 8 characters.'); return; }
+    if (next !== confirm) { setErr('New passwords do not match.'); return; }
+    setBusy(true);
+    try {
+      await apiFetch('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: cur, new_password: next }) });
+      setDone(true); setCur(''); setNext(''); setConfirm('');
+      addToast('Password changed', 'success');
+      setTimeout(() => { setOpen(false); setDone(false); }, 1500);
+    } catch (e2) {
+      setErr(e2.message || 'Could not change password.');
+    } finally { setBusy(false); }
+  }
+
+  const input = { width: '100%', padding: '12px 14px', background: 'var(--bg-card)', border: '1.5px solid var(--border)', borderRadius: 10, color: 'var(--text-primary)', fontSize: 16, marginTop: 8, outlineColor: 'var(--accent)' };
+  return (
+    <div className="settings-section">
+      <div className="settings-section-title">Password</div>
+      {!open ? (
+        <button onClick={() => setOpen(true)} style={{ width: '100%', padding: '13px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text-primary)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>Change password</button>
+      ) : (
+        <form onSubmit={submit}>
+          <input type="password" autoComplete="current-password" placeholder="Current password" value={cur} onChange={e => setCur(e.target.value)} style={input} />
+          <input type="password" autoComplete="new-password" placeholder="New password (8+ characters)" value={next} onChange={e => setNext(e.target.value)} style={input} />
+          <input type="password" autoComplete="new-password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} style={input} />
+          {err && <div style={{ color: '#f87171', fontSize: 13, marginTop: 10 }}>{err}</div>}
+          {done && <div style={{ color: '#4ade80', fontSize: 13, marginTop: 10 }}>Password changed.</div>}
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <button type="button" onClick={() => { setOpen(false); setErr(''); setCur(''); setNext(''); setConfirm(''); }} style={{ flex: 1, padding: '12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text-faint)', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+            <button type="submit" disabled={busy} style={{ flex: 2, padding: '12px', background: 'var(--text-primary)', color: 'var(--bg-primary)', border: 'none', borderRadius: 10, fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1, fontFamily: 'inherit' }}>{busy ? 'Saving…' : 'Update password'}</button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) {
   const isOwner = user._role === 'owner';
   const [notifyPrefs, setNotifyPrefs] = useState(() => NotifyManager.getPrefs());
   const [notifyPerm, setNotifyPerm] = useState(() => NotifyManager.getPermission());
@@ -8760,6 +8809,13 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
           <div className="settings-row-value">5.0.0</div>
         </div>
       </div>
+
+      {isImpersonating ? (
+        <div className="settings-section">
+          <div className="settings-section-title">Password</div>
+          <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.5 }}>Exit partner view to change your own password. This account manages its password from its own login.</div>
+        </div>
+      ) : <ChangePasswordSection />}
 
       <button className="login-btn" style={{background:'rgba(239,68,68,.15)', color:'#f87171', boxShadow:'none', border:'1px solid rgba(239,68,68,.3)'}} onClick={onLogout}>
         Sign Out
@@ -14324,7 +14380,7 @@ function App() {
           {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} />}
           {tab === 'app' && (isPlatformAdmin || (FRANK_APP_TAB_LIVE && isOperator && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID)) && <PartnerAppPage />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
-          {tab === 'account' && <AccountPage user={effectiveUser} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
+          {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
         </div>
       </main>
 
