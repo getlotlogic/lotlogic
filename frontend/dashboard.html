@@ -3501,6 +3501,12 @@ const db = {
   },
   // Records that a tow happened (action_taken='tow') — allowed for owners AND
   // tow partners. NOT force-bill: that stays an owner-only billing override.
+  async recordCooldownTow(passId, reason) {
+    return apiFetch(`/violations/record-tow`, {
+      method: 'POST',
+      body: JSON.stringify({ pass_id: passId, reason: reason || null }),
+    });
+  },
   async markViolationTowed(id, reason) {
     return apiFetch(`/violations/${id}/mark-towed`, {
       method: 'POST',
@@ -9664,6 +9670,11 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
             addToast(`${label} (pass closed)`, 'success');
           } else { throw e; }
         }
+      } else if (kind === 'tow') {
+        // No open violation (cooldown / tow-if-seen): create the tow record —
+        // it feeds the same confirmation/billing pipeline as any other tow.
+        await db.recordCooldownTow(payload.pass_id, reason || 'Cooldown tow from Parking Log');
+        addToast('Tow recorded', 'success');
       } else {
         // No linked violation — close the pass with a clear audit note.
         // Reason prefix lets future review queries filter these out as
@@ -10404,7 +10415,8 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                   // the violation state machine (force-bill / mark-no-tow).
                   // If not, it falls back to cancel-pass with a note so
                   // the row clears from the working view.
-                  const showTowActions = s === 'expired' || s === 'auto_cleared';
+                  const isCooldown = s === 'cooldown';
+                  const showTowActions = s === 'expired' || s === 'auto_cleared' || isCooldown;
                   if (!isActive && !showTowActions) return null;
                   return (
                     <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:-2,flexWrap:'wrap'}}>
