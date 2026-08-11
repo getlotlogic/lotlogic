@@ -10850,7 +10850,7 @@ function ApartmentPermits({ property }) {
                     <div style={{minWidth:0,flex:1}}>
                       <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                         {plateChip(row.plate_text)}
-                        <span style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',padding:'2px 7px',borderRadius:20,background:kind==='resident'?'rgba(96,165,250,.12)':'rgba(192,132,252,.12)',color:kind==='resident'?'#60a5fa':'#c084fc',border:kind==='resident'?'1px solid rgba(96,165,250,.3)':'1px solid rgba(192,132,252,.3)'}}>{kind === 'resident' ? 'Long-term' : 'Self-serve'}</span>
+                        <span style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',padding:'2px 7px',borderRadius:20,background:kind==='resident'?'rgba(96,165,250,.12)':'rgba(192,132,252,.12)',color:kind==='resident'?'#60a5fa':'#c084fc',border:kind==='resident'?'1px solid rgba(96,165,250,.3)':'1px solid rgba(192,132,252,.3)'}}>{kind === 'resident' ? 'Long-term' : 'Short-term'}</span>
                         {unit && <span style={{fontSize:12,color:'var(--text-primary)',fontWeight:600}}>Unit {unit}</span>}
                         {name && <span style={{fontSize:12,color:'var(--text-primary)',fontWeight:600}}>{name}</span>}
                       </div>
@@ -10885,7 +10885,9 @@ function ApartmentPermits({ property }) {
             <span className="pd-section-count">{approvedResidents.length}</span>
           </div>
         </div>
-        {!loading && approvedResidents.length === 0 ? (
+        {loadErr ? (
+          <div className="pd-empty" style={{color:'#b45309'}}>Couldn't load — the list below may be incomplete.</div>
+        ) : !loading && approvedResidents.length === 0 ? (
           <div className="pd-empty">No long-term passes yet</div>
         ) : (
           <div style={{display:'flex',flexDirection:'column',gap:6}}>
@@ -10917,7 +10919,9 @@ function ApartmentPermits({ property }) {
             <span className="pd-section-count">{activeGuests.length}</span>
           </div>
         </div>
-        {!loading && activeGuests.length === 0 ? (
+        {loadErr ? (
+          <div className="pd-empty" style={{color:'#b45309'}}>Couldn't load — the list below may be incomplete.</div>
+        ) : !loading && activeGuests.length === 0 ? (
           <div className="pd-empty">No short-term passes yet</div>
         ) : (
           <div style={{display:'flex',flexDirection:'column',gap:6}}>
@@ -12495,7 +12499,7 @@ function ALPRPropertiesPage({ user }) {
                   </div>
                 </div>
 
-                <div className="kpis-paper">
+                <div className={'kpis-paper' + (p.property_type === 'truck_plaza' ? '' : ' single')}>
                   {isTruckPlaza ? (
                     /* Truck plaza: camera-driven Open Jobs/Overstays are hidden.
                        The three pass-states that matter — On Cooldown (pass
@@ -13400,7 +13404,7 @@ function PlateLookupVerdict({ out, history, typedPlate }) {
   const lastReject = history && history.entries ? history.entries.find(e => e.status === 'rejected') : null;
   // If normalization stripped characters, show what was actually checked so
   // a typo can't silently produce a tow verdict for the wrong string.
-  const normalizedNote = typedPlate && d.plate && typedPlate.replace(/[^A-Za-z0-9]/g, '').toUpperCase() !== d.plate
+  const normalizedNote = typedPlate && d.plate && typedPlate.trim() !== d.plate
     ? `Checked as ${d.plate}` : null;
   const tag = d.is_temp_tag ? (
     d.tag_expired
@@ -13558,13 +13562,15 @@ function PlateLookupPage({ user }) {
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState(null);
+  const [searchedPlate, setSearchedPlate] = useState('');
 
   useEffect(() => {
     let alive = true;
     db.getProperties(user.id, user._role)
       .then(p => {
         if (!alive) return;
-        const apts = scopePropsToPartner(p || [], user).filter(x => x.property_type === 'apartment');
+        const apts = scopePropsToPartner(p || [], user).filter(x => x.property_type === 'apartment')
+          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
         setProperties(apts);
         // Remember the operator's property — defaulting to the alphabetical
         // first lot made 'not registered' verdicts against the WRONG property.
@@ -13587,7 +13593,7 @@ function PlateLookupPage({ user }) {
     if (busy) return; // Enter key had no busy guard — the button did
     if (!propertyId || !pl) { setError('Pick a property and enter a plate.'); return; }
     const req = ++lookupReqRef.current;
-    setBusy(true); setError(''); setResult(null); setHistory(null);
+    setBusy(true); setError(''); setResult(null); setHistory(null); setSearchedPlate(pl);
     try {
       const out = await apiFetch(`/apartment/passes/lookup?property_id=${encodeURIComponent(propertyId)}&plate=${encodeURIComponent(pl)}`);
       if (req === lookupReqRef.current) setResult(out);
@@ -13622,7 +13628,7 @@ function PlateLookupPage({ user }) {
             {busy ? 'Checking…' : 'Check'}
           </button>
           {error && <div style={{ background: 'rgba(217,83,79,.12)', border: '1px solid #D9534F', color: '#D9534F', borderRadius: 8, padding: '10px 12px', fontSize: 13, marginTop: 16, textAlign: 'center' }}>{error}</div>}
-          {result && <PlateLookupVerdict out={result} history={history} typedPlate={plate} />}
+          {result && <PlateLookupVerdict out={result} history={history} typedPlate={searchedPlate} />}
           {history && history.entries && history.entries.length > 0 && (
             <div style={{ marginTop: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>

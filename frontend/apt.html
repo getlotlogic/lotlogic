@@ -981,6 +981,7 @@
             <h2>You're <em>parked.</em></h2>
             <p>Your parking pass for <em>${escapeHtml(property.name)}</em> is active${plate ? ` for plate <strong>${escapeHtml(plate)}</strong>` : ''}. No further steps — your plate is your pass.</p>
             <div class="success-ref">VALID UNTIL ${escapeHtml(untilText.toUpperCase())}</div>
+            ${refId ? `<div class="success-detail">REF ${escapeHtml(refId)} — SAVE THIS IF YOU NEED TO CALL</div>` : ''}
           ` : `
             <h2>Request <em>submitted.</em></h2>
             <p>Your registration for <em>${escapeHtml(property.name)}</em> is in. The leasing office or towing company will review it — you'll be notified.</p>
