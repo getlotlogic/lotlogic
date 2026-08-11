@@ -13702,6 +13702,17 @@ function App() {
 
   // When viewing as a partner, filter lots/violations to that partner's lots
   const effectiveUser = viewAs ? { ...viewAs, _role: 'partner' } : owner;
+
+  useEffect(() => {
+    if (!owner) return;
+    const valid = isOwner
+      ? ['overview', 'lots', 'analytics', 'training', 'towactivity', 'earnings', 'invoices', 'account',
+         ...(isPlatformAdmin ? ['admin', 'app'] : [])]
+      : ['lots', 'lookup', 'activity', 'account',
+         ...(((viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? ['app'] : [])];
+    if (!valid.includes(tab)) setTab('lots');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [owner, viewAs, isOwner, isPlatformAdmin, tab]);
   const viewAsLotIds = viewAs ? lots.filter(l => l.partner_id === viewAs.id).map(l => l.id) : null;
   const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
   const effectiveViolations = viewAsLotIds ? violations.filter(v => viewAsLotIds.includes(v.lot_id)) : violations;
@@ -14211,7 +14222,7 @@ function App() {
         )}
 
         <div key={tab + (viewAs?.id || '')} className="page-slide">
-          {tab === 'overview' && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
+          {tab === 'overview' && isOwner && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
           {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
