@@ -588,7 +588,7 @@
           <span class="arrow">→</span>
         </button>
         <button type="button" class="choice-btn" id="chooseGuest">
-          <span>I'm visiting<span class="sub">visiting someone here</span></span>
+          <span>I'm visiting<span class="sub">get a short-term parking pass</span></span>
           <span class="arrow">→</span>
         </button>
       `;
@@ -646,7 +646,7 @@
           <input type="file" id="r_lease" accept="image/*,application/pdf" required>
           <div class="file-hint">A photo or PDF of your lease.</div>
 
-          <button type="submit" class="submit-btn" id="submitBtn">Submit for approval →</button>
+          <button type="submit" class="submit-btn" id="submitBtn">Get my pass →</button>
           <div class="hint">PENDING APPROVAL</div>
           <div id="progressMsg" class="progress"></div>
           <div id="errorMsg"></div>
@@ -677,11 +677,11 @@
     // ── Guest form ──────────────────────────────────────────────────────
     function showGuestForm() {
       newIdempotencyKey();
-      const hourOptions = [];
-      for (let h = 1; h <= 72; h += 1) {
+      const hourOptions = [2, 4, 8, 12, 24, 48, 72].map(h => {
         const sel = h === 24 ? ' selected' : '';
-        hourOptions.push(`<option value="${h}"${sel}>${h} hour${h === 1 ? '' : 's'}${h === 72 ? ' (maximum)' : ''}</option>`);
-      }
+        const label = h < 24 ? `${h} hours` : `${h / 24} day${h > 24 ? 's' : ''}`;
+        return `<option value="${h}"${sel}>${label}${h === 72 ? ' (maximum)' : ''}</option>`;
+      });
       app.innerHTML = `
         ${logoHtml()}
         <div class="property-name">
@@ -725,7 +725,7 @@
             <div class="file-hint">Leave blank and we'll assume 30 days.</div>
           </div>
 
-          <button type="submit" class="submit-btn" id="submitBtn">Submit for approval →</button>
+          <button type="submit" class="submit-btn" id="submitBtn">Get my pass →</button>
           <div class="hint">MAXIMUM STAY · 72 HOURS</div>
           <div id="progressMsg" class="progress"></div>
           <div id="errorMsg"></div>
@@ -883,7 +883,7 @@
         setProgress('');
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
-        btn.textContent = 'Submit for approval →';
+        btn.textContent = 'Get my pass →';
         submitting = false;
       }
     }
@@ -951,19 +951,25 @@
 
         setProgress('');
         const refId = (result && result.reference_id ? result.reference_id.toString().toUpperCase() : null);
-        showSuccess({ refId });
+        showSuccess({ refId, validUntil: result && result.valid_until ? result.valid_until : null, plate: result && result.plate_text ? result.plate_text : null });
       } catch (err) {
         setProgress('');
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
         btn.disabled = false;
-        btn.textContent = 'Submit for approval →';
+        btn.textContent = 'Get my pass →';
         submitting = false;
       }
     }
 
     function showSuccess(opts) {
       const refId = opts && opts.refId;
+      const validUntil = opts && opts.validUntil;
+      const plate = opts && opts.plate;
       const phone = property.policy_phone ? escapeHtml(property.policy_phone) : null;
+      // A returned validity window means the property auto-approves: the pass
+      // is LIVE — say so. No window = the classic review flow.
+      const live = !!validUntil;
+      const untilText = live ? new Date(validUntil).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
       app.innerHTML = `
         <div class="success-card">
           <div class="success-icon">
@@ -971,10 +977,16 @@
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
           </div>
-          <h2>Request <em>submitted.</em></h2>
-          <p>Your registration for <em>${escapeHtml(property.name)}</em> is in. The leasing office or towing company will review it — you'll be notified.</p>
-          ${refId ? `<div class="success-ref">${escapeHtml(refId)}</div>` : ''}
-          <div class="pending-badge">Pending approval</div>
+          ${live ? `
+            <h2>You're <em>parked.</em></h2>
+            <p>Your parking pass for <em>${escapeHtml(property.name)}</em> is active${plate ? ` for plate <strong>${escapeHtml(plate)}</strong>` : ''}. No further steps — your plate is your pass.</p>
+            <div class="success-ref">VALID UNTIL ${escapeHtml(untilText.toUpperCase())}</div>
+          ` : `
+            <h2>Request <em>submitted.</em></h2>
+            <p>Your registration for <em>${escapeHtml(property.name)}</em> is in. The leasing office or towing company will review it — you'll be notified.</p>
+            ${refId ? `<div class="success-ref">${escapeHtml(refId)}</div>` : ''}
+            <div class="pending-badge">Pending approval</div>
+          `}
           ${phone ? `<div class="success-detail">QUESTIONS? CALL ${phone}</div>` : ''}
         </div>
       `;

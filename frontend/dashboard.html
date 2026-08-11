@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
-  <title>LotView — AI Parking Enforcement</title>
+  <title>LotLogic — AI Parking Enforcement</title>
   <meta name="description" content="AI-powered parking management dashboard. Manage parking passes, cameras, and earnings in real time." />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F6F4EE" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0E0F11" />
@@ -139,6 +139,11 @@
       z-index: 0;
     }
     .app, .login-page { position: relative; z-index: 1; }
+    /* Desktop: the phone column reads as a stretched mobile app — widen the
+       working area so lot cards and logs use the screen. */
+    @media (min-width: 1024px) {
+      .page-content { max-width: 960px; }
+    }
     /* Admin clients: the 5-col grid can't fit a phone — stack to 2 cols and
        let emails wrap at natural boundaries instead of mid-word. */
     @media (max-width: 640px) {
@@ -1951,6 +1956,7 @@
 
     /* ── Brand-v2 KPI tiles (lots redesign) ── */
     .kpis-paper{display:grid;grid-template-columns:1fr 1fr}
+    .kpis-paper.single{grid-template-columns:1fr}
     .kpi-paper{
       padding:18px 16px 16px;
       border-right:1px solid var(--border-paper);
@@ -8200,7 +8206,7 @@ function OperatorActivityPage({ violations, lots }) {
         <div className="empty-state">
           <div style={{width:48, height:48, borderRadius:12, background:'rgba(59,130,246,.1)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22}}>⚡</div>
           <div className="empty-title">No activity yet</div>
-          <div className="empty-body">Completed jobs will appear here as you work</div>
+          <div className="empty-body">Recent enforcement activity will appear here</div>
         </div>
       ) : (
         dateGroups.map(([dateLabel, items]) => (
@@ -8605,7 +8611,7 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
             background: isOwner ? 'rgba(59,130,246,.12)' : 'rgba(139,92,246,.12)',
             color: isOwner ? '#60a5fa' : '#a78bfa',
             border: `1px solid ${isOwner ? 'rgba(59,130,246,.2)' : 'rgba(139,92,246,.2)'}`}}>
-            {isOwner ? 'Lot Owner' : 'Tow Boss'}
+            {isOwner ? 'Lot Owner' : 'Towing Partner'}
           </span>
         </div>
       </div>
@@ -8618,7 +8624,7 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
             <div className="settings-row-label">Role</div>
             <div className="settings-row-desc">{isOwner ? 'Full access to lots, cameras, earnings, and zones' : 'Dispatched to confirmed tows; cameras close the job automatically'}</div>
           </div>
-          <div className="settings-row-value" style={{color: isOwner ? '#60a5fa' : '#a78bfa'}}>{isOwner ? 'Owner' : 'Tow Boss'}</div>
+          <div className="settings-row-value" style={{color: isOwner ? '#60a5fa' : '#a78bfa'}}>{isOwner ? 'Owner' : 'Towing Partner'}</div>
         </div>
         {user.business_name && (
           <div className="settings-row">
@@ -8737,7 +8743,7 @@ function AccountPage({ user, onLogout, autoRefresh, setAutoRefresh, refreshInter
         <div className="settings-row">
           <div className="settings-row-info">
             <div className="settings-row-label">Database</div>
-            <div className="settings-row-desc">Supabase realtime connection</div>
+            <div className="settings-row-desc">Live data connection</div>
           </div>
           <div className="settings-row-value" style={{color: supabase ? '#4ade80' : '#fbbf24'}}>{supabase ? 'Connected' : 'Rails API'}</div>
         </div>
@@ -10813,8 +10819,8 @@ function ApartmentPermits({ property }) {
             <span className="pd-section-title">Pending approval</span>
             <span className="pd-section-count">{pending.length}</span>
           </div>
-          <div style={{display:'flex',gap:8}}>
-            <button onClick={() => setFeedbackOpen(true)} className="pd-share-btn">Report a bug / Request a feature</button>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'flex-end'}}>
+            <button onClick={() => setFeedbackOpen(true)} className="pd-share-btn">Feedback</button>
             <button onClick={refresh} className="pd-share-btn">Refresh</button>
           </div>
         </div>
@@ -10826,7 +10832,11 @@ function ApartmentPermits({ property }) {
             <button onClick={refresh} className="pd-share-btn" style={{marginLeft:6}}>Retry</button>
           </div>
         ) : pending.length === 0 ? (
-          <div className="pd-empty">Nothing waiting for review</div>
+          <div className="pd-empty">
+            {property?.guest_auto_approve
+              ? 'Short-term passes approve automatically at this property — only long-term registrations appear here.'
+              : 'Nothing waiting for review'}
+          </div>
         ) : (
           <div style={{display:'flex',flexDirection:'column',gap:6}}>
             {pending.map(row => {
@@ -12436,7 +12446,11 @@ function ALPRPropertiesPage({ user }) {
         </div>
       ) : (
         <div>
-          {properties.map(p => {
+          {[...properties].sort((a, b) => {
+            const ka = kpiCounts[a.id] || {}, kb = kpiCounts[b.id] || {};
+            const score = (k) => (k.registered || 0) + (k.openJobs || 0) + (k.overstays || 0) + (k.noReg || 0);
+            return score(kb) - score(ka);
+          }).map(p => {
             const kpi = kpiCounts[p.id] || {};
             const openJobs = kpi.openJobs || 0;
             const noReg = kpi.noReg || 0;
@@ -13379,8 +13393,15 @@ function AdminConsolePage({ user }) {
 // Partner-facing field tool: pick an apartment property, punch a plate, get a
 // glanceable Permitted / Expired / Not-registered verdict from the backend
 // apartment lookup (RLS-scoped to the partner's own properties via apiFetch).
-function PlateLookupVerdict({ out }) {
+function PlateLookupVerdict({ out, history, typedPlate }) {
   const d = (out && out.detail) || {};
+  // A same-plate rejection is the strongest hook-evidence there is — surface
+  // it inside the verdict, not three scrolls below.
+  const lastReject = history && history.entries ? history.entries.find(e => e.status === 'rejected') : null;
+  // If normalization stripped characters, show what was actually checked so
+  // a typo can't silently produce a tow verdict for the wrong string.
+  const normalizedNote = typedPlate && d.plate && typedPlate.replace(/[^A-Za-z0-9]/g, '').toUpperCase() !== d.plate
+    ? `Checked as ${d.plate}` : null;
   const tag = d.is_temp_tag ? (
     d.tag_expired
       ? <div style={{ marginTop: 12, color: '#D9534F', fontWeight: 600, fontSize: 14, lineHeight: 1.45 }}>Temp tag EXPIRED — eligible for the expired-tag (48-hr-warning) tow path.</div>
@@ -13390,13 +13411,23 @@ function PlateLookupVerdict({ out }) {
   let glyph = '✗', headline = 'Not registered', sub = 'No active pass — eligible to tow.';
   if (out.verdict === 'resident') { tone = { border: '#3FA45B', bg: 'rgba(63,164,91,.12)', fg: '#3FA45B' }; glyph = '✓'; headline = 'Permitted'; sub = 'Parking pass' + (d.unit ? ' · Unit ' + d.unit : '') + (d.name ? ' · ' + d.name : ''); }
   else if (out.verdict === 'guest') { tone = { border: '#3FA45B', bg: 'rgba(63,164,91,.12)', fg: '#3FA45B' }; glyph = '✓'; headline = 'Permitted'; sub = 'Parking pass' + (d.unit ? ' · Unit ' + d.unit : '') + (d.hours_left != null ? ' · ' + d.hours_left + 'h left' : ''); }
-  else if (out.verdict === 'expired_guest') { tone = { border: 'var(--accent)', bg: 'rgba(251,191,36,.12)', fg: 'var(--accent-dark)' }; glyph = '!'; headline = 'Expired pass'; sub = 'Pass expired' + (d.unit ? ' · Unit ' + d.unit : ''); }
+  else if (out.verdict === 'expired_guest') {
+    tone = { border: 'var(--accent)', bg: 'rgba(251,191,36,.12)', fg: 'var(--accent-dark)' }; glyph = '!'; headline = 'Expired pass';
+    const ago = d.valid_until ? Math.max(0, Math.round((Date.now() - new Date(d.valid_until).getTime()) / 3600000)) : null;
+    sub = 'Pass expired' + (ago != null ? ` ${ago}h ago` : '') + (d.unit ? ' · Unit ' + d.unit : '') + ' — eligible to tow.';
+  }
   return (
     <div style={{ marginTop: 20, border: '2px solid ' + tone.border, background: tone.bg, borderRadius: 12, padding: '24px 20px', textAlign: 'center' }}>
       <div style={{ fontSize: 48, lineHeight: 1, color: tone.fg, marginBottom: 8 }}>{glyph}</div>
       <div style={{ fontWeight: 800, fontSize: 24, color: tone.fg }}>{headline}</div>
       <div style={{ fontSize: 15, color: 'var(--text-secondary)', marginTop: 8, lineHeight: 1.4 }}>{sub}</div>
       {d.plate && <div style={{ display: 'inline-block', marginTop: 14, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)', padding: '8px 16px', borderRadius: 8, fontFamily: 'ui-monospace, monospace', fontSize: 18, fontWeight: 700, letterSpacing: '.08em' }}>{d.plate}</div>}
+      {normalizedNote && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-faint)' }}>{normalizedNote}</div>}
+      {lastReject && (out.verdict === 'not_registered' || out.verdict === 'expired_guest') && (
+        <div style={{ marginTop: 12, fontSize: 13, fontWeight: 700, color: '#D9534F' }}>
+          Registration rejected {new Date(lastReject.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}{lastReject.reject_reason ? ` — ${lastReject.reject_reason}` : ''}
+        </div>
+      )}
       {tag}
     </div>
   );
@@ -13535,7 +13566,11 @@ function PlateLookupPage({ user }) {
         if (!alive) return;
         const apts = scopePropsToPartner(p || [], user).filter(x => x.property_type === 'apartment');
         setProperties(apts);
-        setPropertyId(apts[0]?.id || '');
+        // Remember the operator's property — defaulting to the alphabetical
+        // first lot made 'not registered' verdicts against the WRONG property.
+        let remembered = null;
+        try { remembered = localStorage.getItem('lotlogic_lookup_property'); } catch {}
+        setPropertyId(apts.some(a => a.id === remembered) ? remembered : (apts[0]?.id || ''));
       })
       .catch(() => { if (alive) setProperties([]); });
     return () => { alive = false; };
@@ -13576,22 +13611,22 @@ function PlateLookupPage({ user }) {
       ) : (
         <>
           <label style={labelStyle}>Property</label>
-          <select value={propertyId} onChange={e => setPropertyId(e.target.value)} style={{ width: '100%', padding: '12px 14px', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 15 }}>
+          <select value={propertyId} onChange={e => { setPropertyId(e.target.value); try { localStorage.setItem('lotlogic_lookup_property', e.target.value); } catch {} }} style={{ width: '100%', padding: '12px 14px', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 15 }}>
             {properties.map(p => <option key={p.id} value={p.id}>{p.name || p.address || p.id}</option>)}
           </select>
           <label style={labelStyle}>License plate</label>
           <input value={plate} onChange={e => setPlate(e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter') run(); }}
             autoCapitalize="characters" autoComplete="off" placeholder="ABC1234"
-            style={{ width: '100%', padding: '16px 14px', background: 'var(--accent)', color: '#1a1a1a', border: '1px solid var(--border)', borderRadius: 8, fontSize: 26, fontWeight: 700, textAlign: 'center', letterSpacing: '.1em', fontFamily: 'ui-monospace, monospace' }} />
+            style={{ width: '100%', padding: '16px 14px', background: 'var(--bg-card)', color: 'var(--text-primary)', border: '2px solid var(--border)', borderRadius: 10, fontSize: 26, fontWeight: 700, textAlign: 'center', letterSpacing: '.1em', fontFamily: 'ui-monospace, monospace', outlineColor: 'var(--accent)' }} />
           <button onClick={run} disabled={busy} style={{ width: '100%', marginTop: 18, padding: '15px', background: 'var(--text-primary)', color: 'var(--bg-primary)', border: 'none', borderRadius: 999, fontWeight: 700, fontSize: 16, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>
             {busy ? 'Checking…' : 'Check'}
           </button>
           {error && <div style={{ background: 'rgba(217,83,79,.12)', border: '1px solid #D9534F', color: '#D9534F', borderRadius: 8, padding: '10px 12px', fontSize: 13, marginTop: 16, textAlign: 'center' }}>{error}</div>}
-          {result && <PlateLookupVerdict out={result} />}
+          {result && <PlateLookupVerdict out={result} history={history} typedPlate={plate} />}
           {history && history.entries && history.entries.length > 0 && (
             <div style={{ marginTop: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
-                Tag history · {history.entries.length}{history.entries.length === 50 ? '+' : ''}
+                Pass history · {history.entries.length}{history.entries.length === 50 ? '+' : ''}
               </div>
               <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-card)' }}>
                 {history.entries.map((e, i) => {
@@ -13603,13 +13638,15 @@ function PlateLookupPage({ user }) {
                     <div key={e.id} style={{ padding: '10px 14px', borderTop: i ? '1px solid var(--border-subtle)' : 'none', display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
-                          {e.kind === 'permanent' ? 'Permanent plate' : 'Guest pass'}
+                          {e.kind === 'permanent' ? 'Long-term pass' : 'Short-term pass'}
                           {e.unit ? ` · Unit ${e.unit}` : ''}{e.name ? ` · ${e.name}` : ''}
                         </div>
                         <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
                           {fmt(e.created_at)}{e.valid_until ? ` → ${fmt(e.valid_until)}` : ''}
-                          {e.reject_reason ? ` · ${e.reject_reason}` : ''}
                         </div>
+                        {e.reject_reason && (
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#D9534F', marginTop: 2 }}>Rejected — {e.reject_reason}</div>
+                        )}
                       </div>
                       <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.05em', color: statusColor, alignSelf: 'center' }}>{e.status}</div>
                     </div>
@@ -14141,7 +14178,7 @@ function App() {
       <header className="header" role="banner">
         <div className="header-left">
           <div className="header-shield" aria-hidden="true">LL</div>
-          <div className="header-wordmark">Lot<span>View</span></div>
+          <div className="header-wordmark">Lot<span>Logic</span></div>
         </div>
         <div className="header-right">
           <button
