@@ -12466,7 +12466,7 @@ function RegisterPassModal({ prop, onClose }) {
   );
 }
 
-function ALPRPropertiesPage({ user }) {
+function ALPRPropertiesPage({ user, impersonating = false }) {
   const { addToast } = useToast();
   // Property deletion cascades to plates, cameras and passes. Partners enforce
   // lots, they don't own them — and an admin impersonating a partner arrives
@@ -12744,8 +12744,10 @@ function ALPRPropertiesPage({ user }) {
                 <div className="lot-foot-paper">
                   {/* Partner staff register passes over the phone/counter.
                       Apartment cards only — truck-plaza registration is a
-                      different flow (policy ack, cooldown, 48h cap). */}
-                  {user?._role === 'partner' && p.property_type === 'apartment' && (
+                      different flow (policy ack, cooldown, 48h cap). Hidden in
+                      View-as-Partner: the admin's owner token would 404 on the
+                      partner-scoped endpoint. */}
+                  {user?._role === 'partner' && !impersonating && p.property_type === 'apartment' && (
                     <button onClick={() => setRegisterProp(p)}>Register a parking pass</button>
                   )}
                   <button onClick={() => setSelectedId(p.id)}>View property <span className="arr">›</span></button>
@@ -14519,7 +14521,7 @@ function App() {
         <div key={tab + (viewAs?.id || '')} className="page-slide">
           {tab === 'overview' && isOwner && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
-          {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
+          {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} impersonating={!!viewAs} />}
           {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
           {tab === 'towactivity' && isOwner && <TowActivityPage user={effectiveUser} />}
           {tab === 'earnings' && isOwner && showMoney && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
