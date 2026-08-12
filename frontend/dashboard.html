@@ -6857,11 +6857,15 @@ function computeBillingStatus(v) {
   const a = v.action_taken;
   const conf = !!v.tow_confirmed_at;
   const dispatched = v.dispatched_at ? new Date(v.dispatched_at) : null;
-  // Cooldown-breach rows are never tow-eligible and never enter the QuickBooks
-  // pipeline. Visually segregated into their own queue so operators don't
-  // confuse them with billable tow events. Backend billing query is patched
-  // separately to exclude these rows.
-  if (v.violation_type === 'cooldown')          return 'cooldown_breach';
+  // Cooldown AUTO-FLAG rows are never tow-eligible and never enter the
+  // QuickBooks pipeline. Visually segregated into their own queue so operators
+  // don't confuse them with billable tow events. The backend billing query
+  // excludes them separately (violation_type='cooldown' AND action_taken!='tow').
+  // A cooldown row with a RECORDED TOW (action_taken='tow', from the Parking
+  // Log "tow" button via POST /violations/record-tow) is real enforcement and
+  // must bill like any other tow — let it fall through to the normal
+  // classification below (it resolves to 'confirmed' once tow_confirmed_at is set).
+  if (v.violation_type === 'cooldown' && v.action_taken !== 'tow') return 'cooldown_breach';
   if (v.left_before_tow_at)                     return 'left_before_tow';
   if (a === 'plate_correction')                 return 'no_tow';
   if (a === 'tow'     && conf)                  return 'confirmed';
@@ -7496,12 +7500,15 @@ function ConfirmationReviewView({ user, lots, partnersProp }) {
     // reason in the modal and render with a red Confirm button.
     // Partners have zero server-side permission on these endpoints (they
     // 400/403), so the view is purely read-only evidence for them.
-    // Cooldown-breach rows are NEVER billable — they're a gate-deny event,
+    // Cooldown AUTO-FLAG rows are NEVER billable — they're a gate-deny event,
     // no tow ever happens. Suppress the destructive actions entirely so
     // an operator can't accidentally force-bill or invoice one. The
-    // QuickBooks weekly cron also excludes violation_type='cooldown'
-    // (see lotlogic-backend/routers/quickbooks.py), but the UI gate
-    // is the more visible guardrail.
+    // QuickBooks weekly cron also excludes cooldown auto-flags
+    // (violation_type='cooldown' AND action_taken!='tow'), but the UI gate
+    // is the more visible guardrail. A cooldown row with a RECORDED TOW
+    // (action_taken='tow') is real enforcement: computeBillingStatus no longer
+    // returns 'cooldown_breach' for it, so it flows through the normal billable
+    // actions like any other confirmed tow.
     const isCooldownBreach = computeBillingStatus(r) === 'cooldown_breach';
     const actions = [];
     if (role !== 'partner' && !isCooldownBreach) {
