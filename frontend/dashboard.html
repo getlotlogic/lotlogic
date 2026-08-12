@@ -13931,6 +13931,10 @@ function App() {
     try { const t = localStorage.getItem('lotlogic_tab'); return (!t || t === 'jobs') ? 'lots' : t; } catch { return 'lots'; }
   });
   const [lots, setLots] = useState([]);
+  // True after the first successful lots fetch — tab coercion must not run
+  // before this or a persisted Earnings/Billing tab gets bounced (and
+  // re-persisted as 'lots') while `lots` is still the initial [].
+  const [lotsLoaded, setLotsLoaded] = useState(false);
   const [lotStates, setLotStates] = useState({});
   const [violations, setViolations] = useState([]);
   const [alprViolations, setAlprViolations] = useState([]);
@@ -13994,10 +13998,13 @@ function App() {
 
   useEffect(() => {
     if (!owner) return;
-    // Don't coerce while lots are still loading — showMoney is false until the
-    // first loadData resolves, and coercing a persisted 'earnings' tab away
-    // during that window would bounce a legitimate legacy owner to Lots.
-    if (loading) return;
+    // Don't coerce until lots have actually loaded once — showMoney is false
+    // until then, and coercing a persisted 'earnings' tab away during that
+    // window would bounce a legitimate legacy owner to Lots (and the
+    // tab-persistence effect would write the bounce back to localStorage).
+    // The transient `loading` flag is NOT a safe guard here: on mount this
+    // effect fires before the loadData effect ever sets loading=true.
+    if (!lotsLoaded) return;
     const valid = isOwner
       ? ['overview', 'lots', 'analytics', 'training', 'towactivity', 'account',
          ...(showMoney ? ['earnings', 'invoices'] : []),
@@ -14006,7 +14013,7 @@ function App() {
          ...(((viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? ['app'] : [])];
     if (!valid.includes(tab)) setTab('lots');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [owner, viewAs, isOwner, isPlatformAdmin, tab, showMoney, loading]);
+  }, [owner, viewAs, isOwner, isPlatformAdmin, tab, showMoney, lotsLoaded]);
   const viewAsLotIds = viewAsLotIdsEarly;
   const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
   const effectiveViolations = viewAsLotIds ? violations.filter(v => viewAsLotIds.includes(v.lot_id)) : violations;
@@ -14028,6 +14035,7 @@ function App() {
       const lotsData = await db.getLots(filter);
       if (loadIdRef.current !== myId) return; // Stale call, discard
       setLots(lotsData);
+      setLotsLoaded(true);
 
       // Fetch enforcement partners across both lots.partner_id and
       // properties.tow_company_id so ALPR-only properties (no lots row)
@@ -14100,7 +14108,7 @@ function App() {
     clearInterval(timerRef.current);
     if (realtimeRef.current) { supabase?.removeChannel(realtimeRef.current); realtimeRef.current = null; }
     if (alprRealtimeRef.current) { supabase?.removeChannel(alprRealtimeRef.current); alprRealtimeRef.current = null; }
-    setOwner(null); setLots([]); setLotStates({}); setViolations([]); setAlprViolations([]); setPartners([]); setViewAs(null);
+    setOwner(null); setLots([]); setLotsLoaded(false); setLotStates({}); setViolations([]); setAlprViolations([]); setPartners([]); setViewAs(null);
     setTab('lots');
     try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
   }
