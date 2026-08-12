@@ -8635,7 +8635,7 @@ function ChangePasswordSection() {
   );
 }
 
-function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval }) {
+function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval, showFees = true }) {
   const isOwner = user._role === 'owner';
   const [notifyPrefs, setNotifyPrefs] = useState(() => NotifyManager.getPrefs());
   const [notifyPerm, setNotifyPerm] = useState(() => NotifyManager.getPermission());
@@ -8706,7 +8706,10 @@ function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setAutoRefr
           (their own rates, what they bill the vehicle owner per action).
           revenue_share stays hidden — that's LotLogic's platform cut and
           part of the partner agreement, not a self-service field. */}
-      {!isOwner && <PartnerFeeEditor user={user} />}
+      {/* SaaS (all-apartment) partners pay a subscription — no per-tow fee
+          schedule to edit. Tow-truck plates below stay for everyone: plate
+          matching is live enforcement, not money. */}
+      {!isOwner && showFees && <PartnerFeeEditor user={user} />}
 
       {/* Tow-truck plates — enforcement partners only. Used by the tow-confirm
           edge function to match camera sightings against partner trucks. */}
@@ -13977,17 +13980,32 @@ function App() {
   // When viewing as a partner, filter lots/violations to that partner's lots
   const effectiveUser = viewAs ? { ...viewAs, _role: 'partner' } : owner;
 
+  const viewAsLotIdsEarly = viewAs ? lots.filter(l => l.partner_id === viewAs.id).map(l => l.id) : null;
+  // SaaS accounts (all-apartment, e.g. N Style + the apartment owners) have no
+  // per-tow money flow: no legacy `lots` rows → no Earnings/Billing tabs, no
+  // fee-schedule editor. Platform admins always see money surfaces; in
+  // View-as-Partner the check runs against the impersonated partner's lots so
+  // the admin sees exactly what that partner sees. No new flag anywhere —
+  // "has zero legacy lots" IS the SaaS derivation (spec 2026-08-12).
+  const showMoney = (isPlatformAdmin && !viewAs)
+    || (viewAsLotIdsEarly ? viewAsLotIdsEarly.length > 0 : (lots || []).length > 0);
+
   useEffect(() => {
     if (!owner) return;
+    // Don't coerce while lots are still loading — showMoney is false until the
+    // first loadData resolves, and coercing a persisted 'earnings' tab away
+    // during that window would bounce a legitimate legacy owner to Lots.
+    if (loading) return;
     const valid = isOwner
-      ? ['overview', 'lots', 'analytics', 'training', 'towactivity', 'earnings', 'invoices', 'account',
+      ? ['overview', 'lots', 'analytics', 'training', 'towactivity', 'account',
+         ...(showMoney ? ['earnings', 'invoices'] : []),
          ...(isPlatformAdmin ? ['admin', 'app'] : [])]
       : ['lots', 'lookup', 'activity', 'account',
          ...(((viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? ['app'] : [])];
     if (!valid.includes(tab)) setTab('lots');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [owner, viewAs, isOwner, isPlatformAdmin, tab]);
-  const viewAsLotIds = viewAs ? lots.filter(l => l.partner_id === viewAs.id).map(l => l.id) : null;
+  }, [owner, viewAs, isOwner, isPlatformAdmin, tab, showMoney, loading]);
+  const viewAsLotIds = viewAsLotIdsEarly;
   const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
   const effectiveViolations = viewAsLotIds ? violations.filter(v => viewAsLotIds.includes(v.lot_id)) : violations;
   const effectiveLotStates = viewAsLotIds
@@ -14341,8 +14359,11 @@ function App() {
     { id: 'analytics',   label: 'Analytics',   badge: 0 },
     { id: 'training',    label: 'Training',    badge: trainingBadge },
     { id: 'towactivity', label: 'Tow truck',   badge: 0 },
-    { id: 'earnings',    label: 'Earnings',    badge: 0 },
-    { id: 'invoices',    label: 'Billing',     badge: 0 },
+    // SaaS (all-apartment) owners have no per-tow money flow — see showMoney.
+    ...(showMoney ? [
+      { id: 'earnings',    label: 'Earnings',    badge: 0 },
+      { id: 'invoices',    label: 'Billing',     badge: 0 },
+    ] : []),
     // Platform-admin only: the internal console (clients / onboard / feedback),
     // folded in from admin.html. Gated again at render on isPlatformAdmin.
     ...(isPlatformAdmin ? [{ id: 'admin', label: 'Admin', badge: 0 }] : []),
@@ -14501,14 +14522,14 @@ function App() {
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} />}
           {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
           {tab === 'towactivity' && isOwner && <TowActivityPage user={effectiveUser} />}
-          {tab === 'earnings' && isOwner && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
+          {tab === 'earnings' && isOwner && showMoney && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
-          {tab === 'invoices' && isOwner && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} isPlatformAdmin={isPlatformAdmin} />}
+          {tab === 'invoices' && isOwner && showMoney && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} isPlatformAdmin={isPlatformAdmin} />}
           {tab === 'admin' && isPlatformAdmin && <AdminConsolePage user={owner} />}
           {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} />}
           {tab === 'app' && (isPlatformAdmin || (FRANK_APP_TAB_LIVE && isOperator && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID)) && <PartnerAppPage />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
-          {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} />}
+          {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} />}
         </div>
       </main>
 
