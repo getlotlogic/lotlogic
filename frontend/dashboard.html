@@ -13604,7 +13604,7 @@ function AdminConsolePage({ user }) {
 // Partner-facing field tool: pick an apartment property, punch a plate, get a
 // glanceable Permitted / Expired / Not-registered verdict from the backend
 // apartment lookup (RLS-scoped to the partner's own properties via apiFetch).
-function PlateLookupVerdict({ out, history, typedPlate }) {
+function PlateLookupVerdict({ out, history, typedPlate, onPick }) {
   const d = (out && out.detail) || {};
   // A same-plate rejection is the strongest hook-evidence there is — surface
   // it inside the verdict, not three scrolls below.
@@ -13627,7 +13627,9 @@ function PlateLookupVerdict({ out, history, typedPlate }) {
     const ago = d.valid_until ? Math.max(0, Math.round((Date.now() - new Date(d.valid_until).getTime()) / 3600000)) : null;
     sub = 'Pass expired' + (ago != null ? ` ${ago}h ago` : '') + (d.unit ? ' · Unit ' + d.unit : '') + ' — eligible to tow.';
   }
+  const suggestions = out.verdict === 'not_registered' && Array.isArray(out.suggestions) ? out.suggestions : [];
   return (
+    <>
     <div style={{ marginTop: 20, border: '2px solid ' + tone.border, background: tone.bg, borderRadius: 12, padding: '24px 20px', textAlign: 'center' }}>
       <div style={{ fontSize: 48, lineHeight: 1, color: tone.fg, marginBottom: 8 }}>{glyph}</div>
       <div style={{ fontWeight: 800, fontSize: 24, color: tone.fg }}>{headline}</div>
@@ -13641,6 +13643,34 @@ function PlateLookupVerdict({ out, history, typedPlate }) {
       )}
       {tag}
     </div>
+    {/* Fuzzy near-misses: a typo or partial read shouldn't dead-end at
+        "not registered". Tapping a plate re-runs the lookup on it, so the
+        tow verdict is always rendered from a real exact check — the
+        suggestion list itself is never a verdict. */}
+    {suggestions.length > 0 && (
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+          No exact match — closest registered plates
+        </div>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-card)' }}>
+          {suggestions.map((s, i) => (
+            <button key={s.plate} onClick={() => onPick && onPick(s.plate)}
+              aria-label={`Check plate ${s.plate}`}
+              style={{ display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '13px 14px', background: 'none', border: 'none', borderBottom: i < suggestions.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer', textAlign: 'left' }}>
+              <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 17, fontWeight: 700, letterSpacing: '.08em', color: 'var(--text-primary)' }}>{s.plate}</span>
+              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: s.active_now ? '#4ade80' : 'var(--accent-dark)' }}>
+                  {s.source === 'resident' ? 'Pass on file' : (s.active_now ? 'Active pass' : 'Expired pass')}
+                </span>
+                {(s.unit || s.name) && <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{[s.unit ? 'Unit ' + s.unit : null, s.name].filter(Boolean).join(' · ')}</span>}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 6, textAlign: 'center' }}>Tap a plate to check it.</div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -13795,8 +13825,11 @@ function PlateLookupPage({ user }) {
   // requests in flight and whichever RETURNED last won.) Same reqRef pattern
   // as useActiveRoster.
   const lookupReqRef = React.useRef(0);
-  async function run() {
-    const pl = plate.trim();
+  // `overridePlate` lets a tapped suggestion re-run immediately with the
+  // picked plate (state hasn't flushed yet). Button onClick passes an event
+  // object, hence the typeof guard.
+  async function run(overridePlate) {
+    const pl = (typeof overridePlate === 'string' ? overridePlate : plate).trim();
     if (busy) return; // Enter key had no busy guard — the button did
     if (!propertyId || !pl) { setError('Pick a property and enter a plate.'); return; }
     const req = ++lookupReqRef.current;
@@ -13835,7 +13868,7 @@ function PlateLookupPage({ user }) {
             {busy ? 'Checking…' : 'Check'}
           </button>
           {error && <div style={{ background: 'rgba(217,83,79,.12)', border: '1px solid #D9534F', color: '#D9534F', borderRadius: 8, padding: '10px 12px', fontSize: 13, marginTop: 16, textAlign: 'center' }}>{error}</div>}
-          {result && <PlateLookupVerdict out={result} history={history} typedPlate={searchedPlate} />}
+          {result && <PlateLookupVerdict out={result} history={history} typedPlate={searchedPlate} onPick={(pl) => { setPlate(pl); run(pl); }} />}
           {history && history.entries && history.entries.length > 0 && (
             <div style={{ marginTop: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
