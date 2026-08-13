@@ -2464,7 +2464,13 @@ async function apiFetch(path, options = {}) {
     let msg = `Server error (${r.status})`;
     try {
       const body = await r.json();
-      if (body.detail) msg = body.detail;
+      // Pydantic 422 returns { detail: [{msg, loc, type, ...}] } — same
+      // array-shape bug authLogin already guards against: coercing the
+      // array into new Error() renders "[object Object]" to the user.
+      if (Array.isArray(body.detail)) {
+        const msgs = body.detail.map(d => (d && typeof d === 'object' ? d.msg : String(d))).filter(Boolean);
+        if (msgs.length) msg = msgs.join(', ');
+      } else if (typeof body.detail === 'string') msg = body.detail;
       else if (body.error) msg = body.error;
     } catch {}
     const err = new Error(msg);
