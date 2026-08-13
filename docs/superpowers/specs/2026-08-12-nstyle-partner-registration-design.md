@@ -26,7 +26,7 @@
   - `require_subject`; reject unless `subject.type == 'partner'`.
   - Property must exist, `property_type == 'apartment'`, and `tow_company_id == subject.id` — else 404 (scope-shaped, not 403).
   - No reCAPTCHA. Body mirrors the public form minus photos: `property_id, plate_text, visitor_name, host_unit, phone?, email?, stay_hours (1–72), is_temp_tag, tag_expiration?, submission_idempotency_key`.
-  - Inserts with `status='active'` immediately (the partner registering **is** the approval), `registration_source='partner'`, `registered_by_partner_id = subject.id`.
+  - Inserts with `status='active'` immediately (the partner registering **is** the approval), `registration_source='dashboard'` (the live DB's `visitor_passes_registration_source_check` has a fixed value list predating the repo's migration files — found during prod verification; attribution lives in `registered_by_partner_id = subject.id`, so no new enum value/migration was needed).
   - Doc-key validation skipped (no photo keys accepted in v1 — avoids opening the unauthenticated `/apartment/uploads` surface to a new caller).
 - **Tests:** partner of another property → 404; owner token → rejected; truck-plaza property → rejected; idempotent replay → 200 same row; attribution + source stamped; resulting row satisfies `plate_matcher._find_candidates` predicates (`status='active'`, `valid_from<=now<valid_until`).
 
