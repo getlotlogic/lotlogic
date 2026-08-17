@@ -528,9 +528,9 @@ The property and tow operator are not liable for any damage to trucks, trailers,
           <div style="font-size:12px;opacity:.65;margin-top:4px;">Plate characters only — no state or province</div>
           <div id="preflightMsg" style="font-size:13px;color:#9A5530;margin-top:-8px;margin-bottom:8px;font-family:'DM Mono',monospace;letter-spacing:.04em;"></div>
 
-          <label for="backPlate">Trailer / Rear License Plate <span style="opacity:.7;font-weight:normal;">(if different)</span></label>
-          <input type="text" id="backPlate" class="plate-input" placeholder="leave blank if same" maxlength="10" autocomplete="off">
-          <div style="font-size:12px;opacity:.65;margin-top:4px;">Plate characters only — no state or province</div>
+          <label for="backPlate">Trailer / Rear License Plate <span class="required">*</span></label>
+          <input type="text" id="backPlate" class="plate-input" placeholder="XYZ 5678" required maxlength="10" autocomplete="off">
+          <div style="font-size:12px;opacity:.65;margin-top:4px;">Plate on the back of your rig — trailer plate if you have one. Only one plate? Enter it again.</div>
 
           <label for="phone">Phone Number <span class="required">*</span></label>
           <input type="tel" id="phone" placeholder="(555) 123-4567" required>
@@ -704,9 +704,12 @@ The property and tow operator are not liable for any damage to trucks, trailers,
         if (!driverName) throw new Error('Operator name is required.');
         if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
         if (REGION_TOKENS.has(plateText)) throw new Error('That looks like a state, not a plate — enter the plate characters only.');
-        if (backPlateText && REGION_TOKENS.has(backPlateText)) throw new Error('The trailer plate looks like a state name, not a plate — enter the plate characters only, or leave it blank.');
-        if (backPlateText && backPlateText.length < 4) throw new Error('Trailer/rear plate must be at least 4 characters, or leave it blank.');
-        if (backPlateText && backPlateText === plateText) throw new Error('Trailer/rear plate must differ from the front plate, or leave it blank.');
+        // Rear/trailer plate is REQUIRED for truck-plaza passes (2026-08-17):
+        // camera reads of either end of the rig must be tie-able to the pass.
+        // A single-plate truck enters the same plate again — that's accepted.
+        if (!backPlateText) throw new Error('Please enter the trailer / rear plate. If your truck has only one plate, enter it again.');
+        if (REGION_TOKENS.has(backPlateText)) throw new Error('The trailer plate looks like a state name, not a plate — enter the plate characters only.');
+        if (backPlateText.length < 2) throw new Error('Please enter a valid trailer / rear plate.');
         if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
         if (![12, 24, 36, 48].includes(stayHours)) throw new Error('Choose 12, 24, 36, or 48 hours.');
 
