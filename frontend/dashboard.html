@@ -9264,12 +9264,12 @@ function CooldownChip({ passId, priorFlagCount, registeredAt, priorEnd }) {
 // the truck registered again while it ALREADY held an active pass at this lot
 // (matched on plate OR phone) — resetting its stay to dodge the 24h cooldown.
 // Operator/tow-partner facing only; the driver is never shown this.
-function ReregTowFlag({ matchedOn }) {
-  // Confidence-tiered: a PLATE match is the same truck re-upping (tow); a
-  // PHONE-only match (different plate) is often a second truck from the same
-  // company (review, not tow). Copy stays honest about the unreliable-exit
-  // caveat so the operator verifies presence before towing.
-  const phoneOnly = matchedOn === 'phone';
+function ReregTowFlag({ pass }) {
+  // PLATE match = same truck re-upping (tow); PHONE-only (different plate) =
+  // likely a second truck from the same company (review). Below the banner we
+  // show BOTH overlapping passes — dates + photos — as on-the-spot proof for
+  // the tow driver that the truck holds two passes at once.
+  const phoneOnly = pass.matched_on === 'phone';
   const cfg = phoneOnly
     ? { accent:'#f59e0b', bg:'rgba(245,158,11,.10)', border:'rgba(245,158,11,.45)',
         chipBg:'#b45309', chip:'⚠ REVIEW', title:'Same phone, different plate',
@@ -9277,6 +9277,18 @@ function ReregTowFlag({ matchedOn }) {
     : { accent:'#ef4444', bg:'rgba(239,68,68,.12)', border:'rgba(239,68,68,.45)',
         chipBg:'#dc2626', chip:'🚨 TOW', title:'Re-registered while already parked',
         body:'Registered a new pass while a prior one here is still active (same plate).' };
+  const ref = (id) => id ? '#' + String(id).slice(-8) : '';
+  const passRow = (label, from, until, id, photo) => (
+    <div style={{display:'flex',alignItems:'center',gap:10,padding:'6px 0',borderTop:'1px solid var(--border)'}}>
+      {photo
+        ? <img src={photo} alt="" style={{width:48,height:34,objectFit:'cover',borderRadius:5,flex:'none'}} />
+        : <div style={{width:48,height:34,borderRadius:5,flex:'none',background:'var(--border)'}} />}
+      <div style={{display:'flex',flexDirection:'column',minWidth:0}}>
+        <span style={{fontSize:12,fontWeight:700,color:'var(--text-primary)'}}>{label} · {ref(id)}</span>
+        <span style={{fontSize:12,color:'var(--text-muted)'}}>{fmtCooldownDateTime(from)} → {fmtCooldownDateTime(until)}</span>
+      </div>
+    </div>
+  );
   return (
     <div style={{
       marginTop: 8,
@@ -9297,6 +9309,11 @@ function ReregTowFlag({ matchedOn }) {
       </div>
       <div style={{fontSize:12,color:'var(--text-secondary)',lineHeight:1.45}}>
         {cfg.body}
+      </div>
+      <div style={{marginTop:2}}>
+        <div style={{fontSize:11,fontWeight:600,letterSpacing:'.03em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:2}}>Proof — two passes at once</div>
+        {passRow('Already active', pass.matched_valid_from, pass.matched_valid_until, pass.matched_active_pass_id, pass.matched_image_url)}
+        {passRow('This registration', pass.valid_from, pass.valid_until, pass.id, pass.first_seen_image_url)}
       </div>
     </div>
   );
@@ -10468,7 +10485,7 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                     active pass here (matched on plate OR phone). Operator/tow
                     facing — the driver never sees this. */}
                 {r.reregistration_flagged_at && (
-                  <ReregTowFlag matchedOn={r.matched_on} />
+                  <ReregTowFlag pass={r} />
                 )}
 
                 {/* Status explainer. In bucket mode it only belongs on the
