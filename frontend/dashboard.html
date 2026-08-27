@@ -9197,14 +9197,34 @@ function CooldownChip({ passId, priorFlagCount, registeredAt, priorEnd }) {
     if (!isNaN(after) && after >= 0 && after < 24) breach = { after, before: 24 - after };
   }
   const countSuffix = priorFlagCount > 0 ? ` · ${priorFlagCount}× before` : '';
-  const msg = breach
-    ? `⚠ Re-registered ${fmtHrsShort(breach.after)} after the prior pass ended — inside the 24h cooldown${countSuffix}`
-    : `⚠ Re-registered within cooldown${countSuffix}`;
+  const body = breach
+    ? `Back ${fmtHrsShort(breach.after)} after the prior pass ended${countSuffix}`
+    : `Returned inside the cooldown window${countSuffix}`;
+  // Same red TOW banner as ReregTowFlag — cooldown re-registration is the same
+  // violation class; only the text differs. Keeps the expandable prior-visits.
   return (
-    <div className="cooldown-chip-wrap">
-      <button className="parking-reg-badge cooldown" onClick={toggle} aria-expanded={open}>
-        <span className="cooldown-chip-msg">{msg}</span>
-        <span className="cooldown-chip-cta">{open ? 'Hide prior visits ▴' : 'See prior visits ▾'}</span>
+    <div className="cooldown-chip-wrap" style={{
+      marginTop: 8,
+      background: 'rgba(239,68,68,.12)',
+      border: '1px solid rgba(239,68,68,.45)',
+      borderLeft: '4px solid #ef4444',
+      borderRadius: 8,
+      padding: '10px 12px',
+    }}>
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <span style={{
+          fontSize: 11, fontWeight: 900, letterSpacing: '.06em',
+          color: '#fff', background: '#dc2626',
+          padding: '2px 8px', borderRadius: 5, whiteSpace: 'nowrap',
+        }}>🚨 TOW</span>
+        <span style={{fontSize:13,fontWeight:800,color:'#ef4444'}}>Re-registered within the 24-hour cooldown</span>
+      </div>
+      <div style={{fontSize:12,color:'var(--text-secondary)',lineHeight:1.45,marginTop:4}}>{body}</div>
+      <button className="cooldown-chip-cta" onClick={toggle} aria-expanded={open} style={{
+        marginTop:6, background:'none', border:'none', padding:0, cursor:'pointer',
+        color:'#ef4444', fontWeight:700, fontSize:12,
+      }}>
+        {open ? 'Hide prior visits ▴' : 'See prior visits ▾'}
       </button>
       {open && (
         <div className="cooldown-visits">
@@ -9256,7 +9276,7 @@ function ReregTowFlag({ matchedOn }) {
         body:'A new pass shares this phone with an active one here, but the plate is different — likely a second truck from the same company. Verify before any tow.' }
     : { accent:'#ef4444', bg:'rgba(239,68,68,.12)', border:'rgba(239,68,68,.45)',
         chipBg:'#dc2626', chip:'🚨 TOW', title:'Re-registered while already parked',
-        body:'Registered a new pass while a prior one here is still active (same plate) — the move to reset the stay past the 48-hour limit. Camera exits are unreliable, so verify the truck is still on the lot before towing.' };
+        body:'Registered a new pass while a prior one here is still active (same plate).' };
   return (
     <div style={{
       marginTop: 8,
