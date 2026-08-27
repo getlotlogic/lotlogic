@@ -9240,6 +9240,47 @@ function CooldownChip({ passId, priorFlagCount, registeredAt, priorEnd }) {
     </div>
   );
 }
+// Re-registration → TOW banner. Renders on a pass the backend flagged because
+// the truck registered again while it ALREADY held an active pass at this lot
+// (matched on plate OR phone) — resetting its stay to dodge the 24h cooldown.
+// Operator/tow-partner facing only; the driver is never shown this.
+function ReregTowFlag({ matchedOn }) {
+  // Confidence-tiered: a PLATE match is the same truck re-upping (tow); a
+  // PHONE-only match (different plate) is often a second truck from the same
+  // company (review, not tow). Copy stays honest about the unreliable-exit
+  // caveat so the operator verifies presence before towing.
+  const phoneOnly = matchedOn === 'phone';
+  const cfg = phoneOnly
+    ? { accent:'#f59e0b', bg:'rgba(245,158,11,.10)', border:'rgba(245,158,11,.45)',
+        chipBg:'#b45309', chip:'⚠ REVIEW', title:'Same phone, different plate',
+        body:'A new pass shares this phone with an active one here, but the plate is different — likely a second truck from the same company. Verify before any tow.' }
+    : { accent:'#ef4444', bg:'rgba(239,68,68,.12)', border:'rgba(239,68,68,.45)',
+        chipBg:'#dc2626', chip:'🚨 TOW', title:'Re-registered while already parked',
+        body:'Registered a new pass while a prior one here is still active (same plate) — the move to reset the stay past the 48-hour limit. Camera exits are unreliable, so verify the truck is still on the lot before towing.' };
+  return (
+    <div style={{
+      marginTop: 8,
+      background: cfg.bg,
+      border: `1px solid ${cfg.border}`,
+      borderLeft: `4px solid ${cfg.accent}`,
+      borderRadius: 8,
+      padding: '10px 12px',
+      display: 'flex', flexDirection: 'column', gap: 4,
+    }}>
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <span style={{
+          fontSize: 11, fontWeight: 900, letterSpacing: '.06em',
+          color: '#fff', background: cfg.chipBg,
+          padding: '2px 8px', borderRadius: 5, whiteSpace: 'nowrap',
+        }}>{cfg.chip}</span>
+        <span style={{fontSize:13,fontWeight:800,color:cfg.accent}}>{cfg.title}</span>
+      </div>
+      <div style={{fontSize:12,color:'var(--text-secondary)',lineHeight:1.45}}>
+        {cfg.body}
+      </div>
+    </div>
+  );
+}
 function fmtVisitDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -10400,6 +10441,14 @@ function TruckParkingLog({ propertyId, isOwner = false, mode = 'default' }) {
                     registeredAt={r.valid_from}
                     priorEnd={r.cooldown_prior_end}
                   />
+                )}
+
+                {/* Re-registration → TOW. Only on passes the backend flagged
+                    because the truck registered again while already holding an
+                    active pass here (matched on plate OR phone). Operator/tow
+                    facing — the driver never sees this. */}
+                {r.reregistration_flagged_at && (
+                  <ReregTowFlag matchedOn={r.matched_on} />
                 )}
 
                 {/* Status explainer. In bucket mode it only belongs on the
