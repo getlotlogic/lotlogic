@@ -274,7 +274,7 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
       await page.click('#submitBtn');
 
       await expect(errorText(page)).toHaveText(
-        'This stay has already been paid for — check your text message for the confirmation. Do not pay again.');
+        'This stay has already been paid for. Do not pay again — reload this page to see your pass status.');
 
       // The key is KEPT, so a retry hits the same refusal instead of a new order.
       expect(await storedKeys(page)).toEqual([bodies[0].idempotency_key]);
@@ -387,7 +387,7 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
 
     await expect(page.locator('#plazaUnknown')).toHaveText("We can't find that payment.");
     await expect(page.locator('.not-found')).toContainText(
-      'If you were charged, reply to your text confirmation or contact the plaza.');
+      'If you were charged, reload this page in a minute — or contact the plaza.');
     await expect(page.locator('.success-card')).toHaveCount(0);
     // Terminal: one look, then stop. (Give a beat for a stray second poll.)
     await page.waitForTimeout(2_500);
@@ -401,8 +401,31 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     await page.goto(`${origin}/visit.html?qr=${QR}&plaza_payment_id=${PAYMENT_ID}`);
 
     await expect(page.locator('#plazaStatus')).toHaveText(
-      "We couldn't reach the server to confirm your payment. If you received a text " +
-      "confirmation you're all set; otherwise reload this page.",
+      "We couldn't reach the server to confirm your payment. If you were charged, " +
+      "your parking pass is being activated; reload this page in a minute to confirm.",
+      { timeout: 40_000 },
+    );
+    await expect(page.locator('.success-card')).toHaveCount(0);
+  });
+
+  // Twilio does not work in this deployment, so the return page must not tell
+  // anyone a text is on its way. The only receipt we can honestly point at is
+  // the page they are already looking at, plus whatever Square sends from the
+  // contact details they typed at checkout.
+  test('a pass still activating promises a page, not a text', async ({ page }) => {
+    await stubPage(page, 'on');
+    await page.route(/\/plaza\/payments\/[^/]+\/status/, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ payment_status: 'pending', pass_active: false }),
+    }));
+
+    await page.goto(`${origin}/visit.html?qr=${QR}&plaza_payment_id=${PAYMENT_ID}`);
+
+    await expect(page.locator('#plazaStatus')).toHaveText(
+      'Payment received — your parking pass is being activated. Keep this page ' +
+      'as your receipt; Square will also email or text you a receipt if you ' +
+      'entered your contact info at checkout.',
       { timeout: 40_000 },
     );
     await expect(page.locator('.success-card')).toHaveCount(0);
