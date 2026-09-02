@@ -995,7 +995,7 @@ The property and tow operator are not liable for any damage to trucks, trailers,
       if (status === 409) {
         const kind = plazaSpentKeyKind(d);
         if (kind === 'paid') {
-          return 'This stay has already been paid for — check your text message for the confirmation. Do not pay again.';
+          return 'This stay has already been paid for. Do not pay again — reload this page to see your pass status.';
         }
         if (kind === 'retry') {
           return 'That payment attempt has already been used. Please try again.';
@@ -1152,15 +1152,17 @@ The property and tow operator are not liable for any damage to trucks, trailers,
       // The server said "not yet" — a webhook still in flight. Reassurance earned.
       if (heardFromServer) {
         showPlazaMessage(
-          "Payment received — your pass is being activated and we've texted you a " +
-          "confirmation. You're okay to park."
+          "Payment received — your parking pass is being activated. Keep this " +
+          "page as your receipt; Square will also email or text you a receipt " +
+          "if you entered your contact info at checkout."
         );
         return;
       }
       // We never got an answer, so we know nothing about the money. Say so.
       showPlazaMessage(
-        "We couldn't reach the server to confirm your payment. If you received a " +
-        "text confirmation you're all set; otherwise reload this page."
+        "We couldn't reach the server to confirm your payment. If you were " +
+        "charged, your parking pass is being activated; reload this page in a " +
+        "minute to confirm."
       );
     }
 
@@ -1188,7 +1190,7 @@ The property and tow operator are not liable for any damage to trucks, trailers,
           </div>
           <h2>You're <em>registered.</em></h2>
           <p id="plazaPaidCopy">Payment received. Your parking pass is active.</p>
-          <div class="success-detail" style="margin-top:14px;">Pass for ${escapeHtml(property && property.name || '')} — we've texted you a confirmation.</div>
+          <div class="success-detail" style="margin-top:14px;">Pass for ${escapeHtml(property && property.name || '')}.</div>
           <div class="success-detail" style="margin-top:14px;color:#6b7280;font-size:12px;">
             Save this page (screenshot or bookmark) as your registration receipt.
           </div>
@@ -1200,7 +1202,7 @@ The property and tow operator are not liable for any damage to trucks, trailers,
       app.innerHTML = plazaLogoHtml() + `
         <div class="not-found">
           <h2 id="plazaUnknown">We can't find that payment.</h2>
-          <p>If you were charged, reply to your text confirmation or contact the plaza.</p>
+          <p>If you were charged, reload this page in a minute — or contact the plaza.</p>
         </div>
       `;
     }
