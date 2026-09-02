@@ -9577,7 +9577,7 @@ function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
 }
 
 
-function TruckParkingLog({ propertyId, propertyType, isOwner = false, mode = 'default' }) {
+function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = false, isOwner = false, mode = 'default' }) {
   // mode='history' → the permanent, all-time record (no date lower bound): every
   // registration ever, all statuses, searchable + CSV. 'default' = the live ops
   // log (last 4 days). Same machinery either way.
@@ -9636,10 +9636,24 @@ function TruckParkingLog({ propertyId, propertyType, isOwner = false, mode = 'de
   const [exporting, setExporting] = useState(false);
   // Pay-to-park counters (GET /plaza/summary). null until the endpoint answers,
   // and back to null on any error — a lot that isn't taking payments, an older
-  // backend, or a partner the endpoint won't answer for must all render exactly
+  // backend, or a viewer the endpoint won't answer for must all render exactly
   // the page that existed before pay-to-park, not an error.
   const [paySummary, setPaySummary] = useState(null);
-  const isPayToPark = propertyType === 'truck_plaza';
+  // Three conditions, and each one is load-bearing:
+  //   truck_plaza          — apartments have no paid flow at all;
+  //   pay_to_park_enabled  — a plaza that hasn't been switched on has no
+  //                          payments, and "Today: 0 passes · $0.00 collected"
+  //                          on the live Charlotte lot reads as a broken till,
+  //                          not as an accurate zero;
+  //   not History          — this component is mounted TWICE (the ops log and
+  //                          the all-time History), and with the section filter
+  //                          on "all" both are on screen: ungated, the strip
+  //                          and the stat would render twice and the summary
+  //                          would be fetched twice on every poll.
+  // Gating the FETCH on all three (rather than only the render) is what keeps
+  // the doubled request from happening at all. `paySummary` stays null here, so
+  // the stat and the strip below are gated by construction.
+  const isPayToPark = propertyType === 'truck_plaza' && payToParkEnabled === true && !isHistory;
   // Camera-snapshot cache for inline violation/auto-cleared image previews.
   // Keyed by row id. The image fetch is lazy (IntersectionObserver) so a
   // 500-row log doesn't hammer the API on load. Replaces what ActivePassTracker
@@ -10359,11 +10373,13 @@ function TruckParkingLog({ propertyId, propertyType, isOwner = false, mode = 'de
             </div>
             {/* What the lot took in. Cents come down from the backend so the
                 dashboard never does money arithmetic on a float; today and the
-                month are both the LOT's day, not UTC's. Rendered only once the
-                endpoint has answered — a lot that isn't taking payments shows
-                nothing here rather than a row of zeroes. Both windows are
-                checked, not just the object: an older backend answering a
-                different shape must hide the stat, never blank the log. */}
+                month are both the LOT's day, not UTC's.
+                Both windows are checked individually, not just the object,
+                because the backend deliberately sends them as null to a tow
+                partner (R42) — the partner still gets the processing strip
+                above, and nothing here. The same check covers an older backend
+                answering a shape this page doesn't recognise: hide the stat,
+                never blank the log. */}
             {paySummary?.today && paySummary?.month_to_date && (
               <div style={{display:'flex',gap:12,alignItems:'baseline',flexWrap:'wrap',fontSize:12,color:'var(--text-muted)'}}>
                 <span>
@@ -10559,18 +10575,26 @@ function TruckParkingLog({ propertyId, propertyType, isOwner = false, mode = 'de
                     with nothing to keep in sync. Absent on every pass that was
                     registered for free — those rows look exactly as they did. */}
                 {r.paid_amount_cents != null && (
-                  <span className={'paid-stamp' + (r.payment_status === 'refunded' ? ' is-refunded' : '')}>
-                    <span>
-                      {r.payment_status === 'refunded'
-                        ? 'refunded'
-                        : '$' + Math.round(r.paid_amount_cents / 100)}
-                      {' · '}{r.stay_days === 2 ? '48h' : '24h'}
-                      {r.paid_at ? ` · paid ${fmtTime(r.paid_at)}` : ''}
+                  r.payment_status === 'refunded' ? (
+                    // Refunded says one thing and stops. An amount would read
+                    // as money the lot still has, and a receipt link would send
+                    // the operator to a Square page for a charge that was given
+                    // back — both are worse than silence.
+                    <span className="paid-stamp is-refunded">refunded</span>
+                  ) : (
+                    <span className="paid-stamp">
+                      <span>
+                        {fmtMoney(r.paid_amount_cents)}
+                        {' · '}{r.stay_days === 2 ? '48h' : '24h'}
+                        {/* History spans months, so a bare clock time there is
+                            ambiguous — it needs the date with it. */}
+                        {r.paid_at ? ` · paid ${isHistory ? fmtDateTime(r.paid_at) : fmtTime(r.paid_at)}` : ''}
+                      </span>
+                      {r.square_receipt_url && (
+                        <a href={r.square_receipt_url} target="_blank" rel="noopener">receipt</a>
+                      )}
                     </span>
-                    {r.square_receipt_url && (
-                      <a href={r.square_receipt_url} target="_blank" rel="noopener">receipt</a>
-                    )}
-                  </span>
+                  )
                 )}
 
                 {/* Repeat-offender chip — only on passes the backend flagged as
@@ -11880,7 +11904,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               Live
             </div>
           </div>
-          <ErrorBoundary label="truck parking log"><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} isOwner={isOwner} /></ErrorBoundary>
+          <ErrorBoundary label="truck parking log"><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} /></ErrorBoundary>
         </>
       ) : (
         // Apartment permit registry (M3): pending approval queue + resident /
@@ -11898,7 +11922,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             </div>
             <div className="pd-section-meta">All registrations · all time</div>
           </div>
-          <ErrorBoundary label="history"><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} isOwner={isOwner} mode="history" /></ErrorBoundary>
+          <ErrorBoundary label="history"><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} mode="history" /></ErrorBoundary>
         </>
       )}
 
