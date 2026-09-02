@@ -242,6 +242,41 @@
       letter-spacing: -.01em;
     }
     .not-found p { font-size: 14px; color: var(--ink-2); line-height: 1.5; }
+    /* Pay-to-park only. Both override the global uppercase <label> styling —
+       these labels wrap a control, they aren't field captions. */
+    .duration-options { display: grid; gap: 10px; }
+    .duration-option {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0;
+      padding: 12px 14px;
+      background: var(--paper-2);
+      border: 1.5px solid var(--ink);
+      font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+      font-size: 16px;
+      font-weight: 600;
+      text-transform: none;
+      letter-spacing: normal;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .duration-option input { width: auto; margin: 0; flex: 0 0 auto; accent-color: var(--ink); }
+    .ack-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin: 18px 0 0;
+      font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.5;
+      text-transform: none;
+      letter-spacing: normal;
+      color: var(--ink-2);
+      cursor: pointer;
+    }
+    .ack-row input { width: auto; margin-top: 2px; flex: 0 0 auto; accent-color: var(--ink); }
   </style>
 </head>
 <body>
@@ -323,6 +358,11 @@
     const qrCodeId = (pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null)
       || new URLSearchParams(window.location.search).get('qr');
 
+    // Square sends the payer back to ?qr=<id>&plaza_payment_id=<uuid>. Its
+    // presence means "we just came back from checkout" — never that anything
+    // was paid. The status poll below is the only source of that truth.
+    const plazaPaymentId = new URLSearchParams(window.location.search).get('plaza_payment_id');
+
     let property = null;
 
     async function init() {
@@ -331,18 +371,50 @@
         return;
       }
       try {
-        const rows = await pgRest(`/properties?select=id,name,address,property_type,policy_text,policy_phone&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`);
+        const rows = await loadPropertyRow();
         const data = Array.isArray(rows) ? rows[0] : null;
         if (!data) {
           showNotFound('Lot Not Found', 'This parking pass link is not valid or has expired.');
           return;
         }
         property = data;
+        if (plazaPaymentId && property.property_type === 'truck_plaza') {
+          handlePlazaReturn(plazaPaymentId);
+          return;
+        }
         showForm();
       } catch (err) {
         console.error('init error:', err);
         showConnectionError(err);
       }
+    }
+
+    // Columns every deploy of this page can read. `pay_to_park_enabled` is
+    // asked for separately because the anon column grants may not include it
+    // yet — an older DB answers the wider select with a 4xx, and a page that
+    // died there would take the FREE form down with it. So: ask wide, and on
+    // any HTTP error re-ask narrow and treat the flag as off.
+    const PROPERTY_COLUMNS = 'id,name,address,property_type,policy_text,policy_phone';
+
+    function propertyQuery(columns) {
+      return `/properties?select=${columns}&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`;
+    }
+
+    async function loadPropertyRow() {
+      try {
+        return await pgRest(propertyQuery(PROPERTY_COLUMNS + ',pay_to_park_enabled'));
+      } catch (err) {
+        if (!err || !err.status) throw err;   // timeout / network — not a column problem
+        console.warn('pay_to_park_enabled unreadable — falling back to free registration:', err.message);
+        return await pgRest(propertyQuery(PROPERTY_COLUMNS));
+      }
+    }
+
+    // The single gate for every paid-only behaviour on this page.
+    function payToParkOn() {
+      return !!property
+        && property.property_type === 'truck_plaza'
+        && property.pay_to_park_enabled === true;
     }
 
     function showConnectionError(err) {
@@ -513,6 +585,28 @@ The property and tow operator are not liable for any damage to trucks, trailers,
     }
 
     function showTruckPlazaForm() {
+      const paid = payToParkOn();
+      // Free path: today's 12/24/36/48 dropdown, untouched. Paid path: the two
+      // stays we actually sell, priced on the control the payer taps.
+      const stayField = paid ? `<label>Stay Duration <span class="required">*</span></label>
+          <div class="duration-options" id="durationOptions">
+            <label class="duration-option"><input type="radio" name="duration" value="h24" checked><span>24 hours — $15</span></label>
+            <label class="duration-option"><input type="radio" name="duration" value="h48"><span>48 hours — $30</span></label>
+          </div>` : `<label for="stayHours">Stay Duration <span class="required">*</span></label>
+          <select id="stayHours" required>
+            <option value="" disabled selected>Select duration</option>
+            <option value="12">12 hours</option>
+            <option value="24">24 hours</option>
+            <option value="36">36 hours</option>
+            <option value="48">48 hours</option>
+          </select>`;
+      // §13.13 — the payer agrees to this BEFORE the charge, because there is
+      // no refund afterwards.
+      const ackField = paid ? `<label class="ack-row" for="payAck">
+            <input type="checkbox" id="payAck">
+            <span>I understand payment is non-refundable, does not exempt my vehicle from the parking policies, and that violating any rule may result in towing at my expense.</span>
+          </label>
+          ` : '';
       app.innerHTML = `
         <div class="logo">
           <div class="shield"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/></svg></div>
@@ -541,14 +635,7 @@ The property and tow operator are not liable for any damage to trucks, trailers,
           <label for="driverName">Operator Name <span class="required">*</span></label>
           <input type="text" id="driverName" placeholder="John Smith" required maxlength="80">
 
-          <label for="stayHours">Stay Duration <span class="required">*</span></label>
-          <select id="stayHours" required>
-            <option value="" disabled selected>Select duration</option>
-            <option value="12">12 hours</option>
-            <option value="24">24 hours</option>
-            <option value="36">36 hours</option>
-            <option value="48">48 hours</option>
-          </select>
+          ${stayField}
 
           <div style="margin-top:18px;background:#1F1B14;color:#F4ECD8;border:1.5px solid #1F1B14;padding:16px 18px;font-size:13px;line-height:1.55;letter-spacing:.02em;">
             <div style="font-family:'Fraunces',serif;font-style:italic;font-size:16px;margin-bottom:10px;color:#F4ECD8;">Towing enforced — please read the rules.</div>
@@ -568,13 +655,19 @@ The property and tow operator are not liable for any damage to trucks, trailers,
             <div style="margin-top:10px;font-size:12px;color:#D9C9A6;">By submitting you confirm you have read and agree to all parking policies shown above and understand the liability notice.</div>
           </div>
 
-          <button type="submit" class="submit-btn" id="submitBtn" style="margin-top:18px;">Get parking pass →</button>
+          ${ackField}<button type="submit" class="submit-btn" id="submitBtn" style="margin-top:18px;"${paid ? ' disabled' : ''}>${paid ? 'Pay &amp; register →' : 'Get parking pass →'}</button>
           <div id="errorMsg"></div>
         </form>
       `;
 
-      document.getElementById('passForm').addEventListener('submit', handleTruckPlazaSubmit);
+      document.getElementById('passForm').addEventListener('submit', paid ? handlePlazaPaySubmit : handleTruckPlazaSubmit);
       document.getElementById('plate').addEventListener('blur', preflightCheckPlate);
+      if (paid) {
+        // The acknowledgment gates the button — nothing is charged until it's ticked.
+        const ack = document.getElementById('payAck');
+        const payBtn = document.getElementById('submitBtn');
+        ack.addEventListener('change', () => { payBtn.disabled = !ack.checked; });
+      }
     }
 
     async function preflightCheckPlate() {
@@ -821,6 +914,303 @@ The property and tow operator are not liable for any damage to trucks, trailers,
           <div class="success-plate">${escapeHtml(plate)}</div>
           <div class="success-detail">VALID ${stayHours}H · UNTIL ${escapeHtml(expiresStr).toUpperCase()}</div>
           ${extras}
+        </div>
+      `;
+    }
+
+    // ── Pay-to-park (truck plaza) ──────────────────────────────────────
+    // Everything below runs only when properties.pay_to_park_enabled is true.
+    // The free registration path never reaches any of it.
+
+    // A stable fingerprint of what the payer typed. The idempotency key is
+    // keyed off this, so a retry of the SAME form reuses the SAME key (one
+    // Square order, one charge), while an edited form gets a fresh one.
+    function plazaFormSig(parts) {
+      const str = parts.join('|');
+      let h1 = 5381, h2 = 52711;
+      for (let i = 0; i < str.length; i++) {
+        const c = str.charCodeAt(i);
+        h1 = (((h1 << 5) + h1) + c) >>> 0;
+        h2 = (((h2 << 5) + h2) ^ c) >>> 0;
+      }
+      return h1.toString(36) + h2.toString(36);
+    }
+
+    // §13.6 — survives the full-page redirect to Square and any reload.
+    // sessionStorage, not a module variable: the page is destroyed and rebuilt
+    // by the round-trip, and a second key would mean a second order.
+    function plazaIdempotencyKey(formSig) {
+      const k = 'plaza_idem_' + formSig;
+      let v = null;
+      try { v = sessionStorage.getItem(k); } catch (e) {}
+      if (!v) {
+        v = (crypto.randomUUID && crypto.randomUUID()) ||
+            (Date.now() + '-' + Math.random().toString(36).slice(2));
+        try { sessionStorage.setItem(k, v); } catch (e) {}
+      }
+      return v;
+    }
+
+    // Drop a key the server has told us is spent. The next submit mints a new
+    // one — reusing a settled key just gets refused again.
+    function plazaForgetIdempotencyKey(formSig) {
+      try { sessionStorage.removeItem('plaza_idem_' + formSig); } catch (e) {}
+    }
+
+    // Every key this browser session minted for this page. Cleared once a pass
+    // is confirmed active, so the next stay starts clean.
+    function plazaClearIdempotencyKeys() {
+      try {
+        for (let i = sessionStorage.length - 1; i >= 0; i--) {
+          const k = sessionStorage.key(i);
+          if (k && k.indexOf('plaza_idem_') === 0) sessionStorage.removeItem(k);
+        }
+      } catch (e) {}
+    }
+
+    // A 409 on the idempotency key comes in two flavours and they are NOT
+    // interchangeable. `paid` / `refunded` mean money already changed hands
+    // for this exact stay: reminting the key there would hand the payer a
+    // second Square checkout for a stay they already bought, and this product
+    // issues no refunds. Every other spent-key code means no charge was made,
+    // so a fresh key is the right recovery.
+    function plazaSpentKeyKind(detail) {
+      const d = typeof detail === 'string' ? detail : '';
+      if (d === 'quote_already_settled:paid' || d === 'quote_already_settled:refunded') return 'paid';
+      if (d === 'idempotency_key_reuse_mismatch' || d === 'duplicate_quote' ||
+          d.indexOf('quote_already_settled:') === 0) return 'retry';
+      return null;
+    }
+
+    // Plain language for every refusal the payment entrance can answer with.
+    // Raw JSON and internal codes never reach the payer.
+    function plazaPayErrorMessage(status, detail) {
+      const d = typeof detail === 'string' ? detail : '';
+      if (status === 429) {
+        return 'Too many attempts in the last hour — please wait a bit and try again.';
+      }
+      if (status === 502 || status === 503) {
+        return 'Payments are unavailable right now. Please try again in a few minutes.';
+      }
+      if (status === 409) {
+        const kind = plazaSpentKeyKind(d);
+        if (kind === 'paid') {
+          return 'This stay has already been paid for — check your text message for the confirmation. Do not pay again.';
+        }
+        if (kind === 'retry') {
+          return 'That payment attempt has already been used. Please try again.';
+        }
+        return d || 'We could not start the payment. Please try again.';
+      }
+      if (status === 400) {
+        if (d.indexOf('recaptcha:') === 0) return 'Please retry — automated-access check failed.';
+        if (d === 'policy_not_acknowledged') return 'Please tick the box above to continue.';
+        if (d === 'plate_invalid') return 'Please enter a valid license plate number.';
+        return d || 'We could not start the payment. Please try again.';
+      }
+      if (status === 404) return 'This parking pass link is not valid.';
+      return 'Something went wrong. Please try again.';
+    }
+
+    async function handlePlazaPaySubmit(e) {
+      e.preventDefault();
+      if (submitting) return;
+      submitting = true;
+      const btn = document.getElementById('submitBtn');
+      const errorDiv = document.getElementById('errorMsg');
+      errorDiv.innerHTML = '';
+      btn.disabled = true;
+      btn.textContent = 'Starting payment…';
+
+      let formSig = null;
+      try {
+        const companyName = document.getElementById('companyName').value.trim();
+        const operatorName = document.getElementById('driverName').value.trim();
+        const plateText = normalizePlate(document.getElementById('plate').value);
+        const backPlateRaw = document.getElementById('backPlate')?.value || '';
+        const backPlateText = backPlateRaw.trim() ? normalizePlate(backPlateRaw) : null;
+        const phone = normalizePhone(document.getElementById('phone').value);
+        const durationEl = document.querySelector('input[name="duration"]:checked');
+        const duration = durationEl ? durationEl.value : '';
+        const acknowledged = !!document.getElementById('payAck')?.checked;
+
+        if (!companyName) throw new Error('Company name is required.');
+        if (!operatorName) throw new Error('Operator name is required.');
+        if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
+        if (REGION_TOKENS.has(plateText)) throw new Error('That looks like a state, not a plate — enter the plate characters only.');
+        if (!backPlateText) throw new Error('Please enter the trailer / rear plate. If your truck has only one plate, enter it again.');
+        if (REGION_TOKENS.has(backPlateText)) throw new Error('The trailer plate looks like a state name, not a plate — enter the plate characters only.');
+        if (backPlateText.length < 2) throw new Error('Please enter a valid trailer / rear plate.');
+        if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
+        if (duration !== 'h24' && duration !== 'h48') throw new Error('Choose 24 or 48 hours.');
+        if (!acknowledged) throw new Error('Please tick the box above to continue.');
+
+        const recaptchaToken = await getRecaptchaToken('plaza_pay').catch(() => null);
+        if (!recaptchaToken) throw new Error('Please retry — automated-access check failed.');
+
+        formSig = plazaFormSig([plateText, backPlateText, phone, companyName, operatorName, duration]);
+        const idemKey = plazaIdempotencyKey(formSig);
+
+        // The body carries a duration ENUM and never an amount: the price is
+        // the server's to decide (§13.2).
+        const data = await backendRegister('/plaza/quote-and-start', {
+          property_id: property.id,
+          duration: duration,
+          plate_text: plateText,
+          back_plate: backPlateText,
+          phone: phone,
+          company_name: companyName,
+          visitor_name: operatorName,
+          policy_acknowledged: true,
+          idempotency_key: idemKey,
+          recaptcha_token: recaptchaToken,
+        });
+
+        if (!data || !data.checkout_url) throw new Error('Could not start payment. Please try again.');
+        window.location.href = data.checkout_url;
+        return;   // leaving the page — keep the button disabled
+      } catch (err) {
+        const status = err && err.status;
+        const detail = err && (err.detail || err.message);
+        const spent = status === 409 ? plazaSpentKeyKind(detail) : null;
+        if (spent === 'retry' && formSig) {
+          // No charge was made under this key. Mint a fresh one next time —
+          // the server refuses a spent key forever.
+          plazaForgetIdempotencyKey(formSig);
+        }
+        const message = status
+          ? plazaPayErrorMessage(status, detail)
+          : friendlyErrorMessage(err);
+        errorDiv.innerHTML = '<div class="error">' + escapeHtml(message) + '</div>';
+        btn.innerHTML = 'Pay &amp; register →';
+        if (spent === 'paid') {
+          // Terminal. The stay is bought; the only thing another tap could buy
+          // is a second one. Keep the key, keep the form shut — `submitting`
+          // stays true so even an Enter keypress cannot re-submit.
+          btn.disabled = true;
+          const ackBox = document.getElementById('payAck');
+          if (ackBox) ackBox.disabled = true;
+          return;
+        }
+        btn.disabled = !document.getElementById('payAck')?.checked;
+        submitting = false;
+      }
+    }
+
+    // ── Return from Square (§13.11) ────────────────────────────────────
+    // "Paid" is never painted from the query string. Square redirects the
+    // moment the card clears; the pass is created by the webhook, so the page
+    // polls the server until it sees a live pass.
+    // One poll. Answers with {status: 200|404|null, body} so the caller can
+    // tell "the server said pending" apart from "we never reached the server"
+    // — those two must not end on the same reassuring copy. Bounded like every
+    // other fetch on this page: a hung request would otherwise eat the whole
+    // polling window in one go.
+    async function plazaFetchStatus(ppId, timeoutMs = 4000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(
+          BACKEND_URL + '/plaza/payments/' + encodeURIComponent(ppId) + '/status',
+          { signal: ctrl.signal, headers: { Accept: 'application/json' } },
+        );
+        if (res.status === 404) return { status: 404, body: null };
+        if (!res.ok) return { status: res.status, body: null };
+        const text = await res.text();
+        return { status: 200, body: text ? JSON.parse(text) : null };
+      } catch (e) {
+        return { status: null, body: null };   // timeout / offline
+      } finally { clearTimeout(t); }
+    }
+
+    async function handlePlazaReturn(ppId) {
+      showPlazaMessage('Confirming your payment…');
+      let heardFromServer = false;
+      for (let i = 0; i < 10; i++) {            // ~20s
+        const r = await plazaFetchStatus(ppId);
+        if (r.status === 404) {
+          // The id is not ours. Never tell someone their payment is fine when
+          // we cannot find a record of it.
+          showPlazaUnknown();
+          return;
+        }
+        if (r.status === 200) {
+          heardFromServer = true;
+          const s = r.body;
+          if (s && s.pass_active) {
+            plazaClearIdempotencyKeys();
+            showPlazaPaidSuccess();
+            return;
+          }
+          if (s && s.payment_status === 'failed') {
+            showPlazaFailed();
+            return;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      // The server said "not yet" — a webhook still in flight. Reassurance earned.
+      if (heardFromServer) {
+        showPlazaMessage(
+          "Payment received — your pass is being activated and we've texted you a " +
+          "confirmation. You're okay to park."
+        );
+        return;
+      }
+      // We never got an answer, so we know nothing about the money. Say so.
+      showPlazaMessage(
+        "We couldn't reach the server to confirm your payment. If you received a " +
+        "text confirmation you're all set; otherwise reload this page."
+      );
+    }
+
+    function plazaLogoHtml() {
+      return `
+        <div class="logo">
+          <div class="shield"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/></svg></div>
+          <h1>LotL<span>o</span>gic</h1>
+        </div>`;
+    }
+
+    function showPlazaMessage(message) {
+      app.innerHTML = plazaLogoHtml() + `
+        <div class="loading-state" id="plazaStatus">${escapeHtml(message)}</div>
+      `;
+    }
+
+    function showPlazaPaidSuccess() {
+      app.innerHTML = `
+        <div class="success-card">
+          <div class="success-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </div>
+          <h2>You're <em>registered.</em></h2>
+          <p id="plazaPaidCopy">Payment received. Your parking pass is active.</p>
+          <div class="success-detail" style="margin-top:14px;">Pass for ${escapeHtml(property && property.name || '')} — we've texted you a confirmation.</div>
+          <div class="success-detail" style="margin-top:14px;color:#6b7280;font-size:12px;">
+            Save this page (screenshot or bookmark) as your registration receipt.
+          </div>
+        </div>
+      `;
+    }
+
+    function showPlazaUnknown() {
+      app.innerHTML = plazaLogoHtml() + `
+        <div class="not-found">
+          <h2 id="plazaUnknown">We can't find that payment.</h2>
+          <p>If you were charged, reply to your text confirmation or contact the plaza.</p>
+        </div>
+      `;
+    }
+
+    function showPlazaFailed() {
+      app.innerHTML = plazaLogoHtml() + `
+        <div class="not-found">
+          <h2 id="plazaFailed">Payment did not go through.</h2>
+          <p>The payment did not complete, so no parking pass was created.</p>
+          <p>Scan the code again to retry.</p>
         </div>
       `;
     }
