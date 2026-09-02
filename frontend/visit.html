@@ -968,6 +968,20 @@ The property and tow operator are not liable for any damage to trucks, trailers,
       } catch (e) {}
     }
 
+    // A 409 on the idempotency key comes in two flavours and they are NOT
+    // interchangeable. `paid` / `refunded` mean money already changed hands
+    // for this exact stay: reminting the key there would hand the payer a
+    // second Square checkout for a stay they already bought, and this product
+    // issues no refunds. Every other spent-key code means no charge was made,
+    // so a fresh key is the right recovery.
+    function plazaSpentKeyKind(detail) {
+      const d = typeof detail === 'string' ? detail : '';
+      if (d === 'quote_already_settled:paid' || d === 'quote_already_settled:refunded') return 'paid';
+      if (d === 'idempotency_key_reuse_mismatch' || d === 'duplicate_quote' ||
+          d.indexOf('quote_already_settled:') === 0) return 'retry';
+      return null;
+    }
+
     // Plain language for every refusal the payment entrance can answer with.
     // Raw JSON and internal codes never reach the payer.
     function plazaPayErrorMessage(status, detail) {
@@ -976,11 +990,14 @@ The property and tow operator are not liable for any damage to trucks, trailers,
         return 'Too many attempts in the last hour — please wait a bit and try again.';
       }
       if (status === 502 || status === 503) {
-        return 'Payments are temporarily unavailable. Please try again in a few minutes.';
+        return 'Payments are unavailable right now. Please try again in a few minutes.';
       }
       if (status === 409) {
-        if (d === 'idempotency_key_reuse_mismatch' || d === 'duplicate_quote' ||
-            d.indexOf('quote_already_settled') === 0) {
+        const kind = plazaSpentKeyKind(d);
+        if (kind === 'paid') {
+          return 'This stay has already been paid for — check your text message for the confirmation. Do not pay again.';
+        }
+        if (kind === 'retry') {
           return 'That payment attempt has already been used. Please try again.';
         }
         return d || 'We could not start the payment. Please try again.';
@@ -1055,20 +1072,27 @@ The property and tow operator are not liable for any damage to trucks, trailers,
       } catch (err) {
         const status = err && err.status;
         const detail = err && (err.detail || err.message);
-        if (status === 409 && formSig && (
-              detail === 'idempotency_key_reuse_mismatch' ||
-              detail === 'duplicate_quote' ||
-              (typeof detail === 'string' && detail.indexOf('quote_already_settled') === 0))) {
-          // This key is spent. Mint a fresh one on the next attempt rather
-          // than re-offering a checkout link that may already be paid.
+        const spent = status === 409 ? plazaSpentKeyKind(detail) : null;
+        if (spent === 'retry' && formSig) {
+          // No charge was made under this key. Mint a fresh one next time —
+          // the server refuses a spent key forever.
           plazaForgetIdempotencyKey(formSig);
         }
         const message = status
           ? plazaPayErrorMessage(status, detail)
           : friendlyErrorMessage(err);
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(message) + '</div>';
-        btn.disabled = !document.getElementById('payAck')?.checked;
         btn.innerHTML = 'Pay &amp; register →';
+        if (spent === 'paid') {
+          // Terminal. The stay is bought; the only thing another tap could buy
+          // is a second one. Keep the key, keep the form shut — `submitting`
+          // stays true so even an Enter keypress cannot re-submit.
+          btn.disabled = true;
+          const ackBox = document.getElementById('payAck');
+          if (ackBox) ackBox.disabled = true;
+          return;
+        }
+        btn.disabled = !document.getElementById('payAck')?.checked;
         submitting = false;
       }
     }
@@ -1077,32 +1101,66 @@ The property and tow operator are not liable for any damage to trucks, trailers,
     // "Paid" is never painted from the query string. Square redirects the
     // moment the card clears; the pass is created by the webhook, so the page
     // polls the server until it sees a live pass.
+    // One poll. Answers with {status: 200|404|null, body} so the caller can
+    // tell "the server said pending" apart from "we never reached the server"
+    // — those two must not end on the same reassuring copy. Bounded like every
+    // other fetch on this page: a hung request would otherwise eat the whole
+    // polling window in one go.
+    async function plazaFetchStatus(ppId, timeoutMs = 4000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(
+          BACKEND_URL + '/plaza/payments/' + encodeURIComponent(ppId) + '/status',
+          { signal: ctrl.signal, headers: { Accept: 'application/json' } },
+        );
+        if (res.status === 404) return { status: 404, body: null };
+        if (!res.ok) return { status: res.status, body: null };
+        const text = await res.text();
+        return { status: 200, body: text ? JSON.parse(text) : null };
+      } catch (e) {
+        return { status: null, body: null };   // timeout / offline
+      } finally { clearTimeout(t); }
+    }
+
     async function handlePlazaReturn(ppId) {
       showPlazaMessage('Confirming your payment…');
+      let heardFromServer = false;
       for (let i = 0; i < 10; i++) {            // ~20s
-        try {
-          const r = await fetch(
-            BACKEND_URL + '/plaza/payments/' + encodeURIComponent(ppId) + '/status',
-            { headers: { Accept: 'application/json' } },
-          );
-          if (r.ok) {
-            const s = await r.json();
-            if (s && s.pass_active) {
-              plazaClearIdempotencyKeys();
-              showPlazaPaidSuccess();
-              return;
-            }
-            if (s && s.payment_status === 'failed') {
-              showPlazaFailed();
-              return;
-            }
+        const r = await plazaFetchStatus(ppId);
+        if (r.status === 404) {
+          // The id is not ours. Never tell someone their payment is fine when
+          // we cannot find a record of it.
+          showPlazaUnknown();
+          return;
+        }
+        if (r.status === 200) {
+          heardFromServer = true;
+          const s = r.body;
+          if (s && s.pass_active) {
+            plazaClearIdempotencyKeys();
+            showPlazaPaidSuccess();
+            return;
           }
-        } catch (e) { /* keep polling — a blip is not an answer */ }
+          if (s && s.payment_status === 'failed') {
+            showPlazaFailed();
+            return;
+          }
+        }
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
+      // The server said "not yet" — a webhook still in flight. Reassurance earned.
+      if (heardFromServer) {
+        showPlazaMessage(
+          "Payment received — your pass is being activated and we've texted you a " +
+          "confirmation. You're okay to park."
+        );
+        return;
+      }
+      // We never got an answer, so we know nothing about the money. Say so.
       showPlazaMessage(
-        "Payment received — your pass is being activated and we've texted you a " +
-        "confirmation. You're okay to park."
+        "We couldn't reach the server to confirm your payment. If you received a " +
+        "text confirmation you're all set; otherwise reload this page."
       );
     }
 
@@ -1134,6 +1192,15 @@ The property and tow operator are not liable for any damage to trucks, trailers,
           <div class="success-detail" style="margin-top:14px;color:#6b7280;font-size:12px;">
             Save this page (screenshot or bookmark) as your registration receipt.
           </div>
+        </div>
+      `;
+    }
+
+    function showPlazaUnknown() {
+      app.innerHTML = plazaLogoHtml() + `
+        <div class="not-found">
+          <h2 id="plazaUnknown">We can't find that payment.</h2>
+          <p>If you were charged, reply to your text confirmation or contact the plaza.</p>
         </div>
       `;
     }

@@ -170,6 +170,11 @@ async function fillPaidForm(page: Page) {
 
 const errorText = (page: Page) => page.locator('#errorMsg .error');
 
+const storedKeys = (page: Page) => page.evaluate(() =>
+  Object.keys(sessionStorage)
+    .filter((k) => k.startsWith('plaza_idem_'))
+    .map((k) => sessionStorage.getItem(k)));
+
 test.describe('pay-to-park visit.html @desktop-only', () => {
   test('flag off keeps the free form exactly as it is', async ({ page }) => {
     await openForm(page, 'off');
@@ -251,25 +256,44 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     expect(bodies[2].idempotency_key).not.toBe(bodies[0].idempotency_key);
 
     // Both keys are the persisted ones, not module state.
-    const stored = await page.evaluate(() =>
-      Object.keys(sessionStorage).filter((k) => k.startsWith('plaza_idem_')).map((k) => sessionStorage.getItem(k)),
-    );
+    const stored = await storedKeys(page);
     expect(stored).toHaveLength(2);
     expect(stored).toContain(bodies[0].idempotency_key);
     expect(stored).toContain(bodies[2].idempotency_key);
   });
 
-  test('a settled quote is explained and the next attempt uses a fresh key', async ({ page }) => {
+  // The back button after paying lands here. Reminting the key would sell the
+  // same stay twice, and this product does not refund.
+  for (const settled of ['paid', 'refunded']) {
+    test(`an already-${settled} quote is terminal — no new key, no second checkout`, async ({ page }) => {
+      await openForm(page, 'on');
+      const bodies = await stubQuote(page, (route) =>
+        refuse(route, 409, `quote_already_settled:${settled}`));
+
+      await fillPaidForm(page);
+      await page.click('#submitBtn');
+
+      await expect(errorText(page)).toHaveText(
+        'This stay has already been paid for — check your text message for the confirmation. Do not pay again.');
+
+      // The key is KEPT, so a retry hits the same refusal instead of a new order.
+      expect(await storedKeys(page)).toEqual([bodies[0].idempotency_key]);
+      await expect(page.locator('#submitBtn')).toBeDisabled();
+      await expect(page.locator('#payAck')).toBeDisabled();
+      expect(bodies).toHaveLength(1);
+    });
+  }
+
+  test('an abandoned quote remints the key and the next attempt goes through', async ({ page }) => {
     await openForm(page, 'on');
     const bodies = await stubQuote(page, (route, i) =>
-      i === 0 ? refuse(route, 409, 'quote_already_settled:paid') : okQuote(route));
+      i === 0 ? refuse(route, 409, 'quote_already_settled:abandoned') : okQuote(route));
 
     await fillPaidForm(page);
     await page.click('#submitBtn');
 
     await expect(errorText(page)).toHaveText('That payment attempt has already been used. Please try again.');
-    expect(await page.evaluate(() =>
-      Object.keys(sessionStorage).filter((k) => k.startsWith('plaza_idem_')).length)).toBe(0);
+    expect(await storedKeys(page)).toHaveLength(0);
 
     await page.click('#submitBtn');
     await page.waitForURL(`${CHECKOUT_URL}*`);
@@ -302,7 +326,7 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     detail = 'payments_unavailable';
     await page.click('#submitBtn');
     await expect(errorText(page)).toHaveText(
-      'Payments are temporarily unavailable. Please try again in a few minutes.');
+      'Payments are unavailable right now. Please try again in a few minutes.');
   });
 
   test('return from Square polls until the pass is live, then clears the key', async ({ page }) => {
@@ -332,8 +356,7 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     await expect(page.locator('#plazaPaidCopy')).toHaveText(
       'Payment received. Your parking pass is active.', { timeout: 15_000 });
     expect(calls).toBeGreaterThanOrEqual(2);
-    expect(await page.evaluate(() =>
-      Object.keys(sessionStorage).filter((k) => k.startsWith('plaza_idem_')).length)).toBe(0);
+    expect(await storedKeys(page)).toHaveLength(0);
   });
 
   test('a failed payment says so instead of showing a pass', async ({ page }) => {
@@ -347,6 +370,41 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     await page.goto(`${origin}/visit.html?qr=${QR}&plaza_payment_id=${PAYMENT_ID}`);
 
     await expect(page.locator('#plazaFailed')).toHaveText('Payment did not go through.');
+    await expect(page.locator('.success-card')).toHaveCount(0);
+  });
+
+  test('an unknown payment id stops the poll and never claims success', async ({ page }) => {
+    await stubPage(page, 'on');
+    let calls = 0;
+    await page.route(/\/plaza\/payments\/[^/]+\/status/, (route) => {
+      calls += 1;
+      return route.fulfill({
+        status: 404, contentType: 'application/json', body: JSON.stringify({ detail: 'not_found' }),
+      });
+    });
+
+    await page.goto(`${origin}/visit.html?qr=${QR}&plaza_payment_id=${PAYMENT_ID}`);
+
+    await expect(page.locator('#plazaUnknown')).toHaveText("We can't find that payment.");
+    await expect(page.locator('.not-found')).toContainText(
+      'If you were charged, reply to your text confirmation or contact the plaza.');
+    await expect(page.locator('.success-card')).toHaveCount(0);
+    // Terminal: one look, then stop. (Give a beat for a stray second poll.)
+    await page.waitForTimeout(2_500);
+    expect(calls).toBeLessThanOrEqual(1);
+  });
+
+  test('a return that never reaches the server says so instead of reassuring', async ({ page }) => {
+    await stubPage(page, 'on');
+    await page.route(/\/plaza\/payments\/[^/]+\/status/, (route) => route.abort());
+
+    await page.goto(`${origin}/visit.html?qr=${QR}&plaza_payment_id=${PAYMENT_ID}`);
+
+    await expect(page.locator('#plazaStatus')).toHaveText(
+      "We couldn't reach the server to confirm your payment. If you received a text " +
+      "confirmation you're all set; otherwise reload this page.",
+      { timeout: 40_000 },
+    );
     await expect(page.locator('.success-card')).toHaveCount(0);
   });
 
