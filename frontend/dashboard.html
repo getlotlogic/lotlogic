@@ -3496,7 +3496,9 @@ const db = {
   // Pay-to-park counters for the log header: today's + this month's collected
   // totals, and how many payments are still settling. Owner or the lot's tow
   // partner; anything else 404s, which the caller treats as "nothing to show".
-  // Returns { today: {count, cents}, month_to_date: {count, cents}, pending_recent }.
+  // Returns { today: {count, cents}, month_to_date: {count, cents}, pending_recent,
+  //           needs_review }. `today`, `month_to_date` and `needs_review` come
+  // back null for a tow partner (R42) — the lot's money is the owner's.
   async getPlazaSummary(propertyId) {
     return apiFetch(`/plaza/summary?property_id=${encodeURIComponent(propertyId)}`);
   },
@@ -10392,6 +10394,18 @@ function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = false, i
                 </span>
               </div>
             )}
+            {/* Money captured that never became a pass — a mismatched amount, a
+                trigger that fired after the charge, a second charge on one
+                order. The backend has been writing these down since day one
+                and nothing on any screen said so. Owner-only: the count comes
+                back null for a tow partner, and `null > 0` is false, so the
+                same expression is the gate. No link yet — the number is the
+                prompt to go and look. */}
+            {paySummary?.needs_review > 0 && (
+              <div style={{fontSize:12,fontWeight:600,color:'#f59e0b'}}>
+                ⚠️ {paySummary.needs_review} {paySummary.needs_review === 1 ? 'payment needs' : 'payments need'} review
+              </div>
+            )}
             {pillList.length > 0 && (
               <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
                 {pillList.map(({ id: s, label, color, count, loud: isLoud }) => {
@@ -10573,8 +10587,13 @@ function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = false, i
                 {/* Paid stamp. Comes through the parking log's JOIN on the
                     payment ledger, so a refund shows here on the next refresh
                     with nothing to keep in sync. Absent on every pass that was
-                    registered for free — those rows look exactly as they did. */}
-                {r.paid_amount_cents != null && (
+                    registered for free — those rows look exactly as they did.
+
+                    Gated on `payment_status`, not on the amount: the backend
+                    withholds `paid_amount_cents` and `square_receipt_url` from
+                    the tow partner (the lot's revenue is not a contractor's
+                    business), and that row still has to say it is paid. */}
+                {r.payment_status != null && (
                   r.payment_status === 'refunded' ? (
                     // Refunded says one thing and stops. An amount would read
                     // as money the lot still has, and a receipt link would send
@@ -10584,7 +10603,10 @@ function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = false, i
                   ) : (
                     <span className="paid-stamp">
                       <span>
-                        {fmtMoney(r.paid_amount_cents)}
+                        {/* The word stands in for the amount when the reader
+                            is not allowed the amount — the stamp still has to
+                            say "this one is paid". */}
+                        {r.paid_amount_cents != null ? fmtMoney(r.paid_amount_cents) : 'paid'}
                         {' · '}{r.stay_days === 2 ? '48h' : '24h'}
                         {/* History spans months, so a bare clock time there is
                             ambiguous — it needs the date with it. */}

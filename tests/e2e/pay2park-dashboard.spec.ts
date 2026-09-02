@@ -17,7 +17,9 @@
  *   - the header carries today's and the month's collected totals;
  *   - `pending_recent > 0` puts the false-tow guard above everything (§13.7),
  *     and the count drives the plural;
- *   - a tow partner (R42: `today: null`) gets the guard and no takings;
+ *   - a tow partner (R42: `today: null`) gets the guard and no takings, and
+ *     their log rows read "paid" with no amount and no receipt link (I2);
+ *   - `needs_review > 0` puts an owner-only line under the takings (I3);
  *   - a plaza with `pay_to_park_enabled` false, and the History mount, never
  *     ASK for the summary — this component is mounted twice on one screen;
  *   - a summary endpoint that 404s hides all of it rather than breaking the
@@ -83,6 +85,17 @@ const SUMMARY = {
   today: { count: 3, cents: 4500 },
   month_to_date: { count: 12, cents: 18000 },
   pending_recent: 2,
+  needs_review: 0,
+};
+
+/**
+ * The same paid row as the backend hands a TOW PARTNER: `payment_status` and
+ * `paid_at` survive, the amount and the receipt link come back null.
+ */
+const PARTNER_PAID_ROW = {
+  ...PAID_ROW,
+  paid_amount_cents: null,
+  square_receipt_url: null,
 };
 
 let server: http.Server;
@@ -303,6 +316,52 @@ test.describe('pay-to-park dashboard @desktop-only', () => {
     expect(summaryCalls()).toBe(0);
     await expect(log.locator('.processing-strip')).toHaveCount(0);
     await expect(log).not.toContainText('collected');
+  });
+
+  test("a partner's row says paid, with no amount and no receipt (I2)", async ({ page }) => {
+    // The tow partner is on the lot deciding whether to hook this truck, so
+    // "paid, and since when" has to reach them. What the truck was charged,
+    // and a live link into the Square payment, is the owner's revenue.
+    const { log } = await mountParkingLog(page, {
+      rows: [PARTNER_PAID_ROW],
+      summary: { today: null, month_to_date: null, pending_recent: 0, needs_review: null },
+    });
+
+    const stamp = log.locator('.paid-stamp');
+    await expect(stamp).toHaveCount(1);
+    await expect(stamp).toContainText('paid');
+    await expect(stamp).toContainText('24h');
+    // No amount, in any spelling, and nowhere to click through to the payment.
+    await expect(stamp).not.toContainText('$');
+    await expect(stamp.locator('a')).toHaveCount(0);
+    await expect(log).not.toContainText('$15');
+  });
+
+  test('captured money that never became a pass is surfaced to the owner (I3)', async ({ page }) => {
+    const { log } = await mountParkingLog(page, {
+      summary: { ...SUMMARY, needs_review: 2 },
+    });
+
+    await expect(log).toContainText('2 payments need review');
+  });
+
+  test('one payment needing review reads in the singular (I3)', async ({ page }) => {
+    const { log } = await mountParkingLog(page, {
+      summary: { ...SUMMARY, needs_review: 1 },
+    });
+
+    await expect(log).toContainText('1 payment needs review');
+  });
+
+  test('nothing to review says nothing at all (I3)', async ({ page }) => {
+    // A zero here is the normal state of a working lot. A line reading
+    // "0 payments need review" on every screen is noise that teaches the
+    // operator to stop reading the row.
+    const { log } = await mountParkingLog(page);
+
+    await expect(log).toContainText('Today:');
+    await expect(log).not.toContainText('need review');
+    await expect(log).not.toContainText('needs review');
   });
 
   test('a summary the viewer cannot read hides the money, not the log', async ({ page }) => {
