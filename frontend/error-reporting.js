@@ -36,8 +36,9 @@
 
   // A page may override the DSN before this script runs (a preview build, a
   // one-off debug session). Otherwise the config above wins.
-  if (!window.SENTRY_DSN) window.SENTRY_DSN = SENTRY_DSN;
-  if (!window.SENTRY_DSN) return; // Off. Nothing is fetched, nothing is defined.
+  var dsn = window.SENTRY_DSN || SENTRY_DSN;
+  if (!dsn) return; // Off. Nothing is fetched, nothing is defined, no global set.
+  window.SENTRY_DSN = dsn;
 
   var host = window.location.hostname;
   var environment = (host === 'lotlogicparking.com' || host === 'www.lotlogicparking.com')

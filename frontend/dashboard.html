@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
   <!-- Front-end error reporting. Inert until a DSN is set in the file itself. -->
-  <script src="/error-reporting.js"></script>
+  <script src="/error-reporting.js" defer></script>
   <title>LotLogic — AI Parking Enforcement</title>
   <meta name="description" content="AI-powered parking management dashboard. Manage parking passes, cameras, and earnings in real time." />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F6F4EE" />
@@ -2452,14 +2452,31 @@ function tzOffsetOn(ymd, timeZone = LOT_TIMEZONE) {
   } catch { return null; }
 }
 
+// The UTC offset in force in `timeZone` at a specific instant — unlike
+// tzOffsetOn (anchored at 12:00 UTC of a calendar day), this reads the
+// offset at the exact Date given, so a bound built near a DST transition
+// (2 AM local) gets its own offset instead of borrowing midday's.
+function tzOffsetAt(date, timeZone = LOT_TIMEZONE) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+      .formatToParts(date);
+    const name = (parts.find(p => p.type === 'timeZoneName') || {}).value || '';
+    const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(name);
+    if (!m) return name === 'GMT' ? '+00:00' : null;
+    return `${m[1]}${m[2].padStart(2, '0')}:${m[3] || '00'}`;
+  } catch { return null; }
+}
+
 // "2026-09-03" → "2026-09-03T00:00:00.000-04:00" / "...T23:59:59.999-04:00".
 // Anything that is not a bare calendar date is passed straight through, because
 // the caller already sent a full timestamp.
 function lotDayBound(ymd, edge) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || '')) return ymd;
-  const off = tzOffsetOn(ymd);
+  const time = edge === 'end' ? '23:59:59.999' : '00:00:00.000';
+  let off = tzOffsetOn(ymd);
   if (!off) return ymd; // No Intl offset support: leave the old behaviour alone.
-  return edge === 'end' ? `${ymd}T23:59:59.999${off}` : `${ymd}T00:00:00.000${off}`;
+  const refined = tzOffsetAt(new Date(`${ymd}T${time}${off}`));
+  return `${ymd}T${time}${refined || off}`;
 }
 
 // ── Supabase client ──────────────────────────────────────────
@@ -2489,6 +2506,7 @@ function _supabaseFetch(input, init) {
 const supabase = window.supabase
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { global: { fetch: _supabaseFetch } })
   : null;
+if (!supabase) console.error('supabase-js failed to load — the dashboard cannot read data');
 
 function applySupabaseAuth(token) {
   _supabaseToken = token || null;
@@ -2630,6 +2648,7 @@ const ACTIVE_ROSTER_CAP = 500;
 
 const db = {
   async getOwners(email) {
+    if (!supabase) throw new Error('Data service unavailable');
     let q = supabase.from('lot_owners').select('*');
     if (email) q = q.eq('email', email.trim().toLowerCase());
     const { data, error } = await q;
@@ -2641,6 +2660,7 @@ const db = {
   // / boot_fee / tow_fee / notes / quickbooks_customer_id if anyone added
   // a caller. Safe self-fetch lives on the backend at GET /partners/me.
   async getLots(filter = {}) {
+    if (!supabase) throw new Error('Data service unavailable');
     let q = supabase.from('lots').select('*').eq('active', true);
     if (filter.owner_id) q = q.eq('owner_id', filter.owner_id);
     if (filter.partner_id) q = q.eq('partner_id', filter.partner_id);
@@ -2650,6 +2670,7 @@ const db = {
     return data || [];
   },
   async getLotState(lotId) {
+    if (!supabase) throw new Error('Data service unavailable');
     // Fetch cameras for this lot
     const { data: cams, error: camErr } = await supabase
       .from('cameras')
@@ -2811,6 +2832,7 @@ const db = {
     return viols;
   },
   async getViolations(lotId) {
+    if (!supabase) throw new Error('Data service unavailable');
     const { data, error } = await supabase
       .from('violations')
       .select('*, snapshots:snapshot_id(storage_url, raw_detections)')
@@ -2833,6 +2855,7 @@ const db = {
     return [];
   },
   async recordAction(violId, action, extra = {}) {
+    if (!supabase) throw new Error('Data service unavailable');
     try {
       if (action === 'plate_correction') {
         const { error } = await supabase.from('violations').update({
@@ -2950,6 +2973,7 @@ const db = {
     }
   },
   async getSnapshotUrl(snapshotId) {
+    if (!supabase) throw new Error('Data service unavailable');
     const { data, error } = await supabase
       .from('snapshots')
       .select('storage_url')
@@ -2959,28 +2983,29 @@ const db = {
     return { url: data?.storage_url || null };
   },
   async getRevenue(days) {
+    if (!supabase) throw new Error('Data service unavailable');
     const since = new Date(Date.now() - days * 86400000).toISOString();
     const { data, error } = await supabase
       .from('violations')
       .select('*')
       .in('status', ['resolved', 'cleared'])
       .gte('detected_at', since);
-    if (!error && data) {
-      // Revenue stored as dollars in DB
-      const totalOur = data.reduce((s, v) => s + (v.our_revenue || 0), 0);
-      const totalGross = data.reduce((s, v) => s + (v.gross_revenue || 0), 0);
-      const actioned = data.filter(v => v.action_taken && !['pending', 'plate_correction'].includes(v.action_taken));
-      const byAction = {};
-      actioned.forEach(v => { byAction[v.action_taken] = (byAction[v.action_taken] || 0) + 1; });
-      return {
-        our_revenue_cents: Math.round(totalOur * 100), // convert dollars → cents for fmtMoney
-        gross_revenue_cents: Math.round(totalGross * 100),
-        total_violations: data.length,
-        actions_executed: actioned.length,
-        action_rate: data.length > 0 ? actioned.length / data.length : 0,
-        by_action_type: byAction,
-      };
-    }
+    if (error) throw new Error(error.message);
+    const rows = data || [];
+    // Revenue stored as dollars in DB
+    const totalOur = rows.reduce((s, v) => s + (v.our_revenue || 0), 0);
+    const totalGross = rows.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+    const actioned = rows.filter(v => v.action_taken && !['pending', 'plate_correction'].includes(v.action_taken));
+    const byAction = {};
+    actioned.forEach(v => { byAction[v.action_taken] = (byAction[v.action_taken] || 0) + 1; });
+    return {
+      our_revenue_cents: Math.round(totalOur * 100), // convert dollars → cents for fmtMoney
+      gross_revenue_cents: Math.round(totalGross * 100),
+      total_violations: rows.length,
+      actions_executed: actioned.length,
+      action_rate: rows.length > 0 ? actioned.length / rows.length : 0,
+      by_action_type: byAction,
+    };
   },
   async addCamera(body) {
     // Cameras table has many required fields (ip_address, port, username, etc.)
@@ -2992,6 +3017,7 @@ const db = {
     });
   },
   async updateZones(cameraId, zones) {
+    if (!supabase) throw new Error('Data service unavailable');
     // Delete existing zones for this camera, then insert new ones
     const { error: delErr } = await supabase.from('camera_zones').delete().eq('camera_id', cameraId);
     if (delErr) throw new Error('Failed to clear zones: ' + delErr.message);
@@ -3121,6 +3147,7 @@ const db = {
     throw new Error('Supabase not available');
   },
   async deleteViolation(violId, isAlpr = false) {
+    if (!supabase) throw new Error('Data service unavailable');
     // ALPR violations live in alpr_violations, not violations. The legacy
     // delete path silently no-ops for ALPR rows because the WHERE matches
     // zero rows in the wrong table — no error, no toast feedback, looks
@@ -3146,6 +3173,7 @@ const db = {
 
   // ── Violation Dedup ───────────────────────────────────────
   async acknowledgeViolation(violId) {
+    if (!supabase) throw new Error('Data service unavailable');
     const { data, error } = await supabase
       .from('violations')
       .update({

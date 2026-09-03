@@ -107,6 +107,21 @@ test.describe('Parking Log date bounds @desktop-only', () => {
     expect(await bound(page, '2026-01-15', 'end')).toBe('2026-01-15T23:59:59.999-05:00'); // EST
   });
 
+  test('the START bound is also right on the two transition days themselves', async ({ page }) => {
+    await loadHelpers(page);
+    // 2026-11-01: clocks fall back 2:00 AM EDT -> 1:00 AM EST. Midnight at
+    // the start of the day is still pre-transition, so it's EDT — only the
+    // midday anchor (used for the END bound) has already fallen back to EST.
+    expect(await bound(page, '2026-11-01', 'start')).toBe('2026-11-01T00:00:00.000-04:00');
+    expect(await bound(page, '2026-11-01', 'end')).toBe('2026-11-01T23:59:59.999-05:00'); // unchanged
+
+    // 2026-03-08: clocks spring forward 2:00 AM EST -> 3:00 AM EDT. Midnight
+    // at the start of the day is still pre-transition EST — the midday
+    // anchor (used for the END bound) is already EDT.
+    expect(await bound(page, '2026-03-08', 'start')).toBe('2026-03-08T00:00:00.000-05:00');
+    expect(await bound(page, '2026-03-08', 'end')).toBe('2026-03-08T23:59:59.999-04:00'); // unchanged
+  });
+
   test('a caller that already sent a full timestamp is left alone', async ({ page }) => {
     await loadHelpers(page);
     expect(await bound(page, '2026-09-03T12:00:00Z', 'end')).toBe('2026-09-03T12:00:00Z');
