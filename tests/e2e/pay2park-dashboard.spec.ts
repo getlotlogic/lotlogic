@@ -194,8 +194,8 @@ async function mountParkingLog(
   // Babel transpiles the inline script into a real <script>, so the page's
   // components become globals. Wait for that rather than for any UI.
   await page.waitForFunction(
-    () => typeof (window as Record<string, unknown>).TruckParkingLog === 'function'
-      && typeof (window as Record<string, unknown>).ToastProvider === 'function',
+    () => typeof (window as unknown as Record<string, unknown>).TruckParkingLog === 'function'
+      && typeof (window as unknown as Record<string, unknown>).ToastProvider === 'function',
     undefined,
     { timeout: 30_000 },
   );
