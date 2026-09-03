@@ -3,7 +3,7 @@
 //  - weak_plate_reads.ts flushGroup (insert/update on unmatched bursts)
 //  - cron-no-reg-sweep (status transitions)
 //
-// See: docs/superpowers/specs/2026-05-14-sc211-possible-no-registration-design.md
+// See: docs/archive/specs/2026-05-14-sc211-possible-no-registration-design.md
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";

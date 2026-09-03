@@ -18,7 +18,7 @@
 #   2. Every row created is tagged `plate_text LIKE 'TEST%'` and is deleted
 #      in section H (via trap, so even a partial failure cleans up).
 #   3. PREREQ — the spec at
-#      docs/superpowers/specs/2026-04-20-camera-session-state-machine-design.md
+#      docs/archive/specs/2026-04-20-camera-session-state-machine-design.md
 #      MUST BE DEPLOYED before most of this passes. Specifically needed:
 #        * migrations 011 (alpr_cameras.orientation)
 #        * migration 012 (plate_sessions + FKs)

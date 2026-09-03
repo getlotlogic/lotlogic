@@ -2,7 +2,7 @@
 -- Add last_detected_at to plate_sessions for event-sourced tracking.
 -- Updated on every matching plate_event so cron and dashboard queries
 -- can reason about session activity without aggregating plate_events.
--- Spec: docs/superpowers/specs/2026-04-22-event-sourced-plate-tracking-design.md
+-- Spec: docs/archive/specs/2026-04-22-event-sourced-plate-tracking-design.md
 --
 -- Applied to prod 2026-04-22 via supabase MCP apply_migration.
 
