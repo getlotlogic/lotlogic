@@ -176,6 +176,17 @@
       margin-top: 16px;
       text-align: center;
     }
+    /* Not a failure — the price the server quoted differs from the label the
+       payer tapped, and they are being asked to agree to the real one. */
+    .notice {
+      background: rgba(217,119,6,0.10);
+      border: 1.5px solid var(--amber);
+      color: var(--ink-2);
+      padding: 12px 14px;
+      font-size: 13px;
+      margin-top: 16px;
+      text-align: center;
+    }
     .success-card { text-align: center; }
     .success-icon {
       width: 64px;
@@ -590,9 +601,9 @@ The property and tow operator are not liable for any damage to trucks, trailers,
       // three stays we actually sell, priced on the control the payer taps.
       const stayField = paid ? `<label>Stay Duration <span class="required">*</span></label>
           <div class="duration-options" id="durationOptions">
-            <label class="duration-option"><input type="radio" name="duration" value="h10" checked><span>10 hours — $15</span></label>
-            <label class="duration-option"><input type="radio" name="duration" value="h24"><span>1 day — $25</span></label>
-            <label class="duration-option"><input type="radio" name="duration" value="h48"><span>2 days — $40</span></label>
+            <label class="duration-option"><input type="radio" name="duration" value="h10" data-amount-cents="1500" checked><span>10 hours — $15</span></label>
+            <label class="duration-option"><input type="radio" name="duration" value="h24" data-amount-cents="2500"><span>1 day — $25</span></label>
+            <label class="duration-option"><input type="radio" name="duration" value="h48" data-amount-cents="4000"><span>2 days — $40</span></label>
           </div>` : `<label for="stayHours">Stay Duration <span class="required">*</span></label>
           <select id="stayHours" required>
             <option value="" disabled selected>Select duration</option>
@@ -668,6 +679,15 @@ The property and tow operator are not liable for any damage to trucks, trailers,
         const ack = document.getElementById('payAck');
         const payBtn = document.getElementById('submitBtn');
         ack.addEventListener('change', () => { payBtn.disabled = !ack.checked; });
+        // Picking a different stay while a price confirmation is on screen
+        // retires it — that confirmation was for the old stay, and its button
+        // would otherwise still name the old stay's price.
+        document.getElementById('durationOptions').addEventListener('change', () => {
+          if (!plazaPendingConfirm) return;
+          plazaPendingConfirm = null;
+          document.getElementById('errorMsg').innerHTML = '';
+          payBtn.innerHTML = 'Pay &amp; register →';
+        });
       }
     }
 
@@ -952,6 +972,27 @@ The property and tow operator are not liable for any damage to trucks, trailers,
       return v;
     }
 
+    // ── The price guard ────────────────────────────────────────────────
+    // The server owns the price (§13.2) and this page only ever shows a label.
+    // Between a backend deploy that raises a price and the frontend deploy
+    // that relabels the radios — and for any phone still holding a cached copy
+    // of this page — the two disagree, and a payer who tapped "$15" would land
+    // on Square being asked for $25. So the quote's amount is checked against
+    // the amount the tapped radio declared, and a mismatch stops the redirect:
+    // the real price is said out loud and the payer taps again to agree to it.
+    //
+    // Holds {sig, checkoutUrl, amountCents} while that confirmation is on
+    // screen. `sig` is the form fingerprint the quote was taken for, so an
+    // edited form falls through to a fresh quote instead of paying for the
+    // stay that was quoted before the edit.
+    let plazaPendingConfirm = null;
+
+    /** Cents → the way the price is written on the form: $15, $25.50. */
+    function plazaMoney(cents) {
+      const dollars = cents / 100;
+      return '$' + (Number.isInteger(dollars) ? String(dollars) : dollars.toFixed(2));
+    }
+
     // Drop a key the server has told us is spent. The next submit mints a new
     // one — reusing a settled key just gets refused again.
     function plazaForgetIdempotencyKey(formSig) {
@@ -1046,10 +1087,20 @@ The property and tow operator are not liable for any damage to trucks, trailers,
         if (duration !== 'h10' && duration !== 'h24' && duration !== 'h48') throw new Error('Choose how long you will be parked.');
         if (!acknowledged) throw new Error('Please tick the box above to continue.');
 
+        formSig = plazaFormSig([plateText, backPlateText, phone, companyName, operatorName, duration]);
+
+        // Second tap of a price confirmation: the real price has been shown
+        // and agreed to. Go to the link the server already handed us —
+        // re-quoting here would mint a second Square order for one stay.
+        if (plazaPendingConfirm && plazaPendingConfirm.sig === formSig) {
+          window.location.href = plazaPendingConfirm.checkoutUrl;
+          return;   // leaving the page — keep the button disabled
+        }
+        plazaPendingConfirm = null;
+
         const recaptchaToken = await getRecaptchaToken('plaza_pay').catch(() => null);
         if (!recaptchaToken) throw new Error('Please retry — automated-access check failed.');
 
-        formSig = plazaFormSig([plateText, backPlateText, phone, companyName, operatorName, duration]);
         const idemKey = plazaIdempotencyKey(formSig);
 
         // The body carries a duration ENUM and never an amount: the price is
@@ -1068,6 +1119,29 @@ The property and tow operator are not liable for any damage to trucks, trailers,
         });
 
         if (!data || !data.checkout_url) throw new Error('Could not start payment. Please try again.');
+
+        // The label vs the quote. Only a real disagreement stops the redirect;
+        // a radio with no declared price, or a quote with no amount, is not
+        // something to hold a paying customer up over.
+        const tappedCents = durationEl ? Number(durationEl.dataset.amountCents) : NaN;
+        const quotedCents = Number(data.amount_cents);
+        if (Number.isFinite(tappedCents) && Number.isFinite(quotedCents)
+            && quotedCents !== tappedCents) {
+          plazaPendingConfirm = {
+            sig: formSig,
+            checkoutUrl: data.checkout_url,
+            amountCents: quotedCents,
+          };
+          const real = plazaMoney(quotedCents);
+          errorDiv.innerHTML = '<div class="notice">' + escapeHtml(
+            'Price for this stay is ' + real + ', not ' + plazaMoney(tappedCents)
+            + '. Tap Pay ' + real + ' to continue.') + '</div>';
+          btn.innerHTML = 'Pay ' + escapeHtml(real) + ' →';
+          btn.disabled = false;
+          submitting = false;
+          return;
+        }
+
         window.location.href = data.checkout_url;
         return;   // leaving the page — keep the button disabled
       } catch (err) {
