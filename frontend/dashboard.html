@@ -8533,13 +8533,15 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
 }
 
 // ── Account / Settings page ────────────────────────────────────
-function PartnerFeeEditor({ user }) {
-  // Partner-side edit of their own tow_fee + boot_fee. `tow_fee`/`boot_fee`
-  // are now read-only GENERATED columns (dollars, derived from
-  // `tow_fee_cents`/`boot_fee_cents`) — a direct Supabase write to them
-  // fails. Save goes through the backend PATCH /partners/{id} instead,
-  // which accepts the `_cents` columns; reads still use the generated
-  // dollar columns via the normal user fetch.
+function PartnerFeeEditor({ user, isPlatformAdmin = false }) {
+  // Fees are locked for partners — LotLogic sets them, not the partner.
+  // `tow_fee`/`boot_fee` are read-only GENERATED columns (dollars, derived
+  // from `tow_fee_cents`/`boot_fee_cents`); the backend's PATCH
+  // /partners/{id} allowlist now only accepts the `_cents` fields from a
+  // service / platform-admin caller, never from a partner's own session. So
+  // a real partner gets a plain read-only display here; only a
+  // platform-admin session (e.g. admin viewing/editing on a partner's
+  // behalf) gets the editable form and Save.
   const [towFee, setTowFee] = React.useState(user?.tow_fee ?? 100);
   const [bootFee, setBootFee] = React.useState(user?.boot_fee ?? 0);
   const [saving, setSaving] = React.useState(false);
@@ -8552,6 +8554,35 @@ function PartnerFeeEditor({ user }) {
     setTowFee(user?.tow_fee ?? 100);
     setBootFee(user?.boot_fee ?? 0);
   }, [user?.id, user?.tow_fee, user?.boot_fee]);
+
+  if (!isPlatformAdmin) {
+    return (
+      <div className="settings-section">
+        <div className="settings-section-title">Your fees</div>
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Tow Fee</div>
+            <div className="settings-row-desc">What you bill per tow</div>
+          </div>
+          <div style={{fontSize:16, fontWeight:700, color:'var(--text-primary)'}}>
+            ${user?.tow_fee ?? 100}
+          </div>
+        </div>
+        <div className="settings-row">
+          <div className="settings-row-info">
+            <div className="settings-row-label">Boot Fee</div>
+            <div className="settings-row-desc">What you bill per boot</div>
+          </div>
+          <div style={{fontSize:16, fontWeight:700, color:'var(--text-primary)'}}>
+            ${user?.boot_fee ?? 0}
+          </div>
+        </div>
+        <div style={{fontSize:12, color:'var(--text-faint)', marginTop:10}}>
+          Fees are set by LotLogic — contact us to change them.
+        </div>
+      </div>
+    );
+  }
 
   const dirty = towFee !== (user?.tow_fee ?? 100) || bootFee !== (user?.boot_fee ?? 0);
 
@@ -8704,7 +8735,7 @@ function ChangePasswordSection() {
   );
 }
 
-function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval, showFees = true }) {
+function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval, showFees = true, isPlatformAdmin = false }) {
   const isOwner = user._role === 'owner';
   const [notifyPrefs, setNotifyPrefs] = useState(() => NotifyManager.getPrefs());
   const [notifyPerm, setNotifyPerm] = useState(() => NotifyManager.getPermission());
@@ -8778,7 +8809,7 @@ function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setAutoRefr
       {/* SaaS (all-apartment) partners pay a subscription — no per-tow fee
           schedule to edit. Tow-truck plates below stay for everyone: plate
           matching is live enforcement, not money. */}
-      {!isOwner && showFees && <PartnerFeeEditor user={user} />}
+      {!isOwner && showFees && <PartnerFeeEditor user={user} isPlatformAdmin={isPlatformAdmin} />}
 
       {/* Tow-truck plates — enforcement partners only. Used by the tow-confirm
           edge function to match camera sightings against partner trucks. */}
@@ -14865,7 +14896,7 @@ function App() {
           {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} />}
           {tab === 'app' && (isPlatformAdmin || (FRANK_APP_TAB_LIVE && isOperator && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID)) && <PartnerAppPage />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
-          {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} />}
+          {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} isPlatformAdmin={isPlatformAdmin} />}
         </div>
       </main>
 

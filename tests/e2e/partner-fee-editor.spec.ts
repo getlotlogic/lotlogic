@@ -1,17 +1,18 @@
 /**
  * Partner fee editor — `PartnerFeeEditor` in `frontend/dashboard.html`.
  *
- * `enforcement_partners.tow_fee`/`boot_fee` are becoming read-only GENERATED
- * dollar columns (back-compat reads only); the source of truth is
- * `tow_fee_cents`/`boot_fee_cents`. A direct Supabase write to `tow_fee`/
- * `boot_fee` now fails, so the editor's Save must go through the backend
- * (`PATCH /partners/{id}`) with the `_cents` fields instead.
+ * Fees are locked for partners: `enforcement_partners.tow_fee`/`boot_fee` are
+ * read-only GENERATED dollar columns (back-compat reads only), and the
+ * backend's `PATCH /partners/{id}` allowlist only accepts the `_cents`
+ * fields from a service / platform-admin caller — never from a partner's own
+ * session. So a real partner sees a plain read-only display (no inputs, no
+ * Save); only a platform-admin session gets the editable form, which saves
+ * through the backend in cents.
  *
  * This spec serves the local, uncommitted `frontend/` tree over a throwaway
  * static server (the fix hasn't been deployed) and stubs every network call
  * the dashboard makes on load, so it never touches the live backend or
- * Supabase project. The only thing under test is the shape of the PATCH
- * request the Save button fires.
+ * Supabase project.
  *
  * Run: cd tests && npx playwright test partner-fee-editor --project=chromium-desktop
  */
@@ -53,9 +54,16 @@ test.afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-/** Seed an already-authenticated partner session before any app script runs. */
-async function seedPartnerSession(page: Page) {
-  await page.addInitScript(({ partnerId }) => {
+/**
+ * Seed an already-authenticated partner session before any app script runs.
+ * The session's own `_role` is always 'partner' — that's what makes
+ * `PartnerFeeEditor` render at all (`AccountPage`'s `!isOwner` gate). Whether
+ * the *editable* form appears on top of that is driven by `is_platform_admin`
+ * on the session, which the App component reads straight off `owner` before
+ * its `/auth/me` self-heal call resolves.
+ */
+async function seedPartnerSession(page: Page, { isPlatformAdmin = false } = {}) {
+  await page.addInitScript(({ partnerId, isPlatformAdmin }) => {
     localStorage.setItem('lotlogic_session', JSON.stringify({
       id: partnerId,
       _role: 'partner',
@@ -63,12 +71,13 @@ async function seedPartnerSession(page: Page) {
       _ts: Date.now(),
       email: 'partner@example.com',
       contact_name: 'Test Partner',
+      is_platform_admin: isPlatformAdmin,
       // Mirrors what a real session carries after the post-login Supabase
       // enrichment (read-only dollar values, from the GENERATED columns).
       tow_fee: 250,
       boot_fee: 75,
     }));
-  }, { partnerId: PARTNER_ID });
+  }, { partnerId: PARTNER_ID, isPlatformAdmin });
 }
 
 /**
@@ -76,7 +85,7 @@ async function seedPartnerSession(page: Page) {
  * session, and capture the one PATCH under test. `onPatch` receives the
  * parsed JSON body every time `PATCH /partners/{id}` is hit.
  */
-async function stubNetwork(page: Page, onPatch: (body: unknown) => void) {
+async function stubNetwork(page: Page, onPatch: (body: unknown) => void, { isPlatformAdmin = false } = {}) {
   await page.route(/fonts\.(googleapis|gstatic)\.com|google\.com\/recaptcha/, (r) => r.abort());
 
   await page.route(new RegExp(`^https://${BACKEND_HOST}/`), (route) => {
@@ -91,10 +100,13 @@ async function stubNetwork(page: Page, onPatch: (body: unknown) => void) {
       });
     }
     if (req.method() === 'GET' && url.pathname === '/auth/me') {
+      // The App component self-heals admin flags from /auth/me on mount and
+      // overwrites the seeded session with whatever this returns — echo the
+      // same is_platform_admin so the two stay consistent.
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ email: 'partner@example.com', is_admin: false, is_platform_admin: false }),
+        body: JSON.stringify({ email: 'partner@example.com', is_admin: false, is_platform_admin: isPlatformAdmin }),
       });
     }
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
@@ -118,13 +130,32 @@ async function stubNetwork(page: Page, onPatch: (body: unknown) => void) {
 }
 
 test.describe('partner fee editor @desktop-only', () => {
-  test('save PATCHes the backend with fees in cents, not a direct Supabase dollar write', async ({ page }) => {
-    let patchBody: any = null;
-    await seedPartnerSession(page);
-    await stubNetwork(page, (body) => { patchBody = body; });
+  test('a partner session sees fees as read-only, with no Save path', async ({ page }) => {
+    await seedPartnerSession(page, { isPlatformAdmin: false });
+    await stubNetwork(page, () => {}, { isPlatformAdmin: false });
 
     await page.goto(`${origin}/dashboard.html`);
+    await page.getByRole('tab', { name: 'Account' }).click();
 
+    const feeSection = page.locator('.settings-section').filter({ hasText: 'Your fees' });
+    await expect(feeSection).toBeVisible({ timeout: 15_000 });
+
+    // The dollar amounts are shown as plain text, not editable inputs.
+    await expect(feeSection.getByText('$250')).toBeVisible();
+    await expect(feeSection.getByText('$75')).toBeVisible();
+    await expect(page.getByLabel('Tow fee in dollars')).toHaveCount(0);
+    await expect(page.getByLabel('Boot fee in dollars')).toHaveCount(0);
+    await expect(feeSection.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+
+    await expect(feeSection.getByText('Fees are set by LotLogic — contact us to change them.')).toBeVisible();
+  });
+
+  test('a platform-admin session can save fees, PATCHing the backend in cents', async ({ page }) => {
+    let patchBody: any = null;
+    await seedPartnerSession(page, { isPlatformAdmin: true });
+    await stubNetwork(page, (body) => { patchBody = body; }, { isPlatformAdmin: true });
+
+    await page.goto(`${origin}/dashboard.html`);
     await page.getByRole('tab', { name: 'Account' }).click();
 
     const towInput = page.getByLabel('Tow fee in dollars');
@@ -144,15 +175,15 @@ test.describe('partner fee editor @desktop-only', () => {
 
     // Dollars in the form, cents on the wire — and only the two fields the
     // form edits, nothing else (no `tow_fee`/`boot_fee` dollar keys, which
-    // are now read-only GENERATED columns the backend allowlist rejects).
+    // are read-only GENERATED columns the backend allowlist rejects).
     expect(patchBody).toEqual({ tow_fee_cents: 30000, boot_fee_cents: 9000 });
 
     await expect(page.getByText('✓ Saved')).toBeVisible({ timeout: 5_000 });
   });
 
-  test('a failed save surfaces the backend error via the toast, not a silent drop', async ({ page }) => {
-    await seedPartnerSession(page);
-    await stubNetwork(page, () => {});
+  test('a platform-admin session sees a failed save surfaced via the toast, not a silent drop', async ({ page }) => {
+    await seedPartnerSession(page, { isPlatformAdmin: true });
+    await stubNetwork(page, () => {}, { isPlatformAdmin: true });
 
     // Override just the PATCH to fail, mimicking the allowlist rejecting a
     // field this caller may not set.
