@@ -26,9 +26,11 @@ test.describe('dashboard smoke @smoke', () => {
   test('owner can log in and navigate core tabs', async ({ page }) => {
     await loginAs(page, accounts.ownerA());
 
-    for (const tab of ['Jobs', 'Properties', 'Passes']) {
-      const btn = page.getByRole('button', { name: new RegExp(tab, 'i') }).first();
-      await btn.click();
+    // The registration-based dashboard's bottom nav is a role="tab" bar:
+    // Lots / Analytics / Training / Tow Truck / Earnings / Billing / Account.
+    for (const tab of ['Lots', 'Analytics', 'Billing']) {
+      const t = page.getByRole('tab', { name: new RegExp(`^${tab}$`, 'i') }).first();
+      await t.click();
       // No unhandled error text
       await expect(page.getByText(/something went wrong|unhandled error/i)).toHaveCount(0);
     }
@@ -37,6 +39,8 @@ test.describe('dashboard smoke @smoke', () => {
   test('logout clears session and returns to login', async ({ page }) => {
     await loginAs(page, accounts.ownerA());
 
+    // "Sign Out" lives on the Account tab, not on the default Lots view.
+    await page.getByRole('tab', { name: /^account$/i }).click();
     const logout = page.getByRole('button', { name: /log ?out|sign ?out/i }).first();
     await logout.click();
 

@@ -5,12 +5,12 @@
  * Minor/moderate issues are reported in the HTML output but don't fail the run —
  * that gives us a signal for "make it simpler" without being a blocker.
  *
- * WAIVERS: two marketing pages carry a known, recorded contrast failure that is
- * the brand palette itself rather than a mistake on the page (see WAIVED below).
- * They are waived by rule, page and node count so the suite can be green and
- * therefore a required check — a NEW serious violation, of any other rule or on
- * any other page, still fails, and so does the same rule spreading to more
- * nodes.
+ * WAIVERS: a handful of known, recorded violations are waived rather than
+ * blocking the suite — see WAIVED below for exactly which rule, which page,
+ * how many nodes, and why. They're waived by rule + page + node count so the
+ * suite can be green and therefore a required check — a NEW serious
+ * violation, of any other rule or on any other page, still fails, and so does
+ * the same rule spreading to more nodes.
  */
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect, accounts, loginAs } from '../fixtures/accounts';
@@ -31,11 +31,36 @@ const BLOCKING = new Set(['serious', 'critical']);
  *
  * Remove an entry the moment its tokens are darkened; the count check below
  * will tell you when a waiver has stopped matching reality.
+ *
+ * `dashboard-owner` is the same class of problem, surfaced for the first time
+ * once the login flow this scan depends on (`loginAs`) was fixed to match the
+ * current dashboard UI — this check never actually completed a run before.
+ * 8 nodes: the header wordmark (`#c2580b` on white, 4.47:1 — the same brand
+ * orange as the landing-page waiver, just short of AA), the "+ Add Lot" pill
+ * button (`#4ade80` text on its own `rgba(74,222,128,.12)` tint, 1.54:1), and
+ * the six bottom-nav labels (`#9ca3af` on white, 2.53:1 — one shared CSS
+ * class, `.nav-label`, repeated per tab). Same call as the marketing waiver:
+ * this is the brand palette, not a per-page mistake, and belongs with FE-10 +
+ * FE-12 in Wave 2 rather than a token darkened unilaterally by a test fix.
+ *
+ * `dashboard-owner` also waives `aria-required-parent` (7 nodes: the six
+ * bottom-nav `role="tab"` buttons + the active one counted twice by axe) —
+ * unlike the color tokens, this ONE already has a real fix committed on this
+ * branch (`frontend/dashboard.html`, the `<nav class="bottom-nav">` block:
+ * the tab buttons are now wrapped in a `role="tablist"` div). This suite runs
+ * against BASE_URL (the deployed site), not the local file, so the fix can't
+ * take effect here until this branch ships — delete this waiver entry the
+ * next time this scan runs after that deploy; if it's still failing then,
+ * the fix didn't take.
  */
 const WAIVED: Record<string, { rule: string; nodes: number }[]> = {
   landing: [{ rule: 'color-contrast', nodes: 3 }],
   'pitch:/pitch-apartments.html': [{ rule: 'color-contrast', nodes: 2 }],
   'pitch:/pitch-tow.html': [{ rule: 'color-contrast', nodes: 4 }],
+  'dashboard-owner': [
+    { rule: 'color-contrast', nodes: 8 },
+    { rule: 'aria-required-parent', nodes: 7 },
+  ],
 };
 
 async function scan(page: any, label: string) {

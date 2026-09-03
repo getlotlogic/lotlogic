@@ -48,7 +48,11 @@ export async function loginAs(page: Page, account: TestAccount): Promise<string>
   await page.getByLabel(/password/i).fill(account.password);
   await page.getByRole('button', { name: /sign in|log in/i }).click();
 
-  await expect(page.getByRole('button', { name: /jobs|properties/i }).first()).toBeVisible({
+  // The post-login shell is the registration-based tab bar (Lots / Analytics /
+  // Training / Tow Truck / Earnings / Billing / Account) — these are rendered
+  // as role="tab", not role="button", and "Lots" is present for every owner
+  // regardless of whether they have any properties yet.
+  await expect(page.getByRole('tab', { name: /^lots$/i }).first()).toBeVisible({
     timeout: 15_000,
   });
 
