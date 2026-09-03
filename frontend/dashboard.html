@@ -10607,7 +10607,13 @@ function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = false, i
                             is not allowed the amount — the stamp still has to
                             say "this one is paid". */}
                         {r.paid_amount_cents != null ? fmtMoney(r.paid_amount_cents) : 'paid'}
-                        {' · '}{r.stay_days === 2 ? '48h' : '24h'}
+                        {/* The stay the driver BOUGHT, off the payment row.
+                            stay_days cannot tell 10h from 24h (both round up
+                            to 1 day), so inferring from it labelled a 10h pass
+                            "24h". The old inference is kept only as a fallback
+                            for a row served by a backend that predates the
+                            paid_stay_hours column. */}
+                        {' · '}{r.paid_stay_hours != null ? `${r.paid_stay_hours}h` : (r.stay_days === 2 ? '48h' : '24h')}
                         {/* History spans months, so a bare clock time there is
                             ambiguous — it needs the date with it. */}
                         {r.paid_at ? ` · paid ${isHistory ? fmtDateTime(r.paid_at) : fmtTime(r.paid_at)}` : ''}

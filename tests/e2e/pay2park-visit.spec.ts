@@ -139,8 +139,9 @@ function okQuote(route: Route) {
     body: JSON.stringify({
       plaza_payment_id: PAYMENT_ID,
       checkout_url: CHECKOUT_URL,
+      // The default tier the form submits: 10 hours for $15.
       amount_cents: 1500,
-      stay_hours: 24,
+      stay_hours: 10,
     }),
   });
 }
@@ -187,15 +188,20 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     await expect(page.locator('#submitBtn')).toHaveText('Get parking pass →');
   });
 
-  test('flag on shows two priced stays and gates submit on the acknowledgment', async ({ page }) => {
+  test('flag on shows three priced stays and gates submit on the acknowledgment', async ({ page }) => {
     await openForm(page, 'on');
 
     await expect(page.locator('#stayHours')).toHaveCount(0);
     const options = page.locator('.duration-option');
-    await expect(options).toHaveCount(2);
-    await expect(options.nth(0)).toContainText('24 hours — $15');
-    await expect(options.nth(1)).toContainText('48 hours — $25');
-    await expect(page.locator('input[name="duration"][value="h24"]')).toBeChecked();
+    await expect(options).toHaveCount(3);
+    await expect(options.nth(0)).toContainText('10 hours — $15');
+    await expect(options.nth(1)).toContainText('1 day — $25');
+    await expect(options.nth(2)).toContainText('2 days — $40');
+    // The cheapest stay is pre-selected, so a driver who taps straight through
+    // buys the smallest thing rather than the biggest.
+    await expect(page.locator('input[name="duration"][value="h10"]')).toBeChecked();
+    await expect(page.locator('input[name="duration"][value="h24"]')).not.toBeChecked();
+    await expect(page.locator('input[name="duration"][value="h48"]')).not.toBeChecked();
 
     const ack = page.locator('#payAck');
     await expect(ack).toHaveCount(1);
@@ -221,7 +227,7 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     expect(bodies).toHaveLength(1);
     const body = bodies[0];
     expect(body.property_id).toBe(PROPERTY_ID);
-    expect(body.duration).toBe('h24');
+    expect(body.duration).toBe('h10');
     expect(body.plate_text).toBe('ABC1234');
     expect(body.back_plate).toBe('XYZ5678');
     expect(body.phone).toBe('+15551234567');
@@ -299,6 +305,81 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     await page.waitForURL(`${CHECKOUT_URL}*`);
     expect(bodies).toHaveLength(2);
     expect(bodies[1].idempotency_key).not.toBe(bodies[0].idempotency_key);
+  });
+
+  // Between a backend deploy that raises a price and the frontend deploy that
+  // relabels the radios — and for any phone holding a cached copy of the page
+  // — the tapped label and the server's quote disagree. Nobody should land on
+  // Square being asked for a number they never agreed to.
+  test('a quote above the tapped label is confirmed before the redirect', async ({ page }) => {
+    await openForm(page, 'on');
+    // The page still says $15 for 10 hours; the server has moved to $25.
+    const bodies = await stubQuote(page, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        plaza_payment_id: PAYMENT_ID,
+        checkout_url: CHECKOUT_URL,
+        amount_cents: 2500,
+        stay_hours: 10,
+      }),
+    }));
+
+    await fillPaidForm(page);
+    await page.click('#submitBtn');
+
+    // No redirect: still on the form, with the real price said out loud.
+    await expect(page.locator('#errorMsg .notice')).toHaveText(
+      'Price for this stay is $25, not $15. Tap Pay $25 to continue.');
+    expect(page.url()).toContain('/visit.html');
+    const btn = page.locator('#submitBtn');
+    await expect(btn).toHaveText('Pay $25 →');
+    await expect(btn).toBeEnabled();
+    expect(bodies).toHaveLength(1);
+
+    // The second tap agrees to $25 and reuses the link already quoted — no
+    // second quote, so no second Square order.
+    await btn.click();
+    await page.waitForURL(`${CHECKOUT_URL}*`);
+    expect(bodies).toHaveLength(1);
+  });
+
+  test('picking a different stay retires a pending price confirmation', async ({ page }) => {
+    await openForm(page, 'on');
+    const bodies = await stubQuote(page, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        plaza_payment_id: PAYMENT_ID,
+        checkout_url: CHECKOUT_URL,
+        amount_cents: 2500,
+        stay_hours: 10,
+      }),
+    }));
+
+    await fillPaidForm(page);
+    await page.click('#submitBtn');
+    await expect(page.locator('#errorMsg .notice')).toBeVisible();
+
+    await page.check('input[name="duration"][value="h48"]');
+    await expect(page.locator('#errorMsg .notice')).toHaveCount(0);
+    await expect(page.locator('#submitBtn')).toHaveText('Pay & register →');
+
+    // And the next tap is a fresh quote for the stay now selected, not the
+    // link that was quoted for the old one.
+    await page.click('#submitBtn');
+    await expect.poll(() => bodies.length).toBe(2);
+    expect(bodies[1].duration).toBe('h48');
+  });
+
+  test('a matching quote redirects with no confirmation step', async ({ page }) => {
+    await openForm(page, 'on');
+    const bodies = await stubQuote(page, (route) => okQuote(route));
+
+    await fillPaidForm(page);
+    await page.click('#submitBtn');
+    await page.waitForURL(`${CHECKOUT_URL}*`);
+    expect(bodies).toHaveLength(1);
   });
 
   test('a plate hold shows the server wording', async ({ page }) => {
