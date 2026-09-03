@@ -194,7 +194,7 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     const options = page.locator('.duration-option');
     await expect(options).toHaveCount(2);
     await expect(options.nth(0)).toContainText('24 hours — $15');
-    await expect(options.nth(1)).toContainText('48 hours — $30');
+    await expect(options.nth(1)).toContainText('48 hours — $25');
     await expect(page.locator('input[name="duration"][value="h24"]')).toBeChecked();
 
     const ack = page.locator('#payAck');
