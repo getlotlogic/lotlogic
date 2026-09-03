@@ -2426,6 +2426,40 @@ function useNowTick(everyMs = 30000) {
   return t;
 }
 
+// ── Lot-local calendar dates ─────────────────────────────────
+// Every LotLogic property is in Eastern time today. The Parking Log's date
+// filters are calendar dates the operator picked while standing in the lot, so
+// they have to be turned into instants in the LOT's zone, not the browser's and
+// not UTC. Sending a bare date, or one stamped with `Z`, ended the day at
+// 19:59:59 Eastern — every truck that registered between 8 PM and midnight fell
+// outside "today" in the log and in the CSV export.
+// Wave 2 replaces the constant with a `properties.timezone` column.
+const LOT_TIMEZONE = 'America/New_York';
+
+// The UTC offset in force in `timeZone` on the calendar day `ymd` ("-04:00").
+// Anchored at 12:00 UTC of that day — i.e. mid-morning Eastern, safely past the
+// 2 AM DST switch — so both ends of the day get the day's own offset.
+function tzOffsetOn(ymd, timeZone = LOT_TIMEZONE) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+      .formatToParts(new Date(`${ymd}T12:00:00Z`));
+    const name = (parts.find(p => p.type === 'timeZoneName') || {}).value || '';
+    const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(name);
+    if (!m) return name === 'GMT' ? '+00:00' : null;
+    return `${m[1]}${m[2].padStart(2, '0')}:${m[3] || '00'}`;
+  } catch { return null; }
+}
+
+// "2026-09-03" → "2026-09-03T00:00:00.000-04:00" / "...T23:59:59.999-04:00".
+// Anything that is not a bare calendar date is passed straight through, because
+// the caller already sent a full timestamp.
+function lotDayBound(ymd, edge) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || '')) return ymd;
+  const off = tzOffsetOn(ymd);
+  if (!off) return ymd; // No Intl offset support: leave the old behaviour alone.
+  return edge === 'end' ? `${ymd}T23:59:59.999${off}` : `${ymd}T00:00:00.000${off}`;
+}
+
 // ── Supabase client ──────────────────────────────────────────
 const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
@@ -3472,19 +3506,15 @@ const db = {
     if (opts.status) params.set('status', opts.status);
     if (opts.plate) params.set('plate', opts.plate);
     if (opts.company_name) params.set('company', opts.company_name);
-    if (opts.date_from) params.set('from_date', opts.date_from);
-    if (opts.date_to) {
-      // date_to is a bare calendar date (YYYY-MM-DD). The backend filters
-      // `created_at <= :to_date`, and a bare date parses to 00:00:00 UTC —
-      // which silently drops every pass created later that same day. That's
-      // why a truck registered this morning showed up in search but not in
-      // today's active list. Send an inclusive end-of-day bound so "through
-      // today" means through right now.
-      const toDate = /^\d{4}-\d{2}-\d{2}$/.test(opts.date_to)
-        ? `${opts.date_to}T23:59:59.999Z`
-        : opts.date_to;
-      params.set('to_date', toDate);
-    }
+    // Both bounds are bare calendar dates (YYYY-MM-DD) the operator picked in
+    // the lot, and the backend compares them against `created_at`. A bare date
+    // parses to 00:00:00 UTC, which drops every pass created later that same
+    // day; stamping the upper bound with `Z` instead ended the day at 19:59:59
+    // Eastern, which dropped the entire night shift. Send each bound as a real
+    // instant in the LOT's timezone so "through today" means through midnight
+    // where the trucks actually are.
+    if (opts.date_from) params.set('from_date', lotDayBound(opts.date_from, 'start'));
+    if (opts.date_to) params.set('to_date', lotDayBound(opts.date_to, 'end'));
     if (opts.page) params.set('page', String(opts.page));
     if (opts.page_size) params.set('page_size', String(opts.page_size));
     if (opts.format === 'csv') {
