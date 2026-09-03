@@ -586,12 +586,13 @@ The property and tow operator are not liable for any damage to trucks, trailers,
 
     function showTruckPlazaForm() {
       const paid = payToParkOn();
-      // Free path: today's 12/24/36/48 dropdown, untouched. Paid path: the two
-      // stays we actually sell, priced on the control the payer taps.
+      // Free path: today's 12/24/36/48 dropdown, untouched. Paid path: the
+      // three stays we actually sell, priced on the control the payer taps.
       const stayField = paid ? `<label>Stay Duration <span class="required">*</span></label>
           <div class="duration-options" id="durationOptions">
-            <label class="duration-option"><input type="radio" name="duration" value="h24" checked><span>24 hours — $15</span></label>
-            <label class="duration-option"><input type="radio" name="duration" value="h48"><span>48 hours — $25</span></label>
+            <label class="duration-option"><input type="radio" name="duration" value="h10" checked><span>10 hours — $15</span></label>
+            <label class="duration-option"><input type="radio" name="duration" value="h24"><span>1 day — $25</span></label>
+            <label class="duration-option"><input type="radio" name="duration" value="h48"><span>2 days — $40</span></label>
           </div>` : `<label for="stayHours">Stay Duration <span class="required">*</span></label>
           <select id="stayHours" required>
             <option value="" disabled selected>Select duration</option>
@@ -1042,7 +1043,7 @@ The property and tow operator are not liable for any damage to trucks, trailers,
         if (REGION_TOKENS.has(backPlateText)) throw new Error('The trailer plate looks like a state name, not a plate — enter the plate characters only.');
         if (backPlateText.length < 2) throw new Error('Please enter a valid trailer / rear plate.');
         if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
-        if (duration !== 'h24' && duration !== 'h48') throw new Error('Choose 24 or 48 hours.');
+        if (duration !== 'h10' && duration !== 'h24' && duration !== 'h48') throw new Error('Choose how long you will be parked.');
         if (!acknowledged) throw new Error('Please tick the box above to continue.');
 
         const recaptchaToken = await getRecaptchaToken('plaza_pay').catch(() => null);

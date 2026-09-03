@@ -139,8 +139,9 @@ function okQuote(route: Route) {
     body: JSON.stringify({
       plaza_payment_id: PAYMENT_ID,
       checkout_url: CHECKOUT_URL,
+      // The default tier the form submits: 10 hours for $15.
       amount_cents: 1500,
-      stay_hours: 24,
+      stay_hours: 10,
     }),
   });
 }
@@ -187,15 +188,20 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     await expect(page.locator('#submitBtn')).toHaveText('Get parking pass →');
   });
 
-  test('flag on shows two priced stays and gates submit on the acknowledgment', async ({ page }) => {
+  test('flag on shows three priced stays and gates submit on the acknowledgment', async ({ page }) => {
     await openForm(page, 'on');
 
     await expect(page.locator('#stayHours')).toHaveCount(0);
     const options = page.locator('.duration-option');
-    await expect(options).toHaveCount(2);
-    await expect(options.nth(0)).toContainText('24 hours — $15');
-    await expect(options.nth(1)).toContainText('48 hours — $25');
-    await expect(page.locator('input[name="duration"][value="h24"]')).toBeChecked();
+    await expect(options).toHaveCount(3);
+    await expect(options.nth(0)).toContainText('10 hours — $15');
+    await expect(options.nth(1)).toContainText('1 day — $25');
+    await expect(options.nth(2)).toContainText('2 days — $40');
+    // The cheapest stay is pre-selected, so a driver who taps straight through
+    // buys the smallest thing rather than the biggest.
+    await expect(page.locator('input[name="duration"][value="h10"]')).toBeChecked();
+    await expect(page.locator('input[name="duration"][value="h24"]')).not.toBeChecked();
+    await expect(page.locator('input[name="duration"][value="h48"]')).not.toBeChecked();
 
     const ack = page.locator('#payAck');
     await expect(ack).toHaveCount(1);
@@ -221,7 +227,7 @@ test.describe('pay-to-park visit.html @desktop-only', () => {
     expect(bodies).toHaveLength(1);
     const body = bodies[0];
     expect(body.property_id).toBe(PROPERTY_ID);
-    expect(body.duration).toBe('h24');
+    expect(body.duration).toBe('h10');
     expect(body.plate_text).toBe('ABC1234');
     expect(body.back_plate).toBe('XYZ5678');
     expect(body.phone).toBe('+15551234567');

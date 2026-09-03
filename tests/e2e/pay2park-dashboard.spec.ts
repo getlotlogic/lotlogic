@@ -11,7 +11,9 @@
  * exactly one reason: this component rendered the wrong thing.
  *
  * What it pins down:
- *   - a paid pass wears "$15.00 · 24h · paid <time>" and links its receipt;
+ *   - a paid pass wears "$25.00 · 24h · paid <time>" and links its receipt;
+ *   - the stamp's duration is the PAID stay_hours, so a 10h stay reads "10h"
+ *     rather than the "24h" that inferring from stay_days would give it;
  *   - a refunded one says only "refunded" — no amount, no receipt link;
  *   - a pass registered for free is untouched — no stamp at all;
  *   - the header carries today's and the month's collected totals;
@@ -56,9 +58,10 @@ const PAID_ROW = {
   valid_until: soon(),
   created_at: new Date(Date.now() - 4 * 3600_000).toISOString(),
   exited_at: null,
-  paid_amount_cents: 1500,
+  paid_amount_cents: 2500,
   paid_at: '2026-09-02T18:14:00Z',
   payment_status: 'paid',
+  paid_stay_hours: 24,
   square_receipt_url: RECEIPT_URL,
 };
 
@@ -78,6 +81,7 @@ const FREE_ROW = {
   paid_amount_cents: null,
   paid_at: null,
   payment_status: null,
+  paid_stay_hours: null,
   square_receipt_url: null,
 };
 
@@ -223,7 +227,7 @@ test.describe('pay-to-park dashboard @desktop-only', () => {
 
     const stamp = log.locator('.paid-stamp');
     await expect(stamp).toHaveCount(1);
-    await expect(stamp).toContainText('$15.00');
+    await expect(stamp).toContainText('$25.00');
     await expect(stamp).toContainText('24h');
     await expect(stamp).toContainText(/paid \d{1,2}:\d{2}\s?(AM|PM)/i);
 
@@ -238,6 +242,32 @@ test.describe('pay-to-park dashboard @desktop-only', () => {
     await expect(log).toContainText('FREE5678');
   });
 
+  test('the stamp shows the hours that were PAID FOR, not a rounded day', async ({ page }) => {
+    // A 10h stay and a 24h stay both land stay_days = 1 (ceil of hours/24), so
+    // the old inference — "2 days means 48h, otherwise 24h" — labelled a 10h
+    // pass "24h" and told the operator the truck may sit there for fourteen
+    // hours it never bought. The duration comes off the payment now.
+    const { log } = await mountParkingLog(page, {
+      rows: [{ ...PAID_ROW, paid_stay_hours: 10, paid_amount_cents: 1500 }],
+    });
+
+    const stamp = log.locator('.paid-stamp');
+    await expect(stamp).toContainText('10h');
+    await expect(stamp).not.toContainText('24h');
+    await expect(stamp).toContainText('$15.00');
+  });
+
+  test('a row from a backend without paid_stay_hours still gets a duration', async ({ page }) => {
+    // The field is served by a backend that may not be deployed yet. Falling
+    // back to the old stay_days inference keeps the stamp complete rather than
+    // rendering "· h".
+    const row = { ...PAID_ROW, stay_days: 2 };
+    delete (row as Record<string, unknown>).paid_stay_hours;
+    const { log } = await mountParkingLog(page, { rows: [row] });
+
+    await expect(log.locator('.paid-stamp')).toContainText('48h');
+  });
+
   test('a refunded pass says only that — no amount, no receipt', async ({ page }) => {
     const { log } = await mountParkingLog(page, {
       rows: [{ ...PAID_ROW, payment_status: 'refunded' }],
@@ -245,7 +275,7 @@ test.describe('pay-to-park dashboard @desktop-only', () => {
 
     const stamp = log.locator('.paid-stamp');
     await expect(stamp).toHaveText('refunded');
-    await expect(stamp).not.toContainText('$15');
+    await expect(stamp).not.toContainText('$25');
     await expect(stamp).not.toContainText('paid');
     await expect(stamp.locator('a')).toHaveCount(0);
   });
@@ -334,7 +364,7 @@ test.describe('pay-to-park dashboard @desktop-only', () => {
     // No amount, in any spelling, and nowhere to click through to the payment.
     await expect(stamp).not.toContainText('$');
     await expect(stamp.locator('a')).toHaveCount(0);
-    await expect(log).not.toContainText('$15');
+    await expect(log).not.toContainText('$25');
   });
 
   test('captured money that never became a pass is surfaced to the owner (I3)', async ({ page }) => {
