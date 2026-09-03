@@ -14861,23 +14861,30 @@ function App() {
       </main>
 
       <nav className="bottom-nav" role="navigation" aria-label="Main navigation">
-        {navTabs.map(t => {
-          const Icon = navIcons[t.id];
-          return (
-            <button key={t.id}
-              className={`nav-item ${tab === t.id ? 'active' : ''}`}
-              onClick={() => { setTab(t.id); haptic('light'); }}
-              aria-label={`${t.label}${t.badge > 0 ? `, ${t.badge} pending` : ''}`}
-              aria-current={tab === t.id ? 'page' : undefined}
-              role="tab"
-              aria-selected={tab === t.id}
-            >
-              {t.badge > 0 && <span className="nav-badge" aria-hidden="true">{t.badge}</span>}
-              {Icon && <Icon />}
-              <span className="nav-label">{t.label}</span>
-            </button>
-          );
-        })}
+        {/* Each button carries role="tab"; axe's aria-required-parent rule needs
+            that role contained by role="tablist". The outer <nav> keeps its
+            navigation landmark, so the tablist role goes on this wrapper —
+            display:contents keeps it out of the flex layout .bottom-nav relies
+            on for its direct children. */}
+        <div role="tablist" aria-label="Main navigation" style={{display: 'contents'}}>
+          {navTabs.map(t => {
+            const Icon = navIcons[t.id];
+            return (
+              <button key={t.id}
+                className={`nav-item ${tab === t.id ? 'active' : ''}`}
+                onClick={() => { setTab(t.id); haptic('light'); }}
+                aria-label={`${t.label}${t.badge > 0 ? `, ${t.badge} pending` : ''}`}
+                aria-current={tab === t.id ? 'page' : undefined}
+                role="tab"
+                aria-selected={tab === t.id}
+              >
+                {t.badge > 0 && <span className="nav-badge" aria-hidden="true">{t.badge}</span>}
+                {Icon && <Icon />}
+                <span className="nav-label">{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </nav>
     </div>
   );

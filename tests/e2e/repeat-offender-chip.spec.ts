@@ -12,13 +12,21 @@
 import { test, expect, accounts, loginAs } from '../fixtures/accounts';
 
 test.describe('repeat-offender cooldown chip @smoke', () => {
+  // Needs a truck-plaza property with a repeat-offender pass on it. The seed
+  // accounts (`npm run seed`) don't provision one — set
+  // TEST_TRUCK_PLAZA_PROPERTY_ID (see tests/README-ci-secrets.md) once a
+  // fixture property exists to exercise this suite for real.
+  test.beforeEach(() => {
+    test.skip(!process.env.TEST_TRUCK_PLAZA_PROPERTY_ID, 'needs a truck-plaza property with passes');
+  });
+
   test('chip expands recent-visits list when present', async ({ page }) => {
     await loginAs(page, accounts.ownerA());
 
     // Navigate into the property / Parking Log surface. Tab labels vary by
     // property type, so try the registration-based log labels broadly and fall
     // through gracefully if this owner has no truck_plaza property.
-    const propertyTab = page.getByRole('button', { name: /properties/i }).first();
+    const propertyTab = page.getByRole('tab', { name: /properties|lots/i }).first();
     if (await propertyTab.count()) {
       await propertyTab.click().catch(() => {});
     }

@@ -33,6 +33,23 @@ Everything below runs from `tests/` in `getlotlogic/lotlogic`.
 | `TEST_PARTNER_A_PASSWORD` | **yes** | same | same |
 | `API_URL` | no | backend base URL | defaults to `https://lotlogic-backend-production.up.railway.app` |
 | `VERCEL_PREVIEW_URL` | no | `BASE_URL` for the run | defaults to `https://lotlogic-beta.vercel.app` |
+| `TEST_TRUCK_PLAZA_PROPERTY_ID` | no | `e2e/parking-log-smart-search.spec.ts`, `e2e/repeat-offender-chip.spec.ts` | those two specs skip with "needs a truck-plaza property with passes" |
+
+### `TEST_TRUCK_PLAZA_PROPERTY_ID`
+
+The parking-log smart-search suite and the repeat-offender-chip smoke test both
+exercise the Truck Parking Log — a view that only exists on a `truck_plaza`
+property that has passes on it. The seeded `TEST_OWNER_A` account has exactly
+one legacy `lots` row (in the backend's `lots` table, not the dashboard's
+`properties` table) and zero properties, so there is nothing for these specs
+to open. Rather than fail on data the seed script never provisioned, both
+specs skip cleanly (`test.beforeEach` → `test.skip`) whenever this var is
+unset.
+
+To turn them into real coverage: create (once, by hand or via a future seed
+fixture) a `truck_plaza` property owned by `TEST_OWNER_A` with at least one
+registered pass, set `TEST_TRUCK_PLAZA_PROPERTY_ID` to its id as a repo/CI
+secret, and both specs will run for real instead of skipping.
 
 Source of the requirement: `tests/fixtures/accounts.ts:11-18` (`required()`),
 consumed at `:24`. Source of the plumbing:
