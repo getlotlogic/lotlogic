@@ -8534,15 +8534,18 @@ function OverviewPage({ violations, lots, partners, lotStates, onViewAs }) {
 
 // ── Account / Settings page ────────────────────────────────────
 function PartnerFeeEditor({ user }) {
-  // Partner-side edit of their own tow_fee + boot_fee. Mirrors the
-  // TowTruckPlatesEditor pattern — direct Supabase update on the partner's
-  // own row. RLS allows self-row writes; the backend's PATCH /partners/{id}
-  // would also work but the dashboard already does direct-Supabase elsewhere.
+  // Partner-side edit of their own tow_fee + boot_fee. `tow_fee`/`boot_fee`
+  // are now read-only GENERATED columns (dollars, derived from
+  // `tow_fee_cents`/`boot_fee_cents`) — a direct Supabase write to them
+  // fails. Save goes through the backend PATCH /partners/{id} instead,
+  // which accepts the `_cents` columns; reads still use the generated
+  // dollar columns via the normal user fetch.
   const [towFee, setTowFee] = React.useState(user?.tow_fee ?? 100);
   const [bootFee, setBootFee] = React.useState(user?.boot_fee ?? 0);
   const [saving, setSaving] = React.useState(false);
   const [err, setErr] = React.useState('');
   const [saved, setSaved] = React.useState(false);
+  const { addToast } = useToast();
 
   // Re-sync when the user prop changes (parent refetched).
   React.useEffect(() => {
@@ -8555,20 +8558,26 @@ function PartnerFeeEditor({ user }) {
   async function save() {
     setSaving(true); setErr(''); setSaved(false);
     try {
-      if (!supabase || !user?.id) throw new Error('Not authenticated');
+      if (!user?.id) throw new Error('Not authenticated');
       const tow = Number(towFee);
       const boot = Number(bootFee);
       if (!Number.isFinite(tow) || tow < 0) throw new Error('Tow fee must be a non-negative number');
       if (!Number.isFinite(boot) || boot < 0) throw new Error('Boot fee must be a non-negative number');
-      const { error } = await supabase
-        .from('enforcement_partners')
-        .update({ tow_fee: Math.round(tow), boot_fee: Math.round(boot) })
-        .eq('id', user.id);
-      if (error) throw new Error(error.message);
+      await apiFetch(`/partners/${user.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tow_fee_cents: Math.round(tow * 100),
+          boot_fee_cents: Math.round(boot * 100),
+        }),
+      });
       setSaved(true);
+      addToast('Fees saved', 'success');
       setTimeout(() => setSaved(false), 1800);
     } catch (e) {
-      setErr(e.message || String(e));
+      const msg = e.message || String(e);
+      setErr(msg);
+      addToast('Failed to save fees: ' + msg, 'error');
     } finally {
       setSaving(false);
     }
