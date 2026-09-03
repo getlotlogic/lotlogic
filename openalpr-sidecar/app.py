@@ -13,7 +13,7 @@ OCR for reading the cropped region.
 API contract is identical to v2 so callOpenAlprSidecar() in
 camera-snapshot/index.ts requires no changes.
 
-Spec: docs/superpowers/specs/2026-04-25-yolo-plate-detector-design.md
+Spec: docs/archive/specs/2026-04-25-yolo-plate-detector-design.md
 """
 
 import base64

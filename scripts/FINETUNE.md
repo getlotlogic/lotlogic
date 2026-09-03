@@ -114,4 +114,4 @@ The training_curator agent (designed but not yet built) will:
 4. A/B test new model vs current via shadow scoring
 5. Auto-promote if accuracy improves
 
-Spec: `docs/superpowers/specs/2026-04-24-training-curator-design.md`
+Spec: `docs/archive/specs/2026-04-24-training-curator-design.md`

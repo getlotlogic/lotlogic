@@ -6,7 +6,7 @@
 -- Nullable so properties with a single camera or undecided layout skip
 -- direction inference (fallback to event-sourced timing).
 --
--- Spec: docs/superpowers/specs/2026-04-22-event-sourced-plate-tracking-design.md
+-- Spec: docs/archive/specs/2026-04-22-event-sourced-plate-tracking-design.md
 -- Applied to prod 2026-04-22 via supabase MCP apply_migration.
 
 ALTER TABLE public.alpr_cameras

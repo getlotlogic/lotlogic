@@ -3,7 +3,7 @@
 // the truck side panel and synthesizes a plate-shaped result (DOT-1234567)
 // so the state machine, sessions, holds, and email pipeline work unchanged.
 //
-// Spec: docs/superpowers/specs/2026-04-20-usdot-ocr-fallback-design.md
+// Spec: docs/archive/specs/2026-04-20-usdot-ocr-fallback-design.md
 //
 // Activation:
 //   supabase secrets set PARKPOW_USDOT_TOKEN=<token from parkpow.com trial>

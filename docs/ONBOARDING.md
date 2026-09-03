@@ -37,7 +37,7 @@ cat CLAUDE.md     # project context — read this first
 3. Run `claude` in the cloned repo directory
 4. Read `CLAUDE.md` → has all project rules + agent triggers
 
-**What carries over:** code + `CLAUDE.md` rules + spec/plan docs in `docs/superpowers/`
+**What carries over:** code + `CLAUDE.md` rules + spec/plan docs in `docs/archive/`
 
 **What does NOT carry over:** my conversation history, my auto-memory (`~/.claude/projects/...`). Those are per-machine. They start fresh.
 
@@ -163,7 +163,7 @@ After invites are sent:
 - [ ] Install Claude Code, sign in
 - [ ] Read `CLAUDE.md` end to end
 - [ ] Read `docs/ONBOARDING.md` (this doc)
-- [ ] Read `docs/superpowers/specs/2026-04-20-alpr-pipeline-post-gut-consolidated-design.md` (the ALPR system overview)
+- [ ] Read `docs/archive/specs/2026-04-20-alpr-pipeline-post-gut-consolidated-design.md` (the ALPR system overview)
 - [ ] Verify they can: log into Supabase SQL editor, see Vercel deploys, view Railway logs, view Cloudflare R2 buckets
 - [ ] Test one no-op deploy: clone, make a tiny doc edit, push, watch Vercel auto-deploy
 

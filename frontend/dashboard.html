@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <!-- Front-end error reporting. Inert until a DSN is set in the file itself. -->
+  <script src="/error-reporting.js" defer></script>
   <title>LotLogic — AI Parking Enforcement</title>
   <meta name="description" content="AI-powered parking management dashboard. Manage parking passes, cameras, and earnings in real time." />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F6F4EE" />
@@ -17,7 +19,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.1/qrcode.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1080,6 +1082,10 @@
       background: #fff; padding: 8px; border-radius: 8px; line-height: 0;
     }
     .pd-qr-canvas-wrap canvas { display: block; width: 160px; height: 160px; }
+    .pd-qr-fallback {
+      font-size: 11px; font-weight: 600; color: var(--yellow);
+      text-align: center; max-width: 176px;
+    }
     .pd-qr-url {
       font-family: monospace; font-size: 11px; color: var(--text-muted);
       word-break: break-all; max-width: 100%;
@@ -2422,6 +2428,57 @@ function useNowTick(everyMs = 30000) {
   return t;
 }
 
+// ── Lot-local calendar dates ─────────────────────────────────
+// Every LotLogic property is in Eastern time today. The Parking Log's date
+// filters are calendar dates the operator picked while standing in the lot, so
+// they have to be turned into instants in the LOT's zone, not the browser's and
+// not UTC. Sending a bare date, or one stamped with `Z`, ended the day at
+// 19:59:59 Eastern — every truck that registered between 8 PM and midnight fell
+// outside "today" in the log and in the CSV export.
+// Wave 2 replaces the constant with a `properties.timezone` column.
+const LOT_TIMEZONE = 'America/New_York';
+
+// The UTC offset in force in `timeZone` on the calendar day `ymd` ("-04:00").
+// Anchored at 12:00 UTC of that day — i.e. mid-morning Eastern, safely past the
+// 2 AM DST switch — so both ends of the day get the day's own offset.
+function tzOffsetOn(ymd, timeZone = LOT_TIMEZONE) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+      .formatToParts(new Date(`${ymd}T12:00:00Z`));
+    const name = (parts.find(p => p.type === 'timeZoneName') || {}).value || '';
+    const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(name);
+    if (!m) return name === 'GMT' ? '+00:00' : null;
+    return `${m[1]}${m[2].padStart(2, '0')}:${m[3] || '00'}`;
+  } catch { return null; }
+}
+
+// The UTC offset in force in `timeZone` at a specific instant — unlike
+// tzOffsetOn (anchored at 12:00 UTC of a calendar day), this reads the
+// offset at the exact Date given, so a bound built near a DST transition
+// (2 AM local) gets its own offset instead of borrowing midday's.
+function tzOffsetAt(date, timeZone = LOT_TIMEZONE) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+      .formatToParts(date);
+    const name = (parts.find(p => p.type === 'timeZoneName') || {}).value || '';
+    const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(name);
+    if (!m) return name === 'GMT' ? '+00:00' : null;
+    return `${m[1]}${m[2].padStart(2, '0')}:${m[3] || '00'}`;
+  } catch { return null; }
+}
+
+// "2026-09-03" → "2026-09-03T00:00:00.000-04:00" / "...T23:59:59.999-04:00".
+// Anything that is not a bare calendar date is passed straight through, because
+// the caller already sent a full timestamp.
+function lotDayBound(ymd, edge) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || '')) return ymd;
+  const time = edge === 'end' ? '23:59:59.999' : '00:00:00.000';
+  let off = tzOffsetOn(ymd);
+  if (!off) return ymd; // No Intl offset support: leave the old behaviour alone.
+  const refined = tzOffsetAt(new Date(`${ymd}T${time}${off}`));
+  return `${ymd}T${time}${refined || off}`;
+}
+
 // ── Supabase client ──────────────────────────────────────────
 const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
@@ -2449,6 +2506,7 @@ function _supabaseFetch(input, init) {
 const supabase = window.supabase
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { global: { fetch: _supabaseFetch } })
   : null;
+if (!supabase) console.error('supabase-js failed to load — the dashboard cannot read data');
 
 function applySupabaseAuth(token) {
   _supabaseToken = token || null;
@@ -2590,102 +2648,96 @@ const ACTIVE_ROSTER_CAP = 500;
 
 const db = {
   async getOwners(email) {
-    if (supabase) {
-      let q = supabase.from('lot_owners').select('*');
-      if (email) q = q.eq('email', email.trim().toLowerCase());
-      const { data, error } = await q;
-      if (!error && data) return data;
-    }
-    const params = email ? `?email=${encodeURIComponent(email.trim().toLowerCase())}` : '';
-    return apiFetch(`/owners${params}`);
+    if (!supabase) throw new Error('Data service unavailable');
+    let q = supabase.from('lot_owners').select('*');
+    if (email) q = q.eq('email', email.trim().toLowerCase());
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return data || [];
   },
   // db.getPartners removed 2026-04-29 — was a SELECT * on
   // enforcement_partners with no callers, leak surface for revenue_share
   // / boot_fee / tow_fee / notes / quickbooks_customer_id if anyone added
   // a caller. Safe self-fetch lives on the backend at GET /partners/me.
   async getLots(filter = {}) {
-    if (supabase) {
-      let q = supabase.from('lots').select('*').eq('active', true);
-      if (filter.owner_id) q = q.eq('owner_id', filter.owner_id);
-      if (filter.partner_id) q = q.eq('partner_id', filter.partner_id);
-      if (filter.market_id) q = q.eq('market_id', filter.market_id);
-      const { data, error } = await q;
-      if (!error && data) return data;
-    }
-    const params = filter.owner_id ? `?owner_id=${filter.owner_id}` : filter.partner_id ? `?partner_id=${filter.partner_id}` : filter.market_id ? `?market_id=${filter.market_id}` : '';
-    return apiFetch(`/lots${params}`);
+    if (!supabase) throw new Error('Data service unavailable');
+    let q = supabase.from('lots').select('*').eq('active', true);
+    if (filter.owner_id) q = q.eq('owner_id', filter.owner_id);
+    if (filter.partner_id) q = q.eq('partner_id', filter.partner_id);
+    if (filter.market_id) q = q.eq('market_id', filter.market_id);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return data || [];
   },
   async getLotState(lotId) {
-    if (supabase) {
-      // Fetch cameras for this lot
-      const { data: cams, error: camErr } = await supabase
-        .from('cameras')
-        .select('*')
-        .eq('lot_id', lotId)
-        .eq('active', true);
-      if (camErr) return apiFetch(`/lots/${lotId}/state`);
+    if (!supabase) throw new Error('Data service unavailable');
+    // Fetch cameras for this lot
+    const { data: cams, error: camErr } = await supabase
+      .from('cameras')
+      .select('*')
+      .eq('lot_id', lotId)
+      .eq('active', true);
+    if (camErr) throw new Error(camErr.message);
 
-      // Parallel: pending violations count + latest snapshot per camera + camera zones
-      const [violRes, ...camData] = await Promise.all([
-        supabase.from('violations').select('id, camera_id').eq('lot_id', lotId).in('status', ['pending', 'alerted', 'acknowledged']),
-        ...((cams || []).map(cam => Promise.all([
-          supabase.from('snapshots').select('*').eq('camera_id', cam.id).order('captured_at', { ascending: false }).limit(1),
-          supabase.from('camera_zones').select('*').eq('camera_id', cam.id),
-        ]))),
-      ]);
+    // Parallel: pending violations count + latest snapshot per camera + camera zones
+    const [violRes, ...camData] = await Promise.all([
+      supabase.from('violations').select('id, camera_id').eq('lot_id', lotId).in('status', ['pending', 'alerted', 'acknowledged']),
+      ...((cams || []).map(cam => Promise.all([
+        supabase.from('snapshots').select('*').eq('camera_id', cam.id).order('captured_at', { ascending: false }).limit(1),
+        supabase.from('camera_zones').select('*').eq('camera_id', cam.id),
+      ]))),
+    ]);
 
-      const pendingViols = violRes.data || [];
-      const cameras = (cams || []).map((cam, i) => {
-        const [snapRes, zonesRes] = camData[i] || [{ data: [] }, { data: [] }];
-        const snap = snapRes.data?.[0] || null;
-        const zones = (zonesRes.data || []).map(z => ({
-          zone_id: z.zone_id,
-          label: z.label,
-          zone_type: z.zone_type,
-          time_limit_minutes: z.time_limit_minutes,
-          polygon: z.polygon,
-        }));
-        const camViols = pendingViols.filter(v => v.camera_id === cam.id).length;
-        return {
-          camera_id: cam.id,
-          camera_name: cam.name,
-          online: (cam.status === 'active' || cam.active === true) && (!!cam.ip_address || (cam.last_heartbeat && (Date.now() - new Date(cam.last_heartbeat).getTime()) < 300000)),
-          zones,
-          deployment_profile: cam.camera_type === 'lte_solar' ? 'lte_solar' : 'wired',
-          snapshot_width: cam.snapshot_width || 640,
-          snapshot_height: cam.snapshot_height || 360,
-          poll_interval_sec: cam.poll_interval_sec || 30,
-          bandwidth_budget_mb: cam.bandwidth_budget_mb || null,
-          bandwidth_used_mb: cam.bandwidth_used_mb || null,
-          last_heartbeat: cam.last_heartbeat,
-          channel: cam.channel,
-          active_violations: camViols,
-          tunnel_snapshot_url: (cam.ip_address && cam.http_snapshot_url) ? (() => { try { const u = new URL(cam.http_snapshot_url); return `https://${cam.ip_address}${u.pathname}${u.search}`; } catch { return null; } })() : null,
-          latest_snapshot: snap ? {
-            url: (snap.storage_url || snap.url) ? (snap.storage_url || snap.url) + (((snap.storage_url || snap.url).includes('?')) ? '&' : '?') + '_t=' + Date.now() : null,
-            captured_at: snap.captured_at,
-            vehicles_detected: snap.vehicles_detected || 0,
-            people_detected: snap.raw_detections?.detections?.filter(d => d.class === 'person').length || 0,
-            plates_read: snap.raw_detections?.detections?.filter(d => d.plate_text).length || 0,
-            plate_readings: snap.raw_detections?.detections?.filter(d => d.plate_text).map(d => d.plate_text) || [],
-            detections: snap.raw_detections?.detections?.map((d, i) => ({
-              id: `det_${i}`,
-              type: d.class === 'person' ? 'person' : 'vehicle',
-              bbox: d.bbox ? { x: d.bbox[0] * 100, y: d.bbox[1] * 100, w: (d.bbox[2] - d.bbox[0]) * 100, h: (d.bbox[3] - d.bbox[1]) * 100 } : null,
-              confidence: d.conf,
-              label: d.class,
-            })) || [],
-          } : null,
-        };
-      });
+    const pendingViols = violRes.data || [];
+    const cameras = (cams || []).map((cam, i) => {
+      const [snapRes, zonesRes] = camData[i] || [{ data: [] }, { data: [] }];
+      const snap = snapRes.data?.[0] || null;
+      const zones = (zonesRes.data || []).map(z => ({
+        zone_id: z.zone_id,
+        label: z.label,
+        zone_type: z.zone_type,
+        time_limit_minutes: z.time_limit_minutes,
+        polygon: z.polygon,
+      }));
+      const camViols = pendingViols.filter(v => v.camera_id === cam.id).length;
       return {
-        total_active_violations: pendingViols.length,
-        cameras_online: cameras.filter(c => c.online).length,
-        cameras_total: cameras.length,
-        cameras,
+        camera_id: cam.id,
+        camera_name: cam.name,
+        online: (cam.status === 'active' || cam.active === true) && (!!cam.ip_address || (cam.last_heartbeat && (Date.now() - new Date(cam.last_heartbeat).getTime()) < 300000)),
+        zones,
+        deployment_profile: cam.camera_type === 'lte_solar' ? 'lte_solar' : 'wired',
+        snapshot_width: cam.snapshot_width || 640,
+        snapshot_height: cam.snapshot_height || 360,
+        poll_interval_sec: cam.poll_interval_sec || 30,
+        bandwidth_budget_mb: cam.bandwidth_budget_mb || null,
+        bandwidth_used_mb: cam.bandwidth_used_mb || null,
+        last_heartbeat: cam.last_heartbeat,
+        channel: cam.channel,
+        active_violations: camViols,
+        tunnel_snapshot_url: (cam.ip_address && cam.http_snapshot_url) ? (() => { try { const u = new URL(cam.http_snapshot_url); return `https://${cam.ip_address}${u.pathname}${u.search}`; } catch { return null; } })() : null,
+        latest_snapshot: snap ? {
+          url: (snap.storage_url || snap.url) ? (snap.storage_url || snap.url) + (((snap.storage_url || snap.url).includes('?')) ? '&' : '?') + '_t=' + Date.now() : null,
+          captured_at: snap.captured_at,
+          vehicles_detected: snap.vehicles_detected || 0,
+          people_detected: snap.raw_detections?.detections?.filter(d => d.class === 'person').length || 0,
+          plates_read: snap.raw_detections?.detections?.filter(d => d.plate_text).length || 0,
+          plate_readings: snap.raw_detections?.detections?.filter(d => d.plate_text).map(d => d.plate_text) || [],
+          detections: snap.raw_detections?.detections?.map((d, i) => ({
+            id: `det_${i}`,
+            type: d.class === 'person' ? 'person' : 'vehicle',
+            bbox: d.bbox ? { x: d.bbox[0] * 100, y: d.bbox[1] * 100, w: (d.bbox[2] - d.bbox[0]) * 100, h: (d.bbox[3] - d.bbox[1]) * 100 } : null,
+            confidence: d.conf,
+            label: d.class,
+          })) || [],
+        } : null,
       };
-    }
-    return apiFetch(`/lots/${lotId}/state`);
+    });
+    return {
+      total_active_violations: pendingViols.length,
+      cameras_online: cameras.filter(c => c.online).length,
+      cameras_total: cameras.length,
+      cameras,
+    };
   },
   // Shared: attach snapshot URL + detections to violation rows.
   // If the violation's own snapshot has no storage_url, fall back to
@@ -2780,16 +2832,15 @@ const db = {
     return viols;
   },
   async getViolations(lotId) {
-    if (supabase) {
-      const { data, error } = await supabase
-        .from('violations')
-        .select('*, snapshots:snapshot_id(storage_url, raw_detections)')
-        .eq('lot_id', lotId)
-        .order('detected_at', { ascending: false })
-        .limit(200);
-      if (!error && data) return this._enrichViolations(data);
-    }
-    return apiFetch(`/violations?lot_id=${lotId}&page_size=200`);
+    if (!supabase) throw new Error('Data service unavailable');
+    const { data, error } = await supabase
+      .from('violations')
+      .select('*, snapshots:snapshot_id(storage_url, raw_detections)')
+      .eq('lot_id', lotId)
+      .order('detected_at', { ascending: false })
+      .limit(200);
+    if (error) throw new Error(error.message);
+    return this._enrichViolations(data || []);
   },
   async getViolationsByPartner(partnerId) {
     if (supabase) {
@@ -2804,127 +2855,110 @@ const db = {
     return [];
   },
   async recordAction(violId, action, extra = {}) {
-    if (supabase) {
-      try {
-        if (action === 'plate_correction') {
-          const { error } = await supabase.from('violations').update({
-            plate_text: extra.plate_text,
-          }).eq('id', violId);
-          if (error) throw new Error(error.message || 'Plate update failed');
-          return { success: true };
+    if (!supabase) throw new Error('Data service unavailable');
+    try {
+      if (action === 'plate_correction') {
+        const { error } = await supabase.from('violations').update({
+          plate_text: extra.plate_text,
+        }).eq('id', violId);
+        if (error) throw new Error(error.message || 'Plate update failed');
+        return { success: true };
+      }
+      // Build clean update object — only real DB columns
+      const updates = {
+        action_taken: action,
+        status: 'resolved',
+        resolved_at: new Date().toISOString(),
+      };
+      // Calculate revenue from fee schedule for boot/tow
+      if (action === 'boot' || action === 'tow') {
+        if (extra._partner) {
+          const p = extra._partner;
+          const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
+          const share = p.revenue_share != null ? p.revenue_share : 0.30;
+          updates.gross_revenue = grossFee;
+          updates.our_revenue = Math.round(grossFee * share);
+          updates.partner_id = p.id;
+        } else if (extra._ownerFees) {
+          const f = extra._ownerFees;
+          const grossFee = action === 'boot' ? (f.boot_fee || 75) : (f.tow_fee || 250);
+          updates.gross_revenue = grossFee;
+          updates.our_revenue = grossFee; // Owner keeps 100%
         }
-        // Build clean update object — only real DB columns
-        const updates = {
-          action_taken: action,
-          status: 'resolved',
-          resolved_at: new Date().toISOString(),
-        };
-        // Calculate revenue from fee schedule for boot/tow
-        if (action === 'boot' || action === 'tow') {
+      }
+      // Dismissed / already gone / no action = zero revenue (action-rate only)
+      // Also clear zone_id so the backend won't dedup-match this resolved
+      // violation against new detections in the same zone.
+      // Fetch camera_id + zone_id BEFORE update (dismiss clears zone_id)
+      const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
+      const _preCameraId = _vPre?.camera_id;
+      const _preZoneId = _vPre?.zone_id;
+
+      if (action === 'dismissed' || action === 'already_gone' || action === 'no_action') {
+        updates.gross_revenue = 0;
+        updates.our_revenue = 0;
+        updates.zone_id = null;
+      }
+      const { error } = await supabase.from('violations').update(updates).eq('id', violId);
+      if (error) throw new Error(error.message || 'Update failed');
+
+      // Reset zone_occupancy so the next scan can fire a new violation
+      if (_preCameraId && _preZoneId) {
+        await supabase.from('zone_occupancy')
+          .update({ violation_triggered: false })
+          .eq('camera_id', _preCameraId)
+          .eq('zone_id', _preZoneId);
+      }
+
+      // Log boot/tow actions for invoicing
+      if (action === 'boot' || action === 'tow') {
+        try {
+          // Fetch violation details for the log
+          const { data: viol } = await supabase.from('violations').select('lot_id, plate_text, vehicle_color, vehicle_type').eq('id', violId).single();
+          const lot_id = viol?.lot_id;
+          const vehicleParts = [viol?.vehicle_color, viol?.vehicle_type].filter(Boolean);
+          const vehicle_description = vehicleParts.length ? vehicleParts.join(' ') : (viol?.vehicle_type || null);
+          // Determine who performed the action and fee split
+          let logEntry = {
+            violation_id: violId,
+            lot_id,
+            action_type: action,
+            plate_text: viol?.plate_text || null,
+            vehicle_description,
+            performed_at: updates.resolved_at,
+          };
           if (extra._partner) {
             const p = extra._partner;
             const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
             const share = p.revenue_share != null ? p.revenue_share : 0.30;
-            updates.gross_revenue = grossFee;
-            updates.our_revenue = Math.round(grossFee * share);
-            updates.partner_id = p.id;
+            logEntry.partner_id = p.id;
+            logEntry.performed_by = 'partner';
+            logEntry.performer_email = extra._performerEmail || null;
+            logEntry.gross_fee = grossFee;
+            logEntry.our_revenue = Math.round(grossFee * share);
+            logEntry.partner_payout = grossFee - logEntry.our_revenue;
+            logEntry.owner_payout = 0;
           } else if (extra._ownerFees) {
-            const f = extra._ownerFees;
-            const grossFee = action === 'boot' ? (f.boot_fee || 75) : (f.tow_fee || 250);
-            updates.gross_revenue = grossFee;
-            updates.our_revenue = grossFee; // Owner keeps 100%
+            logEntry.owner_id = extra._ownerId || null;
+            logEntry.performed_by = 'owner';
+            logEntry.performer_email = extra._performerEmail || null;
+            const grossFee = action === 'boot' ? (extra._ownerFees.boot_fee || 75) : (extra._ownerFees.tow_fee || 250);
+            logEntry.gross_fee = grossFee;
+            logEntry.our_revenue = grossFee;
+            logEntry.partner_payout = 0;
+            logEntry.owner_payout = grossFee;
           }
-        }
-        // Dismissed / already gone / no action = zero revenue (action-rate only)
-        // Also clear zone_id so the backend won't dedup-match this resolved
-        // violation against new detections in the same zone.
-        // Fetch camera_id + zone_id BEFORE update (dismiss clears zone_id)
-        const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
-        const _preCameraId = _vPre?.camera_id;
-        const _preZoneId = _vPre?.zone_id;
-
-        if (action === 'dismissed' || action === 'already_gone' || action === 'no_action') {
-          updates.gross_revenue = 0;
-          updates.our_revenue = 0;
-          updates.zone_id = null;
-        }
-        const { error } = await supabase.from('violations').update(updates).eq('id', violId);
-        if (error) throw new Error(error.message || 'Update failed');
-
-        // Reset zone_occupancy so the next scan can fire a new violation
-        if (_preCameraId && _preZoneId) {
-          await supabase.from('zone_occupancy')
-            .update({ violation_triggered: false })
-            .eq('camera_id', _preCameraId)
-            .eq('zone_id', _preZoneId);
-        }
-
-        // Log boot/tow actions for invoicing
-        if (action === 'boot' || action === 'tow') {
-          try {
-            // Fetch violation details for the log
-            const { data: viol } = await supabase.from('violations').select('lot_id, plate_text, vehicle_color, vehicle_type').eq('id', violId).single();
-            const lot_id = viol?.lot_id;
-            const vehicleParts = [viol?.vehicle_color, viol?.vehicle_type].filter(Boolean);
-            const vehicle_description = vehicleParts.length ? vehicleParts.join(' ') : (viol?.vehicle_type || null);
-            // Determine who performed the action and fee split
-            let logEntry = {
-              violation_id: violId,
-              lot_id,
-              action_type: action,
-              plate_text: viol?.plate_text || null,
-              vehicle_description,
-              performed_at: updates.resolved_at,
-            };
-            if (extra._partner) {
-              const p = extra._partner;
-              const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
-              const share = p.revenue_share != null ? p.revenue_share : 0.30;
-              logEntry.partner_id = p.id;
-              logEntry.performed_by = 'partner';
-              logEntry.performer_email = extra._performerEmail || null;
-              logEntry.gross_fee = grossFee;
-              logEntry.our_revenue = Math.round(grossFee * share);
-              logEntry.partner_payout = grossFee - logEntry.our_revenue;
-              logEntry.owner_payout = 0;
-            } else if (extra._ownerFees) {
-              logEntry.owner_id = extra._ownerId || null;
-              logEntry.performed_by = 'owner';
-              logEntry.performer_email = extra._performerEmail || null;
-              const grossFee = action === 'boot' ? (extra._ownerFees.boot_fee || 75) : (extra._ownerFees.tow_fee || 250);
-              logEntry.gross_fee = grossFee;
-              logEntry.our_revenue = grossFee;
-              logEntry.partner_payout = 0;
-              logEntry.owner_payout = grossFee;
-            }
-            await supabase.from('action_logs').insert(logEntry);
-          } catch (logErr) {
-            console.warn('Action logged to violations but action_log insert failed:', logErr);
-          }
-        }
-
-        return { success: true };
-      } catch (e) {
-        console.error('Supabase recordAction error:', e);
-        // Try Rails API fallback
-        try {
-          const { _partner, ...cleanExtra } = extra;
-          return await apiFetch(`/violations/${violId}/action`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action, ...cleanExtra }),
-          });
-        } catch (_) {
-          throw e; // Both failed — throw original Supabase error
+          await supabase.from('action_logs').insert(logEntry);
+        } catch (logErr) {
+          console.warn('Action logged to violations but action_log insert failed:', logErr);
         }
       }
+
+      return { success: true };
+    } catch (e) {
+      console.error('recordAction error:', e);
+      throw e;
     }
-    const { _partner, ...cleanExtra } = extra;
-    return apiFetch(`/violations/${violId}/action`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, ...cleanExtra }),
-    });
   },
   // Mark a violation as departed (vehicle left zone, confirmed by consecutive empty snapshots)
   // Does NOT resolve the violation — operator must still dismiss it manually
@@ -2939,42 +2973,39 @@ const db = {
     }
   },
   async getSnapshotUrl(snapshotId) {
-    if (supabase) {
-      const { data, error } = await supabase
-        .from('snapshots')
-        .select('storage_url')
-        .eq('id', snapshotId)
-        .single();
-      if (!error && data?.storage_url) return { url: data.storage_url };
-    }
-    return apiFetch(`/snapshots/${snapshotId}/url`);
+    if (!supabase) throw new Error('Data service unavailable');
+    const { data, error } = await supabase
+      .from('snapshots')
+      .select('storage_url')
+      .eq('id', snapshotId)
+      .single();
+    if (error) throw new Error(error.message);
+    return { url: data?.storage_url || null };
   },
   async getRevenue(days) {
-    if (supabase) {
-      const since = new Date(Date.now() - days * 86400000).toISOString();
-      const { data, error } = await supabase
-        .from('violations')
-        .select('*')
-        .in('status', ['resolved', 'cleared'])
-        .gte('detected_at', since);
-      if (!error && data) {
-        // Revenue stored as dollars in DB
-        const totalOur = data.reduce((s, v) => s + (v.our_revenue || 0), 0);
-        const totalGross = data.reduce((s, v) => s + (v.gross_revenue || 0), 0);
-        const actioned = data.filter(v => v.action_taken && !['pending', 'plate_correction'].includes(v.action_taken));
-        const byAction = {};
-        actioned.forEach(v => { byAction[v.action_taken] = (byAction[v.action_taken] || 0) + 1; });
-        return {
-          our_revenue_cents: Math.round(totalOur * 100), // convert dollars → cents for fmtMoney
-          gross_revenue_cents: Math.round(totalGross * 100),
-          total_violations: data.length,
-          actions_executed: actioned.length,
-          action_rate: data.length > 0 ? actioned.length / data.length : 0,
-          by_action_type: byAction,
-        };
-      }
-    }
-    return apiFetch(`/violations/revenue?days=${days}`);
+    if (!supabase) throw new Error('Data service unavailable');
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const { data, error } = await supabase
+      .from('violations')
+      .select('*')
+      .in('status', ['resolved', 'cleared'])
+      .gte('detected_at', since);
+    if (error) throw new Error(error.message);
+    const rows = data || [];
+    // Revenue stored as dollars in DB
+    const totalOur = rows.reduce((s, v) => s + (v.our_revenue || 0), 0);
+    const totalGross = rows.reduce((s, v) => s + (v.gross_revenue || 0), 0);
+    const actioned = rows.filter(v => v.action_taken && !['pending', 'plate_correction'].includes(v.action_taken));
+    const byAction = {};
+    actioned.forEach(v => { byAction[v.action_taken] = (byAction[v.action_taken] || 0) + 1; });
+    return {
+      our_revenue_cents: Math.round(totalOur * 100), // convert dollars → cents for fmtMoney
+      gross_revenue_cents: Math.round(totalGross * 100),
+      total_violations: rows.length,
+      actions_executed: actioned.length,
+      action_rate: rows.length > 0 ? actioned.length / rows.length : 0,
+      by_action_type: byAction,
+    };
   },
   async addCamera(body) {
     // Cameras table has many required fields (ip_address, port, username, etc.)
@@ -2986,46 +3017,40 @@ const db = {
     });
   },
   async updateZones(cameraId, zones) {
-    if (supabase) {
-      // Delete existing zones for this camera, then insert new ones
-      const { error: delErr } = await supabase.from('camera_zones').delete().eq('camera_id', cameraId);
-      if (delErr) throw new Error('Failed to clear zones: ' + delErr.message);
+    if (!supabase) throw new Error('Data service unavailable');
+    // Delete existing zones for this camera, then insert new ones
+    const { error: delErr } = await supabase.from('camera_zones').delete().eq('camera_id', cameraId);
+    if (delErr) throw new Error('Failed to clear zones: ' + delErr.message);
 
-      if (zones.length > 0) {
-        const rows = zones.map(z => ({
-          camera_id: cameraId,
-          zone_id: z.zone_id,
-          label: z.label || z.zone_id,
-          zone_type: z.zone_type || 'no_parking',
-          time_limit_minutes: z.time_limit_minutes || null,
-          polygon: z.polygon,
-        }));
-        const { error: insErr } = await supabase.from('camera_zones').insert(rows);
-        if (insErr) throw new Error('Failed to insert zones: ' + insErr.message);
-      }
-
-      // Sync to cameras.zones JSON column (backend detection uses this format)
-      // Convert {x,y} percentage objects to [[x,y]] normalized 0-1 arrays
-      const backendZones = zones.map((z, i) => ({
+    if (zones.length > 0) {
+      const rows = zones.map(z => ({
+        camera_id: cameraId,
         zone_id: z.zone_id,
-        violation_type: z.zone_type || 'no_parking',
-        max_minutes: z.time_limit_minutes || null,
-        space_number: i + 1,
-        polygon: (z.polygon || []).map(pt => {
-          const px = pt.x != null ? pt.x : (Array.isArray(pt) ? pt[0] * 100 : 0);
-          const py = pt.y != null ? pt.y : (Array.isArray(pt) ? pt[1] * 100 : 0);
-          return [Math.round(px / 100 * 10000) / 10000, Math.round(py / 100 * 10000) / 10000];
-        }),
+        label: z.label || z.zone_id,
+        zone_type: z.zone_type || 'no_parking',
+        time_limit_minutes: z.time_limit_minutes || null,
+        polygon: z.polygon,
       }));
-      await supabase.from('cameras').update({ zones: backendZones }).eq('id', cameraId);
-
-      return { success: true };
+      const { error: insErr } = await supabase.from('camera_zones').insert(rows);
+      if (insErr) throw new Error('Failed to insert zones: ' + insErr.message);
     }
-    return apiFetch(`/cameras/${cameraId}/zones`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ zones }),
-    });
+
+    // Sync to cameras.zones JSON column (backend detection uses this format)
+    // Convert {x,y} percentage objects to [[x,y]] normalized 0-1 arrays
+    const backendZones = zones.map((z, i) => ({
+      zone_id: z.zone_id,
+      violation_type: z.zone_type || 'no_parking',
+      max_minutes: z.time_limit_minutes || null,
+      space_number: i + 1,
+      polygon: (z.polygon || []).map(pt => {
+        const px = pt.x != null ? pt.x : (Array.isArray(pt) ? pt[0] * 100 : 0);
+        const py = pt.y != null ? pt.y : (Array.isArray(pt) ? pt[1] * 100 : 0);
+        return [Math.round(px / 100 * 10000) / 10000, Math.round(py / 100 * 10000) / 10000];
+      }),
+    }));
+    await supabase.from('cameras').update({ zones: backendZones }).eq('id', cameraId);
+
+    return { success: true };
   },
   // Fetch unique enforcement partners linked to a set of lots
   async getPartnersForLots(lots) {
@@ -3122,51 +3147,47 @@ const db = {
     throw new Error('Supabase not available');
   },
   async deleteViolation(violId, isAlpr = false) {
-    if (supabase) {
-      // ALPR violations live in alpr_violations, not violations. The legacy
-      // delete path silently no-ops for ALPR rows because the WHERE matches
-      // zero rows in the wrong table — no error, no toast feedback, looks
-      // like the button does nothing. Branch by isAlpr.
-      if (isAlpr) {
-        const { error } = await supabase.from('alpr_violations').delete().eq('id', violId);
-        if (error) throw new Error(error.message);
-        return;
-      }
-      // Fetch camera_id + zone_id before deleting so we can reset occupancy
-      const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
-      const { error } = await supabase.from('violations').delete().eq('id', violId);
+    if (!supabase) throw new Error('Data service unavailable');
+    // ALPR violations live in alpr_violations, not violations. The legacy
+    // delete path silently no-ops for ALPR rows because the WHERE matches
+    // zero rows in the wrong table — no error, no toast feedback, looks
+    // like the button does nothing. Branch by isAlpr.
+    if (isAlpr) {
+      const { error } = await supabase.from('alpr_violations').delete().eq('id', violId);
       if (error) throw new Error(error.message);
-      // Reset zone_occupancy so the next scan can fire a new violation
-      if (_vPre?.camera_id && _vPre?.zone_id) {
-        await supabase.from('zone_occupancy')
-          .update({ violation_triggered: false })
-          .eq('camera_id', _vPre.camera_id)
-          .eq('zone_id', _vPre.zone_id);
-      }
-      return { success: true };
+      return;
     }
-    return apiFetch(`/violations/${violId}`, { method: 'DELETE' });
+    // Fetch camera_id + zone_id before deleting so we can reset occupancy
+    const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
+    const { error } = await supabase.from('violations').delete().eq('id', violId);
+    if (error) throw new Error(error.message);
+    // Reset zone_occupancy so the next scan can fire a new violation
+    if (_vPre?.camera_id && _vPre?.zone_id) {
+      await supabase.from('zone_occupancy')
+        .update({ violation_triggered: false })
+        .eq('camera_id', _vPre.camera_id)
+        .eq('zone_id', _vPre.zone_id);
+    }
+    return { success: true };
   },
 
   // ── Violation Dedup ───────────────────────────────────────
   async acknowledgeViolation(violId) {
-    if (supabase) {
-      const { data, error } = await supabase
-        .from('violations')
-        .update({
-          status: 'acknowledged',
-          acknowledged_at: new Date().toISOString(),
-          acknowledged_by: 'dashboard',
-        })
-        .eq('id', violId)
-        .eq('status', 'alerted')
-        .select();
-      if (error) throw new Error(error.message);
-      // Also try backend endpoint as fallback/sync
-      try { await apiFetch(`/violations/${violId}/acknowledge`, { method: 'POST' }); } catch (_) {}
-      return { success: true, data };
-    }
-    return apiFetch(`/violations/${violId}/acknowledge`, { method: 'POST' });
+    if (!supabase) throw new Error('Data service unavailable');
+    const { data, error } = await supabase
+      .from('violations')
+      .update({
+        status: 'acknowledged',
+        acknowledged_at: new Date().toISOString(),
+        acknowledged_by: 'dashboard',
+      })
+      .eq('id', violId)
+      .eq('status', 'alerted')
+      .select();
+    if (error) throw new Error(error.message);
+    // Best-effort sync of the same state to the backend.
+    try { await apiFetch(`/violations/${violId}/acknowledge`, { method: 'POST' }); } catch (_) {}
+    return { success: true, data };
   },
 
   // ── Analytics ─────────────────────────────────────────────
@@ -3468,19 +3489,15 @@ const db = {
     if (opts.status) params.set('status', opts.status);
     if (opts.plate) params.set('plate', opts.plate);
     if (opts.company_name) params.set('company', opts.company_name);
-    if (opts.date_from) params.set('from_date', opts.date_from);
-    if (opts.date_to) {
-      // date_to is a bare calendar date (YYYY-MM-DD). The backend filters
-      // `created_at <= :to_date`, and a bare date parses to 00:00:00 UTC —
-      // which silently drops every pass created later that same day. That's
-      // why a truck registered this morning showed up in search but not in
-      // today's active list. Send an inclusive end-of-day bound so "through
-      // today" means through right now.
-      const toDate = /^\d{4}-\d{2}-\d{2}$/.test(opts.date_to)
-        ? `${opts.date_to}T23:59:59.999Z`
-        : opts.date_to;
-      params.set('to_date', toDate);
-    }
+    // Both bounds are bare calendar dates (YYYY-MM-DD) the operator picked in
+    // the lot, and the backend compares them against `created_at`. A bare date
+    // parses to 00:00:00 UTC, which drops every pass created later that same
+    // day; stamping the upper bound with `Z` instead ended the day at 19:59:59
+    // Eastern, which dropped the entire night shift. Send each bound as a real
+    // instant in the LOT's timezone so "through today" means through midnight
+    // where the trucks actually are.
+    if (opts.date_from) params.set('from_date', lotDayBound(opts.date_from, 'start'));
+    if (opts.date_to) params.set('to_date', lotDayBound(opts.date_to, 'end'));
     if (opts.page) params.set('page', String(opts.page));
     if (opts.page_size) params.set('page_size', String(opts.page_size));
     if (opts.format === 'csv') {
@@ -11346,6 +11363,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   const nowTick = useNowTick();
   const tempQrRef = useRef(null);
   const permQrRef = useRef(null);
+  // The QR drawing library is a third-party CDN script. When it fails to load
+  // the tiles used to render an empty white box with nothing in the console —
+  // say so instead, and point at the Copy link button that still works.
+  const [qrLibFailed, setQrLibFailed] = useState(false);
 
   const isTruckPlaza = property?.property_type === 'truck_plaza';
 
@@ -11488,10 +11509,22 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
 
   // Render the Temporary + Permanent QR codes once we know the property
   useEffect(() => {
-    if (!property?.qr_code_id || typeof QRCode === 'undefined') return;
+    if (!property?.qr_code_id) return;
+    if (typeof QRCode === 'undefined' || typeof QRCode.toCanvas !== 'function') {
+      console.error('qr: QRCode library did not load');
+      setQrLibFailed(true);
+      return;
+    }
+    setQrLibFailed(false);
     const opts = { width: 320, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#0f172a', light: '#ffffff' } };
-    if (tempQrRef.current) QRCode.toCanvas(tempQrRef.current, `${window.location.origin}/temp/${property.qr_code_id}`, opts, err => { if (err) console.error('temp qr:', err); });
-    if (permQrRef.current) QRCode.toCanvas(permQrRef.current, `${window.location.origin}/perm/${property.qr_code_id}`, opts, err => { if (err) console.error('perm qr:', err); });
+    const draw = (canvas, url, label) => {
+      if (!canvas) return;
+      QRCode.toCanvas(canvas, url, opts, err => {
+        if (err) { console.error(label + ' qr:', err); setQrLibFailed(true); }
+      });
+    };
+    draw(tempQrRef.current, `${window.location.origin}/temp/${property.qr_code_id}`, 'temp');
+    draw(permQrRef.current, `${window.location.origin}/perm/${property.qr_code_id}`, 'perm');
   }, [property?.qr_code_id]);
 
   // ── Permanent plates (new /perm submissions land here) ──
@@ -11824,6 +11857,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               <span className="pd-qr-sub">up to 48 hrs</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={tempQrRef} /></div>
+            {qrLibFailed && <div className="pd-qr-fallback" data-testid="qr-unavailable">QR unavailable &mdash; use Copy link</div>}
             <div className="pd-qr-url">{tempUrl}</div>
             <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast('Self-serve link copied', 'success'); }}>Copy link</button>
           </div>
@@ -11837,6 +11871,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               <span className="pd-qr-sub">owner-approved</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={permQrRef} /></div>
+            {qrLibFailed && <div className="pd-qr-fallback" data-testid="qr-unavailable">QR unavailable &mdash; use Copy link</div>}
             <div className="pd-qr-url">{permUrl}</div>
             <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(permUrl); addToast('Long-term link copied', 'success'); }}>Copy link</button>
           </div>
