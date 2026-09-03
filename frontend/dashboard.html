@@ -17,7 +17,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.1/qrcode.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1080,6 +1080,10 @@
       background: #fff; padding: 8px; border-radius: 8px; line-height: 0;
     }
     .pd-qr-canvas-wrap canvas { display: block; width: 160px; height: 160px; }
+    .pd-qr-fallback {
+      font-size: 11px; font-weight: 600; color: var(--yellow);
+      text-align: center; max-width: 176px;
+    }
     .pd-qr-url {
       font-family: monospace; font-size: 11px; color: var(--text-muted);
       word-break: break-all; max-width: 100%;
@@ -11346,6 +11350,10 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   const nowTick = useNowTick();
   const tempQrRef = useRef(null);
   const permQrRef = useRef(null);
+  // The QR drawing library is a third-party CDN script. When it fails to load
+  // the tiles used to render an empty white box with nothing in the console —
+  // say so instead, and point at the Copy link button that still works.
+  const [qrLibFailed, setQrLibFailed] = useState(false);
 
   const isTruckPlaza = property?.property_type === 'truck_plaza';
 
@@ -11488,10 +11496,22 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
 
   // Render the Temporary + Permanent QR codes once we know the property
   useEffect(() => {
-    if (!property?.qr_code_id || typeof QRCode === 'undefined') return;
+    if (!property?.qr_code_id) return;
+    if (typeof QRCode === 'undefined' || typeof QRCode.toCanvas !== 'function') {
+      console.error('qr: QRCode library did not load');
+      setQrLibFailed(true);
+      return;
+    }
+    setQrLibFailed(false);
     const opts = { width: 320, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#0f172a', light: '#ffffff' } };
-    if (tempQrRef.current) QRCode.toCanvas(tempQrRef.current, `${window.location.origin}/temp/${property.qr_code_id}`, opts, err => { if (err) console.error('temp qr:', err); });
-    if (permQrRef.current) QRCode.toCanvas(permQrRef.current, `${window.location.origin}/perm/${property.qr_code_id}`, opts, err => { if (err) console.error('perm qr:', err); });
+    const draw = (canvas, url, label) => {
+      if (!canvas) return;
+      QRCode.toCanvas(canvas, url, opts, err => {
+        if (err) { console.error(label + ' qr:', err); setQrLibFailed(true); }
+      });
+    };
+    draw(tempQrRef.current, `${window.location.origin}/temp/${property.qr_code_id}`, 'temp');
+    draw(permQrRef.current, `${window.location.origin}/perm/${property.qr_code_id}`, 'perm');
   }, [property?.qr_code_id]);
 
   // ── Permanent plates (new /perm submissions land here) ──
@@ -11824,6 +11844,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               <span className="pd-qr-sub">up to 48 hrs</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={tempQrRef} /></div>
+            {qrLibFailed && <div className="pd-qr-fallback" data-testid="qr-unavailable">QR unavailable &mdash; use Copy link</div>}
             <div className="pd-qr-url">{tempUrl}</div>
             <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast('Self-serve link copied', 'success'); }}>Copy link</button>
           </div>
@@ -11837,6 +11858,7 @@ function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               <span className="pd-qr-sub">owner-approved</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={permQrRef} /></div>
+            {qrLibFailed && <div className="pd-qr-fallback" data-testid="qr-unavailable">QR unavailable &mdash; use Copy link</div>}
             <div className="pd-qr-url">{permUrl}</div>
             <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(permUrl); addToast('Long-term link copied', 'success'); }}>Copy link</button>
           </div>
