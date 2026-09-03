@@ -82,5 +82,5 @@ status: ## Show git status and branch info
 	@echo "Frontend:   frontend/"
 	@echo "Puller:     puller/"
 	@echo "Monitoring: monitoring/"
-	@echo "Backend:    backend/ (modules imported by external API)"
+	@echo "Backend:    getlotlogic/lotlogic-backend (separate repo)"
 	@echo "Migrations: migrations/"
