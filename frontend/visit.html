@@ -1157,6 +1157,7 @@ The property and tow operator are not liable for any damage to trucks, trailers,
           ? plazaPayErrorMessage(status, detail)
           : friendlyErrorMessage(err);
         errorDiv.innerHTML = '<div class="error">' + escapeHtml(message) + '</div>';
+        plazaPendingConfirm = null;
         btn.innerHTML = 'Pay &amp; register →';
         if (spent === 'paid') {
           // Terminal. The stay is bought; the only thing another tap could buy
