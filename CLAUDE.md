@@ -60,7 +60,6 @@ lotlogic/
 ├── leadgen/           # Cold-outreach blog / email automation
 ├── tests/             # Playwright E2E
 ├── docs/              # docs/README.md says what is current; docs/archive/ is history
-├── supabase-schema.sql
 ├── Makefile
 └── CLAUDE.md
 ```
@@ -140,7 +139,7 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 
 ### Database Schema vs Code Gotchas
 - `cameras` table does NOT have an `online` column — use `status` and `active` instead
-- Camera status values: `active` (not `online` as in supabase-schema.sql)
+- Camera status values: `active`
 - Zone polygon coords are **0-1 normalized** in the DB, not 0-100 percentage
 - Detection bboxes are also **0-1 normalized** `[x1, y1, x2, y2]`
 - Camera has `resolution_width`/`resolution_height` AND `snapshot_width`/`snapshot_height` columns
@@ -227,6 +226,7 @@ users out or blank their data.
   `lotlogic-backend/migrations/`, applied by `scripts/db/migrate.sh` and gated
   by the `schema-rebuild` + `schema-drift` CI jobs there. Edge functions in
   `supabase/functions/` still deploy from here; the database does not.
+- **`frontend/dashboard.html` has dead/broken reads against tables that don't exist in production.** `db.getPermits`/`db.addPermit`/`db.deletePermit` (dashboard.html ~3113-3145) query the permits table (unused — no caller in the file); `recordAction`'s action-log insert (dashboard.html:2951) is reachable but already wrapped in a tolerant try/catch. Pre-existing, not caused by this schema-baseline retirement task (FAT-11/DB-11) — tracked for Wave 2.9.
 
 Resolved vs earlier versions of this note:
 - ~~No backend CI~~ → `getlotlogic/lotlogic-backend` now has `.github/workflows/ci.yml` (ruff + compileall + pytest).
@@ -249,7 +249,6 @@ Resolved vs earlier versions of this note:
 - **Backend**: FastAPI on Railway — auto-deploys from `getlotlogic/lotlogic-backend` repo
 - **Puller**: `puller/Dockerfile` runs `async_puller.py` in python:3.12-slim (Railway worker)
 - **Monitoring**: `monitoring/Dockerfile` runs agents in python:3.12-slim (Railway worker)
-- **Migrations**: `puller/Dockerfile.migrate` runs one-shot schema patches
 - Railway auto-deploys on push to main (each service has its own root directory)
 - Use `make help` to see all build/run commands
 - Each Railway service should have its root directory set to its subdirectory (e.g., `puller/`, `monitoring/`)
