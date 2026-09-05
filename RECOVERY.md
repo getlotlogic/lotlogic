@@ -19,7 +19,7 @@ back this system:
 - ✅ **Running infra**: Vercel/Railway/Supabase/Cloudflare are cloud-hosted, not on the laptop.
 - ✅ **Edge functions**: all 17 live functions now in git (4 were pulled back in on 2026-06-05).
 - ⚠️ **Secrets**: real values live only in laptop `.env*` files + provider dashboards + this person's head. → vault (§9).
-- ⚠️ **DB**: schema can't be rebuilt from `migrations/` alone; depends on Supabase backups → CONFIRM (§7).
+- ✅ **DB schema**: rebuilds from git (`scripts/db/migrate.sh --baseline`), proven by CI. ⚠️ **DB data**: Supabase backups only → still CONFIRM (§7).
 - ⚠️ **Claude memory** (`~/.claude/.../memory/`): institutional knowledge, laptop-only → back up (§9).
 - ⚠️ **pg_cron, Railway cron, DNS, Email Routing**: console-only state → documented here, recreate by hand.
 
@@ -118,12 +118,50 @@ values only in the vault.
 
 ---
 
-## 7. Database — see `lotlogic-backend/recovery/db-state.md`
-46 tables (all RLS-on), 66 functions, 80 policies, 26 triggers, 5 pg_cron jobs.
-**Migrations cannot rebuild the schema** (30+ unfiled). Authoritative recovery =
-Supabase backup. **TODO: confirm daily backups + PITR are enabled in the Supabase
-dashboard.** pg_cron jobs are in `lotlogic-backend/recovery/pg_cron.sql` (recreate
-after any restore).
+## 7. Database — rebuildable from git as of 2026-09-05
+
+Measured: 51 tables (all RLS-on), 3 views, 1 matview, 70 functions, 86 policies,
+28 triggers, 8 pg_cron jobs (4 of them intentionally inactive), 217 indexes.
+Full state snapshot: `lotlogic-backend/recovery/db-state.md`.
+
+**The schema now rebuilds from `lotlogic-backend/migrations/`.** One command:
+
+```bash
+cd lotlogic-backend
+scripts/db/migrate.sh "$DATABASE_URL" --baseline
+```
+
+That applies `0000_baseline.prereqs.sql` (roles + extension schema; a no-op on
+Supabase), then `0000_baseline.sql` (the full public schema, in pg_dump's raw
+applyable order), records the 176 sealed migrations in
+`supabase_migrations.schema_migrations`, seeds pg_cron (only when the `pg_cron`
+extension is installed — true on Supabase, false on plain Postgres/CI, where
+it's skipped with a notice instead), then applies every post-baseline
+migration file, one per transaction. A clean re-run against an
+already-baselined database is a no-op; a crash mid-baseline (after
+`0000_baseline.sql` runs but before its manifest is fully sealed) is **not**
+resumable — start over with a fresh, empty database.
+
+CI proves this on every pull request (`schema-rebuild`), and a second job
+(`schema-drift`) fails when a migration file has no applied record in
+production or a production record has no file — once the one-time
+`PROD_SCHEMA_READER_URL` secret is wired up (see
+`lotlogic-backend/docs/db/schema-drift.md` for Gabe's setup SQL); until then it
+no-ops with a notice rather than blocking PRs.
+
+**Still not in the schema dump, still needed after a restore:**
+1. `migrations/0000_baseline.cron.sql` — the 8 pg_cron jobs. `--baseline`
+   applies it automatically whenever `pg_cron` is installed (a real Supabase
+   restore); it's idempotent (upserts by job name), so re-running it by hand
+   afterward is safe, cheap insurance. Four are recreated inactive on
+   purpose; do not turn them on.
+2. Table **data**. The schema is in git; the rows are not. Data recovery is a
+   Supabase backup or PITR restore, and nothing else.
+3. Per-camera `alpr_cameras.api_key` values — data, so item 2 covers them.
+
+**TODO (unchanged, still the highest-priority DR gap): confirm daily backups +
+PITR in the Supabase dashboard, and do one test restore.** The schema being
+rebuildable does not give you back a single plate read.
 
 ---
 
@@ -147,8 +185,10 @@ ZeroTier Central. Camera IPs/creds are in `~/.claude/.../memory/reference_camera
 ---
 
 ## 10. Rebuild-from-zero (order matters)
-1. Restore Supabase project from backup (or new project + `pg_dump`); enable
-   extensions; run `recovery/pg_cron.sql`; re-set all Supabase edge secrets (§5).
+1. Restore Supabase project from backup for DATA. For schema on a fresh
+   project: `lotlogic-backend/scripts/db/migrate.sh "$DATABASE_URL" --baseline`,
+   then `psql "$DATABASE_URL" -f lotlogic-backend/migrations/0000_baseline.cron.sql`;
+   re-set all Supabase edge secrets (§5).
 2. Set `JWT_SECRET` consistently across Supabase + backend + edge fns (§6).
 3. Deploy edge functions: `supabase functions deploy <slug>` for each (§4).
 4. Railway: recreate API service + the **Monday-06:00-ET QB invoicing cron**
