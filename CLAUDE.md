@@ -58,7 +58,6 @@ lotlogic/
 ├── puller/            # Async snapshot capture (Railway worker service)
 ├── monitoring/        # AI monitoring agents (Railway worker service)
 ├── leadgen/           # Cold-outreach blog / email automation
-├── migrations/        # SQL schema patches (backend repo is source of truth)
 ├── tests/             # Playwright E2E
 ├── docs/              # docs/README.md says what is current; docs/archive/ is history
 ├── supabase-schema.sql
@@ -181,7 +180,7 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 ### When you change auth-adjacent code
 - Update both the backend route and the Playwright spec in the same PR — they're the two halves of the contract.
 - If you add a new route that returns tenant-owned data, require `Subject = Depends(require_subject)` in the backend handler and filter via `services.scope` helpers. Then add a cross-tenant assertion in `tests/e2e/access-control.spec.ts`.
-- If you add a new Supabase table that holds tenant data, extend `migrations/*_rls_property_scope.sql` with a matching policy.
+- If you add a new Supabase table that holds tenant data, extend `lotlogic-backend/migrations/*_rls_property_scope.sql` with a matching policy.
 
 ## Testing
 - Playwright harness in `tests/` — access-control E2E, dashboard smoke, a11y sweep.
@@ -196,7 +195,7 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 The auth/RLS changes must be shipped in this order. Skipping steps will lock
 users out or blank their data.
 
-1. **Apply `migrations/20260417024653_account_passwords.sql`** to Supabase
+1. **Apply `lotlogic-backend/migrations/20260417024653_account_passwords.sql`** to Supabase
    (adds `password_hash` + related columns). Use the Supabase MCP
    `apply_migration` so the row lands in `supabase_migrations.schema_migrations`.
 2. **Set Railway env vars** on `lotlogic-backend`:
@@ -211,7 +210,7 @@ users out or blank their data.
 5. **Deploy the frontend** (merge PR). The login page now requires a password.
 6. **Seed Playwright test accounts**: `cd tests && ADMIN_API_KEY=… npm run seed`.
    Then add the `TEST_*` secrets to GitHub so the workflow can run.
-7. **Apply `migrations/20260417025411_rls_property_scope.sql`** LAST. This flips
+7. **Apply `lotlogic-backend/migrations/20260417025411_rls_property_scope.sql`** LAST. This flips
    Supabase tables from public-read to JWT-scoped. Any still-anonymous reader
    goes to an empty result set the moment this lands.
 8. Run `cd tests && npm run test:access` against prod to verify.
@@ -224,6 +223,10 @@ users out or blank their data.
 - **Gitignored lockfile.** CI dependency resolution is non-deterministic.
 - **Secrets rotate by find-and-replace.** The old shared API key was embedded in the browser bundle and in CLAUDE.md — rotation was intrusive.
 - **Edge functions deploy out-of-band.** `supabase/functions/*` lives here but `supabase functions deploy` is a manual step. Repo can drift from deployed runtime. When you touch an edge function, diff against `mcp__supabase__get_edge_function` before pushing.
+- **This repo holds no migrations.** All DB schema lives in
+  `lotlogic-backend/migrations/`, applied by `scripts/db/migrate.sh` and gated
+  by the `schema-rebuild` + `schema-drift` CI jobs there. Edge functions in
+  `supabase/functions/` still deploy from here; the database does not.
 
 Resolved vs earlier versions of this note:
 - ~~No backend CI~~ → `getlotlogic/lotlogic-backend` now has `.github/workflows/ci.yml` (ruff + compileall + pytest).
