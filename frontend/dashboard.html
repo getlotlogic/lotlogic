@@ -10166,10 +10166,17 @@ function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = false, i
   const fmtDateTime = (s) => s ? new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
   // Human-relative day label for the operator's "how long ago" scan.
   // "Today", "Yesterday", or "N days ago".
+  // Calendar days in the viewer's local time — NOT elapsed hours. A pass
+  // registered yesterday at 1:42 PM must read "Yesterday" this morning, even
+  // though fewer than 24 hours have passed (2026-09-05 report: it said "Today").
   const fmtDaysAgo = (s) => {
     if (!s) return '';
-    const ms = Date.now() - new Date(s).getTime();
-    const days = Math.floor(ms / (24 * 60 * 60 * 1000));
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return '';
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfThatDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const days = Math.round((startOfToday - startOfThatDay) / (24 * 60 * 60 * 1000));
     if (days <= 0) return 'Today';
     if (days === 1) return 'Yesterday';
     return `${days} days ago`;
