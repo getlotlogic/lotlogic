@@ -1,5 +1,29 @@
 import { assertEquals, assertMatch } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { heartbeat, redactError } from "./index.ts";
+import { handleSystemPaused, heartbeat, redactError } from "./index.ts";
+
+Deno.test("handleSystemPaused: stamps ok:true before returning, not ok:false or a skip", async () => {
+  // A deliberate pause is the sweep correctly doing nothing, not a failure —
+  // it must stamp ok:true so a pause held longer than the dead-man's 2x
+  // window doesn't page as a false alarm.
+  const calls: Array<{ fn: string; params: Record<string, unknown> }> = [];
+  const client = {
+    rpc(fn: string, params: Record<string, unknown>) {
+      calls.push({ fn, params });
+      return Promise.resolve({ error: null });
+    },
+  };
+
+  const res = await handleSystemPaused(client);
+
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].fn, "ops_job_heartbeat");
+  assertEquals(calls[0].params.p_ok, true);
+  assertEquals(calls[0].params.p_error, null);
+
+  const body = await res.json();
+  assertEquals(body.ok, true);
+  assertEquals(body.paused, true);
+});
 
 Deno.test("heartbeat: success path calls rpc with ok=true and no error", async () => {
   const calls: Array<{ fn: string; params: Record<string, unknown> }> = [];

@@ -92,9 +92,19 @@ export async function heartbeat(client: HeartbeatClient, ok: boolean, error: str
   }
 }
 
+// Exported for testing: what the paused branch does, parameterized by client
+// so a test doesn't need a live Supabase connection. A deliberate pause is
+// the sweep correctly doing nothing, not an outage — a pause held longer than
+// 2x the interval must not trip the dead-man as a false alarm, so this stamps
+// ok:true just like a normal successful tick.
+export async function handleSystemPaused(client: HeartbeatClient): Promise<Response> {
+  await heartbeat(client, true, null);
+  return json(200, { ok: true, paused: true });
+}
+
 Deno.serve(async (_req: Request) => {
   const started = Date.now();
-  if (SYSTEM_PAUSED) return json(200, { ok: true, paused: true });
+  if (SYSTEM_PAUSED) return await handleSystemPaused(db);
   try {
     const promoted = await registrationTransition();
     const grace = await graceExpiry();
