@@ -77,4 +77,4 @@ status: ## Show git status and branch info
 	@echo "Puller:     puller/"
 	@echo "Monitoring: monitoring/"
 	@echo "Backend:    getlotlogic/lotlogic-backend (separate repo)"
-	@echo "Migrations: migrations/"
+	@echo "Migrations: lotlogic-backend/migrations/"
