@@ -1,5 +1,5 @@
 import { assertEquals, assertMatch } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { handleSystemPaused, heartbeat, redactError } from "./index.ts";
+import { handleSystemPaused, heartbeat, redactError } from "./heartbeat.ts";
 
 Deno.test("handleSystemPaused: stamps ok:true before returning, not ok:false or a skip", async () => {
   // A deliberate pause is the sweep correctly doing nothing, not a failure —
