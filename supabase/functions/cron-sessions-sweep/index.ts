@@ -49,6 +49,49 @@ const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 // violations while the camera ingest is paused.
 const SYSTEM_PAUSED = (Deno.env.get("SYSTEM_PAUSED") ?? "false").toLowerCase() === "true";
 
+// Wave 2.7 dead-man. pg_cron pokes this function via net.http_post, which is
+// fire-and-forget — the cron job only ever learns "a request was sent", never
+// whether the sweep actually did anything. Stamping the heartbeat here, on the
+// success path only, is what makes "the sweep failed and reported done" (the
+// exact 2026-08-30 failure, AUTO-2) visible to the dead-man instead of hidden
+// behind a green cron.job_run_details row.
+type HeartbeatClient = { rpc(fn: string, params: Record<string, unknown>): PromiseLike<{ error: unknown }> };
+
+const HEARTBEAT_JOB_NAME = "plate_sessions_sweep";
+const HEARTBEAT_INTERVAL_S = 180; // matches the */3 * * * * pg_cron schedule
+
+// Postgres/JS error messages can carry a plate, a phone, a URL or a token
+// (a PostgREST DETAIL line embeds the offending column VALUE; a fetch error
+// embeds the target URL). last_error is free text an alerting path emails —
+// strip anything shaped like that before it ever reaches ops_job_runs.
+export function redactError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  let msg = raw.split(/\bDETAIL:/i)[0];
+  msg = msg.replace(/https?:\/\/\S+/gi, "[url]");
+  msg = msg.replace(/\b[\w-]+\.(?:supabase\.co|lotlogicparking\.com)\S*/gi, "[host]");
+  msg = msg.replace(/\bBearer\s+\S+/gi, "Bearer [redacted]");
+  msg = msg.replace(/\+?\d[\d\-\s]{8,}\d/g, "[redacted]"); // phone-ish digit runs
+  return msg.trim().slice(0, 300);
+}
+
+// Never throws — a heartbeat that cannot be written must not turn a
+// successful sweep into a 500, and must not mask the sweep's own error on a
+// failed run.
+export async function heartbeat(client: HeartbeatClient, ok: boolean, error: string | null): Promise<void> {
+  try {
+    const { error: rpcErr } = await client.rpc("ops_job_heartbeat", {
+      p_job_name: HEARTBEAT_JOB_NAME,
+      p_source: "edge",
+      p_expected_interval_s: HEARTBEAT_INTERVAL_S,
+      p_ok: ok,
+      p_error: error,
+    });
+    if (rpcErr) console.error("ops heartbeat rpc error:", rpcErr);
+  } catch (e) {
+    console.error("ops heartbeat failed:", e);
+  }
+}
+
 Deno.serve(async (_req: Request) => {
   const started = Date.now();
   if (SYSTEM_PAUSED) return json(200, { ok: true, paused: true });
@@ -67,6 +110,7 @@ Deno.serve(async (_req: Request) => {
     const closedResident = await closeResident();
     const closedExpired = await closeExpired();
 
+    await heartbeat(db, true, null);
     return json(200, {
       ok: true,
       promoted,
@@ -86,6 +130,7 @@ Deno.serve(async (_req: Request) => {
     });
   } catch (err) {
     console.error("cron-sessions-sweep error:", err instanceof Error ? err.stack ?? err.message : err);
+    await heartbeat(db, false, redactError(err));
     return json(500, { ok: false, error: String(err) });
   }
 });
