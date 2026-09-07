@@ -8,7 +8,8 @@
     "build": "node scripts/build.mjs",
     "build:dev": "node scripts/build.mjs --dev",
     "dev": "node scripts/build.mjs --dev && python3 -m http.server 8000 --directory dist",
-    "test": "node --test scripts/*.test.mjs"
+    "test": "node --test scripts/*.test.mjs",
+    "check:naming": "node scripts/check-naming.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2"
