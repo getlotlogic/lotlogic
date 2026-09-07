@@ -26,9 +26,14 @@ createRoot(document.getElementById('root')).render(
 // mounting it means dragging Suspense into every harness), so each is
 // exposed instead as `{ load() }`, resolving to the module's default export
 // via the same dynamic import the app already uses to fetch that chunk.
+// Never on the production origin, even with the right query string or
+// localStorage flag — previews (`*.vercel.app`) and localhost still work.
+const PROD_HOSTNAMES = new Set(['lotlogicparking.com', 'www.lotlogicparking.com']);
+
 function isE2E() {
   try {
-    return new URLSearchParams(location.search).has('e2e')
+    if (PROD_HOSTNAMES.has(location.hostname)) return false;
+    return new URLSearchParams(location.search).get('e2e') === '1'
       || localStorage.getItem('lotlogic:e2e') === '1';
   } catch {
     return false;
