@@ -377,6 +377,63 @@ files for this now — Task 15 only records the numbers.
 `--amber-soft: #FBBF24` (the dark-theme accent on `#0E0F11`) already passes
 comfortably and is not touched by either task.
 
+### 9a. Corrections from the Slice 3 fix round (2026-09-07)
+
+**The 18 `:root` blocks were a union, not 18 copies of one block.** Counted
+at `d2a82fb~1` (the commit before `styles/brand.css` existed): 18 marketing
+pages carried a brand `:root`, but they carried *different subsets* of it.
+`brand.css` declares 13 tokens; `brand-v2.html` had 14 (a superset — all 13
+plus one of its own), `pitch-apartments.html` and `pitch-tow.html` had all
+13, most pages 12, the six blog pages 9, and `privacy.html` / `terms.html`
+only 7. So `brand.css` does not just
+deduplicate: it **adds** tokens to most pages — one to seven of them, four to
+each blog page, and six (`--ink-4`, `--paper-3`, `--status-no`,
+`--status-ok`, `--terra`, `--terra-deep`) to `privacy.html` and `terms.html`.
+
+Those additions are inert, and that was verified rather than assumed: for
+every page, each token `brand.css` contributes beyond that page's original
+`:root` has zero `var(--token)` references in the page today. Nothing renders
+differently; the pages simply now declare tokens they never use.
+
+**`--ink-4` is dead; `--ink-4-paper` is the live token.** `var(--ink-4)` has
+no references anywhere in the repo — not in the 18 marketing pages, not in
+`src/`. The token that section 9's table calls `--ink-4` and darkened to
+`#6C6350` is therefore decorative bookkeeping. The one that actually renders
+is `dashboard.html`'s separate `--ink-4-paper` (line 77), whose only *text*
+use is `.kpi-paper .chev` at 11px on `--card-paper #FAF5E8` (hover
+`#EFE4CA`); its other three uses are decorative left-edge stripes with no
+contrast requirement. It was never darkened by Task 15 and sat at
+`#968B73` — **2.66:1** on its worst ground. It is now `#6B6250`, **4.76:1**.
+
+**Every marketing text token was still failing on `--paper-3`.** Tasks 15
+and 16 measured against `--paper` and `--paper-2` only. `--paper-3 #DFD2B5`
+is a real content background (`services.html` `.block.solves`, `pitch-tow.html`
+`.compare.good`, `brand-v2.html` `.aud-card.tow`), and all six text tokens
+were under 4.5:1 on it — including `--amber`, which no earlier pass flagged
+even though `pitch-tow.html:347` puts `--amber` text directly on `--paper-3`.
+Re-solved against all three grounds (worst ground shown):
+
+| Token | Was | Now | `--paper` | `--paper-2` | `--paper-3` |
+|---|---|---|---:|---:|---:|
+| `--ink-3` | `#6F6450` | **`#625848`** | 5.83 | 5.28 | **4.66** |
+| `--ink-4` (unused) | `#6C6350` | **`#5F5746`** | 5.97 | 5.40 | **4.77** |
+| `--amber` | `#965204` | **`#874904`** | 5.87 | 5.32 | **4.70** |
+| `--terra-deep` | `#8F4E20` | **`#84461B`** | 6.10 | 5.53 | **4.88** |
+| `--status-ok` | `#4A7A48` | **`#3A6039`** | 6.02 | 5.45 | **4.82** |
+| `--status-no` | `#B14535` | **`#993A2C`** | 5.85 | 5.30 | **4.68** |
+
+`--terra` and `--amber-soft` remain unchanged: they are fills behind `--ink`
+text, never text themselves (Task 15's rule).
+
+**The "+ Add Lot" pill's `#15803D` was measured against one theme only.**
+Section 9's table records 4.66:1 "on the composited `#E9FBF0` tint" — the
+LIGHT theme's tint. The dashboard's default theme is dark, where the same
+`rgba(74,222,128,.12)` composites over `#0E0F11` to `#15281E` and `#15803D`
+scores **3.09:1** — a regression from the `#4ADE80` it replaced (8.90:1
+there). No literal clears both grounds; the theme token `--green` does not
+either (`#16A34A` is 2.80:1 on the light tint). The pill now uses
+`var(--text-primary)`: **14.18:1** dark, **15.28:1** light.
+
 ## 10. After Wave 2.6 — measured after the build (Task 20, 2026-09-07)
 
 Wave 2.6 (Tasks 1–19) replaced the single `frontend/dashboard.html` measured
