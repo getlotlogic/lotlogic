@@ -287,3 +287,5 @@ export function TrainingPage({ user, isOwner }) {
     </div>
   );
 }
+
+export default TrainingPage;

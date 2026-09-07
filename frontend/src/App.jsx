@@ -5,21 +5,25 @@ import { db } from './lib/db.js';
 import { useTheme, useOnlineStatus } from './hooks.js';
 import { haptic, NotifyManager } from './lib/notify.js';
 import { useToast } from './ui/Toast.jsx';
+import { SkeletonCards } from './ui/Skeletons.jsx';
 import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview } from './ui/icons.jsx';
 import { EarningsPage } from './pages/EarningsPage.jsx';
 import { InvoicesPage } from './pages/InvoicesPage.jsx';
-import { TowActivityPage } from './pages/TowActivityPage.jsx';
-import { JobsPage } from './pages/JobsPage.jsx';
 import { ALPRPropertiesPage } from './pages/ALPRPropertiesPage.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
 import { OperatorActivityPage } from './pages/OperatorActivityPage.jsx';
 import { OverviewPage } from './pages/OverviewPage.jsx';
 import { AccountPage } from './pages/AccountPage.jsx';
-import { AnalyticsPage } from './pages/AnalyticsPage.jsx';
-import { TrainingPage } from './pages/TrainingPage.jsx';
-import { AdminConsolePage } from './pages/AdminConsolePage.jsx';
 import { PlateLookupPage } from './pages/PlateLookupPage.jsx';
 import { PartnerAppPage } from './pages/PartnerAppPage.jsx';
+
+// Heavy tabs — lazy so a phone loads a login form, not a billing console.
+// Each of these eight modules also carries `export default` for this.
+const JobsPage         = React.lazy(() => import('./pages/JobsPage.jsx'));
+const AnalyticsPage    = React.lazy(() => import('./pages/AnalyticsPage.jsx'));
+const TowActivityPage  = React.lazy(() => import('./pages/TowActivityPage.jsx'));
+const TrainingPage     = React.lazy(() => import('./pages/TrainingPage.jsx'));
+const AdminConsolePage = React.lazy(() => import('./pages/AdminConsolePage.jsx'));
 
 const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';
 const FRANK_APP_TAB_LIVE = true; // live in Frank's partner portal since 2026-08-07
@@ -685,6 +689,7 @@ export function App() {
         )}
 
         <div key={tab + (viewAs?.id || '')} className="page-slide">
+          <React.Suspense fallback={<SkeletonCards />}>
           {tab === 'overview' && isOwner && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
           {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} impersonating={!!viewAs} />}
@@ -698,6 +703,7 @@ export function App() {
           {tab === 'app' && (isPlatformAdmin || (FRANK_APP_TAB_LIVE && isOperator && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID)) && <PartnerAppPage />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} isPlatformAdmin={isPlatformAdmin} />}
+          </React.Suspense>
         </div>
       </main>
 

@@ -5,9 +5,13 @@ import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
 import { scopePropsToPartner } from '../shared/scope.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
+import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { RegisterPassModal } from '../ui/RegisterPassModal.jsx';
-import { ALPRPropertyDetailPage } from './ALPRPropertyDetailPage.jsx';
 import { RegisteredDrill } from './RegisteredDrill.jsx';
+
+// Heavy — lazy-loaded so opening the Lots list doesn't pull in the full
+// property-detail bundle (which itself pulls in TruckParkingLog).
+const ALPRPropertyDetailPage = React.lazy(() => import('./ALPRPropertyDetailPage.jsx'));
 
 export function ALPRPropertiesPage({ user, impersonating = false }) {
   const { addToast } = useToast();
@@ -124,7 +128,7 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
     setSaving(false);
   }
 
-  if (selectedId) return <ErrorBoundary label="this property"><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} user={user} /></ErrorBoundary>;
+  if (selectedId) return <ErrorBoundary label="this property"><React.Suspense fallback={<SkeletonCards />}><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} user={user} /></React.Suspense></ErrorBoundary>;
 
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading properties...</div></div>;
 

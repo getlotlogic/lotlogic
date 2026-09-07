@@ -1245,3 +1245,5 @@ export function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = f
     </div>
   );
 }
+
+export default TruckParkingLog;

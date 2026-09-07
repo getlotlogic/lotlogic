@@ -1071,3 +1071,5 @@ export function JobsPage({ lots, violations, alprViolations = [], loading, lotSt
     </div>
   );
 }
+
+export default JobsPage;

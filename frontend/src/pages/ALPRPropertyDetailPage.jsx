@@ -9,9 +9,13 @@ import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
 import { useIntervalFetch, useNowTick } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
+import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { CrossCameraSightings } from '../ui/CrossCameraSightings.jsx';
-import { TruckParkingLog } from './TruckParkingLog.jsx';
 import { ApartmentPermits } from './ApartmentPermits.jsx';
+
+// Heavy — lazy-loaded so opening a property doesn't pull in the full
+// parking-log bundle before the operator ever scrolls to it.
+const TruckParkingLog = React.lazy(() => import('./TruckParkingLog.jsx'));
 
 // Swipeable fullscreen carousel for the matched-vehicle snapshots on
 // No Registration Evidence Package cards. On phones the inline 2-up grid
@@ -833,7 +837,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               Live
             </div>
           </div>
-          <ErrorBoundary label="truck parking log"><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} /></ErrorBoundary>
+          <ErrorBoundary label="truck parking log"><React.Suspense fallback={<SkeletonCards />}><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} /></React.Suspense></ErrorBoundary>
         </>
       ) : (
         // Apartment permit registry (M3): pending approval queue + resident /
@@ -851,7 +855,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             </div>
             <div className="pd-section-meta">All registrations · all time</div>
           </div>
-          <ErrorBoundary label="history"><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} mode="history" /></ErrorBoundary>
+          <ErrorBoundary label="history"><React.Suspense fallback={<SkeletonCards />}><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} mode="history" /></React.Suspense></ErrorBoundary>
         </>
       )}
 
@@ -1381,3 +1385,5 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
     </div>
   );
 }
+
+export default ALPRPropertyDetailPage;

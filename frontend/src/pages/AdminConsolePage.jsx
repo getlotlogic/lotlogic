@@ -254,3 +254,5 @@ export function AdminConsolePage({ user }) {
     </div>
   );
 }
+
+export default AdminConsolePage;

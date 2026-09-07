@@ -266,3 +266,5 @@ export function AnalyticsPage({ lots, violations, partners = [], isOwner, onNavi
     </div>
   );
 }
+
+export default AnalyticsPage;

@@ -283,3 +283,5 @@ export function TowActivityPage({ user }) {
     </div>
   );
 }
+
+export default TowActivityPage;

@@ -26,9 +26,12 @@ await mkdir(DIST, { recursive: true });
 
 const result = await build({
   entryPoints: [path.join(ROOT, 'src/dashboard.jsx')],
-  outfile: path.join(DIST, 'dashboard.js'),
+  outdir: DIST,
+  entryNames: 'dashboard',
+  chunkNames: 'chunks/[name]-[hash]',
   bundle: true,
-  format: 'iife',
+  format: 'esm',
+  splitting: true,
   target: ['es2020'],
   jsx: 'transform',              // React.createElement — same output shape as Babel
   minify: !DEV,

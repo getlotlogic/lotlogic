@@ -940,3 +940,5 @@ export function ConfirmationReviewView({ user, lots, partnersProp }) {
     }),
   );
 }
+
+export default ConfirmationReviewView;
