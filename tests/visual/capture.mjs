@@ -89,6 +89,7 @@ async function stabilize(page) {
 async function settle(page) {
   await page.waitForLoadState('networkidle').catch(() => {});
   await page.waitForTimeout(500);
+  await page.evaluate(() => document.fonts.ready).catch(() => {});
   await stabilize(page);
 }
 

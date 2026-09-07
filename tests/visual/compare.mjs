@@ -140,8 +140,11 @@ function pngPixelsEqual(a, b) {
 }
 
 // ── diff baseline vs current ─────────────────────────────────────────────
-const baseFiles = new Set(readdirSync(BASELINE).filter((f) => f !== 'manifest.json'));
-const curFiles = new Set(readdirSync(CURRENT).filter((f) => f !== 'manifest.json'));
+// Only html/png are captures — filter out stray files (.DS_Store, editor
+// backups, manifest.json) so they never show up as missing/extra.
+const isCaptureFile = (f) => /\.(html|png)$/.test(f);
+const baseFiles = new Set(readdirSync(BASELINE).filter(isCaptureFile));
+const curFiles = new Set(readdirSync(CURRENT).filter(isCaptureFile));
 
 const missing = [...baseFiles].filter((f) => !curFiles.has(f)).sort();
 const extra = [...curFiles].filter((f) => !baseFiles.has(f)).sort();
