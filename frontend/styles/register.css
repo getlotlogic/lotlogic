@@ -1,0 +1,203 @@
+/* Shared layout for the three registration pages — visit.html, resident.html,
+   apt.html (Task 17 / FAT-18, FE-11, BACKEND-15). This is the literal
+   intersection of the three pages' <style> blocks: every selector below was
+   present, with byte-identical declarations, in all three. Anything that
+   differed even slightly (`.success-detail`'s margin-top: 8px vs 8px vs
+   10px) or existed in only one or two of the pages stayed in that page's own
+   <style> block in the HTML file — see docs/frontend-baseline-2026-09-07.md
+   section 3 and task-17-report.md for the full accounting.
+
+   `input` / `input:focus` here are deliberately narrower than two of the
+   three pages' original `input, select { … }` / `input:focus, select:focus
+   { … }` selector lists: resident.html has no <select> element, so its rule
+   was always just `input`. Splitting the selector list preserves the exact
+   computed style for every element on every page — visit.html and apt.html
+   each carry a `select` / `select:focus` / `select option` rule in their own
+   <style> block that restates this same declaration block plus their
+   select-specific additions (appearance/cursor), so the two pages that
+   render a <select> still get identical styling to before. */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -.005em;
+  background-image:
+    radial-gradient(circle at 12% 18%, rgba(31,27,20,0.025) 0 1.2px, transparent 1.5px),
+    radial-gradient(circle at 78% 62%, rgba(31,27,20,0.02) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 42% 88%, rgba(31,27,20,0.018) 0 0.8px, transparent 1.2px);
+  background-size: 240px 240px, 320px 320px, 200px 200px;
+}
+
+.card {
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  padding: 32px 28px;
+  max-width: 440px;
+  width: 100%;
+}
+
+.logo {
+  text-align: center;
+  margin-bottom: 24px;
+}
+.logo .shield {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: rotate(-6deg);
+  margin-bottom: 12px;
+}
+.logo .shield svg { display: block; }
+.logo h1 {
+  font-family: 'Fraunces', Georgia, serif;
+  font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+  font-size: 36px;
+  letter-spacing: -.02em;
+  line-height: 1;
+  color: var(--ink);
+  text-transform: none;
+}
+.logo h1 span { color: var(--amber); font-style: italic; }
+
+.property-name {
+  text-align: center;
+  font-size: 14px;
+  color: var(--ink-3);
+  margin-bottom: 28px;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  letter-spacing: .04em;
+}
+.property-name strong {
+  display: block;
+  font-family: 'Fraunces', serif;
+  font-variation-settings: "opsz" 144, "wght" 700, "SOFT" 80;
+  font-style: italic;
+  font-size: 22px;
+  color: var(--ink);
+  margin-top: 6px;
+  letter-spacing: -.01em;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+  margin-bottom: 6px;
+  margin-top: 16px;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+label .required { color: var(--status-no); margin-left: 2px; }
+
+input {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--paper-2);
+  border: 1.5px solid var(--ink);
+  border-radius: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-family: inherit;
+  outline: none;
+  transition: background 0.15s;
+}
+input:focus { background: var(--paper-3); }
+input::placeholder { color: var(--ink-3); }
+
+.plate-input {
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 22px;
+  text-align: center;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  background: var(--amber-soft);
+}
+.plate-input:focus { background: var(--amber-soft); }
+
+.submit-btn {
+  width: 100%;
+  padding: 14px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1.5px solid var(--ink);
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 24px;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.submit-btn:hover:not(:disabled) { background: var(--terra-deep); border-color: var(--terra-deep); }
+
+.error {
+  background: rgba(177,69,53,0.12);
+  border: 1.5px solid var(--status-no);
+  color: var(--status-no);
+  padding: 12px 14px;
+  font-size: 13px;
+  margin-top: 16px;
+  text-align: center;
+}
+
+.success-card { text-align: center; }
+.success-icon {
+  width: 64px;
+  height: 64px;
+  border: 2px solid var(--status-ok);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 18px;
+}
+.success-icon svg { width: 32px; height: 32px; stroke: var(--status-ok); fill: none; stroke-width: 2.5; }
+.success-card h2 {
+  font-family: 'Fraunces', serif;
+  font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+  font-size: 28px;
+  letter-spacing: -.015em;
+  color: var(--ink);
+  margin-bottom: 10px;
+  line-height: 1.05;
+}
+.success-card h2 em { font-style: italic; color: var(--amber); }
+.success-card p { font-size: 15px; color: var(--ink-2); line-height: 1.55; }
+.success-card p em {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-variation-settings: "opsz" 14, "wght" 600, "SOFT" 50;
+}
+
+.loading-state {
+  text-align: center;
+  padding: 40px 0;
+  color: var(--ink-3);
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-variation-settings: "opsz" 14, "wght" 500, "SOFT" 50;
+  font-size: 16px;
+}
+
+.not-found { text-align: center; padding: 20px 0; }
+.not-found h2 {
+  font-family: 'Fraunces', serif;
+  font-variation-settings: "opsz" 144, "wght" 800, "SOFT" 80;
+  font-size: 22px;
+  color: var(--status-no);
+  margin-bottom: 10px;
+  letter-spacing: -.01em;
+}
+.not-found p { font-size: 14px; color: var(--ink-2); line-height: 1.5; }

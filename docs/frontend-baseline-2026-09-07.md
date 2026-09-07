@@ -125,7 +125,54 @@ every one): `backendRegister`, `escapeHtml`, `friendlyErrorMessage`,
 counts confirmed unchanged: `visit.html` 273, `resident.html` 229, `apt.html`
 356. All three are plain `<script>`, not JSX — no React, no Babel.
 
-## 4. The colours that fail
+### 3a. Task 17 — measured again first, then after the split
+
+Re-ran the same `difflib.SequenceMatcher` script (non-blank, stripped lines)
+against the working tree immediately before starting Task 17's edits, per
+the task's "measure again first" instruction. The pages had not moved since
+this doc's original measurement above (same day, no intervening edits to
+these three files besides Task 16's brand.css token consolidation, which
+Task 17 cherry-picked in first — see task-17-report.md): **392/73%,
+371/69%, 393/42%, identical to section 3 above, byte-for-byte.**
+
+After the split (`frontend/src/shared/register.js`,
+`frontend/src/shared/policy.js`, `frontend/styles/register.css`,
+`frontend/src/{visit,resident,apt}.js`, and each HTML file cut down to head
+boilerplate + a page-specific `<style>` leftover + one `<script
+type="module">` tag), re-measured the same three HTML files:
+
+| Pair | Matching lines | % of the smaller file |
+|---|---:|---:|
+| `visit.html` (136) vs `resident.html` (84) | 62 | 74% |
+| `resident.html` (84) vs `apt.html` (225) | 57 | 68% |
+| `visit.html` (136) vs `apt.html` (225) | 63 | 46% |
+
+The percentages barely moved — expected, since what's left in each HTML
+file is mostly the `<head>` boilerplate every page in this repo shares
+(charset/viewport meta, the error-reporting script tag, the reCAPTCHA
+`<meta>` + script tag, the Google Fonts `<link>`s, the two stylesheet
+`<link>`s) plus a short page-specific leftover `<style>` block — genuinely
+similar-looking markup that Task 17 was never asked to deduplicate further.
+The actual target of this task — the ten shared functions and the bulk of
+the CSS — dropped from 2,696 non-blank lines across the three files (1,215
++ 540 + 941) to 136 + 84 + 225 = 445 non-blank lines in the HTML, with the
+extracted logic now living once each in:
+
+| File | Non-blank lines |
+|---|---:|
+| `frontend/src/shared/register.js` | 297 |
+| `frontend/src/shared/policy.js` | 46 |
+| `frontend/styles/register.css` | 190 |
+| `frontend/src/visit.js` (incl. the untouched pay-to-park branch) | 740 |
+| `frontend/src/resident.js` | 151 |
+| `frontend/src/apt.js` | 437 |
+
+`grep -c "function normalizePlate"` = 1 across the three HTML files now (0
+— the function moved into `register.js`, imported by all three entry
+files); same for the other nine names from the list above except
+`showSuccess` (kept per-page, in each entry file — see task-17-report.md
+for why) and `init` (never shared — page-specific control flow, as it always
+was).
 
 Re-measured (WCAG 2.1 relative-luminance contrast) against the live token
 values in the working tree (`frontend/index.html`, `frontend/dashboard.html`)

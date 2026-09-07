@@ -1,5 +1,6 @@
 // The LotLogic frontend build.
-//   1. bundle the dashboard's JSX into dist/dashboard.js
+//   1. bundle the dashboard's JSX into dist/dashboard.js, and the three
+//      registration pages' entry files into dist/{visit,resident,apt}.js
 //   2. stage every static file into dist/ (dist IS the Vercel output directory)
 // Deliberately one file with no config language: the whole build should be
 // readable in one sitting by whoever is on call.
@@ -20,14 +21,26 @@ const NOT_OUTPUT = new Set([
   'Dockerfile', 'nginx.conf', 'railway.toml',
 ]);
 
-// ── 1. the dashboard bundle ────────────────────────────────────────────────
+// ── 1. the JS bundles ──────────────────────────────────────────────────────
+// The dashboard plus the three registration pages' entry files (Task 17 /
+// FAT-18 — visit.html/resident.html/apt.html each swap their old inline
+// <script> for `<script type="module" src="/visit.js">` etc). One build()
+// call, one shared `entryNames: '[name]'` so esbuild names each output file
+// after its own entry (dashboard.jsx -> dashboard.js, visit.js -> visit.js,
+// ...) instead of the single hardcoded 'dashboard' this used before there
+// was more than one entry point.
 await rm(DIST, { recursive: true, force: true });
 await mkdir(DIST, { recursive: true });
 
 const result = await build({
-  entryPoints: [path.join(ROOT, 'src/dashboard.jsx')],
+  entryPoints: [
+    path.join(ROOT, 'src/dashboard.jsx'),
+    path.join(ROOT, 'src/visit.js'),
+    path.join(ROOT, 'src/resident.js'),
+    path.join(ROOT, 'src/apt.js'),
+  ],
   outdir: DIST,
-  entryNames: 'dashboard',
+  entryNames: '[name]',
   chunkNames: 'chunks/[name]-[hash]',
   bundle: true,
   format: 'esm',
@@ -57,7 +70,9 @@ for (const entry of await readdir(ROOT, { withFileTypes: true })) {
 
 // ── 3. assert the deploy is not silently empty ─────────────────────────────
 for (const f of ['dashboard.html', 'index.html', 'visit.html', 'resident.html',
-                 'apt.html', 'dashboard.js', 'error-reporting.js', 'vercel.json']) {
+                 'apt.html', 'dashboard.js', 'visit.js', 'resident.js', 'apt.js',
+                 'error-reporting.js', 'vercel.json', 'styles/register.css',
+                 'styles/brand.css']) {
   // vercel.json must reach dist/ for the rewrites to apply to the output dir.
   if (f === 'vercel.json') { await cp(path.join(ROOT, f), path.join(DIST, f)); continue; }
   if (!existsSync(path.join(DIST, f))) throw new Error(`build: dist/${f} is missing`);
