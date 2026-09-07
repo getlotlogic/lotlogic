@@ -13,10 +13,9 @@
  * its own React root with every data call stubbed.
  *
  * What it pins down:
- *   - the pinned CDN script really loads and really exposes `QRCode.toCanvas`
- *     (this is the exact thing that was broken — the URL 404'd);
  *   - the tile's canvas is NON-EMPTY once it has drawn, i.e. it has dark
- *     pixels, not a blank box.
+ *     pixels, not a blank box — that only happens if the bundled `qrcode`
+ *     module actually ran, so a missing/broken module fails this test too.
  *
  * Tagged @desktop-only so the mobile-safari project (which targets the remote
  * deploy) skips it.
@@ -32,9 +31,6 @@ import type { AddressInfo } from 'node:net';
 const FRONTEND_DIR = path.resolve(__dirname, '../../frontend');
 const PROPERTY_ID = '22222222-2222-4222-8222-222222222222';
 const QR_CODE_ID = 'test-plaza-qr-0001';
-
-/** The pinned QR library. If this ever 404s again, test 1 goes red. */
-const QR_LIB = /cdnjs\.cloudflare\.com\/ajax\/libs\/qrcode\//;
 
 let server: http.Server;
 let origin: string;
@@ -142,22 +138,6 @@ async function canvasHasInk(page: Page, selector: string): Promise<boolean> {
 }
 
 test.describe('property QR codes @desktop-only', () => {
-  test('the pinned QR library loads and exposes the drawing call', async ({ page }) => {
-    const loaded: { url: string; status: number }[] = [];
-    page.on('response', (r) => {
-      if (QR_LIB.test(r.url())) loaded.push({ url: r.url(), status: r.status() });
-    });
-    await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
-    await page.goto(`${origin}/dashboard.html`);
-    await page.waitForFunction(
-      () => typeof (window as unknown as Record<string, any>).QRCode?.toCanvas === 'function',
-      undefined,
-      { timeout: 30_000 },
-    );
-    expect(loaded.length, 'the dashboard requested the QR library').toBeGreaterThan(0);
-    expect(loaded.every((r) => r.status === 200), JSON.stringify(loaded)).toBe(true);
-  });
-
   test('the tile draws a real QR code, not an empty box', async ({ page }) => {
     await mountPropertyDetail(page);
     const canvas = '#qr-harness .pd-qr-canvas-wrap canvas';
@@ -167,8 +147,16 @@ test.describe('property QR codes @desktop-only', () => {
     await expect(page.locator('#qr-harness [data-testid="qr-unavailable"]')).toHaveCount(0);
   });
 
-  // "a QR library that fails to load says so instead of drawing nothing" (and
-  // its breakQrLib fixture) was removed: qrcode is bundled (Task 14), so a
-  // load failure is now a chunk-fetch failure, not a CDN 404 — lazyPage()'s
-  // reload-once/ErrorBoundary path owns that case, not a QRCode-specific UI.
+  // Two tests were removed here, both stale for the same reason: qrcode is
+  // bundled (Task 14), not loaded from a CDN.
+  //   - "the pinned QR library loads and exposes the drawing call" asserted a
+  //     `cdnjs.cloudflare.com` request and a `window.QRCode` global, neither
+  //     of which the bundle produces — its intent (the library is present)
+  //     is covered by "draws a real QR code" above, which fails outright if
+  //     the bundled `qrcode` module is missing.
+  //   - "a QR library that fails to load says so instead of drawing nothing"
+  //     (and its breakQrLib fixture) tested a CDN-404 fallback that no
+  //     longer exists: a load failure now means the whole
+  //     ALPRPropertyDetailPage chunk failed to fetch, which is
+  //     lazyPage()'s reload-once/ErrorBoundary path, not a QRCode-specific UI.
 });
