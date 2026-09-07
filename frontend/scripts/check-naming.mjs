@@ -86,6 +86,11 @@ function loadAllowlist() {
 const META_DESCRIPTION_RE =
   /<meta\b[^>]*\b(?:name|property)\s*=\s*"(?:description|og:description|og:title|twitter:description|twitter:title)"[^>]*>/gi;
 
+// Attributes that carry user-facing copy even though they're attribute
+// values, not text nodes: alt text and aria-labels are read by screen
+// readers, placeholders and title tooltips are read by everyone else.
+const USER_FACING_ATTR_RE = /\b(?:alt|aria-label|placeholder|title)\s*=\s*"([^"]*)"/gi;
+
 function extractTextNodes(html) {
   // Drop script/style contents entirely — code and CSS class names aren't
   // user-facing copy.
@@ -103,9 +108,15 @@ function extractTextNodes(html) {
     if (contentMatch) nodes.push(contentMatch[1]);
   }
 
+  // alt / aria-label / placeholder / title attribute values: also
+  // user-facing despite living inside a tag.
+  for (const m of body.matchAll(USER_FACING_ATTR_RE)) {
+    nodes.push(m[1]);
+  }
+
   // Everything else: text strictly between two tags. This naturally covers
   // <title>...</title> and every visible paragraph/heading/list item, and
-  // naturally excludes attributes, hrefs, and other tag internals.
+  // naturally excludes hrefs and other non-user-facing tag internals.
   for (const m of body.matchAll(/>([^<]+)</g)) {
     nodes.push(m[1]);
   }
@@ -138,9 +149,13 @@ function main() {
     );
     for (const f of failures) console.error('  ' + f);
     console.error(
-      '\nRewrite the sentence naturally (see docs/superpowers/sdd/2026-09-07-' +
-        'wave2-6-dashboard-build/task-19-report.md for examples), or, for a ' +
-        'genuine legal term of art, add it to frontend/.naming-allowlist with a reason.',
+      '\nThe rule only governs what LotLogic calls its passes (CLAUDE.md\'s ' +
+        '"User-facing naming — parking pass ONLY" rule) — it does not reach ' +
+        'plain-English nouns for people or occupations. If this sentence is ' +
+        'naming a pass type, rewrite it to say "parking pass" naturally. If ' +
+        'it\'s a plain-English noun (a tow truck driver, a census figure, ' +
+        'quoted speech) or a genuine legal term of art, add it to ' +
+        'frontend/.naming-allowlist with a reason.',
     );
     process.exitCode = 1;
     return;
