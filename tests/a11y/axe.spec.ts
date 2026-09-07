@@ -20,17 +20,12 @@ const BLOCKING = new Set(['serious', 'critical']);
 /**
  * Known failures accepted for now, keyed by the label passed to `scan()`.
  *
- * `color-contrast` on `/` and the two pitch pages is not a page-level
- * mistake: the brand tokens themselves are too light against the cream ground
- * (`--amber #D97706` = 2.66:1 and `--terra-deep #9A5530` = 4.27:1 against
- * `--paper`/`--paper-2`, where AA wants 4.5:1 for body text and 3:1 for large).
- * Those tokens are copy-pasted into 18 HTML files, so darkening them is a brand
- * change across the whole marketing site, not a test fix — it belongs with
- * FE-10 + FE-12 (one shared stylesheet) in Wave 2 of the enterprise-readiness
- * program, and needs the owner's eye on the new colors.
- *
- * Remove an entry the moment its tokens are darkened; the count check below
- * will tell you when a waiver has stopped matching reality.
+ * The `/` and pitch-page `color-contrast` waivers that used to live here are
+ * retired: FE-10 darkened the brand tokens (`--amber` -> `#965204`,
+ * `--terra-deep` -> `#8F4E20`, `--ink-4` -> `#6C6350`) and FE-12 (Task 16)
+ * moved them out of 18 copy-pasted `:root` blocks into one shared
+ * `frontend/styles/brand.css` that every marketing page links. Re-add an
+ * entry here only if a real new violation shows up against the preview.
  *
  * `dashboard-owner` is the same class of problem, surfaced for the first time
  * once the login flow this scan depends on (`loginAs`) was fixed to match the
@@ -54,9 +49,6 @@ const BLOCKING = new Set(['serious', 'critical']);
  * the fix didn't take.
  */
 const WAIVED: Record<string, { rule: string; nodes: number }[]> = {
-  landing: [{ rule: 'color-contrast', nodes: 3 }],
-  'pitch:/pitch-apartments.html': [{ rule: 'color-contrast', nodes: 2 }],
-  'pitch:/pitch-tow.html': [{ rule: 'color-contrast', nodes: 4 }],
   'dashboard-owner': [
     { rule: 'color-contrast', nodes: 8 },
     { rule: 'aria-required-parent', nodes: 7 },

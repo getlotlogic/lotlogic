@@ -1,0 +1,18 @@
+/* LotLogic marketing brand tokens — Task 16 (FE-12).
+   Was copy-pasted :root block in 18 HTML files; now a single shared source.
+   amber / terra-deep / ink-4 corrected for WCAG AA per Task 15 (FE-10). */
+:root {
+  --paper: #F2EAD8;
+  --paper-2: #EADFC7;
+  --paper-3: #DFD2B5;
+  --ink: #1F1B14;
+  --ink-2: #3D3528;
+  --ink-3: #6F6450;
+  --ink-4: #6C6350;
+  --amber: #965204;
+  --amber-soft: #FBBF24;
+  --terra: #C97A4A;
+  --terra-deep: #8F4E20;
+  --status-ok: #4A7A48;
+  --status-no: #B14535;
+}
