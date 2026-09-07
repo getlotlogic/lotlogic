@@ -6,15 +6,22 @@
 // the product (dashboard, registration forms); this script stops the
 // marketing pages from drifting back into the old vocabulary.
 //
-// It checks TEXT NODES only — not tag names, attributes, URLs, or
-// script/style contents — because DB names, file names, and URLs
-// (`resident.html`, `/temp/<qr>`, `qr_code_id`) are explicitly allowed to
-// keep the banned words. Title tags and meta description/OG/Twitter tags
-// are included on purpose: a prospect reads those before anything else.
+// It checks user-facing copy — not tag names, hrefs/URLs, or script/style
+// contents — because DB names, file names, and URLs (`resident.html`,
+// `/temp/<qr>`, `qr_code_id`) are explicitly allowed to keep the banned
+// words. That includes: text nodes, <title> and meta description/OG/
+// Twitter tags, AND alt=/aria-label=/placeholder=/title= attribute values
+// — all of those are things a prospect or screen reader actually reads,
+// even though some live inside an attribute.
 //
-// A small allow-list (`frontend/.naming-allowlist`) carries legitimate
-// exceptions — legal terms of art in privacy.html / policy pages — so the
-// guard can stay a hard failure with zero manual overrides in CI.
+// Scope (Ruling T19b): the rule only governs what LotLogic calls its
+// passes (UI labels, pass categories, product copy naming a pass type) —
+// not plain-English or industry nouns for people or occupations. A small
+// allow-list (`frontend/.naming-allowlist`) carries those exceptions: not
+// just legal terms of art in privacy.html/policy pages, but also
+// plain-English nouns (a tow truck driver, a census figure) and quoted
+// speech, so the guard can stay a hard failure with zero manual overrides
+// in CI.
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
