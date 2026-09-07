@@ -44,6 +44,14 @@ const EMAIL = process.env.TEST_OWNER_A_EMAIL;
 const PASSWORD = process.env.TEST_OWNER_A_PASSWORD;
 const AUTHENTICATED = !!(EMAIL && PASSWORD);
 
+// Same Vercel "Protection Bypass for Automation" header as
+// tests/playwright.config.ts — a Preview URL is behind Deployment Protection
+// and 302s to vercel.com/sso-api without it. Absent for production/live-beta.
+const BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+const bypassHeaders = BYPASS_SECRET
+  ? { 'x-vercel-protection-bypass': BYPASS_SECRET, 'x-vercel-set-bypass-cookie': 'true' }
+  : {};
+
 const PROJECTS = {
   'chromium-desktop': { launcher: chromium, device: devices['Desktop Chrome'] },
   'mobile-safari': { launcher: webkit, device: devices['iPhone 14'] },
@@ -134,7 +142,7 @@ async function run() {
 
   for (const [projectName, { launcher, device }] of Object.entries(PROJECTS)) {
     const browser = await launcher.launch();
-    const ctx = await browser.newContext({ ...device });
+    const ctx = await browser.newContext({ ...device, extraHTTPHeaders: bypassHeaders });
     const page = await ctx.newPage();
 
     if (AUTHENTICATED) {

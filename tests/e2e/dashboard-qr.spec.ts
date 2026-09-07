@@ -16,9 +16,7 @@
  *   - the pinned CDN script really loads and really exposes `QRCode.toCanvas`
  *     (this is the exact thing that was broken — the URL 404'd);
  *   - the tile's canvas is NON-EMPTY once it has drawn, i.e. it has dark
- *     pixels, not a blank box;
- *   - when the library fails to load the tile says so out loud —
- *     "QR unavailable — use Copy link" — instead of silently rendering nothing.
+ *     pixels, not a blank box.
  *
  * Tagged @desktop-only so the mobile-safari project (which targets the remote
  * deploy) skips it.
@@ -66,8 +64,6 @@ test.afterAll(async () => {
 });
 
 type Options = {
-  /** Block the QR library, reproducing the 404 this spec exists to catch. */
-  breakQrLib?: boolean;
   /** Truck plazas only show the self-serve tile; apartments show both. */
   propertyType?: string;
 };
@@ -78,14 +74,13 @@ type Options = {
  */
 async function mountPropertyDetail(
   page: Page,
-  { breakQrLib = false, propertyType = 'apartment' }: Options = {},
+  { propertyType = 'apartment' }: Options = {},
 ) {
   const json = (body: unknown, status = 200) => ({
     status, contentType: 'application/json', body: JSON.stringify(body),
   });
 
   await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
-  if (breakQrLib) await page.route(QR_LIB, (route) => route.fulfill({ status: 404, body: '' }));
 
   // Nothing in this spec talks to a real backend or a real Supabase.
   await page.route(/^https:\/\/(lotlogic-backend-production\.up\.railway\.app|nzdkoouoaedbbccraoti\.supabase\.co)\//,
@@ -172,11 +167,8 @@ test.describe('property QR codes @desktop-only', () => {
     await expect(page.locator('#qr-harness [data-testid="qr-unavailable"]')).toHaveCount(0);
   });
 
-  test('a QR library that fails to load says so instead of drawing nothing', async ({ page }) => {
-    const detail = await mountPropertyDetail(page, { breakQrLib: true });
-    await expect(detail.locator('[data-testid="qr-unavailable"]').first()).toBeVisible();
-    await expect(detail).toContainText('QR unavailable');
-    // The escape hatch the note points at is still there.
-    await expect(detail.getByRole('button', { name: 'Copy link' }).first()).toBeVisible();
-  });
+  // "a QR library that fails to load says so instead of drawing nothing" (and
+  // its breakQrLib fixture) was removed: qrcode is bundled (Task 14), so a
+  // load failure is now a chunk-fetch failure, not a CDN 404 — lazyPage()'s
+  // reload-once/ErrorBoundary path owns that case, not a QRCode-specific UI.
 });

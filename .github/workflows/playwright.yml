@@ -51,7 +51,20 @@ jobs:
 
       - name: Resolve BASE_URL
         id: base
+        env:
+          # A boolean-as-string, not the secret itself — never echo the value.
+          BYPASS_SECRET_SET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET != '' }}
         run: |
+          # A Vercel Preview sits behind Deployment Protection (confirmed:
+          # it 302s to vercel.com/sso-api without a bypass) — so testing one
+          # without VERCEL_AUTOMATION_BYPASS_SECRET set can only either hang
+          # on the SSO redirect or, worse, silently pass against nothing.
+          # Fail loudly here instead of falling back to production, which
+          # would defeat the entire point of Task 18.
+          if [ "${{ github.event_name }}" = "deployment_status" ] && [ "$BYPASS_SECRET_SET" != "true" ]; then
+            echo "::error::deployment_status fired but the VERCEL_AUTOMATION_BYPASS_SECRET GitHub Actions secret is not set. The Vercel preview is behind Deployment Protection and will redirect to vercel.com/sso-api instead of serving the app. Create the bypass secret in Vercel -> Project -> Settings -> Deployment Protection -> Protection Bypass for Automation, then add it as the VERCEL_AUTOMATION_BYPASS_SECRET GitHub Actions secret." >&2
+            exit 1
+          fi
           if [ -n "${{ inputs.base_url }}" ]; then
             echo "value=${{ inputs.base_url }}" >> "$GITHUB_OUTPUT"
           elif [ -n "${{ github.event.deployment_status.environment_url }}" ]; then
@@ -73,6 +86,7 @@ jobs:
           TEST_OWNER_B_PASSWORD: ${{ secrets.TEST_OWNER_B_PASSWORD }}
           TEST_PARTNER_A_EMAIL: ${{ secrets.TEST_PARTNER_A_EMAIL }}
           TEST_PARTNER_A_PASSWORD: ${{ secrets.TEST_PARTNER_A_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: npm test
 
       - name: Upload report
