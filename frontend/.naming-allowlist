@@ -1,0 +1,12 @@
+# Naming-rule guard allow-list (Wave 2.6 Task 19).
+#
+# Format: one entry per line — `<file relative to frontend/>: <exact phrase
+# or substring>  # reason`. The checker (scripts/check-naming.mjs) only
+# suppresses a hit when the flagged text node contains this exact phrase, so
+# keep phrases specific rather than single words.
+#
+# Every entry here must be a genuine legal term of art in a legal-adjacent
+# page (privacy.html, policy/*) — not a convenience exception. If a sentence
+# can be rewritten instead, rewrite it; don't allow-list it.
+
+policy/charlotte-travel-plaza.src.html: the driver and motor carrier acknowledge  # Legal liability/release clause. "Driver" is the defined party accepting the release (alongside "motor carrier"); rewording risks narrowing or changing who the waiver binds. Left verbatim per Task 19 controller ruling.

@@ -31,6 +31,12 @@ jobs:
       # This IS the syntax check the frontend has never had (FE-3). A typo in
       # dashboard.html now fails here instead of white-screening production.
       - run: npm run build
+      # Naming-rule guard (Task 19): the marketing site says "parking pass,"
+      # never Resident/Visitor/Permanent/Temporary/Guest/Driver. Checks text
+      # nodes only (attributes, URLs, script/style contents are exempt) and
+      # skips the product surfaces (registration forms, admin, dashboard).
+      # Legal-page exceptions live in frontend/.naming-allowlist.
+      - run: npm run check:naming
       - name: Report bundle size
         run: |
           set -eu
