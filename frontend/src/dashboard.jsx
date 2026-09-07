@@ -1,3 +1,10 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { createPortal } from 'react-dom';
+// The file was written against the UMD globals; keep that shape so the 12,638
+// lines below are untouched. Task 12 removes this shim when App.jsx lands.
+const ReactDOM = { createRoot, createPortal };
+
 const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
 
 // ── Error boundary ────────────────────────────────────────────
