@@ -23,10 +23,14 @@ const BLOCKING = new Set(['serious', 'critical']);
  * Both waivers that used to live here are retired.
  *
  * The `/` and pitch-page `color-contrast` waivers: FE-10 darkened the brand
- * tokens (`--amber` -> `#965204`, `--terra-deep` -> `#8F4E20`, `--ink-4` ->
- * `#6C6350`) and FE-12 (Task 16) moved them out of 18 copy-pasted `:root`
- * blocks into one shared `frontend/styles/brand.css` that every marketing
- * page links.
+ * tokens and FE-12 (Task 16) moved them out of 18 copy-pasted `:root` blocks
+ * into one shared `frontend/styles/brand.css` that every marketing page links.
+ * The Slice-3 fix round re-solved every text token against `--paper-3` too —
+ * the third paper ground, a real content background that Tasks 15/16 never
+ * measured, on which all six were still failing: `--ink-3` -> `#625848`,
+ * `--ink-4` -> `#5F5746`, `--amber` -> `#874904`, `--terra-deep` -> `#84461B`,
+ * `--status-ok` -> `#3A6039`, `--status-no` -> `#993A2C` (>= 4.51:1 on all
+ * three grounds).
  *
  * `dashboard-owner` had the same class of problem (header wordmark, "+ Add
  * Lot" pill, six bottom-nav labels) plus a real `aria-required-parent` bug
@@ -34,13 +38,18 @@ const BLOCKING = new Set(['serious', 'critical']);
  * axe, missing a `role="tablist"` wrapper). Wave 2 Task 15 (FE-10) fixed
  * both: `--accent`/`--yellow` #C2580B -> #B85309 (4.91:1), `.theme-light
  * .nav-item` #9ca3af -> #6B7280 (4.83:1), the "+ Add Lot" pill's inline
- * `#4ade80` -> `#15803D` (4.66:1 on its tint), and `frontend/src/App.jsx`'s
+ * `#4ade80` -> `#15803D`, and `frontend/src/App.jsx`'s
  * bottom nav now wraps its tab buttons in a `role="tablist"` div. This suite
  * runs against BASE_URL (the deployed site), not the local file, so these
  * fixes can't be proven here until this branch ships — the waiver entries are
  * removed now on the strength of the local contrast-checker + computed-style
  * proof (see Tasks 15 and 16's reports); if the deployed scan still fails on
  * any of these rules, that's a real regression, not a stale waiver.
+ *
+ * The pill's `#15803D` was itself wrong: it was measured only against the
+ * light theme's tint and scores 3.09:1 on the dark one. No single literal
+ * clears both grounds, so it is now `var(--text-primary)` (14.18:1 dark /
+ * 15.28:1 light) — Ruling S3-b.
  *
  * The WAIVED map stays in place (not deleted) as the documented home for
  * this pattern. Re-add an entry here only if a real new violation shows up
@@ -102,6 +111,18 @@ test.describe('accessibility @a11y', () => {
     for (const path of ['/pitch-apartments.html', '/pitch-tow.html']) {
       await page.goto(path);
       await scan(page, `pitch:${path}`);
+    }
+  });
+
+  // Ruling S3-c. These two were the pages the marketing-token fix (Task 16)
+  // changed but nothing scanned: services.html and brand-v2.html are the only
+  // two that put token-coloured text on `--paper-3`, the ground Tasks 15/16
+  // never measured. They are unauthenticated, so they run in CI's local-dist
+  // job as well as against the preview.
+  test('services and brand pages are accessible', async ({ page }) => {
+    for (const path of ['/services.html', '/brand-v2.html']) {
+      await page.goto(path);
+      await scan(page, `marketing:${path}`);
     }
   });
 });

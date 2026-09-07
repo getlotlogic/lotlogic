@@ -1,18 +1,31 @@
 /* LotLogic marketing brand tokens — Task 16 (FE-12).
    Was copy-pasted :root block in 18 HTML files; now a single shared source.
-   amber / terra-deep / ink-4 corrected for WCAG AA per Task 15 (FE-10). */
+
+   Every token used as TEXT below is >= 4.5:1 (WCAG AA, normal text) on all
+   THREE paper grounds — --paper, --paper-2 AND --paper-3 — per Ruling S3-a.
+   --paper-3 is a real content ground, not just a hairline: services.html
+   `.block.solves`, pitch-tow.html `.compare.good` and brand-v2.html
+   `.aud-card.tow` all set it as a background with token-coloured text on top.
+   Task 15/16 only checked --paper and --paper-2, so every text token was
+   failing there; the values below were re-solved against all three.
+
+   --terra and --amber-soft are FILLS behind --ink text, never text
+   themselves, so they are exempt (and unchanged). --ink-4 has zero
+   `var(--ink-4)` references anywhere in the repo — it is kept only so the
+   token set stays complete, and is held to the same bar in case it is ever
+   used. The live near-equivalent is dashboard.html's --ink-4-paper. */
 :root {
   --paper: #F2EAD8;
   --paper-2: #EADFC7;
   --paper-3: #DFD2B5;
   --ink: #1F1B14;
   --ink-2: #3D3528;
-  --ink-3: #6F6450;
-  --ink-4: #6C6350;
-  --amber: #965204;
+  --ink-3: #625848;
+  --ink-4: #5F5746;
+  --amber: #874904;
   --amber-soft: #FBBF24;
   --terra: #C97A4A;
-  --terra-deep: #8F4E20;
-  --status-ok: #4A7A48;
-  --status-no: #B14535;
+  --terra-deep: #84461B;
+  --status-ok: #3A6039;
+  --status-no: #993A2C;
 }

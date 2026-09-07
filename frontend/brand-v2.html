@@ -334,6 +334,10 @@
       color: var(--ink-3);
     }
     .logo-card.ink .meta-tag { color: var(--paper-3); }
+    /* --amber-soft is a FILL: --ink-3 on it is 4.18:1, under AA for 11px text.
+       --ink is 10.27:1. Same rule as .logo-card.ink above — the card picks the
+       ink, the token stays as it is (Ruling S3-a / Task 15). */
+    .logo-card.amber .meta-tag { color: var(--ink); }
 
     /* Stamps */
     .stamps-row {
@@ -447,7 +451,7 @@
     .btn.primary { background: var(--ink); color: var(--paper); }
     .btn.primary:hover { background: var(--terra-deep); border-color: var(--terra-deep); }
     .btn.amber { background: var(--amber-soft); border-color: var(--ink); color: var(--ink); }
-    .btn.terra { background: var(--terra); border-color: var(--ink); color: var(--paper); }
+    .btn.terra { background: var(--terra); border-color: var(--ink); color: var(--ink); }   /* --paper on --terra is 2.75:1; --terra is a fill behind --ink (5.20:1) */
     .btn.ghost { background: transparent; }
     .btn.sm { padding: 8px 16px; font-size: 13px; }
     .btn.lg { padding: 16px 30px; font-size: 17px; }
