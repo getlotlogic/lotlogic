@@ -7,6 +7,7 @@ import { haptic, NotifyManager } from './lib/notify.js';
 import { useToast } from './ui/Toast.jsx';
 import { SkeletonCards } from './ui/Skeletons.jsx';
 import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview } from './ui/icons.jsx';
+import { lazyPage } from './lib/lazyPage.js';
 import { EarningsPage } from './pages/EarningsPage.jsx';
 import { InvoicesPage } from './pages/InvoicesPage.jsx';
 import { ALPRPropertiesPage } from './pages/ALPRPropertiesPage.jsx';
@@ -19,11 +20,11 @@ import { PartnerAppPage } from './pages/PartnerAppPage.jsx';
 
 // Heavy tabs — lazy so a phone loads a login form, not a billing console.
 // Each of these eight modules also carries `export default` for this.
-const JobsPage         = React.lazy(() => import('./pages/JobsPage.jsx'));
-const AnalyticsPage    = React.lazy(() => import('./pages/AnalyticsPage.jsx'));
-const TowActivityPage  = React.lazy(() => import('./pages/TowActivityPage.jsx'));
-const TrainingPage     = React.lazy(() => import('./pages/TrainingPage.jsx'));
-const AdminConsolePage = React.lazy(() => import('./pages/AdminConsolePage.jsx'));
+const JobsPage         = lazyPage(() => import('./pages/JobsPage.jsx'));
+const AnalyticsPage    = lazyPage(() => import('./pages/AnalyticsPage.jsx'));
+const TowActivityPage  = lazyPage(() => import('./pages/TowActivityPage.jsx'));
+const TrainingPage     = lazyPage(() => import('./pages/TrainingPage.jsx'));
+const AdminConsolePage = lazyPage(() => import('./pages/AdminConsolePage.jsx'));
 
 const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';
 const FRANK_APP_TAB_LIVE = true; // live in Frank's partner portal since 2026-08-07

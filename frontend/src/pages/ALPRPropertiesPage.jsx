@@ -8,10 +8,11 @@ import { useToast } from '../ui/Toast.jsx';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { RegisterPassModal } from '../ui/RegisterPassModal.jsx';
 import { RegisteredDrill } from './RegisteredDrill.jsx';
+import { lazyPage } from '../lib/lazyPage.js';
 
 // Heavy — lazy-loaded so opening the Lots list doesn't pull in the full
 // property-detail bundle (which itself pulls in TruckParkingLog).
-const ALPRPropertyDetailPage = React.lazy(() => import('./ALPRPropertyDetailPage.jsx'));
+const ALPRPropertyDetailPage = lazyPage(() => import('./ALPRPropertyDetailPage.jsx'));
 
 export function ALPRPropertiesPage({ user, impersonating = false }) {
   const { addToast } = useToast();

@@ -4,13 +4,14 @@ import { apiFetch } from '../lib/api.js';
 import { useIntervalFetch } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
+import { lazyPage } from '../lib/lazyPage.js';
 
 // Heavy — lazy-loaded so opening Billing doesn't pull in either sub-tab's
 // bundle before the operator picks it. Own lazy() calls from App.jsx's
 // (TowActivityPage is also a top-level tab there); esbuild code-splitting
 // resolves both dynamic import() call sites to the same chunk.
-const TowActivityPage = React.lazy(() => import('./TowActivityPage.jsx'));
-const ConfirmationReviewView = React.lazy(() => import('./ConfirmationReview.jsx'));
+const TowActivityPage = lazyPage(() => import('./TowActivityPage.jsx'));
+const ConfirmationReviewView = lazyPage(() => import('./ConfirmationReview.jsx'));
 
 // ── Billing page (owner only) — partners + QuickBooks invoice lifecycle ────
 // The earnings tab is the canonical job/revenue log; this page hosts two

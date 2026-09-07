@@ -12,10 +12,11 @@ import { useToast } from '../ui/Toast.jsx';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { CrossCameraSightings } from '../ui/CrossCameraSightings.jsx';
 import { ApartmentPermits } from './ApartmentPermits.jsx';
+import { lazyPage } from '../lib/lazyPage.js';
 
 // Heavy — lazy-loaded so opening a property doesn't pull in the full
 // parking-log bundle before the operator ever scrolls to it.
-const TruckParkingLog = React.lazy(() => import('./TruckParkingLog.jsx'));
+const TruckParkingLog = lazyPage(() => import('./TruckParkingLog.jsx'));
 
 // Swipeable fullscreen carousel for the matched-vehicle snapshots on
 // No Registration Evidence Package cards. On phones the inline 2-up grid
