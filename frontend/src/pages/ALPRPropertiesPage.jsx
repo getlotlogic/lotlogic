@@ -152,7 +152,7 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
         <div style={{fontSize:16,fontWeight:800,color:'var(--text-primary)'}}>Lots</div>
         {user?._role !== 'partner' && (
-          <button onClick={() => setShowAdd(!showAdd)} style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{showAdd ? 'Cancel' : '+ Add Lot'}</button>
+          <button onClick={() => setShowAdd(!showAdd)} style={{background:'rgba(74,222,128,.12)',color:'#15803D',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{showAdd ? 'Cancel' : '+ Add Lot'}</button>
         )}
       </div>
 

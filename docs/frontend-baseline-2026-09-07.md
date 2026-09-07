@@ -125,7 +125,73 @@ every one): `backendRegister`, `escapeHtml`, `friendlyErrorMessage`,
 counts confirmed unchanged: `visit.html` 273, `resident.html` 229, `apt.html`
 356. All three are plain `<script>`, not JSX — no React, no Babel.
 
-## 4. The colours that fail
+### 3a. Task 17 — measured again first, then after the split
+
+Re-ran the same `difflib.SequenceMatcher` script (non-blank, stripped lines)
+against the actual starting tree for Task 17's own edits — commit `d9fa1a4`,
+the point right after Task 16's brand.css cherry-pick landed on this branch
+(see task-17-report.md §0) and right before Task 17 touched anything. This
+correction landed in Task 17's fix round 1: the first pass mistakenly
+re-ran the script against the tree from *before* that cherry-pick (i.e.
+still carrying each page's own 13-line `:root {...}` block) and reported
+392/73%, 371/69%, 393/42% — identical to section 3 above only because it
+was, in effect, re-measuring section 3's own commit, not Task 17's starting
+point. The correct "measured again first" numbers, against `d9fa1a4`:
+
+| Pair | Matching lines | % of the smaller file |
+|---|---:|---:|
+| `visit.html` (1,202) vs `resident.html` (527) | 379 | **72%** |
+| `resident.html` (527) vs `apt.html` (928) | 358 | **68%** |
+| `visit.html` (1,202) vs `apt.html` (928) | 380 | **41%** |
+
+Non-blank line counts dropped by 13 per file (1,215→1,202, 540→527,
+941→928) — exactly the `:root` block Task 16 replaced with a `<link>` in
+each file; the percentages moved by ~1 point each, same conclusion as
+section 3 (the three pages substantially duplicate registration logic).
+This table is committed together with the refactor commit itself, not as a
+preceding step — the first pass's sequencing error (measuring, then
+cherry-picking, in the wrong order relative to when the doc was written)
+is what fix round 1 corrected.
+
+After the split (`frontend/src/shared/register.js`,
+`frontend/src/shared/policy.js`, `frontend/styles/register.css`,
+`frontend/src/{visit,resident,apt}.js`, and each HTML file cut down to head
+boilerplate + a page-specific `<style>` leftover + one `<script
+type="module">` tag), re-measured the same three HTML files:
+
+| Pair | Matching lines | % of the smaller file |
+|---|---:|---:|
+| `visit.html` (136) vs `resident.html` (84) | 62 | 74% |
+| `resident.html` (84) vs `apt.html` (225) | 57 | 68% |
+| `visit.html` (136) vs `apt.html` (225) | 63 | 46% |
+
+The percentages barely moved — expected, since what's left in each HTML
+file is mostly the `<head>` boilerplate every page in this repo shares
+(charset/viewport meta, the error-reporting script tag, the reCAPTCHA
+`<meta>` + script tag, the Google Fonts `<link>`s, the two stylesheet
+`<link>`s) plus a short page-specific leftover `<style>` block — genuinely
+similar-looking markup that Task 17 was never asked to deduplicate further.
+The actual target of this task — the ten shared functions and the bulk of
+the CSS — dropped from 2,657 non-blank lines across the three files at
+Task 17's starting point (1,202 + 527 + 928, the `d9fa1a4` numbers above)
+to 136 + 84 + 225 = 445 non-blank lines in the HTML, with the extracted
+logic now living once each in:
+
+| File | Non-blank lines |
+|---|---:|
+| `frontend/src/shared/register.js` | 297 |
+| `frontend/src/shared/policy.js` | 46 |
+| `frontend/styles/register.css` | 190 |
+| `frontend/src/visit.js` (incl. the untouched pay-to-park branch) | 736 |
+| `frontend/src/resident.js` | 151 |
+| `frontend/src/apt.js` | 437 |
+
+`grep -c "function normalizePlate"` = 1 across the three HTML files now (0
+— the function moved into `register.js`, imported by all three entry
+files); same for the other nine names from the list above except
+`showSuccess` (kept per-page, in each entry file — see task-17-report.md
+for why) and `init` (never shared — page-specific control flow, as it always
+was).
 
 Re-measured (WCAG 2.1 relative-luminance contrast) against the live token
 values in the working tree (`frontend/index.html`, `frontend/dashboard.html`)
@@ -277,3 +343,36 @@ not exist in this worktree.
 
 2 requests instead of 6/9, ~888–892 KB → ~228 KB on the wire, zero
 in-browser compilation — the ~20 s → ~2 s change the spec asks for.
+
+## 9. Task 15 — dashboard contrast fixes (done) + marketing tokens for Task 16
+
+Task 15 (FE-10) darkened the three brand tokens the dashboard uses at
+runtime, plus one inline color, and re-measured each with the same
+sRGB → linear-light WCAG formula as section 4:
+
+| File:line (this worktree) | Rule | Before | After | Measured after |
+|---|---|---|---|---:|
+| `frontend/dashboard.html:100,104` `--accent`/`--yellow` (`.theme-light` block) | on `#FFFFFF` | `#C2580B` (4.47:1) | **`#B85309`** | 4.91:1 |
+| `frontend/dashboard.html:1572` `.theme-light .nav-item { color }` | on `#FFFFFF` | `#9ca3af` (2.54:1) | **`#6B7280`** | 4.83:1 |
+| `frontend/src/pages/ALPRPropertiesPage.jsx:155` inline `color` on the "+ Add Lot" pill (`rgba(74,222,128,.12)` tint) | on the composited `#E9FBF0` tint | `#4ADE80` (1.62:1) | **`#15803D`** | 4.66:1 |
+
+These three sites are the ones this task's HTML/JSX diff touches. The dark
+theme's own `--accent: #FBBF24` (line 51, used on `#0E0F11`) was left alone —
+it already passes comfortably.
+
+**Values for Task 16** — the shared-token edit that lands in
+`frontend/styles/brand.css` and removes the two remaining `color-contrast`
+waivers in `tests/a11y/axe.spec.ts` (`landing`, `pitch:/pitch-apartments.html`,
+`pitch:/pitch-tow.html`) once applied across the 18 marketing HTML files.
+Verified against both `--paper` and `--paper-2`; do not hand-edit the HTML
+files for this now — Task 15 only records the numbers.
+
+| Token | Today | Change to | On `--paper #F2EAD8` | On `--paper-2 #EADFC7` |
+|---|---|---|---:|---:|
+| `--amber` | `#D97706` | **`#965204`** | 5.00:1 | 4.53:1 |
+| `--terra-deep` | `#9A5530` | **`#8F4E20`** | 5.35:1 | 4.84:1 |
+| `--ink-4` | `#968B73` | **`#6C6350`** | 4.96:1 | 4.49:1 |
+| `--terra` | `#C97A4A` | unchanged | — | it is a *fill* behind `--ink` text, never text itself; darkening it changes the look for no accessibility gain. If axe ever flags it as text, use `#9D582F` (4.53:1 on `--paper`). |
+
+`--amber-soft: #FBBF24` (the dark-theme accent on `#0E0F11`) already passes
+comfortably and is not touched by either task.

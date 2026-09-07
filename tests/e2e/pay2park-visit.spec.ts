@@ -2,11 +2,14 @@
  * Pay-to-park QR page (`frontend/visit.html`) — paid branch, idempotency key,
  * return-from-Square polling.
  *
- * Everything here runs against the LOCAL file: a tiny static server serves
- * `frontend/` and every network dependency (Supabase PostgREST, the backend,
- * reCAPTCHA, Google Fonts, Square) is stubbed with `page.route()`. That keeps
- * the suite honest about the page's own logic and keeps it runnable with no
- * backend, no database and no Square account.
+ * Everything here runs against a LOCAL build: `frontend/` is built once
+ * (`npm run build`) and a tiny static server serves the resulting `dist/`
+ * (visit.html's script is a bundled ES module — `/visit.js` only exists
+ * after a build, never in the source tree), and every network dependency
+ * (Supabase PostgREST, the backend, reCAPTCHA, Google Fonts, Square) is
+ * stubbed with `page.route()`. That keeps the suite honest about the page's
+ * own logic and keeps it runnable with no backend, no database and no
+ * Square account.
  *
  * The money invariants under test:
  *   - the paid branch appears ONLY when `properties.pay_to_park_enabled` is
@@ -23,10 +26,8 @@
  * Run: cd tests && npx playwright test pay2park-visit --project=chromium-desktop
  */
 import { test, expect, type Page, type Route } from '@playwright/test';
-import http from 'node:http';
-import fs from 'node:fs';
 import path from 'node:path';
-import type { AddressInfo } from 'node:net';
+import { buildAndServeFrontend } from '../fixtures/buildAndServeFrontend';
 
 const FRONTEND_DIR = path.resolve(__dirname, '../../frontend');
 
@@ -46,31 +47,19 @@ const BASE_PROPERTY = {
 
 type FlagMode = 'on' | 'off' | 'column-error';
 
-let server: http.Server;
 let origin: string;
+let closeServer: () => Promise<void>;
 
+// visit.html now loads its app code as a bundled ES module (`/visit.js`),
+// produced by `npm run build` -- it exists only in frontend/dist/, never in
+// the source tree, so the embedded server below serves the BUILT output,
+// not raw frontend/ (see fixtures/buildAndServeFrontend.ts).
 test.beforeAll(async () => {
-  server = http.createServer((req, res) => {
-    const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
-    const file = path.join(FRONTEND_DIR, pathname.replace(/^\/+/, ''));
-    if (!file.startsWith(FRONTEND_DIR) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('not found');
-      return;
-    }
-    const type = file.endsWith('.html') ? 'text/html; charset=utf-8'
-      : file.endsWith('.js') ? 'text/javascript; charset=utf-8'
-      : file.endsWith('.css') ? 'text/css; charset=utf-8'
-      : 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': type });
-    fs.createReadStream(file).pipe(res);
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  ({ origin, close: closeServer } = await buildAndServeFrontend(FRONTEND_DIR));
 });
 
 test.afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeServer();
 });
 
 /** reCAPTCHA stub + third-party blocking + the properties read. */
