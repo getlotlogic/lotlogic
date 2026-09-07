@@ -39,3 +39,28 @@ blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.
 blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.html: with drivers responding to notifications  # plain-English noun, not a pass category (Ruling T19b) — the tow operator's own patrol staff.
 blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.html: changing how your drivers operate  # plain-English noun, not a pass category (Ruling T19b) — the tow operator's own patrol staff.
 blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.html: creates driver frustration and wasted trips  # plain-English noun, not a pass category (Ruling T19b) — the tow operator's own patrol staff.
+
+# ── Slice 3 fix round (Ruling S3-g): the six "driver" metrics Task 19 had
+# contorted into truck/crew wording. Each is a unit of the tow operator's own
+# labour, not a LotLogic pass type. They are separate entries rather than
+# riding on the sentences already listed above because the guard now masks
+# only the matched phrase and re-scans the rest of the node (Ruling S3-k) —
+# three of these sit in paragraphs that were already allow-listed for a
+# different phrase, and used to be exempted by accident.
+blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.html: burned 45 minutes of driver time  # plain-English noun, not a pass category (Ruling T19b) — a unit of the tow operator's own labour.
+blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.html: with the same driver capacity  # plain-English noun, not a pass category (Ruling T19b) — the tow operator's own patrol staff.
+blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.html: minus driver time, fuel  # plain-English noun, not a pass category (Ruling T19b) — a unit of the tow operator's own labour.
+blog/how-charlotte-tow-companies-are-getting-more-jobs-without-more-patrol-runs.html: context for your driver to make a quick decision  # plain-English noun, not a pass category (Ruling T19b) — the tow operator's own patrol staff.
+pitch-tow.html: Revenue per driver-hour: low  # plain-English noun, not a pass category (Ruling T19b) — a unit of the tow operator's own labour.
+pitch-tow.html: Revenue per driver-hour: way up  # plain-English noun, not a pass category (Ruling T19b) — a unit of the tow operator's own labour.
+
+# The printed plaza sign. "Every truck must scan" was Task 19's rewording; the
+# sign that is actually posted at Charlotte Travel Plaza — and the JPG rendered
+# from this file, restored byte-for-byte from d2a82fb — says "All truck
+# drivers". The words on a physical sign are not a LotLogic pass label.
+policy/charlotte-travel-plaza.src.html: All truck drivers must scan the barcode to check in!  # plain-English noun, not a pass category (Ruling T19b) — instruction on a printed sign; must match the posted sign and the rendered JPG.
+
+# Industry term of art in property management: satisfaction surveys of the
+# people who live in a community are universally called resident satisfaction
+# surveys. Not a LotLogic pass label.
+blog/5-parking-problems-every-charlotte-property-manager-deals-with-and-how-to-fix-them.html: resident satisfaction surveys  # industry term of art (Ruling T19b) — the standard name for this survey instrument, not a pass category.
