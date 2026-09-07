@@ -277,3 +277,36 @@ not exist in this worktree.
 
 2 requests instead of 6/9, ~888–892 KB → ~228 KB on the wire, zero
 in-browser compilation — the ~20 s → ~2 s change the spec asks for.
+
+## 9. Task 15 — dashboard contrast fixes (done) + marketing tokens for Task 16
+
+Task 15 (FE-10) darkened the three brand tokens the dashboard uses at
+runtime, plus one inline color, and re-measured each with the same
+sRGB → linear-light WCAG formula as section 4:
+
+| File:line (this worktree) | Rule | Before | After | Measured after |
+|---|---|---|---|---:|
+| `frontend/dashboard.html:100,104` `--accent`/`--yellow` (`.theme-light` block) | on `#FFFFFF` | `#C2580B` (4.47:1) | **`#B85309`** | 4.91:1 |
+| `frontend/dashboard.html:1572` `.theme-light .nav-item { color }` | on `#FFFFFF` | `#9ca3af` (2.54:1) | **`#6B7280`** | 4.83:1 |
+| `frontend/src/pages/ALPRPropertiesPage.jsx:155` inline `color` on the "+ Add Lot" pill (`rgba(74,222,128,.12)` tint) | on the composited `#E9FBF0` tint | `#4ADE80` (1.62:1) | **`#15803D`** | 4.66:1 |
+
+These three sites are the ones this task's HTML/JSX diff touches. The dark
+theme's own `--accent: #FBBF24` (line 51, used on `#0E0F11`) was left alone —
+it already passes comfortably.
+
+**Values for Task 16** — the shared-token edit that lands in
+`frontend/styles/brand.css` and removes the two remaining `color-contrast`
+waivers in `tests/a11y/axe.spec.ts` (`landing`, `pitch:/pitch-apartments.html`,
+`pitch:/pitch-tow.html`) once applied across the 18 marketing HTML files.
+Verified against both `--paper` and `--paper-2`; do not hand-edit the HTML
+files for this now — Task 15 only records the numbers.
+
+| Token | Today | Change to | On `--paper #F2EAD8` | On `--paper-2 #EADFC7` |
+|---|---|---|---:|---:|
+| `--amber` | `#D97706` | **`#965204`** | 5.00:1 | 4.53:1 |
+| `--terra-deep` | `#9A5530` | **`#8F4E20`** | 5.35:1 | 4.84:1 |
+| `--ink-4` | `#968B73` | **`#6C6350`** | 4.96:1 | 4.49:1 |
+| `--terra` | `#C97A4A` | unchanged | — | it is a *fill* behind `--ink` text, never text itself; darkening it changes the look for no accessibility gain. If axe ever flags it as text, use `#9D582F` (4.53:1 on `--paper`). |
+
+`--amber-soft: #FBBF24` (the dark-theme accent on `#0E0F11`) already passes
+comfortably and is not touched by either task.

@@ -32,35 +32,36 @@ const BLOCKING = new Set(['serious', 'critical']);
  * Remove an entry the moment its tokens are darkened; the count check below
  * will tell you when a waiver has stopped matching reality.
  *
- * `dashboard-owner` is the same class of problem, surfaced for the first time
- * once the login flow this scan depends on (`loginAs`) was fixed to match the
- * current dashboard UI — this check never actually completed a run before.
- * 8 nodes: the header wordmark (`#c2580b` on white, 4.47:1 — the same brand
- * orange as the landing-page waiver, just short of AA), the "+ Add Lot" pill
- * button (`#4ade80` text on its own `rgba(74,222,128,.12)` tint, 1.54:1), and
- * the six bottom-nav labels (`#9ca3af` on white, 2.53:1 — one shared CSS
- * class, `.nav-label`, repeated per tab). Same call as the marketing waiver:
- * this is the brand palette, not a per-page mistake, and belongs with FE-10 +
- * FE-12 in Wave 2 rather than a token darkened unilaterally by a test fix.
+ * `dashboard-owner` had the same class of problem (header wordmark, "+ Add
+ * Lot" pill, six bottom-nav labels) plus a real `aria-required-parent` bug
+ * (six bottom-nav `role="tab"` buttons + the active one counted twice by
+ * axe, missing a `role="tablist"` wrapper). Wave 2 Task 15 (FE-10) fixed
+ * both: `--accent`/`--yellow` #C2580B -> #B85309 (4.91:1), `.theme-light
+ * .nav-item` #9ca3af -> #6B7280 (4.83:1), the "+ Add Lot" pill's inline
+ * `#4ade80` -> `#15803D` (4.66:1 on its tint), and `frontend/src/App.jsx`'s
+ * bottom nav now wraps its tab buttons in a `role="tablist"` div. This suite
+ * runs against BASE_URL (the deployed site), not the local file, so these
+ * fixes can't be proven here until this branch ships — this waiver entry is
+ * removed now on the strength of the local contrast-checker + computed-style
+ * proof (see Task 15's report); if the deployed scan still fails on either
+ * rule, that's a real regression, not a stale waiver.
  *
- * `dashboard-owner` also waives `aria-required-parent` (7 nodes: the six
- * bottom-nav `role="tab"` buttons + the active one counted twice by axe) —
- * unlike the color tokens, this ONE already has a real fix committed on this
- * branch (`frontend/dashboard.html`, the `<nav class="bottom-nav">` block:
- * the tab buttons are now wrapped in a `role="tablist"` div). This suite runs
- * against BASE_URL (the deployed site), not the local file, so the fix can't
- * take effect here until this branch ships — delete this waiver entry the
- * next time this scan runs after that deploy; if it's still failing then,
- * the fix didn't take.
+ * The landing/pitch `color-contrast` waivers remain: `--amber`,
+ * `--terra-deep`, `--ink-4` are copy-pasted into 18 HTML files and land in
+ * Task 16's shared stylesheet (FE-12), not here. Remove those entries the
+ * moment Task 16 darkens the tokens; the node-count check below will tell
+ * you when a waiver has stopped matching reality.
+ *
+ * The WAIVED map stays in place (not deleted) as the documented home for
+ * the two waivers above. Once Task 16 darkens the marketing tokens and
+ * those two entries are removed, the map goes empty — leave it as an empty
+ * `{}` rather than deleting it: it's the extension point for `scan()`'s
+ * node-count-drift check, empty on purpose, not dead code.
  */
 const WAIVED: Record<string, { rule: string; nodes: number }[]> = {
   landing: [{ rule: 'color-contrast', nodes: 3 }],
   'pitch:/pitch-apartments.html': [{ rule: 'color-contrast', nodes: 2 }],
   'pitch:/pitch-tow.html': [{ rule: 'color-contrast', nodes: 4 }],
-  'dashboard-owner': [
-    { rule: 'color-contrast', nodes: 8 },
-    { rule: 'aria-required-parent', nodes: 7 },
-  ],
 };
 
 async function scan(page: any, label: string) {
