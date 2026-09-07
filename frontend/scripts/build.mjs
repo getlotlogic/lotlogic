@@ -22,6 +22,27 @@ const DIST_NAME = process.env.LOTLOGIC_BUILD_OUT || 'dist';
 const DIST = path.join(ROOT, DIST_NAME);
 const DEV = process.argv.includes('--dev');
 
+// Guard LOTLOGIC_BUILD_OUT before anything destructive runs. The build does
+// `rm(DIST, { recursive: true, force: true })` below — if a caller sets
+// LOTLOGIC_BUILD_OUT to '.', '..', an absolute path, or anything containing
+// '/', DIST resolves outside (or to the root of) frontend/ and that rm wipes
+// the source tree instead of a build output dir. Only the shared 'dist' name
+// and the `.test-dist-*` names buildAndServeFrontend.ts generates are valid;
+// everything else must be rejected before DIST is ever touched.
+const VALID_DIST_NAME = /^(dist|\.test-dist-[A-Za-z0-9_-]+)$/;
+const resolvedDist = path.resolve(ROOT, DIST_NAME);
+if (
+  !VALID_DIST_NAME.test(DIST_NAME) ||
+  resolvedDist === ROOT ||
+  !resolvedDist.startsWith(ROOT + path.sep)
+) {
+  console.error(
+    `build: refusing to build — LOTLOGIC_BUILD_OUT=${JSON.stringify(DIST_NAME)} ` +
+    `must be 'dist' or a '.test-dist-*' name inside frontend/, not an escape from it.`
+  );
+  process.exit(2);
+}
+
 // Files and directories that are inputs, not output. Deny-list, not
 // allow-list: a new page must ship by default, never be silently dropped.
 // `DIST_NAME` is always excluded too (not just the literal 'dist') so a
