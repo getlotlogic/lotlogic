@@ -376,3 +376,98 @@ files for this now — Task 15 only records the numbers.
 
 `--amber-soft: #FBBF24` (the dark-theme accent on `#0E0F11`) already passes
 comfortably and is not touched by either task.
+
+## 10. After Wave 2.6 — measured after the build (Task 20, 2026-09-07)
+
+Wave 2.6 (Tasks 1–19) replaced the single `frontend/dashboard.html` measured
+in sections 1–2 above with `frontend/src/` (54 modules), built by esbuild
+(`frontend/scripts/build.mjs`) into `frontend/dist/`. Numbers below are
+pulled from each task's own report, not re-derived here; sources are named
+so they can be checked against `.superpowers/sdd/2026-09-07-wave2-6-dashboard-build/task-{13,14,17}-report.md`.
+
+### Bundle size (gzip, local `dist/` build)
+
+| Stage | Entry chunk (`dashboard.js`) gzip | Source |
+|---|---:|---|
+| Before (this doc, §1: `dashboard.html` alone) | 197,826 B | §1 above |
+| After Task 13 (lazy-load the 8 heavy tabs) | **29,087 B** (down from a freshly-measured pre-task 141,887 B at the same commit's parent — see task-13-report.md's own caveat that this doesn't match this doc's §1 figure, both numbers clear the 130 KB target) | task-13-report.md |
+
+| Stage | Pre-login total gzip (entry + every eagerly-loaded chunk/script) | Source |
+|---|---:|---|
+| Before Task 13 | 207,963 B | progress.md (reviewer figure, Task 13 review) |
+| After Task 13 (0 of the 8 heavy-tab chunks load pre-login; 10 shared/vendor chunks still do) | 156,611 B | progress.md (reviewer figure, Task 13 review) |
+| After Task 14 (supabase-js + qrcode moved from 2 CDN scripts to the bundle; zero third-party `<script>` tags left) | **147,964 B**, 1 origin, 0 extra TLS handshakes | task-14-report.md §"Sizes" |
+
+Task 14 also confirmed via `grep -c 'https://cdn' dashboard.html` → `0` and a
+headless Playwright probe (`externalScriptCount: 0`, `blockedHosts: []`) —
+**the dashboard now loads zero third-party scripts**, replacing the
+`babel-standalone` (2.8 MB raw / 583 KB gzip alone), CDN React/ReactDOM,
+CDN `@supabase/supabase-js`, and CDN `qrcode` this doc's §1 measured.
+
+### Registration-page duplication (Task 17)
+
+Re-quoting §3a above rather than re-deriving it: `difflib.SequenceMatcher`
+over non-blank lines, `visit.html`/`resident.html`/`apt.html`, immediately
+before Task 17's edit (commit `d9fa1a4`) vs. after the shared-layer split:
+
+| Pair | Before (matching lines) | After (matching lines) |
+|---|---:|---:|
+| `visit.html` × `resident.html` | 379 | 62 |
+| `resident.html` × `apt.html` | 358 | 57 |
+| `visit.html` × `apt.html` | 380 | 63 |
+
+The ten shared functions (`normalizePlate`, `backendRegister`, etc.) and the
+bulk of the CSS now live once each in `frontend/src/shared/register.js`
+(297 non-blank lines), `frontend/src/shared/policy.js` (46), and
+`frontend/styles/register.css` (190) — see task-17-report.md for the full
+per-file breakdown.
+
+### Module count and largest files
+
+`find frontend/src -type f | wc -l` → **54**. Largest modules (`wc -l`,
+this worktree, 2026-09-07): `src/pages/ALPRPropertyDetailPage.jsx` 1,391
+lines, `src/pages/TruckParkingLog.jsx` 1,249 lines, `src/pages/JobsPage.jsx`
+1,075 lines, `src/pages/ConfirmationReview.jsx` 944 lines — all four still
+worth a follow-up split, per CLAUDE.md's Audit Mandate item 5.
+
+### The plan's headline metric — NOT re-measured on a preview
+
+**Section 5 above measured `time-to-usable` ≈ 18.7 s (median) against the
+live `https://lotlogic-beta.vercel.app` beta** — a real network, real CDN
+latency, real DNS/TLS handshakes, slow-4G + 4× CPU throttle, iPhone 14
+emulation. **That same measurement has not been repeated against this
+plan's output**, and cannot be yet: Vercel Preview deployments are behind
+Deployment Protection (confirmed by the controller — a preview URL 302s to
+`vercel.com/sso-api`), and the bypass mechanism Task 18 wired up
+(`VERCEL_AUTOMATION_BYPASS_SECRET`, an `x-vercel-protection-bypass` header)
+requires a secret that **does not exist yet** — it must be created by Gabe
+in Vercel → Project `lotlogic` → Settings → Deployment Protection →
+Protection Bypass for Automation, then added as a GitHub Actions repo
+secret. Until then, nothing outside a manual login can reach a preview to
+measure it, and CI's own `deployment_status`-triggered Playwright run fails
+fast for the identical reason (see `.github/workflows/playwright.yml`'s
+"Resolve BASE_URL" step).
+
+The only "after" number that exists is a **local-server-only, directional**
+measurement from task-13-report.md, quoted verbatim and labeled as such —
+**not a substitute for a preview or production measurement**, run on
+unthrottled local disk I/O with the same slow-4G + 4× CPU + iPhone 14
+network/CPU throttle profile as section 5, `dist/` served by
+`python3 -m http.server` on `localhost`:
+
+| Metric | Local before (pre-Task-13 build) | Local after (Task 13) |
+|---|---:|---:|
+| `timeToUsable` | 4,226 ms | 3,206 ms |
+| `domContentLoaded` | 4,046 ms | 3,083 ms |
+| `fcp` | 1,248 ms | 1,120 ms |
+| `transferred` | 610,444 B | 379,452 B |
+| `requests` | 7 | 18 |
+
+This ~24% local `timeToUsable` improvement is real but measures a different
+thing than section 5's 18.7 s figure (no network latency, no CDN, no real
+TLS) and was taken mid-plan (Task 13 only — before Task 14 removed the two
+remaining CDN scripts, which section 5's 18.7 s baseline is still paying
+for). **The plan's actual claim — that real-world time-to-usable drops from
+~18.7 s to roughly comparable to this bundle-size reduction — remains
+unverified against a live preview or production deploy.** The bypass secret
+is the blocking dependency for closing that measurement.
