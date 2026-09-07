@@ -10,13 +10,25 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const DIST = path.join(ROOT, 'dist');
+// LOTLOGIC_BUILD_OUT lets a caller point the build at a private output
+// directory instead of the shared `dist/` — used by
+// tests/fixtures/buildAndServeFrontend.ts so concurrent Playwright workers
+// each get their own isolated build instead of racing to rm+rebuild the
+// same `frontend/dist/` (and, worse, deleting it out from under a sibling
+// worker's already-running static server). Unset, this is exactly `dist`,
+// same as before this existed — the real `npm run build` / Vercel build is
+// unaffected.
+const DIST_NAME = process.env.LOTLOGIC_BUILD_OUT || 'dist';
+const DIST = path.join(ROOT, DIST_NAME);
 const DEV = process.argv.includes('--dev');
 
 // Files and directories that are inputs, not output. Deny-list, not
 // allow-list: a new page must ship by default, never be silently dropped.
+// `DIST_NAME` is always excluded too (not just the literal 'dist') so a
+// custom LOTLOGIC_BUILD_OUT output directory never tries to copy itself
+// into itself in step 2 below.
 const NOT_OUTPUT = new Set([
-  'dist', 'node_modules', 'src', 'scripts',
+  'dist', DIST_NAME, 'node_modules', 'src', 'scripts',
   'package.json', 'package-lock.json', '.npmrc', 'vercel.json',
   'Dockerfile', 'nginx.conf', 'railway.toml',
 ]);
@@ -63,8 +75,17 @@ await writeFile(path.join(DIST, 'metafile.json'), JSON.stringify(result.metafile
 // inside ROOT. Per-entry copying sidesteps that guard while keeping the
 // same deny-list semantics — a new top-level file or directory ships by
 // default unless it's named in NOT_OUTPUT.
+//
+// Concurrent Playwright workers can each be mid-build into their own
+// `.test-dist-<pid>-<rand>/` (see tests/fixtures/buildAndServeFrontend.ts)
+// at the same time as this one; `entry.name === DIST_NAME` only excludes
+// THIS build's own output directory, not a sibling worker's. Without the
+// prefix check below, this loop would try to copy another worker's
+// in-progress (or just-deleted, once its test finishes) output directory
+// into this one's — at best wasted work, at worst an ENOENT mid-`cp()` when
+// that worker's `close()` deletes it out from under this copy.
 for (const entry of await readdir(ROOT, { withFileTypes: true })) {
-  if (NOT_OUTPUT.has(entry.name)) continue;
+  if (NOT_OUTPUT.has(entry.name) || entry.name.startsWith('.test-dist-')) continue;
   await cp(path.join(ROOT, entry.name), path.join(DIST, entry.name), { recursive: true });
 }
 

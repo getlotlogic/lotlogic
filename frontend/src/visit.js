@@ -16,12 +16,6 @@ import {
 } from './shared/register.js';
 import { DEFAULT_TRUCK_PLAZA_POLICY } from './shared/policy.js';
 
-// The pay-to-park branch further down refers to the backend base URL by the
-// bare name `BACKEND_URL`, same as it did when this was a plain <script>.
-// That constant now lives in ./shared/register.js — `backendUrl()` is the
-// one adaptation needed so none of the pay-to-park logic itself changes.
-function backendUrl() { return BACKEND_URL; }
-
 const app = document.getElementById('app');
 
 // QR code id comes from /visit.html/<qr> in the URL, but we also accept
@@ -254,7 +248,7 @@ async function preflightCheckPlate() {
     // driver re-scanning the QR after a few hours would never see the
     // "already registered" notice. The backend endpoint is public, in
     // PUBLIC_PATHS, and returns only {active, valid_until, reference_id}.
-    const url = `${backendUrl()}/visitor_passes/check-active`
+    const url = `${BACKEND_URL}/visitor_passes/check-active`
       + `?property_id=${encodeURIComponent(property.id)}`
       + `&plate=${encodeURIComponent(plate)}`;
     const ctrl = new AbortController();
@@ -454,8 +448,9 @@ function showSuccess(opts) {
 // Moved here VERBATIM from visit.html's inline script — per the task
 // brief, this branch is not refactored, not shared, not deleted. Pay-to-park
 // is ENDED in production (flag OFF since 2026-09-03) but the code stays.
-// (See `backendUrl()` near the top of this file for the one necessary
-// adaptation — `BACKEND_URL` moved to ./shared/register.js.)
+// `BACKEND_URL` is imported from ./shared/register.js (see the top of this
+// file) and used by its bare name below, exactly as it was when this was a
+// plain <script> and BACKEND_URL was a module-scope const declared in it.
 
 // A stable fingerprint of what the payer typed. The idempotency key is
 // keyed off this, so a retry of the SAME form reuses the SAME key (one
@@ -701,7 +696,7 @@ async function plazaFetchStatus(ppId, timeoutMs = 4000) {
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(
-      backendUrl() + '/plaza/payments/' + encodeURIComponent(ppId) + '/status',
+      BACKEND_URL + '/plaza/payments/' + encodeURIComponent(ppId) + '/status',
       { signal: ctrl.signal, headers: { Accept: 'application/json' } },
     );
     if (res.status === 404) return { status: 404, body: null };
