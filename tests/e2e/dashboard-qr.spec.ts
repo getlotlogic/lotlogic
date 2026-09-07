@@ -92,30 +92,33 @@ async function mountPropertyDetail(
     (route) => route.fulfill(json({})));
   await page.route(/supabase\.co\/rest\/v1\//, (route) => route.fulfill(json([])));
 
-  await page.goto(`${origin}/dashboard.html`);
+  // `?e2e=1` is what makes the bundle expose `window.__lotlogicTestHooks` —
+  // see `frontend/src/main.jsx`. Without it this is a real visitor's page.
+  await page.goto(`${origin}/dashboard.html?e2e=1`);
 
   await page.waitForFunction(
-    () => typeof (window as unknown as Record<string, unknown>).ALPRPropertyDetailPage === 'function',
+    () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.ALPRPropertyDetailPage?.load === 'function',
     undefined,
     { timeout: 30_000 },
   );
 
-  await page.evaluate(({ propertyId, qrCodeId, type }) => {
-    const w = window as unknown as Record<string, any>;
+  await page.evaluate(async ({ propertyId, qrCodeId, type }) => {
+    const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
     // The detail page loads its property through `db`; hand it one directly so
     // the tiles render without a session or a database.
-    w.db.getProperty = async () => ({
+    hooks.db.getProperty = async () => ({
       id: propertyId, name: 'Test Property', qr_code_id: qrCodeId,
       property_type: type, address: '1 Test Way', pay_to_park_enabled: false,
     });
+    const ALPRPropertyDetailPage = await hooks.ALPRPropertyDetailPage.load();
     const host = document.createElement('div');
     host.id = 'qr-harness';
     document.body.appendChild(host);
-    w.ReactDOM.createRoot(host).render(
-      w.React.createElement(
-        w.ToastProvider,
+    hooks.ReactDOM.createRoot(host).render(
+      hooks.React.createElement(
+        hooks.ToastProvider,
         null,
-        w.React.createElement(w.ALPRPropertyDetailPage, {
+        hooks.React.createElement(ALPRPropertyDetailPage, {
           propertyId, onBack: () => {}, user: { _role: 'owner', id: 'u1' },
         }),
       ),

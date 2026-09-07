@@ -189,27 +189,30 @@ async function mountParkingLog(
     );
   });
 
-  await page.goto(`${origin}/dashboard.html`);
+  // `?e2e=1` is what makes the bundle expose `window.__lotlogicTestHooks` —
+  // see `frontend/src/main.jsx`. Without it this is a real visitor's page.
+  await page.goto(`${origin}/dashboard.html?e2e=1`);
 
-  // Babel transpiles the inline script into a real <script>, so the page's
-  // components become globals. Wait for that rather than for any UI.
+  // Wait for the test-hook surface rather than for any UI: TruckParkingLog is
+  // a lazy page, so its `load()` only resolves once its chunk has fetched.
   await page.waitForFunction(
-    () => typeof (window as unknown as Record<string, unknown>).TruckParkingLog === 'function'
-      && typeof (window as unknown as Record<string, unknown>).ToastProvider === 'function',
+    () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.TruckParkingLog?.load === 'function'
+      && typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.ToastProvider === 'function',
     undefined,
     { timeout: 30_000 },
   );
 
-  await page.evaluate((props) => {
-    const w = window as unknown as Record<string, any>;
+  await page.evaluate(async (props) => {
+    const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
+    const TruckParkingLog = await hooks.TruckParkingLog.load();
     const host = document.createElement('div');
     host.id = 'p2p-harness';
     document.body.appendChild(host);
-    w.ReactDOM.createRoot(host).render(
-      w.React.createElement(
-        w.ToastProvider,
+    hooks.ReactDOM.createRoot(host).render(
+      hooks.React.createElement(
+        hooks.ToastProvider,
         null,
-        w.React.createElement(w.TruckParkingLog, { ...props, isOwner: true }),
+        hooks.React.createElement(TruckParkingLog, { ...props, isOwner: true }),
       ),
     );
   }, { propertyId: PROPERTY_ID, propertyType: 'truck_plaza', payToParkEnabled, mode });

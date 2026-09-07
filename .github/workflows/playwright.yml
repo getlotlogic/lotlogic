@@ -3,7 +3,7 @@ name: Playwright
 on:
   push:
     branches: [main]
-  pull_request:
+  deployment_status:
   workflow_dispatch:
     inputs:
       base_url:
@@ -17,6 +17,14 @@ concurrency:
 jobs:
   e2e:
     name: e2e + a11y
+    # Only a Vercel Preview deploy that actually succeeded gets tested — a
+    # Production deployment_status (main, post-merge) is handled by the
+    # `push: main` trigger above instead, and a failed/pending deploy has
+    # nothing at a URL yet.
+    if: >-
+      github.event_name != 'deployment_status' ||
+      (github.event.deployment_status.state == 'success' &&
+       github.event.deployment_status.environment == 'Preview')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -46,6 +54,9 @@ jobs:
         run: |
           if [ -n "${{ inputs.base_url }}" ]; then
             echo "value=${{ inputs.base_url }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.deployment_status.environment_url }}" ]; then
+            # The preview built from THIS commit. Test the change, not production.
+            echo "value=${{ github.event.deployment_status.environment_url }}" >> "$GITHUB_OUTPUT"
           elif [ -n "${{ secrets.VERCEL_PREVIEW_URL }}" ]; then
             echo "value=${{ secrets.VERCEL_PREVIEW_URL }}" >> "$GITHUB_OUTPUT"
           else
