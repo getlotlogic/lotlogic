@@ -102,7 +102,10 @@ test.describe('accessibility @a11y', () => {
     await scan(page, 'login');
   });
 
-  test('dashboard (owner) has no serious a11y violations', async ({ page }) => {
+  // @auth — needs TEST_OWNER_A_* credentials. CI's offline `pull_request` job
+  // runs this file with `--grep-invert @auth`, so this is the one case that is
+  // skipped there; the credentialed preview job runs the whole file.
+  test('dashboard (owner) has no serious a11y violations @auth', async ({ page }) => {
     await loginAs(page, accounts.ownerA());
     await scan(page, 'dashboard-owner');
   });
