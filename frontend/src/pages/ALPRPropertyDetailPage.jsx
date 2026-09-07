@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import QRCode from 'qrcode';
 import { makeDebounced } from '../lib/time.js';
 import { fmtDateTime } from '../lib/format.js';
 import { bundleVehicleEvents, filterEvidencePackages } from '../lib/bundle.js';
