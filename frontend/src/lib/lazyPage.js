@@ -16,6 +16,11 @@ import React from 'react';
 // (bad deploy, network failure): a second failure within 60s of the first
 // reload rethrows so the ErrorBoundary's normal UI shows instead of
 // reloading forever. A successful import clears the flag.
+//
+// The flag is the ONLY thing standing between a persistently-404ing chunk
+// and an infinite refresh loop, so a reload happens only when the flag was
+// written successfully. Storage that throws (Safari private mode, a full
+// quota) therefore gets the ErrorBoundary rather than a spinning page.
 const CHUNK_RELOAD_KEY = 'lotlogic:chunk-reload';
 const RELOAD_WINDOW_MS = 60000;
 
@@ -27,12 +32,17 @@ function readReloadedAt() {
   }
 }
 
+// Returns whether the value was actually persisted. That matters on the
+// failure path: the reload guard IS the stored flag, so if the write did not
+// land there is nothing to stop the next load failing and reloading again,
+// forever. Callers must not reload unless this returned true.
 function writeReloadedAt(value) {
   try {
     if (value === null) sessionStorage.removeItem(CHUNK_RELOAD_KEY);
     else sessionStorage.setItem(CHUNK_RELOAD_KEY, value);
+    return true;
   } catch {
-    // private mode / storage disabled — nothing to persist, nothing to do
+    return false; // private mode / storage disabled / quota exceeded
   }
 }
 
@@ -46,7 +56,12 @@ export function lazyPage(loader) {
       const reloadedAt = readReloadedAt();
       const withinWindow = reloadedAt !== null && (Date.now() - Number(reloadedAt)) < RELOAD_WINDOW_MS;
       if (!withinWindow) {
-        writeReloadedAt(String(Date.now()));
+        // Record the reload BEFORE performing it. If it could not be
+        // recorded, do not reload at all — an unguarded reload on a page
+        // whose chunk keeps 404ing is an endless refresh loop, which is
+        // strictly worse for the user than the ErrorBoundary. Rethrowing
+        // hands them the boundary's "Something went wrong" instead.
+        if (!writeReloadedAt(String(Date.now()))) throw err;
         try {
           location.reload();
         } catch {

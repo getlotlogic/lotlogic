@@ -130,3 +130,70 @@ test('successful import clears the flag', async () => {
     restore();
   }
 });
+
+test('storage that throws on write: rethrows without reloading', async () => {
+  // Safari private mode, or a full quota. The stored flag is the only guard
+  // against reloading forever, so if it cannot be written the page must not
+  // reload at all — it must fall through to the ErrorBoundary. Before this
+  // was fixed the write was swallowed, reload() fired, and the next load
+  // read back a null flag and reloaded again: an endless refresh.
+  const reloadCalls = [];
+  const throwingStorage = {
+    getItem: () => null,
+    setItem: () => { throw new DOMException('QuotaExceededError'); },
+    removeItem: () => { throw new DOMException('QuotaExceededError'); },
+  };
+  const { lazyPage, restore } = await importLazyPageWithStubs({
+    sessionStorage: throwingStorage,
+    reload: () => reloadCalls.push(Date.now()),
+    now: 1_000,
+  });
+
+  let capturedLoader;
+  const realReact = await import('react');
+  const originalLazy = realReact.default.lazy;
+  realReact.default.lazy = (fn) => { capturedLoader = fn; return {}; };
+
+  try {
+    const failingLoader = () => Promise.reject(new Error('404: chunk missing'));
+    lazyPage(failingLoader);
+
+    await assert.rejects(() => capturedLoader(), /404: chunk missing/);
+    assert.equal(
+      reloadCalls.length, 0,
+      'location.reload() must NOT be called when the guard flag could not be stored'
+    );
+  } finally {
+    realReact.default.lazy = originalLazy;
+    restore();
+  }
+});
+
+test('storage that throws on write: a successful import still resolves', async () => {
+  // The success path also writes (to clear the flag). A throwing storage
+  // there must not turn a working import into a failure.
+  const throwingStorage = {
+    getItem: () => null,
+    setItem: () => { throw new DOMException('QuotaExceededError'); },
+    removeItem: () => { throw new DOMException('QuotaExceededError'); },
+  };
+  const { lazyPage, restore } = await importLazyPageWithStubs({
+    sessionStorage: throwingStorage,
+    reload: () => { throw new Error('reload should not happen'); },
+    now: 1_000,
+  });
+
+  let capturedLoader;
+  const realReact = await import('react');
+  const originalLazy = realReact.default.lazy;
+  realReact.default.lazy = (fn) => { capturedLoader = fn; return {}; };
+
+  try {
+    const okModule = { default: () => null };
+    lazyPage(() => Promise.resolve(okModule));
+    assert.equal(await capturedLoader(), okModule);
+  } finally {
+    realReact.default.lazy = originalLazy;
+    restore();
+  }
+});
