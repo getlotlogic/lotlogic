@@ -43,21 +43,22 @@ const EXCLUDE_FILES = new Set([
   'tuner.html',         // internal camera-tuning tool
 ]);
 
-const MARKETING_DIRS = ['blog', 'policy'];
+// Directories that never hold marketing copy. Everything else under
+// frontend/ is walked recursively — a hard-coded ['blog', 'policy'] list
+// silently skipped any new marketing subdirectory, which is the failure mode
+// a guard can least afford.
+const EXCLUDE_DIRS = new Set(['node_modules', 'dist', 'src', 'styles', 'scripts', '.git']);
+const isBuildDir = (name) => EXCLUDE_DIRS.has(name) || name.startsWith('.test-dist-');
 
-function targetFiles() {
+function targetFiles(dir = ROOT, prefix = '') {
   const files = [];
-  for (const entry of readdirSync(ROOT, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith('.html') && !EXCLUDE_FILES.has(entry.name)) {
-      files.push(entry.name);
-    }
-  }
-  for (const dir of MARKETING_DIRS) {
-    const dirPath = path.join(ROOT, dir);
-    for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith('.html')) {
-        files.push(path.posix.join(dir, entry.name));
-      }
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? path.posix.join(prefix, entry.name) : entry.name;
+    if (entry.isDirectory()) {
+      if (isBuildDir(entry.name)) continue;
+      files.push(...targetFiles(path.join(dir, entry.name), rel));
+    } else if (entry.isFile() && entry.name.endsWith('.html') && !EXCLUDE_FILES.has(rel)) {
+      files.push(rel);
     }
   }
   return files.sort();
@@ -90,13 +91,17 @@ function loadAllowlist() {
   return entries;
 }
 
+// Attribute values may be single- OR double-quoted; matching only `"..."`
+// let `alt='...'` through unchecked.
 const META_DESCRIPTION_RE =
-  /<meta\b[^>]*\b(?:name|property)\s*=\s*"(?:description|og:description|og:title|twitter:description|twitter:title)"[^>]*>/gi;
+  /<meta\b[^>]*\b(?:name|property)\s*=\s*["'](?:description|og:description|og:title|twitter:description|twitter:title)["'][^>]*>/gi;
+const META_CONTENT_RE = /\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
 
 // Attributes that carry user-facing copy even though they're attribute
 // values, not text nodes: alt text and aria-labels are read by screen
 // readers, placeholders and title tooltips are read by everyone else.
-const USER_FACING_ATTR_RE = /\b(?:alt|aria-label|placeholder|title)\s*=\s*"([^"]*)"/gi;
+const USER_FACING_ATTR_RE =
+  /\b(?:alt|aria-label|placeholder|title)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
 
 function extractTextNodes(html) {
   // Drop script/style contents entirely — code and CSS class names aren't
@@ -111,14 +116,14 @@ function extractTextNodes(html) {
   // these in search results and link previews) even though they live in an
   // attribute value, so they get pulled out explicitly.
   for (const m of body.matchAll(META_DESCRIPTION_RE)) {
-    const contentMatch = m[0].match(/\bcontent\s*=\s*"([^"]*)"/i);
-    if (contentMatch) nodes.push(contentMatch[1]);
+    const contentMatch = m[0].match(META_CONTENT_RE);
+    if (contentMatch) nodes.push(contentMatch[1] ?? contentMatch[2]);
   }
 
   // alt / aria-label / placeholder / title attribute values: also
   // user-facing despite living inside a tag.
   for (const m of body.matchAll(USER_FACING_ATTR_RE)) {
-    nodes.push(m[1]);
+    nodes.push(m[1] ?? m[2]);
   }
 
   // Everything else: text strictly between two tags. This naturally covers
@@ -130,23 +135,62 @@ function extractTextNodes(html) {
   return nodes;
 }
 
+// An allow-listed phrase exempts THAT PHRASE, not the whole text node it
+// happens to sit in. Masking the phrase out and re-testing the remainder is
+// what makes that true: previously one allow-listed sentence blessed every
+// other banned word in the same paragraph, so a real regression could hide
+// behind a legitimate exception a few clauses away.
+function maskPhrases(text, phrases) {
+  let out = text;
+  for (const phrase of phrases) {
+    if (!phrase) continue;
+    let idx = out.indexOf(phrase);
+    while (idx !== -1) {
+      out = out.slice(0, idx) + ' '.repeat(phrase.length) + out.slice(idx + phrase.length);
+      idx = out.indexOf(phrase, idx + phrase.length);
+    }
+  }
+  return out;
+}
+
 function main() {
   const allowlist = loadAllowlist();
   const files = targetFiles();
   const failures = [];
+  const used = new Set();
 
   for (const rel of files) {
     const abs = path.join(ROOT, rel);
     const html = readFileSync(abs, 'utf8');
     const allowedForFile = allowlist.filter((a) => a.file === rel);
+    const phrases = allowedForFile.map((a) => a.phrase);
 
     for (const rawNode of extractTextNodes(html)) {
       if (!WORDS.test(rawNode)) continue;
       const text = rawNode.trim();
       if (!text) continue;
-      const isAllowed = allowedForFile.some((a) => text.includes(a.phrase));
-      if (!isAllowed) failures.push(`${rel}: "${text.slice(0, 160)}"`);
+      for (const a of allowedForFile) {
+        if (text.includes(a.phrase)) used.add(`${a.file}\u0000${a.phrase}`);
+      }
+      // Re-test what is LEFT after every allow-listed phrase is blanked out.
+      if (WORDS.test(maskPhrases(text, phrases))) {
+        failures.push(`${rel}: "${text.slice(0, 160)}"`);
+      }
     }
+  }
+
+  // A stale entry is a silent hole: the phrase it was written for is gone,
+  // so it exempts nothing today but would quietly bless the text if it ever
+  // came back. Fail on it so the allow-list stays an accurate record.
+  const stale = allowlist.filter((a) => !used.has(`${a.file}\u0000${a.phrase}`));
+  if (stale.length) {
+    console.error(
+      'Naming guard failed: stale entries in frontend/.naming-allowlist — the ' +
+        'phrase is not present in the file it names (moved, reworded, or the ' +
+        'file was renamed). Delete the entry, or fix the phrase to match:\n',
+    );
+    for (const a of stale) console.error(`  ${a.file}: "${a.phrase}"`);
+    if (failures.length) console.error('');
   }
 
   if (failures.length) {
@@ -164,13 +208,16 @@ function main() {
         'quoted speech) or a genuine legal term of art, add it to ' +
         'frontend/.naming-allowlist with a reason.',
     );
+  }
+
+  if (failures.length || stale.length) {
     process.exitCode = 1;
     return;
   }
 
   console.log(
     `Naming guard passed: ${files.length} marketing page(s) checked, ` +
-      `${allowlist.length} allow-listed phrase(s).`,
+      `${allowlist.length} allow-listed phrase(s), 0 stale.`,
   );
 }
 
