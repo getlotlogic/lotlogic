@@ -1,5 +1,4 @@
-import React from 'react';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { db } from '../lib/db.js';
 import { apiFetch } from '../lib/api.js';
 import { scopePropsToPartner } from '../shared/scope.js';

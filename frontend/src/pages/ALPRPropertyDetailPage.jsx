@@ -1,5 +1,4 @@
-import React from 'react';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { makeDebounced } from '../lib/time.js';
 import { fmtDateTime } from '../lib/format.js';
 import { bundleVehicleEvents, filterEvidencePackages } from '../lib/bundle.js';

@@ -1,5 +1,4 @@
-import React from 'react';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { fmtPassRemaining } from '../lib/time.js';
 import { fmtTime } from '../lib/format.js';
 import { API, apiFetch, getSessionToken } from '../lib/api.js';

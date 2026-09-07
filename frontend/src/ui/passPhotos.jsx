@@ -1,7 +1,5 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
-const ReactDOM = { createPortal };
 import { apiFetch } from '../lib/api.js';
 import { db } from '../lib/db.js';
 import { fmtVisitDate, fmtStay, fmtCooldownDateTime, fmtHrsShort } from '../lib/passFormat.js';
@@ -354,7 +352,7 @@ export function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
           position:fixed-relative-to-the-card — the viewer rendered as a dark
           smear squeezed into the card column. document.body escapes all of it.
           Same pattern as the existing ReactDOM.createPortal overlay. */}
-      {viewer !== null && ReactDOM.createPortal(
+      {viewer !== null && createPortal(
         <PassPhotoViewer photos={photos} startIndex={viewer} plate={pass.plate_text} exitEventId={pass.exited_via_plate_event_id} onClose={() => setViewer(null)} />,
         document.body
       )}

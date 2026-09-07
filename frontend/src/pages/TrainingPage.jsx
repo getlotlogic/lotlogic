@@ -1,5 +1,4 @@
-import React from 'react';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { fmtDateTime } from '../lib/format.js';
 import { supabase } from '../lib/supabase.js';
 import { useToast } from '../ui/Toast.jsx';

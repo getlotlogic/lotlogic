@@ -1,5 +1,4 @@
-import React from 'react';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { fmtMoney } from '../lib/format.js';
 
 // ── Owner Overview page — per-operator stats + "View as" ──────

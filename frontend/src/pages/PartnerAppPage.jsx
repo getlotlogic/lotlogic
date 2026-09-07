@@ -1,5 +1,4 @@
-import React from 'react';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 // ── Frank's app-preview tab (partner: NMLD only) ─────────────────────────
 // Live embed of the NMLD Parking app (nmld-parking-preview.vercel.app)
 // framed as a phone, with partner-pitch copy. The surrounding page uses

@@ -1,5 +1,4 @@
-import React from 'react';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { fmtMoney } from '../lib/format.js';
 import { db } from '../lib/db.js';
 import { SkeletonCards, SkeletonKPIs } from '../ui/Skeletons.jsx';

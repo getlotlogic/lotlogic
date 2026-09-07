@@ -1,5 +1,4 @@
-import React from 'react';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { smartDate, elapsed, fmtMoney, fmtTime } from '../lib/format.js';
 import { mapsLink } from '../lib/bundle.js';
 import { displayColor, colorHex, cleanMmc } from '../lib/vehicles.js';

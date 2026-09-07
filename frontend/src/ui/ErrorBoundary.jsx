@@ -1,5 +1,4 @@
-import React from 'react';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 
 // ── Error boundary ────────────────────────────────────────────
 // Catches render / lifecycle throws in a subtree so a malformed record

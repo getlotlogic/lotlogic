@@ -1,7 +1,5 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
-const { useState, useEffect, useCallback, useRef, useMemo, memo } = React;
-const ReactDOM = { createPortal };
 import { supabase } from '../lib/supabase.js';
 import { isVehicleInZone } from '../lib/geometry.js';
 import { colorHex } from '../lib/vehicles.js';
@@ -156,7 +154,7 @@ export function ViolationProofModal({ violation, latestSnapshotUrl, latestDetect
   const initialTime = violation.detected_at ? new Date(violation.detected_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '';
 
   // Portal: render directly into document.body to escape all ancestor transforms
-  return ReactDOM.createPortal(
+  return createPortal(
     <div onClick={onClose} style={{
       position:'fixed', inset:0, zIndex:9999,
       background:'rgba(0,0,0,.85)', backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
