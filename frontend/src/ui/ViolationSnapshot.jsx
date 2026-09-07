@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 // ── Violation snapshot with AI bounding box ───────────────────
 // Renders a snapshot image with a single bounding box around the

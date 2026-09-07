@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React from 'react';
 import { smartDate, fmtTime, timeAgo } from '../lib/format.js';
 import { displayColor, colorHex } from '../lib/vehicles.js';
 

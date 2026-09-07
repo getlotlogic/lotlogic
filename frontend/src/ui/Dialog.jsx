@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React, { useState, useRef } from 'react';
 import { useFocusTrap, useUid } from './focusTrap.js';
 
 // ── Confirm dialog ────────────────────────────────────────────

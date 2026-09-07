@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React, { useEffect, useRef } from 'react';
 
 // ── Focus trap for modal dialogs ─────────────────────────────
 // Minimal a11y helper for <div role="dialog">-style overlays. Responsibilities:

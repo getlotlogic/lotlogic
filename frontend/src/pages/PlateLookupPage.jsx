@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { db } from '../lib/db.js';
 import { apiFetch } from '../lib/api.js';
 import { scopePropsToPartner } from '../shared/scope.js';
