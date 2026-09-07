@@ -1,5 +1,3 @@
-import { useState, useEffect } from 'react';
-
 // ── Shared helpers (parking passes) ──────────────────────────
 // Format a millisecond duration as "Xh Ym left" / "Zm left" / "<1m left" / "Expired"
 export function fmtPassRemaining(ms) {
@@ -21,29 +19,3 @@ export function makeDebounced(fn, wait) {
     t = setTimeout(() => { t = null; fn(...args); }, wait);
   };
 }
-
-// Keep a dashboard-wide ticker so every "time-left" label counts down in lockstep
-// without each component setting its own interval.
-const NOW_TICK_LISTENERS = new Set();
-let NOW_TICK_INTERVAL = null;
-export function useNowTick(everyMs = 30000) {
-  const [t, setT] = useState(() => Date.now());
-  useEffect(() => {
-    const cb = () => setT(Date.now());
-    NOW_TICK_LISTENERS.add(cb);
-    if (!NOW_TICK_INTERVAL) {
-      NOW_TICK_INTERVAL = setInterval(() => {
-        NOW_TICK_LISTENERS.forEach(l => l());
-      }, everyMs);
-    }
-    return () => {
-      NOW_TICK_LISTENERS.delete(cb);
-      if (NOW_TICK_LISTENERS.size === 0 && NOW_TICK_INTERVAL) {
-        clearInterval(NOW_TICK_INTERVAL);
-        NOW_TICK_INTERVAL = null;
-      }
-    };
-  }, [everyMs]);
-  return t;
-}
-
