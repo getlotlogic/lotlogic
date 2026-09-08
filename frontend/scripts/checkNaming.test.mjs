@@ -1,3 +1,4 @@
+import os from 'node:os';
 // Tests for the naming guard (Ruling S3-k). Each case builds a throwaway
 // "frontend/" containing nothing but scripts/check-naming.mjs, a couple of
 // tiny HTML files and an allow-list, then runs the guard against it. The
@@ -12,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const GUARD = path.resolve(import.meta.dirname, 'check-naming.mjs');
-const SCRATCH = '/private/tmp/claude-501/-Users-gabe/16382c27-5cfe-4c64-a900-76278515b0bf/scratchpad';
+const SCRATCH = os.tmpdir();
 
 // files: { 'index.html': '<p>…</p>', 'blog/x.html': … }; allowlist: string
 function runGuard(files, allowlist = '') {
