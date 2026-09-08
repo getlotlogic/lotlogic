@@ -18,7 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const REAL_FRONTEND = path.resolve(import.meta.dirname, '..');
-const SCRATCH_ROOT = '/private/tmp/claude-501/-Users-gabe/16382c27-5cfe-4c64-a900-76278515b0bf/scratchpad';
+const SCRATCH_ROOT = os.tmpdir();
 const SENTINEL_NAME = '.build-guard-test-sentinel';
 const SENTINEL_CONTENT = 'if you can read this, LOTLOGIC_BUILD_OUT did not delete the tree';
 
