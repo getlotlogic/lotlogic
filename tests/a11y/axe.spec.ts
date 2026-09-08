@@ -29,7 +29,7 @@ const BLOCKING = new Set(['serious', 'critical']);
  * the third paper ground, a real content background that Tasks 15/16 never
  * measured, on which all six were still failing: `--ink-3` -> `#625848`,
  * `--ink-4` -> `#5F5746`, `--amber` -> `#874904`, `--terra-deep` -> `#84461B`,
- * `--status-ok` -> `#3A6039`, `--status-no` -> `#993A2C` (>= 4.51:1 on all
+ * `--status-ok` -> `#3A6039`, `--status-no` -> `#993A2C` (>= 4.66:1 on all
  * three grounds).
  *
  * `dashboard-owner` had the same class of problem (header wordmark, "+ Add

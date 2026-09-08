@@ -82,7 +82,7 @@ jobs:
 
       - name: Install browsers
         working-directory: tests
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       # These two build and serve their own dist/ (fixtures/buildAndServeFrontend.ts),
       # so they need no BASE_URL and no credentials.
