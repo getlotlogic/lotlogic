@@ -113,6 +113,9 @@ jobs:
         working-directory: tests
         env:
           BASE_URL: http://localhost:8252
+          # PNG baselines are macOS captures; Linux font rasterisation differs.
+          # CI compares the DOM captures only (see tests/visual/compare.mjs).
+          VISUAL_DOM_ONLY: "1"
         run: npm run visual:check
 
       # Unauthenticated pages only. The one credentialed case is tagged @auth
