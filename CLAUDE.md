@@ -288,11 +288,12 @@ Spec: [`getlotlogic/lotlogic-backend` → `docs/superpowers/specs/2026-04-18-tru
 
 Spec: [`getlotlogic/lotlogic-backend` → `docs/superpowers/specs/2026-04-18-tow-confirmation-design.md`]
 
-- `supabase/functions/tow-confirm/` — correlates camera sightings of tow-truck plates (listed in `enforcement_partners.tow_truck_plates`) back to open violations. Claims sightings via `partner_truck_sightings.consumed_by_violation_id`. Exit-event correlation uses a lookback window (`TOW_CONFIRM_LOOKBACK_MINUTES`, default 180). **Not currently wired into the new pipeline** — `camera-snapshot` does not fan out to `tow-confirm`. Re-enabling it is a separate task; see TODO in `camera-snapshot/index.ts`.
+- `supabase/functions/tow-confirm/` — correlates camera sightings of tow-truck plates (listed in `enforcement_partners.tow_truck_plates`) back to open violations. Claims sightings via `partner_truck_sightings.consumed_by_violation_id`. Exit-event correlation uses a lookback window (`TOW_CONFIRM_LOOKBACK_MINUTES`, default 180). `camera-snapshot` fans out to it (fire-and-forget, `dispatchTowConfirm`) on every `exit_clean`/`exit_overstay`/`partner_truck_sighting` outcome that carries a plate (`supabase/functions/camera-snapshot/index.ts:364`); it is `INTERNAL_TOKEN`-gated and safely no-ops when the plate matches no open violation.
 - `supabase/functions/camera-snapshot/` fires `tow-dispatch-email` fire-and-forget after every new `alpr_violations` insert. No SMS today.
 - `supabase/functions/tow-dispatch-email/` mints HMAC-SHA256 JWT action tokens (aud `violation-action`, 48h TTL, signed with `JWT_SECRET` — MUST match the backend's) and renders two one-click buttons. Clicking hits backend `GET /violations/action` (render confirm form) → `POST /violations/action` (atomic resolve). Provider: SendGrid (primary) with Resend fallback. Click/open tracking is disabled in `tracking_settings` so Tow / No Tow links resolve straight to the backend without SendGrid's `url{N}.<domain>` redirector (whose SSL cert is flaky on first provisioning).
 - Dashboard Billing tab has a **Confirmation review** sub-tab with 7 queues derived from `v_violation_billing_status`: Possible fraud → Needs verification → Unreported confirmed → Confirmed → Pending → No tow → Held/Force-billed. Per-row operator actions: Bill Anyway, Mark No-Tow, Pause/Resume Billing (all owner-scoped, hit backend endpoints `POST /violations/{id}/{force-bill|mark-no-tow|pause-billing|resume-billing}`).
 - Partner settings: `AccountPage` has a **tow-truck plates** editor writing `enforcement_partners.tow_truck_plates`. Plates normalized byte-identically to `tow-confirm/index.ts`.
+- The Tow truck tab (`frontend/src/pages/TowActivityPage.jsx`) shows per-visit clip status (archived / pending / partial / expired) and a "Watch clip" action, fed by `GET /ops/tow-sightings`.
 
 ## Deploying edge functions
 
@@ -312,7 +313,7 @@ supabase secrets set JWT_SECRET=$SUPABASE_JWT_SECRET  # tow-dispatch-email
 
 New env vars required:
 - `tow-dispatch-email`: `JWT_SECRET` (= the Supabase JWT secret = backend's `JWT_SECRET`), `BACKEND_URL` (optional, defaults to prod), `SENDGRID_API_KEY` (primary provider) OR `RESEND_API_KEY` (fallback), `FROM_EMAIL` (must be on a domain-authenticated sender — currently `dispatch@lotlogicparking.com`), `FROM_NAME` (optional, "LotLogic" default), `EMAIL_OVERRIDE_TO` (optional test-recipient override; unset in prod).
-- `tow-confirm`: `TOW_CONFIRM_MIN_CONFIDENCE` (default 0.85), `TOW_CONFIRM_LOOKBACK_MINUTES` (default 180)
+- `tow-confirm`: `TOW_CONFIRM_MIN_CONFIDENCE` (default 0.65 — lowered from 0.85 on 2026-04-26; 0.85 dropped night-IR Charlotte frames and the 0.70-confidence inherit path, so partner-truck sightings never reached `tow-confirm` correlation), `TOW_CONFIRM_LOOKBACK_MINUTES` (default 180)
 - `camera-snapshot` / `pr-ingest`: `PLATE_RECOGNIZER_TOKEN`, `PR_MIN_SCORE` (default `0.8`), `PR_DEDUP_WINDOW_SECONDS` (default `0`; currently `300` in prod), `CAMERA_SNAPSHOT_URL_SECRET` (primary) or `PR_INGEST_URL_SECRET` (fallback shared secret for the trailing-path URL), `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_PUBLIC_BASE_URL`.
 
 ## Email sending (added Apr 2026)
