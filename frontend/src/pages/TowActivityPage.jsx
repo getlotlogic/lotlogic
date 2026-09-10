@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { db } from '../lib/db.js';
 import { apiFetch } from '../lib/api.js';
@@ -101,8 +101,23 @@ export function TowActivityPage({ user }) {
   // below. Empty array means "the page renders exactly as it did before the
   // evidence column existed", which is also what a 403 leaves behind.
   const [groups, setGroups] = useState([]);
+  // Did the evidence read actually succeed? Distinguishes "the pipeline has
+  // no record of this visit" (chip: no evidence record) from "this viewer is
+  // not allowed to see evidence at all" (no chip, ever). Without it those two
+  // look identical, and an operator can't tell a sighting the archiver never
+  // saw from one they're simply not cleared for.
+  const [evidenceOk, setEvidenceOk] = useState(false);
   const [clipBusyId, setClipBusyId] = useState(null);
   const [clipError, setClipError] = useState(null);
+  // Refreshing every 60s, so the "you can't see this" debug line would
+  // otherwise repeat forever in the console of every owner who isn't a
+  // platform admin. Once is the whole signal.
+  const evidenceWarnedRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   // Escape closes the evidence viewer — it was mouse-dismiss only, which made
   // it a keyboard trap for anyone reviewing evidence without a pointer.
   useEffect(() => {
@@ -120,25 +135,29 @@ export function TowActivityPage({ user }) {
   // endpoint rather than by a client-side flag, and a failure here must never
   // degrade the sighting list itself.
   //
-  // Fetched once per mount rather than on the 60s read refresh: this is 30
-  // days of rows, and archiving moves on the order of minutes, not seconds.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const since = new Date(Date.now() - 30 * 86400000).toISOString();
-      try {
-        const body = await apiFetch(
-          `/ops/tow-sightings?since=${encodeURIComponent(since)}&limit=1000`
-        );
-        if (cancelled) return;
-        setGroups((body?.sightings || []).filter(s => s.is_group_anchor));
-      } catch (err) {
-        if (cancelled) return;
+  // Refreshed on the same 60s tick as the reads below (see `refresh`). The
+  // page's own header promises auto-refresh, and the state this carries is
+  // exactly the one that changes while somebody watches: a visit archives a
+  // few minutes after the truck leaves, and a chip stuck on "Clip pending"
+  // until you navigate away and back contradicts the page in front of you.
+  const loadEvidence = useCallback(async () => {
+    const since = new Date(Date.now() - 30 * 86400000).toISOString();
+    try {
+      const body = await apiFetch(
+        `/ops/tow-sightings?since=${encodeURIComponent(since)}&limit=1000`
+      );
+      if (!mountedRef.current) return;
+      setGroups((body?.sightings || []).filter(s => s.is_group_anchor));
+      setEvidenceOk(true);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      if (!evidenceWarnedRef.current) {
+        evidenceWarnedRef.current = true;
         console.debug('tow-sightings evidence unavailable', err?.status || err?.message);
-        setGroups([]);
       }
-    })();
-    return () => { cancelled = true; };
+      setGroups([]);
+      setEvidenceOk(false);
+    }
   }, []);
 
   const watchClip = useCallback(async (anchorId) => {
@@ -147,11 +166,25 @@ export function TowActivityPage({ user }) {
     try {
       // 15-minute presigned URL — opened and dropped, never held in state.
       const { url } = await apiFetch(`/ops/tow-sightings/${anchorId}/clip`);
-      if (url) window.open(url, '_blank', 'noopener');
-      else setClipError({ id: anchorId, message: 'The clip link came back empty.' });
+      if (!mountedRef.current) return;
+      // window.open returns null when the browser blocks the window. Left
+      // unchecked, a blocked pop-up looks exactly like a working click that
+      // did nothing — the operator retries forever instead of allowing
+      // pop-ups once.
+      const opened = url ? window.open(url, '_blank', 'noopener') : null;
+      if (!opened) {
+        setClipError({
+          id: anchorId,
+          message: url
+            ? 'Your browser blocked the clip window — allow pop-ups for this site.'
+            : 'The clip link came back empty.',
+        });
+      }
     } catch (err) {
+      if (!mountedRef.current) return;
       setClipError({ id: anchorId, message: err?.message || 'Could not open the clip.' });
     }
+    if (!mountedRef.current) return;
     setClipBusyId(null);
   }, []);
 
@@ -268,11 +301,15 @@ export function TowActivityPage({ user }) {
     }
     setLoading(false);
   }, [hours, user?.id, user?._role]);
-  useEffect(() => { setLoading(true); load(); }, [load]);
+  // One refresh cycle for both reads. The evidence read is deliberately not
+  // awaited by `load` — it must never be able to delay or break the sighting
+  // list, which is the part of this page that works for everyone.
+  const refresh = useCallback(() => { load(); loadEvidence(); }, [load, loadEvidence]);
+  useEffect(() => { setLoading(true); refresh(); }, [refresh]);
   useEffect(() => {
-    const t = setInterval(load, 60_000);
+    const t = setInterval(refresh, 60_000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [refresh]);
 
   // Cluster events into visits: consecutive reads within 20 minutes
   // collapse to one row. Walks the (descending) events list and starts a
@@ -363,7 +400,17 @@ export function TowActivityPage({ user }) {
           const camsInVisit = [...new Set(v.frames.map(f => cameras[f.camera_id] || (f.camera_id || '?').slice(0, 6)))];
           const spanSec = Math.round((new Date(v.last_at) - new Date(v.first_at)) / 1000);
           const group = groupForVisit(v);
-          const clip = group ? clipState(group) : null;
+          // No group and the evidence read worked → the pipeline genuinely has
+          // nothing for this visit (it predates the archiver, or the sighting
+          // never reached it). Say so. No group because the read was refused →
+          // no chip at all, so the evidence column stays invisible to anyone
+          // who isn't cleared for it.
+          const clip = group
+            ? clipState(group)
+            : (evidenceOk
+                ? { kind: 'none', label: 'No evidence record', tone: CHIP_TONE.pending,
+                    title: 'The evidence pipeline has no clip record for this visit' }
+                : null);
           return (
             <div key={idx} style={{
               background: 'var(--bg-card)',
