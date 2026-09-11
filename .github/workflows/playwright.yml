@@ -2,9 +2,10 @@
 #
 #   e2e (local dist)  -- `pull_request`. Builds frontend/, serves dist/ on
 #     localhost and runs everything that needs no credentials and no network:
-#     the node tests, the two self-serving specs, the visual/DOM no-op gate and
-#     the unauthenticated half of the a11y sweep. This is the one that actually
-#     guards a PR, and it can be a required check today.
+#     the node tests, the self-serving specs (including the HQ tab's own
+#     e2e/hq.spec.ts, a11y/hq.spec.ts and DOM-snapshot gate), the visual/DOM
+#     no-op gate and the unauthenticated half of the a11y sweep. This is the
+#     one that actually guards a PR, and it can be a required check today.
 #
 #   e2e + a11y  -- `deployment_status`. The full credentialed suite against the
 #     Vercel preview built from the PR's own commit.
@@ -56,7 +57,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Node 22+ strips TypeScript types natively, which the HQ DOM gate
+          # (visual/hq-dom.mjs) needs to import the shared .ts fixtures.
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: |
             frontend/package-lock.json
@@ -84,11 +87,20 @@ jobs:
         working-directory: tests
         run: npx playwright install --with-deps chromium webkit
 
-      # These two build and serve their own dist/ (fixtures/buildAndServeFrontend.ts),
-      # so they need no BASE_URL and no credentials.
+      # These all build and serve their own dist/ (fixtures/buildAndServeFrontend.ts),
+      # so they need no BASE_URL and no credentials. e2e/hq.spec.ts and
+      # a11y/hq.spec.ts are the HQ tab's own suites -- same self-serving
+      # pattern as the other two, so they belong here rather than a new job.
       - name: Self-serving e2e specs
         working-directory: tests
-        run: npx playwright test e2e/pay2park-visit.spec.ts e2e/error-reporting.spec.ts --project=chromium-desktop
+        run: npx playwright test e2e/pay2park-visit.spec.ts e2e/error-reporting.spec.ts e2e/hq.spec.ts a11y/hq.spec.ts --project=chromium-desktop
+
+      # The HQ board's structural DOM snapshot (section order, per-section
+      # counts, health words) against the committed baseline -- also
+      # self-serving, same reason as the step above.
+      - name: HQ DOM snapshot gate
+        working-directory: tests
+        run: node visual/hq-dom.mjs
 
       # Backgrounded with its stdout/stderr redirected to a file: a child that
       # keeps the step's output pipe open makes the step itself hang.
