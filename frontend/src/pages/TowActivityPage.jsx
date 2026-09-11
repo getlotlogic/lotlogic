@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { db } from '../lib/db.js';
+import { apiFetch } from '../lib/api.js';
 
 // ── TowActivityPage ─────────────────────────────
 // Operator-facing repository of every tow-truck sighting at the property's
@@ -8,9 +9,87 @@ import { db } from '../lib/db.js';
 // enforcement_partners.tow_truck_plates plus Lev≤2 OCR variants so OCR drift
 // (VK7434 from VX7434, PK7434, AA96116 from AA9611E, etc.) shows up.
 //
-// Visits are grouped by 10-minute clusters: N consecutive reads of the same
+// Visits are grouped by 20-minute clusters: N consecutive reads of the same
 // truck collapse to one visit row with all camera frames as a thumbnail
 // strip. Auto-refresh every 60s.
+//
+// Each visit also carries the state of its VIDEO evidence, read from the
+// backend's /ops/tow-sightings. The camera keeps footage for a limited
+// number of days and the archiver copies the window around a sighting into
+// permanent storage; the chip on each visit says which of those two worlds
+// the video is in, and — while it is still only on the camera — the date it
+// runs out. That date is the one thing that turns into a lost tow if nobody
+// looks at it in time.
+
+// The lot is in Charlotte. Footage-expiry dates are decisions the operator
+// makes standing in the lot, so they read in lot-local time regardless of
+// where the browser is.
+const LOT_TZ = 'America/New_York';
+
+// Uppercase, alphanumerics only. plate_events.normalized_plate is already
+// stored this way; the backend's truck_plate is not guaranteed to be, so both
+// sides of the group match go through this.
+const normPlate = (s) => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+const CHIP = {
+  fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+  whiteSpace: 'nowrap', letterSpacing: '.04em',
+};
+const CHIP_TONE = {
+  ok:      { background: 'rgba(34,197,94,.15)',  color: '#22c55e' },
+  pending: { background: 'rgba(255,255,255,.06)', color: 'var(--text-muted)' },
+  gone:    { background: 'rgba(248,113,113,.15)', color: '#f87171' },
+};
+
+// Clip length, for the "is this the whole visit or a fragment" question.
+function clipLength(seconds) {
+  const s = Number(seconds || 0);
+  if (!s) return null;
+  return s < 60 ? `${Math.round(s)}s` : `${Math.round(s / 60)} min`;
+}
+
+// Which of the three states this visit's evidence is in. `group` is the
+// backend anchor row for the visit, or null when the backend knows nothing
+// about it (older sightings, or the archiver has not run yet).
+function clipState(group) {
+  const clip = group && group.clip;
+  if (clip && (clip.status === 'archived' || clip.status === 'partial')) {
+    const len = clipLength(clip.duration_s);
+    return {
+      kind: 'saved',
+      label: len ? `Clip archived · ${len}` : 'Clip archived',
+      tone: CHIP_TONE.ok,
+      title: clip.status === 'partial'
+        ? 'Only part of the window made it into storage — watch it before relying on it'
+        : 'The video around this sighting is in permanent storage',
+    };
+  }
+  const expiresAt = group && group.footage_expires_at ? new Date(group.footage_expires_at) : null;
+  const expired = (clip && clip.status === 'expired_unarchived')
+    || (expiresAt && expiresAt.getTime() < Date.now());
+  if (expired) {
+    return {
+      kind: 'gone',
+      label: 'Footage expired',
+      tone: CHIP_TONE.gone,
+      title: 'The camera has overwritten this window and no clip was archived',
+    };
+  }
+  const attempts = clip && clip.attempts;
+  return {
+    kind: 'pending',
+    label: 'Clip pending',
+    tone: CHIP_TONE.pending,
+    title: clip && clip.status === 'failed'
+      ? `Archiving failed${attempts ? ` after ${attempts} attempt${attempts === 1 ? '' : 's'}` : ''}${clip.error ? ` — ${clip.error}` : ''}`
+      : 'Not archived yet — the video is still on the camera',
+    // The one line that says when to act.
+    until: expiresAt
+      ? expiresAt.toLocaleDateString('en-US', { timeZone: LOT_TZ, month: 'short', day: 'numeric', year: 'numeric' })
+      : null,
+  };
+}
+
 export function TowActivityPage({ user }) {
   const [events, setEvents] = useState([]);
   const [plates, setPlates] = useState([]);
@@ -18,6 +97,27 @@ export function TowActivityPage({ user }) {
   const [loading, setLoading] = useState(true);
   const [hours, setHours] = useState(72);
   const [lightbox, setLightbox] = useState(null);
+  // Backend anchor rows keyed nowhere — matched to visits by plate + time
+  // below. Empty array means "the page renders exactly as it did before the
+  // evidence column existed", which is also what a 403 leaves behind.
+  const [groups, setGroups] = useState([]);
+  // Did the evidence read actually succeed? Distinguishes "the pipeline has
+  // no record of this visit" (chip: no evidence record) from "this viewer is
+  // not allowed to see evidence at all" (no chip, ever). Without it those two
+  // look identical, and an operator can't tell a sighting the archiver never
+  // saw from one they're simply not cleared for.
+  const [evidenceOk, setEvidenceOk] = useState(false);
+  const [clipBusyId, setClipBusyId] = useState(null);
+  const [clipError, setClipError] = useState(null);
+  // Refreshing every 60s, so the "you can't see this" debug line would
+  // otherwise repeat forever in the console of every owner who isn't a
+  // platform admin. Once is the whole signal.
+  const evidenceWarnedRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   // Escape closes the evidence viewer — it was mouse-dismiss only, which made
   // it a keyboard trap for anyone reviewing evidence without a pointer.
   useEffect(() => {
@@ -26,6 +126,67 @@ export function TowActivityPage({ user }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [lightbox]);
+
+  // Video-evidence metadata. Separate from the Supabase read below on
+  // purpose: /ops/* is platform-admin only, so an owner who is not one gets a
+  // 403 and this stays empty — the page then looks exactly as it always has,
+  // with no chip, no button and no error. That is the 2026-05-31 ruling
+  // (the tow crew must never see their own truck sightings) enforced at the
+  // endpoint rather than by a client-side flag, and a failure here must never
+  // degrade the sighting list itself.
+  //
+  // Refreshed on the same 60s tick as the reads below (see `refresh`). The
+  // page's own header promises auto-refresh, and the state this carries is
+  // exactly the one that changes while somebody watches: a visit archives a
+  // few minutes after the truck leaves, and a chip stuck on "Clip pending"
+  // until you navigate away and back contradicts the page in front of you.
+  const loadEvidence = useCallback(async () => {
+    const since = new Date(Date.now() - 30 * 86400000).toISOString();
+    try {
+      const body = await apiFetch(
+        `/ops/tow-sightings?since=${encodeURIComponent(since)}&limit=1000`
+      );
+      if (!mountedRef.current) return;
+      setGroups((body?.sightings || []).filter(s => s.is_group_anchor));
+      setEvidenceOk(true);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      if (!evidenceWarnedRef.current) {
+        evidenceWarnedRef.current = true;
+        console.debug('tow-sightings evidence unavailable', err?.status || err?.message);
+      }
+      setGroups([]);
+      setEvidenceOk(false);
+    }
+  }, []);
+
+  const watchClip = useCallback(async (anchorId) => {
+    setClipBusyId(anchorId);
+    setClipError(null);
+    try {
+      // 15-minute presigned URL — opened and dropped, never held in state.
+      const { url } = await apiFetch(`/ops/tow-sightings/${anchorId}/clip`);
+      if (!mountedRef.current) return;
+      // window.open returns null when the browser blocks the window. Left
+      // unchecked, a blocked pop-up looks exactly like a working click that
+      // did nothing — the operator retries forever instead of allowing
+      // pop-ups once.
+      const opened = url ? window.open(url, '_blank', 'noopener') : null;
+      if (!opened) {
+        setClipError({
+          id: anchorId,
+          message: url
+            ? 'Your browser blocked the clip window — allow pop-ups for this site.'
+            : 'The clip link came back empty.',
+        });
+      }
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setClipError({ id: anchorId, message: err?.message || 'Could not open the clip.' });
+    }
+    if (!mountedRef.current) return;
+    setClipBusyId(null);
+  }, []);
 
   const load = useCallback(async () => {
     if (!supabase || !user?.id) return;
@@ -140,16 +301,25 @@ export function TowActivityPage({ user }) {
     }
     setLoading(false);
   }, [hours, user?.id, user?._role]);
-  useEffect(() => { setLoading(true); load(); }, [load]);
+  // One refresh cycle for both reads. The evidence read is deliberately not
+  // awaited by `load` — it must never be able to delay or break the sighting
+  // list, which is the part of this page that works for everyone.
+  const refresh = useCallback(() => { load(); loadEvidence(); }, [load, loadEvidence]);
+  useEffect(() => { setLoading(true); refresh(); }, [refresh]);
   useEffect(() => {
-    const t = setInterval(load, 60_000);
+    const t = setInterval(refresh, 60_000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [refresh]);
 
-  // Cluster events into visits: consecutive reads within 10 minutes
+  // Cluster events into visits: consecutive reads within 20 minutes
   // collapse to one row. Walks the (descending) events list and starts a
   // new visit when the gap exceeds VISIT_GAP_MS.
-  const VISIT_GAP_MS = 10 * 60 * 1000;
+  //
+  // 20, not the 10 this page used to use, because the backend groups
+  // sightings at 20 minutes. With two different gaps the page would split a
+  // visit the backend kept whole and then hang one clip chip off two rows —
+  // two answers to "how many times was the truck here".
+  const VISIT_GAP_MS = 20 * 60 * 1000;
   const visits = (() => {
     const out = [];
     let cur = null;
@@ -166,6 +336,34 @@ export function TowActivityPage({ user }) {
     }
     return out.reverse(); // newest first
   })();
+
+  // Match a visit to the backend group describing the same truck at the same
+  // time: same plate once both sides are normalised, and the group's span
+  // overlapping the visit's span widened by one gap on each side. The widening
+  // matters because the two sides cluster the same reads from different
+  // starting points, so their spans can be offset without disagreeing.
+  const groupForVisit = (v) => {
+    if (!groups.length) return null;
+    const plates = new Set(
+      v.frames.map(f => normPlate(f.normalized_plate || f.plate_text)).filter(Boolean)
+    );
+    if (!plates.size) return null;
+    const visitFirst = new Date(v.first_at).getTime();
+    const from = visitFirst - VISIT_GAP_MS;
+    const to = new Date(v.last_at).getTime() + VISIT_GAP_MS;
+    let best = null;
+    let bestDist = Infinity;
+    for (const g of groups) {
+      if (!plates.has(normPlate(g.truck_plate))) continue;
+      const gFirst = new Date(g.group_first_seen_at || g.seen_at).getTime();
+      const gLast = new Date(g.group_last_seen_at || g.seen_at).getTime();
+      if (!(gFirst <= to && gLast >= from)) continue;
+      // Nearest start wins when a plate visits twice inside one widened window.
+      const dist = Math.abs(gFirst - visitFirst);
+      if (dist < bestDist) { bestDist = dist; best = g; }
+    }
+    return best;
+  };
 
   return (
     <div className="page-enter" style={{padding: '16px 12px 80px', maxWidth: 1100, margin: '0 auto'}}>
@@ -201,6 +399,18 @@ export function TowActivityPage({ user }) {
           const exact = plates.find(p => v.frames.some(f => f.normalized_plate === p));
           const camsInVisit = [...new Set(v.frames.map(f => cameras[f.camera_id] || (f.camera_id || '?').slice(0, 6)))];
           const spanSec = Math.round((new Date(v.last_at) - new Date(v.first_at)) / 1000);
+          const group = groupForVisit(v);
+          // No group and the evidence read worked → the pipeline genuinely has
+          // nothing for this visit (it predates the archiver, or the sighting
+          // never reached it). Say so. No group because the read was refused →
+          // no chip at all, so the evidence column stays invisible to anyone
+          // who isn't cleared for it.
+          const clip = group
+            ? clipState(group)
+            : (evidenceOk
+                ? { kind: 'none', label: 'No evidence record', tone: CHIP_TONE.pending,
+                    title: 'The evidence pipeline has no clip record for this visit' }
+                : null);
           return (
             <div key={idx} style={{
               background: 'var(--bg-card)',
@@ -227,6 +437,30 @@ export function TowActivityPage({ user }) {
                         : 'FUZZY'}
                     </span>
                   )}
+                  {clip && (
+                    <span title={clip.title} style={{marginLeft:8, ...CHIP, ...clip.tone}}>
+                      {clip.label}
+                    </span>
+                  )}
+                  {clip && clip.kind === 'saved' && (
+                    <button
+                      onClick={() => watchClip(group.id)}
+                      disabled={clipBusyId === group.id}
+                      style={{
+                        marginLeft:8, fontSize:11, fontWeight:700, padding:'3px 9px',
+                        borderRadius:6, cursor: clipBusyId === group.id ? 'default' : 'pointer',
+                        background:'transparent', color:'var(--text)',
+                        border:'1px solid var(--border)',
+                        opacity: clipBusyId === group.id ? .5 : 1,
+                      }}>
+                      {clipBusyId === group.id ? 'Opening…' : 'Watch clip'}
+                    </button>
+                  )}
+                  {clip && clip.kind === 'pending' && clip.until && (
+                    <span style={{marginLeft:8,fontSize:11,color:'var(--text-muted)'}}>
+                      footage on camera until {clip.until}
+                    </span>
+                  )}
                 </div>
                 <div style={{fontSize:12,color:'var(--text-muted)', fontFamily:'ui-monospace,monospace'}}>
                   {new Date(v.first_at).toLocaleString('en-US', {
@@ -238,6 +472,9 @@ export function TowActivityPage({ user }) {
                   <span style={{marginLeft:8,color:'var(--text-muted)'}}>· {v.frames.length} read{v.frames.length===1?'':'s'}</span>
                 </div>
               </div>
+              {clipError && group && clipError.id === group.id && (
+                <div style={{color:'#f87171',fontSize:12,marginBottom:10}}>{clipError.message}</div>
+              )}
               <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:8}}>
                 {v.frames.map(f => {
                   const conf = Number(f.confidence ?? 0);
