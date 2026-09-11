@@ -11,7 +11,10 @@
     "test:a11y": "playwright test a11y",
     "install-browsers": "playwright install --with-deps chromium",
     "seed": "node scripts/seed-test-accounts.mjs",
-    "report": "playwright show-report"
+    "report": "playwright show-report",
+    "perf": "node perf/measure-dashboard-load.mjs",
+    "visual:baseline": "node visual/capture.mjs --out=visual/baseline",
+    "visual:check": "node visual/compare.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.0",

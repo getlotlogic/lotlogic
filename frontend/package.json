@@ -1,0 +1,19 @@
+{
+  "name": "lotlogic-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LotLogic operator dashboard and public pages. Built by esbuild, deployed by Vercel.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --dev",
+    "dev": "node scripts/build.mjs --dev && python3 -m http.server 8000 --directory dist"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "dependencies": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  }
+}
