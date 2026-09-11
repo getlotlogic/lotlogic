@@ -48,11 +48,12 @@ function clipLength(seconds) {
   return s < 60 ? `${Math.round(s)}s` : `${Math.round(s / 60)} min`;
 }
 
-// Which of the three states this visit's evidence is in. `group` is the
-// backend anchor row for the visit, or null when the backend knows nothing
-// about it (older sightings, or the archiver has not run yet).
-function clipState(group) {
-  const clip = group && group.clip;
+// Which of the three states one clip is in. `clip` is a clip-shaped object —
+// either the legacy `group.clip` (the visit's own camera) or one entry from
+// the new per-camera `group.clips` array — and `footageExpiresAt` is the
+// group-level expiry (the backend doesn't give a per-camera one; every
+// camera at the property shares the same footage-retention window).
+function clipStateFor(clip, footageExpiresAt) {
   if (clip && (clip.status === 'archived' || clip.status === 'partial')) {
     const len = clipLength(clip.duration_s);
     return {
@@ -64,7 +65,7 @@ function clipState(group) {
         : 'The video around this sighting is in permanent storage',
     };
   }
-  const expiresAt = group && group.footage_expires_at ? new Date(group.footage_expires_at) : null;
+  const expiresAt = footageExpiresAt ? new Date(footageExpiresAt) : null;
   const expired = (clip && clip.status === 'expired_unarchived')
     || (expiresAt && expiresAt.getTime() < Date.now());
   if (expired) {
@@ -88,6 +89,13 @@ function clipState(group) {
       ? expiresAt.toLocaleDateString('en-US', { timeZone: LOT_TZ, month: 'short', day: 'numeric', year: 'numeric' })
       : null,
   };
+}
+
+// Legacy single-camera shape. `group` is the backend anchor row for the
+// visit, or null when the backend knows nothing about it (older sightings,
+// or the archiver has not run yet).
+function clipState(group) {
+  return clipStateFor(group && group.clip, group && group.footage_expires_at);
 }
 
 export function TowActivityPage({ user }) {
@@ -160,12 +168,23 @@ export function TowActivityPage({ user }) {
     }
   }, []);
 
-  const watchClip = useCallback(async (anchorId) => {
-    setClipBusyId(anchorId);
+  // One visit can now carry several clips (one per camera at the property),
+  // each with its own busy/error state — a click on camera A's button must
+  // not spin or fail camera B's. `clipKey` is the one place that turns
+  // (anchorId, camera) into the id used for both `clipBusyId` and
+  // `clipError.id`, so the setter and every comparison agree on the same
+  // string. No camera (the legacy single-clip case) keys off the anchor
+  // alone, unchanged from before this array existed.
+  const clipKey = (anchorId, camera) => (camera ? `${anchorId}:${camera}` : String(anchorId));
+
+  const watchClip = useCallback(async (anchorId, camera) => {
+    const key = clipKey(anchorId, camera);
+    setClipBusyId(key);
     setClipError(null);
     try {
       // 15-minute presigned URL — opened and dropped, never held in state.
-      const { url } = await apiFetch(`/ops/tow-sightings/${anchorId}/clip`);
+      const qs = camera ? `?camera=${encodeURIComponent(camera)}` : '';
+      const { url } = await apiFetch(`/ops/tow-sightings/${anchorId}/clip${qs}`);
       if (!mountedRef.current) return;
       // window.open returns null when the browser blocks the window. Left
       // unchecked, a blocked pop-up looks exactly like a working click that
@@ -174,7 +193,7 @@ export function TowActivityPage({ user }) {
       const opened = url ? window.open(url, '_blank', 'noopener') : null;
       if (!opened) {
         setClipError({
-          id: anchorId,
+          id: key,
           message: url
             ? 'Your browser blocked the clip window — allow pop-ups for this site.'
             : 'The clip link came back empty.',
@@ -182,7 +201,7 @@ export function TowActivityPage({ user }) {
       }
     } catch (err) {
       if (!mountedRef.current) return;
-      setClipError({ id: anchorId, message: err?.message || 'Could not open the clip.' });
+      setClipError({ id: key, message: err?.message || 'Could not open the clip.' });
     }
     if (!mountedRef.current) return;
     setClipBusyId(null);
@@ -400,14 +419,23 @@ export function TowActivityPage({ user }) {
           const camsInVisit = [...new Set(v.frames.map(f => cameras[f.camera_id] || (f.camera_id || '?').slice(0, 6)))];
           const spanSec = Math.round((new Date(v.last_at) - new Date(v.first_at)) / 1000);
           const group = groupForVisit(v);
+          // Gabe's requirement: whenever the tow truck shows up, both
+          // cameras' viewpoints must be checked so it couldn't have left with
+          // a truck unseen. The new backend gives one clip per active camera
+          // at the property (`group.clips`) instead of just the sighting's
+          // own camera (`group.clip`). An empty array reads the same as
+          // absent — there's nothing to render per-camera either way — so
+          // both fall back to the legacy single-chip shape below.
+          const hasNewClips = !!(group && Array.isArray(group.clips) && group.clips.length);
           // No group and the evidence read worked → the pipeline genuinely has
           // nothing for this visit (it predates the archiver, or the sighting
           // never reached it). Say so. No group because the read was refused →
           // no chip at all, so the evidence column stays invisible to anyone
-          // who isn't cleared for it.
-          const clip = group
+          // who isn't cleared for it. When the new per-camera shape is
+          // present it owns the evidence UI instead of this single chip.
+          const clip = (group && !hasNewClips)
             ? clipState(group)
-            : (evidenceOk
+            : (!group && evidenceOk
                 ? { kind: 'none', label: 'No evidence record', tone: CHIP_TONE.pending,
                     title: 'The evidence pipeline has no clip record for this visit' }
                 : null);
@@ -445,15 +473,15 @@ export function TowActivityPage({ user }) {
                   {clip && clip.kind === 'saved' && (
                     <button
                       onClick={() => watchClip(group.id)}
-                      disabled={clipBusyId === group.id}
+                      disabled={clipBusyId === clipKey(group.id)}
                       style={{
                         marginLeft:8, fontSize:11, fontWeight:700, padding:'3px 9px',
-                        borderRadius:6, cursor: clipBusyId === group.id ? 'default' : 'pointer',
+                        borderRadius:6, cursor: clipBusyId === clipKey(group.id) ? 'default' : 'pointer',
                         background:'transparent', color:'var(--text)',
                         border:'1px solid var(--border)',
-                        opacity: clipBusyId === group.id ? .5 : 1,
+                        opacity: clipBusyId === clipKey(group.id) ? .5 : 1,
                       }}>
-                      {clipBusyId === group.id ? 'Opening…' : 'Watch clip'}
+                      {clipBusyId === clipKey(group.id) ? 'Opening…' : 'Watch clip'}
                     </button>
                   )}
                   {clip && clip.kind === 'pending' && clip.until && (
@@ -472,8 +500,53 @@ export function TowActivityPage({ user }) {
                   <span style={{marginLeft:8,color:'var(--text-muted)'}}>· {v.frames.length} read{v.frames.length===1?'':'s'}</span>
                 </div>
               </div>
-              {clipError && group && clipError.id === group.id && (
+              {clipError && group && clipError.id === clipKey(group.id) && (
                 <div style={{color:'#f87171',fontSize:12,marginBottom:10}}>{clipError.message}</div>
+              )}
+              {hasNewClips && (
+                // One line per camera, in the order the backend returned
+                // them — this is the "did he leave with a truck unseen"
+                // check: every active camera at the property gets its own
+                // status and its own Watch clip button, not just the camera
+                // that happened to read the plate.
+                <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:10}}>
+                  {group.clips.map((c) => {
+                    const camState = clipStateFor(c, group.footage_expires_at);
+                    const key = clipKey(group.id, c.camera_api_key);
+                    return (
+                      <div key={c.camera_api_key} style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                        <span style={{fontSize:12,color:'var(--text)',minWidth:100,fontWeight:600}}>
+                          {c.camera_name || c.camera_api_key}
+                        </span>
+                        <span title={camState.title} style={{...CHIP, ...camState.tone}}>
+                          {camState.label}
+                        </span>
+                        {camState.kind === 'saved' && (
+                          <button
+                            onClick={() => watchClip(group.id, c.camera_api_key)}
+                            disabled={clipBusyId === key}
+                            style={{
+                              fontSize:11, fontWeight:700, padding:'3px 9px',
+                              borderRadius:6, cursor: clipBusyId === key ? 'default' : 'pointer',
+                              background:'transparent', color:'var(--text)',
+                              border:'1px solid var(--border)',
+                              opacity: clipBusyId === key ? .5 : 1,
+                            }}>
+                            {clipBusyId === key ? 'Opening…' : 'Watch clip'}
+                          </button>
+                        )}
+                        {camState.kind === 'pending' && camState.until && (
+                          <span style={{fontSize:11,color:'var(--text-muted)'}}>
+                            footage on camera until {camState.until}
+                          </span>
+                        )}
+                        {clipError && clipError.id === key && (
+                          <span style={{color:'#f87171',fontSize:12}}>{clipError.message}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               )}
               <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:8}}>
                 {v.frames.map(f => {
