@@ -71,28 +71,28 @@ export const BOARD = {
     },
   ],
   changed_this_week: [
-    { kind: 'decision', business: 'lotlogic', title: 'Closed db-pool-saturated after resizing the pool.', at: '2026-09-11T15:00:00Z', worker: 'lotlogic-db-health' },
-    { kind: 'fact', business: 'lotlogic', title: 'Supabase pool size raised from 8 to 12 connections.', at: '2026-09-11T14:00:00Z', worker: 'lotlogic-db-health' },
-    { kind: 'metric', business: 'standard_water', title: 'Weekly review count: 14.', at: '2026-09-10T09:00:00Z', worker: 'water-reviews' },
-    { kind: 'decision', business: 'standard_vending', title: 'Approved a restock of the Pavilion Blvd machine.', at: '2026-09-09T18:00:00Z', worker: 'vending-restock' },
-    { kind: 'fact', business: 'cross', title: 'Fleet budget raised to $150 a day.', at: '2026-09-08T10:00:00Z', worker: 'brain-deadman' },
-    { kind: 'metric', business: 'lotlogic', title: 'Passes issued per day: 41.', at: '2026-09-07T09:00:00Z', worker: 'lotlogic-metrics' },
+    { kind: 'decision', area: 'ops', title: 'Closed db-pool-saturated after resizing the pool.', at: '2026-09-11T15:00:00Z', worker: 'ops-db-health' },
+    { kind: 'fact', area: 'ops', title: 'Supabase pool size raised from 8 to 12 connections.', at: '2026-09-11T14:00:00Z', worker: 'ops-db-health' },
+    { kind: 'metric', area: 'money', title: 'Weekly billing review count: 14.', at: '2026-09-10T09:00:00Z', worker: 'money-billing-audit' },
+    { kind: 'decision', area: 'customers', title: 'Approved a partner fee-schedule change for a Charlotte plaza.', at: '2026-09-09T18:00:00Z', worker: 'customers-partner-fees' },
+    { kind: 'fact', area: 'cross', title: 'Fleet budget raised to $150 a day.', at: '2026-09-08T10:00:00Z', worker: 'brain-deadman' },
+    { kind: 'metric', area: 'evidence', title: 'Plate-match confidence this week: 96%.', at: '2026-09-07T09:00:00Z', worker: 'evidence-plate-quality' },
   ],
   questions: [
     {
-      id: 101, business: 'lotlogic', worker: 'lotlogic-billing-audit',
+      id: 101, area: 'money', worker: 'money-billing-audit',
       question: 'Refund a customer up to $200 for a double tow charge?',
       context: 'Camera confirms one tow event; the billing system posted two charges for it.',
       gate_kind: 'spend', asked_at: '2026-09-10T12:00:00Z',
     },
     {
-      id: 102, business: 'standard_water', worker: 'water-reviews',
-      question: 'Send a reply to a one-star review disputing delivery timing?',
-      context: 'Draft reply attached — the review claims a late delivery, dispatch logs show it was on time.',
+      id: 102, area: 'customers', worker: 'customers-partner-comms',
+      question: 'Send a reply to a partner disputing a fee-schedule change?',
+      context: 'Draft reply attached — the partner claims the new fee posted early, billing logs show it matched the effective date.',
       gate_kind: 'email_customer', asked_at: '2026-09-10T13:00:00Z',
     },
     {
-      id: 103, business: 'lotlogic', worker: 'lotlogic-plate-pairs',
+      id: 103, area: 'evidence', worker: 'evidence-plate-pairs',
       question: 'Merge two plate records that look like the same truck?',
       context: 'Same USDOT number on both, one-character OCR drift between the two reads.',
       gate_kind: 'merge', asked_at: '2026-09-10T14:00:00Z',
@@ -101,6 +101,6 @@ export const BOARD = {
   fleet: {
     runs_24h: 612, ok_24h: 598, failed_24h: 14,
     spend_today_usd: 41.20, budget_usd: 150, cap: 60, running: 9,
-    dead_workers: ['water-reviews'], budget_stop: false,
+    dead_workers: ['sales-lead-followup'], budget_stop: false,
   },
 };

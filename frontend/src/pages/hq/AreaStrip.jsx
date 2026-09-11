@@ -29,23 +29,20 @@ function byHealth(areas) {
 
 // LotLogic's eight areas (spec §9.5 / ruling SC-2). Eight cards do not fit
 // four-across on a phone, so this is a horizontally scrolling, snapping row
-// rather than a grid — nothing is hidden behind a fold, and the red one is
-// still the first thing a human's thumb lands on.
+// on narrow viewports — nothing is hidden behind a fold, and the red one is
+// still the first thing a human's thumb lands on. At >=1024px (HQ-1) there
+// is room for all eight without a fold or a scrollbar, so `.hq-area-strip`'s
+// desktop media query (dashboard.html) switches the same 220px cards from a
+// scrolling single row to a wrapping grid instead — same card, same colors,
+// no scroll either way.
 export function AreaStrip({ areas }) {
   const ordered = byHealth(areas || []);
   return (
     <div
       role="group"
-      aria-label="LotLogic's eight areas, scroll for more"
+      aria-label="LotLogic's eight areas, scroll for more on narrow screens"
       tabIndex={0}
-      style={{
-        display: 'flex',
-        gap: 10,
-        overflowX: 'auto',
-        scrollSnapType: 'x mandatory',
-        paddingBottom: 4,
-        WebkitOverflowScrolling: 'touch',
-      }}
+      className="hq-area-strip"
     >
       {ordered.map((area) => {
         const h = HEALTH[area.health] || HEALTH.green;
@@ -55,13 +52,12 @@ export function AreaStrip({ areas }) {
             data-testid="area-card"
             data-health={area.health}
             data-area={area.slug}
+            className="hq-area-card"
             style={{
               background: 'var(--bg-card)',
               border: `1px solid ${h.color}`,
               borderRadius: 10,
               padding: 12,
-              flex: '0 0 220px',
-              scrollSnapAlign: 'start',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>

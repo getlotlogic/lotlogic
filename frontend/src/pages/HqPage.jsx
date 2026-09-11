@@ -68,7 +68,20 @@ export function HqPage() {
   const staleLabel = error && lastGoodAt ? `Last updated ${fmtClock(lastGoodAt)}` : null;
 
   return (
-    <div data-testid="hq-root" className="page-enter" style={{ padding: '16px 12px 80px', maxWidth: 1000, margin: '0 auto' }}>
+    <div
+      data-testid="hq-root"
+      className="page-enter"
+      style={{
+        // The fixed bottom nav (.bottom-nav) sits over the last card unless
+        // this reserves at least its full height, including the safe-area
+        // inset the nav itself pads into on notched phones — tied to the
+        // nav's own --bottom-nav-height variable (dashboard.html) rather
+        // than a bare magic number, plus a little breathing room.
+        padding: '16px 12px calc(var(--bottom-nav-height, 58px) + env(safe-area-inset-bottom) + 24px)',
+        maxWidth: 1000,
+        margin: '0 auto',
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: 'var(--text-primary)' }}>HQ</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

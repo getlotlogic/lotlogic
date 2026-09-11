@@ -147,6 +147,32 @@
     @media (min-width: 1024px) {
       .page-content { max-width: 960px; }
     }
+    /* HQ area strip (HqPage / hq/AreaStrip.jsx): a horizontally scrolling,
+       snapping row of 220px cards on narrow screens — 8 don't fit 4-across
+       on a phone, so nothing is hidden behind a fold, the red one is still
+       the first thing a thumb lands on. At >=1024px there's room to show
+       all eight without a fold or a scrollbar, so this switches the exact
+       same cards from a single scrolling row to a wrapping grid instead. */
+    .hq-area-strip {
+      display: flex;
+      gap: 10px;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      padding-bottom: 4px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .hq-area-card { flex: 0 0 220px; scroll-snap-align: start; }
+    @media (min-width: 1024px) {
+      .hq-area-strip {
+        flex-wrap: wrap;
+        overflow-x: visible;
+        scroll-snap-type: none;
+      }
+      /* flex-grow (0 on the phone row, where a fixed basis is what makes
+         scroll-snapping predictable) so wrapped rows fill the available
+         width instead of leaving a dead gutter after the last card. */
+      .hq-area-card { flex: 1 1 220px; scroll-snap-align: none; }
+    }
     /* Admin clients: the 5-col grid can't fit a phone — stack to 2 cols and
        let emails wrap at natural boundaries instead of mid-word. */
     @media (max-width: 640px) {
@@ -348,6 +374,15 @@
     .signout-btn:active { color: var(--text-secondary); border-color: var(--border); }
 
     /* ── Bottom nav ── */
+    :root {
+      /* Fixed nav's own content height (10px+20px icon+3px gap+~12px label+8px
+         padding, plus its 1px border) — NOT including env(safe-area-inset-bottom),
+         which the nav adds on top via its own padding-bottom below. A page
+         whose last card must clear the nav (e.g. HqPage) adds this PLUS
+         env(safe-area-inset-bottom) itself, rather than a bare magic number
+         that silently drifts if this nav's own layout ever changes. */
+      --bottom-nav-height: 58px;
+    }
     .bottom-nav {
       position: fixed;
       bottom: 0;
