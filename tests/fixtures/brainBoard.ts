@@ -1,49 +1,71 @@
 // Fixture for the HQ tab's GET /brain/board — shaped exactly per
 // CONTRACTS.md §4. No real plate, phone number or name appears anywhere in
-// here; every id, worker and business below is invented for the test.
+// here; every id and worker below is invented for the test. `areas` below
+// are CONTRACTS §1's eight areas (Task 24 Step 0 / spec §9.5, ruling SC-2),
+// replacing the old four-business dimension the strip used to render.
 export const BOARD = {
   generated_at: '2026-09-11T18:03:00Z',
-  businesses: [
+  areas: [
     {
-      slug: 'lotlogic', name: 'LotLogic', health: 'red',
+      slug: 'ops', name: 'Ops', health: 'red',
       open_high: 2, open_total: 7, last_run_at: '2026-09-11T17:00:00Z',
       spend_today_usd: 12.40,
     },
     {
-      slug: 'standard_water', name: 'Standard Water', health: 'amber',
+      slug: 'evidence', name: 'Evidence', health: 'green',
+      open_high: 0, open_total: 1, last_run_at: '2026-09-11T17:05:00Z',
+      spend_today_usd: 0.20,
+    },
+    {
+      slug: 'money', name: 'Money', health: 'amber',
       open_high: 0, open_total: 3, last_run_at: '2026-09-11T16:30:00Z',
       spend_today_usd: 4.10,
     },
     {
-      slug: 'standard_vending', name: 'Standard Vending', health: 'green',
+      slug: 'customers', name: 'Customers', health: 'green',
       open_high: 0, open_total: 0, last_run_at: '2026-09-11T17:10:00Z',
       spend_today_usd: 1.05,
     },
     {
-      slug: 'cross', name: 'Cross-business', health: 'green',
-      open_high: 0, open_total: 1, last_run_at: '2026-09-11T17:05:00Z',
+      slug: 'code', name: 'Code', health: 'green',
+      open_high: 0, open_total: 0, last_run_at: '2026-09-11T17:12:00Z',
+      spend_today_usd: 0.50,
+    },
+    {
+      slug: 'marketing', name: 'Marketing', health: 'green',
+      open_high: 0, open_total: 0, last_run_at: '2026-09-11T17:15:00Z',
+      spend_today_usd: 0.10,
+    },
+    {
+      slug: 'sales', name: 'Sales', health: 'green',
+      open_high: 0, open_total: 0, last_run_at: '2026-09-11T17:18:00Z',
+      spend_today_usd: 0.05,
+    },
+    {
+      slug: 'cross', name: 'Cross', health: 'green',
+      open_high: 0, open_total: 1, last_run_at: '2026-09-11T17:20:00Z',
       spend_today_usd: 0.20,
     },
   ],
   priorities: [
     'Keep the Supabase pool under 80% before onboarding a new worker.',
     'No spend gate over $200 goes unanswered for more than a day.',
-    'Ship the deadman sweep before adding a fifth business.',
+    'Ship the deadman sweep before onboarding a ninth area.',
   ],
   red: [
     {
-      id: 31, fingerprint: 'db-pool-saturated', business: 'lotlogic',
-      worker: 'lotlogic-db-health',
+      id: 31, fingerprint: 'ops:db-pool-saturated', area: 'ops',
+      worker: 'ops-db-health',
       title: 'Supabase connection pool held above 90% for six hours straight.',
       evidence_url: 'https://example.com/evidence/db-pool-saturated',
       seen_count: 3,
       first_seen_at: '2026-09-11T12:00:00Z', last_seen_at: '2026-09-11T17:45:00Z',
     },
     {
-      id: 32, fingerprint: 'camera-heartbeat-stale', business: 'lotlogic',
-      worker: 'lotlogic-camera-health',
+      id: 32, fingerprint: 'ops:camera-gap-north', area: 'ops',
+      worker: 'ops-camera-health',
       title: 'South gate camera has not reported a heartbeat in 40 minutes.',
-      evidence_url: 'https://example.com/evidence/camera-heartbeat-stale',
+      evidence_url: 'https://example.com/evidence/camera-gap-north',
       seen_count: 5,
       first_seen_at: '2026-09-11T10:00:00Z', last_seen_at: '2026-09-11T17:50:00Z',
     },

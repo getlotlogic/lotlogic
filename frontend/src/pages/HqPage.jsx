@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchBoard } from '../lib/brainApi.js';
-import { BusinessStrip } from './hq/BusinessStrip.jsx';
+import { AreaStrip } from './hq/AreaStrip.jsx';
 import { RedList } from './hq/RedList.jsx';
 import { QuestionCard } from './hq/QuestionCard.jsx';
 import { ChangedThisWeek } from './hq/ChangedThisWeek.jsx';
@@ -90,8 +90,8 @@ export function HqPage() {
         </div>
       </div>
 
-      <section data-section="businesses" style={{ marginBottom: 22 }}>
-        <BusinessStrip businesses={board.businesses} />
+      <section data-section="areas" style={{ marginBottom: 22 }}>
+        <AreaStrip areas={board.areas} />
       </section>
 
       <section data-section="priorities" style={{ marginBottom: 22 }}>

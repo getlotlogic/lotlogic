@@ -1,11 +1,17 @@
+import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { buildAndServeFrontend } from '../fixtures/buildAndServeFrontend';
 import { BOARD } from '../fixtures/brainBoard';
 
 // Served from THIS branch's build, not from production: playwright.config.ts's
 // baseURL points at the live Vercel site, which does not have this page.
+// Absolute path, not the literal 'frontend' — buildAndServeFrontend's `cwd`
+// option is resolved against the test runner's process.cwd() (tests/, the
+// directory playwright is invoked from), not this spec file's directory, so
+// a relative 'frontend' resolves to the nonexistent tests/frontend.
+const FRONTEND_DIR = path.resolve(__dirname, '../../frontend');
 let server: Awaited<ReturnType<typeof buildAndServeFrontend>>;
-test.beforeAll(async () => { server = await buildAndServeFrontend('frontend'); });
+test.beforeAll(async () => { server = await buildAndServeFrontend(FRONTEND_DIR); });
 test.afterAll(async () => { await server.close(); });
 
 async function openHq(page: Page, { admin = true } = {}) {
@@ -25,7 +31,7 @@ async function openHq(page: Page, { admin = true } = {}) {
 
 test('renders every section of the board', async ({ page }) => {
   await openHq(page);
-  await expect(page.getByTestId('business-card')).toHaveCount(4);
+  await expect(page.getByTestId('area-card')).toHaveCount(8);
   await expect(page.getByTestId('red-finding')).toHaveCount(2);
   await expect(page.getByTestId('question')).toHaveCount(3);
   await expect(page.getByTestId('fleet-health')).toContainText('150');
@@ -57,14 +63,28 @@ test('sections appear in the spec order', async ({ page }) => {
   await openHq(page);
   const order = await page.$$eval('[data-section]',
     els => els.map(e => e.getAttribute('data-section')));
-  expect(order).toEqual(['businesses', 'priorities', 'red', 'questions', 'changed', 'fleet']);
+  expect(order).toEqual(['areas', 'priorities', 'red', 'questions', 'changed', 'fleet']);
 });
 
-test('a red business shows its state in words and its open-high count', async ({ page }) => {
+test('the strip leads with the area that is red', async ({ page }) => {
   await openHq(page);
-  const card = page.getByTestId('business-card').filter({ hasText: 'LotLogic' });
-  await expect(card).toHaveAttribute('data-health', 'red');
-  await expect(card).toContainText('2');
+  const first = page.getByTestId('area-card').first();
+  await expect(first).toHaveAttribute('data-health', 'red');
+  await expect(first).toContainText(/ops/i);
+  await expect(first).toContainText('2');
+});
+
+test('every area the board sends gets a card', async ({ page }) => {
+  await openHq(page);
+  const slugs = await page.$$eval('[data-testid="area-card"]',
+    els => els.map(e => e.getAttribute('data-area')));
+  expect(new Set(slugs)).toEqual(new Set(
+    ['ops', 'evidence', 'money', 'customers', 'code', 'marketing', 'sales', 'cross']));
+});
+
+test('no card says business', async ({ page }) => {
+  await openHq(page);
+  expect((await page.locator('body').innerText()).toLowerCase()).not.toContain('business');
 });
 
 test('answering a question posts it and removes it from the list', async ({ page }) => {
