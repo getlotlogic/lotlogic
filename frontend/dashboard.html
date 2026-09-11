@@ -15,8 +15,6 @@
   <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22LotLogic%22%2C%22short_name%22%3A%22LotLogic%22%2C%22start_url%22%3A%22%2F%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230c0e14%22%2C%22theme_color%22%3A%22%233b82f6%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%253Csvg%2520xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%2520viewBox%3D%270%25200%2520192%2520192%27%253E%253Crect%2520width%3D%27192%27%2520height%3D%27192%27%2520rx%3D%2740%27%2520fill%3D%27%25232563eb%27%2F%253E%253Ctext%2520x%3D%2796%27%2520y%3D%27126%27%2520font-family%3D%27Inter%2Csans-serif%27%2520font-weight%3D%27800%27%2520font-size%3D%2780%27%2520fill%3D%27white%27%2520text-anchor%3D%27middle%27%253ELL%253C%2Ftext%253E%253C%2Fsvg%253E%22%2C%22sizes%22%3A%22192x192%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%7D%5D%7D" />
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='14' fill='white' text-anchor='middle'%3ELL%3C/text%3E%3C/svg%3E" />
   <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%232563eb'/%3E%3Ctext x='90' y='118' font-family='Inter,sans-serif' font-weight='800' font-size='72' fill='white' text-anchor='middle'%3ELL%3C/text%3E%3C/svg%3E" />
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.1/qrcode.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -76,7 +74,7 @@
       --ink-paper: #1F1B14;
       --ink-2-paper: #3D3528;
       --ink-3-paper: #6F6450;
-      --ink-4-paper: #968B73;
+      --ink-4-paper: #6B6250;
       --red-paper: #B14535;
       --red-bg-paper: #F4DDD3;
       --amber-paper: #D97706;
@@ -99,11 +97,11 @@
       --text-faint: #8E8F89;
       --text-ghost: #B6B7B1;
       --text-dim: #D9D5C5;
-      --accent: #C2580B;
+      --accent: #B85309;
       --accent-dark: #9A4408;
       --green: #16A34A;
       --red: #DC2626;
-      --yellow: #C2580B;
+      --yellow: #B85309;
       --purple: #7C3AED;
       --unknown-pattern: repeating-linear-gradient(45deg, #D9D5C5 0 6px, #EFECDF 6px 12px);
       --unknown-border: rgba(0,0,0,.1);
@@ -1571,7 +1569,7 @@
     .theme-light .header-wordmark { color: #1a1a2e; }
     .theme-light .header-name { color: #6b7280; }
     .theme-light .bottom-nav { background: rgba(255,255,255,.97); border-top-color: #e5e7eb; }
-    .theme-light .nav-item { color: #9ca3af; }
+    .theme-light .nav-item { color: #6B7280; }
     .theme-light .nav-item.active { color: #B8860B; }
     .theme-light .nav-item.active::before { background: #FBBF24; }
     .theme-light .nav-badge { border-color: #fff; }
@@ -2291,6 +2289,6 @@
 <a href="#main-content" class="skip-link">Skip to content</a>
 <div id="root"></div>
 
-<script src="/dashboard.js" defer></script>
+<script type="module" src="/dashboard.js"></script>
 </body>
 </html>

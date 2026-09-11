@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React from 'react';
 import { supabase } from '../../lib/supabase.js';
 
 function normalizeTruckPlate(s) {

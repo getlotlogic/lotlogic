@@ -35,8 +35,13 @@ AI-powered parking enforcement platform. Cameras detect vehicles in zones, creat
 ## Repository Structure
 ```
 lotlogic/
-├── frontend/          # Vercel-deployed static pages (auto-deploy from main)
-│   ├── dashboard.html # ~7000-line single-file React SPA (Babel in-browser)
+├── frontend/          # Vercel-deployed via `npm run build` (esbuild) -> frontend/dist/ (Wave 2.6, 2026-09)
+│   ├── dashboard.html # Dashboard shell (2,294 lines) — head/CSS + `<div id="root">` + `<script type="module" src="/dashboard.js">`
+│   ├── src/           # Dashboard app code, 54 modules. Entry chain: dashboard.jsx (4 lines) -> main.jsx -> App.jsx -> src/{lib,shared,ui,pages}/ + hooks.js. 8 heavy tabs (JobsPage, AnalyticsPage, TowActivityPage, TrainingPage, AdminConsolePage, ALPRPropertyDetailPage, ConfirmationReview, TruckParkingLog) load as separate chunks via `lib/lazyPage.js`.
+│   ├── src/visit.js, src/resident.js, src/apt.js  # QR registration entry points, share src/shared/register.js + src/shared/policy.js + styles/register.css
+│   ├── styles/brand.css   # Marketing-page design tokens (18 HTML files)
+│   ├── scripts/build.mjs  # The whole esbuild build — bundles src/ into dist/, stages every static file into dist/. `frontend/dist/` is GENERATED, gitignored, never committed.
+│   ├── scripts/check-naming.mjs # `npm run check:naming` — enforces "parking pass" only on marketing copy; exceptions in `frontend/.naming-allowlist`
 │   ├── index.html     # Marketing / landing
 │   ├── visit.html     # Public QR → temporary-pass form
 │   ├── resident.html  # Public QR → permanent-plate form
@@ -44,7 +49,7 @@ lotlogic/
 │   ├── terms.html
 │   ├── pitch-*.html   # Sales / pitch decks
 │   ├── blog/          # Content + SEO pages
-│   └── vercel.json    # SPA rewrites + cache headers
+│   └── vercel.json    # `outputDirectory: "dist"`, SPA rewrites + cache headers + report-only CSP scoped to /app
 ├── supabase/
 │   └── functions/     # Edge functions deployed via `supabase functions deploy`
 │       ├── camera-snapshot/       # Primary ingest: camera JSON/image POST -> PR -> plate_events -> violation -> email
@@ -166,7 +171,7 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 ## Auth & Property Access Control (added Apr 2026)
 
 ### How a request is scoped
-1. User submits email + password to the LoginPage in `frontend/dashboard.html`.
+1. User submits email + password to `LoginPage` (`frontend/src/pages/LoginPage.jsx`), rendered inside the dashboard shell `frontend/dashboard.html`.
 2. `authLogin()` posts to the backend `POST /auth/login`. Backend looks the email up in `lot_owners` first, then `enforcement_partners`, runs bcrypt, and returns a JWT.
 3. The JWT is stored in `localStorage.lotlogic_session._token`.
 4. `apiFetch()` attaches `Authorization: Bearer <jwt>` to every backend call. The shared `X-API-Key` is no longer used in the browser.
@@ -174,7 +179,7 @@ bounding boxes against zone polygons from recent snapshots to find WHY zones fai
 6. On any `401` response, `apiFetch()` clears the session and fires `window.dispatchEvent('lotlogic:auth-expired')` — the App component catches that and returns to the login page.
 
 ### Files to know
-- `frontend/dashboard.html` — single-file React SPA. Search for `LoginPage`, `apiFetch`, `authLogin`, `applySupabaseAuth` to find the auth flow. Backend calls go through `apiFetch(path, options)`; direct Supabase reads go through the `db` object.
+- `frontend/src/` — the dashboard's module tree (54 files, esbuild-built into `frontend/dist/dashboard.js`). Search for `LoginPage`, `apiFetch`, `authLogin`, `applySupabaseAuth` to find the auth flow. Backend calls go through `apiFetch(path, options)` (`src/lib/api.js`); direct Supabase reads go through the `db` object (`src/lib/db.js`).
 - `tests/fixtures/accounts.ts` — shared test fixtures and the `loginAs(page, account)` helper for Playwright.
 - `tests/e2e/access-control.spec.ts` — the canonical security proof. Run this whenever the auth plumbing changes.
 
@@ -219,7 +224,7 @@ users out or blank their data.
 ## Known Bottlenecks (Apr 2026)
 - **No staging for the backend.** Railway deploys straight to prod from `main`. Nowhere to rehearse a migration or an auth change end-to-end.
 - **Migrations are manual.** Code can merge before the required migration is applied. Every schema change depends on human-in-the-loop.
-- **Single ~7000-line `frontend/dashboard.html` with in-browser Babel.** No type check, no component tests, no tree-shaking. Every change loads the entire file.
+- ~~Single ~7000-line `frontend/dashboard.html` with in-browser Babel~~ → **RESOLVED (Wave 2.6, 2026-09).** The dashboard is now `frontend/src/` (54 modules), built by esbuild (`frontend/scripts/build.mjs`) into `frontend/dist/`. Still no type check (plain JS/JSX, no TypeScript) and no component tests, but `npm run build` now catches unresolved imports and syntax errors, and the 8 heaviest tabs are lazy chunks instead of shipping in the initial bundle.
 - **No shared types between Python and frontend.** A Pydantic field rename silently breaks the UI.
 - **Gitignored lockfile.** CI dependency resolution is non-deterministic.
 - **Secrets rotate by find-and-replace.** The old shared API key was embedded in the browser bundle and in CLAUDE.md — rotation was intrusive.
@@ -235,12 +240,21 @@ Resolved vs earlier versions of this note:
 - **Vercel Project**: `lotlogic` (ID: `prj_X69wXEACGHveq0etAvX3xFBWDsqJ`)
 - **Vercel Team**: `gabebs1-2452s-projects` (ID: `team_r9Qsbhq7f117Wza8KnrvV55t`)
 - **Root directory**: `frontend/` (configured in Vercel project settings)
-- **Framework**: None — static HTML, no build step
+- **Framework**: None (esbuild, no framework plugin) — **has a build step since Wave 2.6 (2026-09)**: `installCommand: npm ci`, `buildCommand: npm run build`, `outputDirectory: dist` (`frontend/vercel.json`). `frontend/dist/` is generated by `frontend/scripts/build.mjs` and is gitignored — never commit it.
 - **Deploy trigger**: Auto-deploys on push to `main` via GitHub integration
-- **Preview deploys**: Created automatically for PRs
-- **Config**: `frontend/vercel.json` handles SPA rewrites (all routes → `index.html`) and cache headers
+- **Preview deploys**: Created automatically for PRs (sit behind Vercel Deployment Protection / SSO — see Testing below)
+- **Config**: `frontend/vercel.json` handles rewrites (`/app` → `dashboard.html`, `/visit` → `visit.html`, etc.), cache headers, and a report-only CSP scoped to `/app`, `/app/:path*`, `/dashboard.html`
 - **To deploy manually**: Push to `main` or open a PR — Vercel picks it up automatically
 - **Vercel MCP tools available**: Use `list_deployments`, `get_deployment`, `get_deployment_build_logs`, `get_runtime_logs`, `deploy_to_vercel` for deployment management
+
+### How to change the dashboard
+1. `cd frontend && npm ci`
+2. `npm run dev` — builds once (`node scripts/build.mjs --dev`) and serves `dist/` at `http://localhost:8000` via `python3 -m http.server`. It does not watch for changes; re-run `npm run dev` (or `npm run build`) after each edit.
+3. Edit under `frontend/src/` (pages in `src/pages/`, shared UI in `src/ui/`, data/helpers in `src/lib/`, cross-page-shared registration code in `src/shared/`).
+4. `npm run build` — this is the syntax/unresolved-import check the dashboard never used to have. A typo or a bad import path fails the build instead of white-screening production.
+5. `npm test` — frontend unit tests (`node --test scripts/*.test.mjs`).
+6. `npm run check:naming` — marketing-copy naming guard; exceptions go in `frontend/.naming-allowlist`, not around the script.
+7. `cd tests && BASE_URL=http://localhost:8000 npm run visual:check` — the no-op visual/DOM diff gate against `tests/visual/baseline/`. Only regenerate the baseline (`npm run visual:baseline`) when the change is an intentional visual change, and commit the new baseline files in the same commit as the change that caused the diff.
 
 ### Backend & Workers — Railway
 - **Backend**: FastAPI on Railway — auto-deploys from `getlotlogic/lotlogic-backend` repo
@@ -252,8 +266,8 @@ Resolved vs earlier versions of this note:
 - Each Railway service should have its root directory set to its subdirectory (e.g., `puller/`, `monitoring/`)
 
 ## Development Rules
-- The dashboard is a single `frontend/dashboard.html` file (React + Babel transpiled in-browser)
-- QR registration flow uses two separate single-file pages: `frontend/visit.html` (temporary) and `frontend/resident.html` (permanent)
+- The dashboard is `frontend/src/` (54 modules, esbuild-built) rendered into the `frontend/dashboard.html` shell — not a single file, and not Babel. See "How to change the dashboard" above.
+- QR registration flow is three entry points — `frontend/visit.html` (temporary), `frontend/resident.html` (permanent), `frontend/apt.html` (apartment) — each a thin `<script type="module" src="/{visit,resident,apt}.js">` over shared `src/shared/register.js` + `src/shared/policy.js` + `styles/register.css`, not standalone single-file pages.
 - Zone coordinates in the DB and new code are **0-1 normalized**. Legacy 0-100 values are converted on read by `_convert_camera_zones()` in `routers/snapshots.py` — do NOT write new 0-100 coords.
 - All timestamps are UTC (TIMESTAMPTZ)
 - Legacy `violations` row status is only 'pending' or 'resolved' (CHECK constraint); `alpr_violations` uses a richer state machine driven by `action_taken` + `tow_confirmed_at`
@@ -312,7 +326,7 @@ Guardrails:
 
 ## Audit & Simplification Mandate (2026-04-29)
 
-This codebase grew fast during the Charlotte launch. The dashboard is a single ~10K-line `frontend/dashboard.html` with in-browser Babel; edge functions have accumulated guards, tuning knobs, and patches that may now be redundant. **Default mode for any audit pass is: read-only review, propose simplifications, do not edit production-shaped surfaces without explicit go-ahead.**
+This codebase grew fast during the Charlotte launch. The dashboard was a single ~10K-line `frontend/dashboard.html` with in-browser Babel until Wave 2.6 (2026-09) split it into `frontend/src/` (54 modules, esbuild-built) — several of those modules are still large (e.g. `src/pages/TruckParkingLog.jsx`, `src/pages/ALPRPropertyDetailPage.jsx`, each 1,200+ lines) and worth auditing on their own terms; edge functions have accumulated guards, tuning knobs, and patches that may now be redundant. **Default mode for any audit pass is: read-only review, propose simplifications, do not edit production-shaped surfaces without explicit go-ahead.**
 
 When auditing, look for:
 
@@ -320,7 +334,7 @@ When auditing, look for:
 2. **Duplicate logic** between camera-snapshot, cron-sessions-sweep, and the backend (e.g. plate normalization, pass-matching, JWT signing all exist in multiple places).
 3. **Over-defensive guards** — checks for impossible states, retry-on-retry wrappers, "in case" comments without a documented incident behind them.
 4. **Premature abstractions** — single-call helper functions, two-line "utilities", config knobs no one has ever changed.
-5. **Tight coupling that fights the file-size limit** — places where dashboard.html could lose 200 lines by collapsing redundant React components or replacing copy-paste blocks with a shared helper.
+5. **Tight coupling in the oversized modules** — places where a `src/pages/*.jsx` file could lose lines by collapsing redundant React components or replacing copy-paste blocks with a shared helper (this is no longer a single-file-size problem post-Wave-2.6, but individual page modules can still be too big).
 6. **Comments that describe WHAT not WHY** — names already describe the what.
 
 When proposing a fix, prefer:

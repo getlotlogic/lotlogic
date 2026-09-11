@@ -1,10 +1,17 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React from 'react';
 import { db } from '../lib/db.js';
 import { apiFetch } from '../lib/api.js';
 import { useIntervalFetch } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
-import { TowActivityPage } from './TowActivityPage.jsx';
-import { ConfirmationReviewView } from './ConfirmationReview.jsx';
+import { SkeletonCards } from '../ui/Skeletons.jsx';
+import { lazyPage } from '../lib/lazyPage.js';
+
+// Heavy — lazy-loaded so opening Billing doesn't pull in either sub-tab's
+// bundle before the operator picks it. Own lazy() calls from App.jsx's
+// (TowActivityPage is also a top-level tab there); esbuild code-splitting
+// resolves both dynamic import() call sites to the same chunk.
+const TowActivityPage = lazyPage(() => import('./TowActivityPage.jsx'));
+const ConfirmationReviewView = lazyPage(() => import('./ConfirmationReview.jsx'));
 
 // ── Billing page (owner only) — partners + QuickBooks invoice lifecycle ────
 // The earnings tab is the canonical job/revenue log; this page hosts two
@@ -33,12 +40,14 @@ export function InvoicesPage({ lots, partners: partnersProp, user, isOwner = tru
   let body;
   if (subTab === 'tow-activity' && isPlatformAdmin) {
     body = React.createElement(ErrorBoundary, { label: 'tow activity' },
-      React.createElement(TowActivityPage, { user }));
+      React.createElement(React.Suspense, { fallback: React.createElement(SkeletonCards) },
+        React.createElement(TowActivityPage, { user })));
   } else if (isOwner && subTab === 'invoices') {
     body = React.createElement(BillingQuickBooksView, { partnersProp, lots });
   } else {
     body = React.createElement(ErrorBoundary, { label: 'confirmation review' },
-      React.createElement(ConfirmationReviewView, { user, lots, partnersProp }));
+      React.createElement(React.Suspense, { fallback: React.createElement(SkeletonCards) },
+        React.createElement(ConfirmationReviewView, { user, lots, partnersProp })));
   }
 
   return React.createElement('div', { className: 'page-enter' },

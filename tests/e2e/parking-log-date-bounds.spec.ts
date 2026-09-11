@@ -60,16 +60,21 @@ test.afterAll(async () => {
 async function loadHelpers(page: Page) {
   await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
   await page.route(/cdnjs\.cloudflare\.com\/ajax\/libs\/qrcode\//, (route) => route.abort());
-  await page.goto(`${origin}/dashboard.html`);
+  // `?e2e=1` is what makes the bundle expose `window.__lotlogicTestHooks` —
+  // see `frontend/src/main.jsx`. Without it this is a real visitor's page.
+  await page.goto(`${origin}/dashboard.html?e2e=1`);
   await page.waitForFunction(
-    () => typeof (window as unknown as Record<string, unknown>).lotDayBound === 'function',
+    () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.lotDayBound === 'function',
     undefined,
     { timeout: 30_000 },
   );
 }
 
 const bound = (page: Page, ymd: string, edge: 'start' | 'end') =>
-  page.evaluate(({ d, e }) => (window as unknown as Record<string, any>).lotDayBound(d, e), { d: ymd, e: edge });
+  page.evaluate(
+    ({ d, e }) => (window as unknown as Record<string, any>).__lotlogicTestHooks.lotDayBound(d, e),
+    { d: ymd, e: edge },
+  );
 
 test.describe('Parking Log date bounds @desktop-only', () => {
   test('a 10 PM Eastern registration is inside "today"', async ({ page }) => {
@@ -140,9 +145,9 @@ test.describe('Parking Log date bounds @desktop-only', () => {
     });
 
     await page.evaluate(async (propertyId) => {
-      const w = window as unknown as Record<string, any>;
-      await w.db.getParkingLog(propertyId, { date_from: '2026-09-01', date_to: '2026-09-03' });
-      await w.db.getParkingLog(propertyId, { date_from: '2026-09-01', date_to: '2026-09-03', format: 'csv' });
+      const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
+      await hooks.db.getParkingLog(propertyId, { date_from: '2026-09-01', date_to: '2026-09-03' });
+      await hooks.db.getParkingLog(propertyId, { date_from: '2026-09-01', date_to: '2026-09-03', format: 'csv' });
     }, PROPERTY_ID);
 
     expect(seen).toHaveLength(2);

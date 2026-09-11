@@ -125,7 +125,73 @@ every one): `backendRegister`, `escapeHtml`, `friendlyErrorMessage`,
 counts confirmed unchanged: `visit.html` 273, `resident.html` 229, `apt.html`
 356. All three are plain `<script>`, not JSX — no React, no Babel.
 
-## 4. The colours that fail
+### 3a. Task 17 — measured again first, then after the split
+
+Re-ran the same `difflib.SequenceMatcher` script (non-blank, stripped lines)
+against the actual starting tree for Task 17's own edits — commit `d9fa1a4`,
+the point right after Task 16's brand.css cherry-pick landed on this branch
+(see task-17-report.md §0) and right before Task 17 touched anything. This
+correction landed in Task 17's fix round 1: the first pass mistakenly
+re-ran the script against the tree from *before* that cherry-pick (i.e.
+still carrying each page's own 13-line `:root {...}` block) and reported
+392/73%, 371/69%, 393/42% — identical to section 3 above only because it
+was, in effect, re-measuring section 3's own commit, not Task 17's starting
+point. The correct "measured again first" numbers, against `d9fa1a4`:
+
+| Pair | Matching lines | % of the smaller file |
+|---|---:|---:|
+| `visit.html` (1,202) vs `resident.html` (527) | 379 | **72%** |
+| `resident.html` (527) vs `apt.html` (928) | 358 | **68%** |
+| `visit.html` (1,202) vs `apt.html` (928) | 380 | **41%** |
+
+Non-blank line counts dropped by 13 per file (1,215→1,202, 540→527,
+941→928) — exactly the `:root` block Task 16 replaced with a `<link>` in
+each file; the percentages moved by ~1 point each, same conclusion as
+section 3 (the three pages substantially duplicate registration logic).
+This table is committed together with the refactor commit itself, not as a
+preceding step — the first pass's sequencing error (measuring, then
+cherry-picking, in the wrong order relative to when the doc was written)
+is what fix round 1 corrected.
+
+After the split (`frontend/src/shared/register.js`,
+`frontend/src/shared/policy.js`, `frontend/styles/register.css`,
+`frontend/src/{visit,resident,apt}.js`, and each HTML file cut down to head
+boilerplate + a page-specific `<style>` leftover + one `<script
+type="module">` tag), re-measured the same three HTML files:
+
+| Pair | Matching lines | % of the smaller file |
+|---|---:|---:|
+| `visit.html` (136) vs `resident.html` (84) | 62 | 74% |
+| `resident.html` (84) vs `apt.html` (225) | 57 | 68% |
+| `visit.html` (136) vs `apt.html` (225) | 63 | 46% |
+
+The percentages barely moved — expected, since what's left in each HTML
+file is mostly the `<head>` boilerplate every page in this repo shares
+(charset/viewport meta, the error-reporting script tag, the reCAPTCHA
+`<meta>` + script tag, the Google Fonts `<link>`s, the two stylesheet
+`<link>`s) plus a short page-specific leftover `<style>` block — genuinely
+similar-looking markup that Task 17 was never asked to deduplicate further.
+The actual target of this task — the ten shared functions and the bulk of
+the CSS — dropped from 2,657 non-blank lines across the three files at
+Task 17's starting point (1,202 + 527 + 928, the `d9fa1a4` numbers above)
+to 136 + 84 + 225 = 445 non-blank lines in the HTML, with the extracted
+logic now living once each in:
+
+| File | Non-blank lines |
+|---|---:|
+| `frontend/src/shared/register.js` | 297 |
+| `frontend/src/shared/policy.js` | 46 |
+| `frontend/styles/register.css` | 190 |
+| `frontend/src/visit.js` (incl. the untouched pay-to-park branch) | 736 |
+| `frontend/src/resident.js` | 151 |
+| `frontend/src/apt.js` | 437 |
+
+`grep -c "function normalizePlate"` = 1 across the three HTML files now (0
+— the function moved into `register.js`, imported by all three entry
+files); same for the other nine names from the list above except
+`showSuccess` (kept per-page, in each entry file — see task-17-report.md
+for why) and `init` (never shared — page-specific control flow, as it always
+was).
 
 Re-measured (WCAG 2.1 relative-luminance contrast) against the live token
 values in the working tree (`frontend/index.html`, `frontend/dashboard.html`)
@@ -277,3 +343,188 @@ not exist in this worktree.
 
 2 requests instead of 6/9, ~888–892 KB → ~228 KB on the wire, zero
 in-browser compilation — the ~20 s → ~2 s change the spec asks for.
+
+## 9. Task 15 — dashboard contrast fixes (done) + marketing tokens for Task 16
+
+Task 15 (FE-10) darkened the three brand tokens the dashboard uses at
+runtime, plus one inline color, and re-measured each with the same
+sRGB → linear-light WCAG formula as section 4:
+
+| File:line (this worktree) | Rule | Before | After | Measured after |
+|---|---|---|---|---:|
+| `frontend/dashboard.html:100,104` `--accent`/`--yellow` (`.theme-light` block) | on `#FFFFFF` | `#C2580B` (4.47:1) | **`#B85309`** | 4.91:1 |
+| `frontend/dashboard.html:1572` `.theme-light .nav-item { color }` | on `#FFFFFF` | `#9ca3af` (2.54:1) | **`#6B7280`** | 4.83:1 |
+| `frontend/src/pages/ALPRPropertiesPage.jsx:155` inline `color` on the "+ Add Lot" pill (`rgba(74,222,128,.12)` tint) | on the composited `#E9FBF0` tint | `#4ADE80` (1.62:1) | **`#15803D`** | 4.66:1 |
+
+These three sites are the ones this task's HTML/JSX diff touches. The dark
+theme's own `--accent: #FBBF24` (line 51, used on `#0E0F11`) was left alone —
+it already passes comfortably.
+
+**Values for Task 16** — the shared-token edit that lands in
+`frontend/styles/brand.css` and removes the two remaining `color-contrast`
+waivers in `tests/a11y/axe.spec.ts` (`landing`, `pitch:/pitch-apartments.html`,
+`pitch:/pitch-tow.html`) once applied across the 18 marketing HTML files.
+Verified against both `--paper` and `--paper-2`; do not hand-edit the HTML
+files for this now — Task 15 only records the numbers.
+
+| Token | Today | Change to | On `--paper #F2EAD8` | On `--paper-2 #EADFC7` |
+|---|---|---|---:|---:|
+| `--amber` | `#D97706` | **`#965204`** | 5.00:1 | 4.53:1 |
+| `--terra-deep` | `#9A5530` | **`#8F4E20`** | 5.35:1 | 4.84:1 |
+| `--ink-4` | `#968B73` | **`#6C6350`** | 4.96:1 | 4.49:1 |
+| `--terra` | `#C97A4A` | unchanged | — | it is a *fill* behind `--ink` text, never text itself; darkening it changes the look for no accessibility gain. If axe ever flags it as text, use `#9D582F` (4.53:1 on `--paper`). |
+
+`--amber-soft: #FBBF24` (the dark-theme accent on `#0E0F11`) already passes
+comfortably and is not touched by either task.
+
+### 9a. Corrections from the Slice 3 fix round (2026-09-07)
+
+**The 18 `:root` blocks were a union, not 18 copies of one block.** Counted
+at `d2a82fb~1` (the commit before `styles/brand.css` existed): 18 marketing
+pages carried a brand `:root`, but they carried *different subsets* of it.
+`brand.css` declares 13 tokens; `brand-v2.html` had 14 (a superset — all 13
+plus one of its own), `pitch-apartments.html` and `pitch-tow.html` had all
+13, most pages 12, the six blog pages 9, and `privacy.html` / `terms.html`
+only 7. So `brand.css` does not just
+deduplicate: it **adds** tokens to most pages — one to seven of them, four to
+each blog page, and six (`--ink-4`, `--paper-3`, `--status-no`,
+`--status-ok`, `--terra`, `--terra-deep`) to `privacy.html` and `terms.html`.
+
+Those additions are inert, and that was verified rather than assumed: for
+every page, each token `brand.css` contributes beyond that page's original
+`:root` has zero `var(--token)` references in the page today. Nothing renders
+differently; the pages simply now declare tokens they never use.
+
+**`--ink-4` is dead; `--ink-4-paper` is the live token.** `var(--ink-4)` has
+no references anywhere in the repo — not in the 18 marketing pages, not in
+`src/`. The token that section 9's table calls `--ink-4` and darkened to
+`#6C6350` is therefore decorative bookkeeping. The one that actually renders
+is `dashboard.html`'s separate `--ink-4-paper` (line 77), whose only *text*
+use is `.kpi-paper .chev` at 11px on `--card-paper #FAF5E8` (hover
+`#EFE4CA`); its other three uses are decorative left-edge stripes with no
+contrast requirement. It was never darkened by Task 15 and sat at
+`#968B73` — **2.66:1** on its worst ground. It is now `#6B6250`, **4.76:1**.
+
+**Every marketing text token was still failing on `--paper-3`.** Tasks 15
+and 16 measured against `--paper` and `--paper-2` only. `--paper-3 #DFD2B5`
+is a real content background (`services.html` `.block.solves`, `pitch-tow.html`
+`.compare.good`, `brand-v2.html` `.aud-card.tow`), and all six text tokens
+were under 4.5:1 on it — including `--amber`, which no earlier pass flagged
+even though `pitch-tow.html:347` puts `--amber` text directly on `--paper-3`.
+Re-solved against all three grounds (worst ground shown):
+
+| Token | Was | Now | `--paper` | `--paper-2` | `--paper-3` |
+|---|---|---|---:|---:|---:|
+| `--ink-3` | `#6F6450` | **`#625848`** | 5.83 | 5.28 | **4.66** |
+| `--ink-4` (unused) | `#6C6350` | **`#5F5746`** | 5.97 | 5.40 | **4.77** |
+| `--amber` | `#965204` | **`#874904`** | 5.87 | 5.32 | **4.70** |
+| `--terra-deep` | `#8F4E20` | **`#84461B`** | 6.10 | 5.53 | **4.88** |
+| `--status-ok` | `#4A7A48` | **`#3A6039`** | 6.02 | 5.45 | **4.82** |
+| `--status-no` | `#B14535` | **`#993A2C`** | 5.85 | 5.30 | **4.68** |
+
+`--terra` and `--amber-soft` remain unchanged: they are fills behind `--ink`
+text, never text themselves (Task 15's rule).
+
+**The "+ Add Lot" pill's `#15803D` was measured against one theme only.**
+Section 9's table records 4.66:1 "on the composited `#E9FBF0` tint" — the
+LIGHT theme's tint. The dashboard's default theme is dark, where the same
+`rgba(74,222,128,.12)` composites over `#0E0F11` to `#15281E` and `#15803D`
+scores **3.09:1** — a regression from the `#4ADE80` it replaced (8.90:1
+there). No literal clears both grounds; the theme token `--green` does not
+either (`#16A34A` is 2.80:1 on the light tint). The pill now uses
+`var(--text-primary)`: **14.18:1** dark, **15.28:1** light.
+
+## 10. After Wave 2.6 — measured after the build (Task 20, 2026-09-07)
+
+Wave 2.6 (Tasks 1–19) replaced the single `frontend/dashboard.html` measured
+in sections 1–2 above with `frontend/src/` (54 modules), built by esbuild
+(`frontend/scripts/build.mjs`) into `frontend/dist/`. Numbers below are
+pulled from each task's own report, not re-derived here; sources are named
+so they can be checked against `.superpowers/sdd/2026-09-07-wave2-6-dashboard-build/task-{13,14,17}-report.md`.
+
+### Bundle size (gzip, local `dist/` build)
+
+| Stage | Entry chunk (`dashboard.js`) gzip | Source |
+|---|---:|---|
+| Before (this doc, §1: `dashboard.html` alone) | 197,826 B | §1 above |
+| After Task 13 (lazy-load the 8 heavy tabs) | **29,087 B** (down from a freshly-measured pre-task 141,887 B at the same commit's parent — see task-13-report.md's own caveat that this doesn't match this doc's §1 figure, both numbers clear the 130 KB target) | task-13-report.md |
+
+| Stage | Pre-login total gzip (entry + every eagerly-loaded chunk/script) | Source |
+|---|---:|---|
+| Before Task 13 | 207,963 B | progress.md (reviewer figure, Task 13 review) |
+| After Task 13 (0 of the 8 heavy-tab chunks load pre-login; 10 shared/vendor chunks still do) | 156,611 B | progress.md (reviewer figure, Task 13 review) |
+| After Task 14 (supabase-js + qrcode moved from 2 CDN scripts to the bundle; zero third-party `<script>` tags left) | **147,964 B**, 1 origin, 0 extra TLS handshakes | task-14-report.md §"Sizes" |
+
+Task 14 also confirmed via `grep -c 'https://cdn' dashboard.html` → `0` and a
+headless Playwright probe (`externalScriptCount: 0`, `blockedHosts: []`) —
+**the dashboard now loads zero third-party scripts**, replacing the
+`babel-standalone` (2.8 MB raw / 583 KB gzip alone), CDN React/ReactDOM,
+CDN `@supabase/supabase-js`, and CDN `qrcode` this doc's §1 measured.
+
+### Registration-page duplication (Task 17)
+
+Re-quoting §3a above rather than re-deriving it: `difflib.SequenceMatcher`
+over non-blank lines, `visit.html`/`resident.html`/`apt.html`, immediately
+before Task 17's edit (commit `d9fa1a4`) vs. after the shared-layer split:
+
+| Pair | Before (matching lines) | After (matching lines) |
+|---|---:|---:|
+| `visit.html` × `resident.html` | 379 | 62 |
+| `resident.html` × `apt.html` | 358 | 57 |
+| `visit.html` × `apt.html` | 380 | 63 |
+
+The ten shared functions (`normalizePlate`, `backendRegister`, etc.) and the
+bulk of the CSS now live once each in `frontend/src/shared/register.js`
+(297 non-blank lines), `frontend/src/shared/policy.js` (46), and
+`frontend/styles/register.css` (190) — see task-17-report.md for the full
+per-file breakdown.
+
+### Module count and largest files
+
+`find frontend/src -type f | wc -l` → **54**. Largest modules (`wc -l`,
+this worktree, 2026-09-07): `src/pages/ALPRPropertyDetailPage.jsx` 1,391
+lines, `src/pages/TruckParkingLog.jsx` 1,249 lines, `src/pages/JobsPage.jsx`
+1,075 lines, `src/pages/ConfirmationReview.jsx` 944 lines — all four still
+worth a follow-up split, per CLAUDE.md's Audit Mandate item 5.
+
+### The plan's headline metric — NOT re-measured on a preview
+
+**Section 5 above measured `time-to-usable` ≈ 18.7 s (median) against the
+live `https://lotlogic-beta.vercel.app` beta** — a real network, real CDN
+latency, real DNS/TLS handshakes, slow-4G + 4× CPU throttle, iPhone 14
+emulation. **That same measurement has not been repeated against this
+plan's output**, and cannot be yet: Vercel Preview deployments are behind
+Deployment Protection (confirmed by the controller — a preview URL 302s to
+`vercel.com/sso-api`), and the bypass mechanism Task 18 wired up
+(`VERCEL_AUTOMATION_BYPASS_SECRET`, an `x-vercel-protection-bypass` header)
+requires a secret that **does not exist yet** — it must be created by Gabe
+in Vercel → Project `lotlogic` → Settings → Deployment Protection →
+Protection Bypass for Automation, then added as a GitHub Actions repo
+secret. Until then, nothing outside a manual login can reach a preview to
+measure it, and CI's own `deployment_status`-triggered Playwright run fails
+fast for the identical reason (see `.github/workflows/playwright.yml`'s
+"Resolve BASE_URL" step).
+
+The only "after" number that exists is a **local-server-only, directional**
+measurement from task-13-report.md, quoted verbatim and labeled as such —
+**not a substitute for a preview or production measurement**, run on
+unthrottled local disk I/O with the same slow-4G + 4× CPU + iPhone 14
+network/CPU throttle profile as section 5, `dist/` served by
+`python3 -m http.server` on `localhost`:
+
+| Metric | Local before (pre-Task-13 build) | Local after (Task 13) |
+|---|---:|---:|
+| `timeToUsable` | 4,226 ms | 3,206 ms |
+| `domContentLoaded` | 4,046 ms | 3,083 ms |
+| `fcp` | 1,248 ms | 1,120 ms |
+| `transferred` | 610,444 B | 379,452 B |
+| `requests` | 7 | 18 |
+
+This ~24% local `timeToUsable` improvement is real but measures a different
+thing than section 5's 18.7 s figure (no network latency, no CDN, no real
+TLS) and was taken mid-plan (Task 13 only — before Task 14 removed the two
+remaining CDN scripts, which section 5's 18.7 s baseline is still paying
+for). **The plan's actual claim — that real-world time-to-usable drops from
+~18.7 s to roughly comparable to this bundle-size reduction — remains
+unverified against a live preview or production deploy.** The bypass secret
+is the blocking dependency for closing that measurement.

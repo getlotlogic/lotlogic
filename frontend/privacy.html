@@ -9,16 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500,50;9..144,700,50;9..144,800,80;9..144,900,80&family=Manrope:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/brand.css">
   <style>
-    :root {
-      --paper: #F2EAD8;
-      --paper-2: #EADFC7;
-      --ink: #1F1B14;
-      --ink-2: #3D3528;
-      --ink-3: #6F6450;
-      --amber: #D97706;
-      --amber-soft: #FBBF24;
-    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: 'Manrope', system-ui, -apple-system, sans-serif;
@@ -100,7 +92,7 @@
     <h2>2. Information we collect</h2>
     <ul>
       <li><strong>Account information</strong> for property managers and enforcement partners: name, company, email, phone, and authentication credentials.</li>
-      <li><strong>Vehicle and registration data</strong> entered by Permanent and Temporary plate-holders: license plate, vehicle type, host unit, validity window, and optional ID photo.</li>
+      <li><strong>Vehicle and registration data</strong> entered by parking-pass holders: license plate, vehicle type, host unit, validity window, and optional ID photo.</li>
       <li><strong>Automated plate reads</strong> captured by our cameras at contracted properties: plate text, timestamp, confidence score, and image snapshot.</li>
       <li><strong>SMS recipient numbers</strong> provided by contracted towing partners for dispatch alerts.</li>
       <li><strong>Service logs</strong>: IP address, request metadata, and error diagnostics needed to operate the service.</li>
@@ -108,7 +100,7 @@
 
     <h2>3. How we use information</h2>
     <ul>
-      <li>To match detected license plates against registered Permanent and Temporary passes and decide whether to dispatch enforcement.</li>
+      <li>To match detected license plates against registered parking passes and decide whether to dispatch enforcement.</li>
       <li>To send transactional SMS or MMS alerts to contracted towing partners so they can service verified violations.</li>
       <li>To provide property managers with dashboards for their contracted property only.</li>
       <li>To diagnose, secure, and improve the service.</li>

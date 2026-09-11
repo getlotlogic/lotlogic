@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React, { useRef } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { db } from '../lib/db.js';
 import { fmtDate, fmtTime } from '../lib/format.js';
@@ -940,3 +940,5 @@ export function ConfirmationReviewView({ user, lots, partnersProp }) {
     }),
   );
 }
+
+export default ConfirmationReviewView;

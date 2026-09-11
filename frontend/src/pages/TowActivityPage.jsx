@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { db } from '../lib/db.js';
 
@@ -283,3 +283,5 @@ export function TowActivityPage({ user }) {
     </div>
   );
 }
+
+export default TowActivityPage;

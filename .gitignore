@@ -55,6 +55,7 @@ supabase/.temp/
 frontend/*.scriptblock.*
 *.scriptblock.*
 frontend/dist/
+frontend/.test-dist-*/
 
 # Wave 2.6 visual no-op harness — current/ is a throwaway diff target,
 # regenerated every run; tests/visual/baseline/ IS committed.

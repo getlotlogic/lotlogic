@@ -14,40 +14,32 @@
  * Run: cd tests && npx playwright test error-reporting --project=chromium-desktop
  */
 import { test, expect, type Page } from '@playwright/test';
-import http from 'node:http';
-import fs from 'node:fs';
 import path from 'node:path';
-import type { AddressInfo } from 'node:net';
+import { buildAndServeFrontend } from '../fixtures/buildAndServeFrontend';
 
 const FRONTEND_DIR = path.resolve(__dirname, '../../frontend');
 const PAGES = ['/dashboard.html', '/visit.html', '/apt.html', '/resident.html'];
 const SENTRY_CDN = /browser\.sentry-cdn\.com/;
 
-let server: http.Server;
 let origin: string;
+let closeServer: () => Promise<void>;
 
+// dashboard.html/visit.html/apt.html/resident.html all now load their app
+// code as bundled ES modules (`/dashboard.js`, `/visit.js`, ...), produced
+// by `npm run build` -- they exist only in frontend/dist/, never in the
+// source tree, so this serves the BUILT output (see
+// fixtures/buildAndServeFrontend.ts). Latent until Task 17: this spec's own
+// assertions don't depend on the app module actually booting (they check
+// the /error-reporting.js request + `window.Sentry`/`window.LotLogicErrorReporting`,
+// which the loader script sets up independently of the page's own app
+// script), so serving raw frontend/ never actually failed here -- fixed
+// anyway for correctness, per Task 17 fix round 1.
 test.beforeAll(async () => {
-  server = http.createServer((req, res) => {
-    const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
-    const file = path.join(FRONTEND_DIR, pathname.replace(/^\/+/, ''));
-    if (!file.startsWith(FRONTEND_DIR) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('not found');
-      return;
-    }
-    const type = file.endsWith('.html') ? 'text/html; charset=utf-8'
-      : file.endsWith('.js') ? 'text/javascript; charset=utf-8'
-      : file.endsWith('.css') ? 'text/css; charset=utf-8'
-      : 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': type });
-    fs.createReadStream(file).pipe(res);
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  ({ origin, close: closeServer } = await buildAndServeFrontend(FRONTEND_DIR));
 });
 
 test.afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeServer();
 });
 
 /** Keep every third-party request this spec has no opinion about off the wire. */

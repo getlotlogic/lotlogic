@@ -8,8 +8,16 @@ const SLOW_4G = { downloadThroughput: 1.6e6 / 8, uploadThroughput: 750e3 / 8, la
 const url = (process.argv.find(a => a.startsWith('--url=')) || '').slice(6)
          || process.env.BASE_URL || 'https://lotlogic-beta.vercel.app';
 
+// Same Vercel "Protection Bypass for Automation" header as
+// tests/playwright.config.ts — a Preview URL is behind Deployment Protection
+// and 302s to vercel.com/sso-api without it. Absent for production/live-beta.
+const BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+const bypassHeaders = BYPASS_SECRET
+  ? { 'x-vercel-protection-bypass': BYPASS_SECRET, 'x-vercel-set-bypass-cookie': 'true' }
+  : {};
+
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ ...devices['iPhone 14'] });
+const ctx = await browser.newContext({ ...devices['iPhone 14'], extraHTTPHeaders: bypassHeaders });
 const page = await ctx.newPage();
 const cdp = await ctx.newCDPSession(page);
 await cdp.send('Network.enable');

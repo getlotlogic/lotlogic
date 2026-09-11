@@ -11,22 +11,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500,50;9..144,700,50;9..144,900,80&family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 
+  <link rel="stylesheet" href="/styles/brand.css">
   <style>
     :root {
-      --paper: #F2EAD8;
-      --paper-2: #EADFC7;
-      --paper-3: #DFD2B5;
-      --ink: #1F1B14;
-      --ink-2: #3D3528;
-      --ink-3: #6F6450;
-      --ink-4: #968B73;
-      --amber: #D97706;
-      --amber-soft: #FBBF24;
-      --terra: #C97A4A;
-      --terra-deep: #9A5530;
       --sage: #7A9171;
-      --status-ok: #4A7A48;
-      --status-no: #B14535;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -346,6 +334,10 @@
       color: var(--ink-3);
     }
     .logo-card.ink .meta-tag { color: var(--paper-3); }
+    /* --amber-soft is a FILL: --ink-3 on it is 4.18:1, under AA for 11px text.
+       --ink is 10.27:1. Same rule as .logo-card.ink above — the card picks the
+       ink, the token stays as it is (Ruling S3-a / Task 15). */
+    .logo-card.amber .meta-tag { color: var(--ink); }
 
     /* Stamps */
     .stamps-row {
@@ -459,7 +451,7 @@
     .btn.primary { background: var(--ink); color: var(--paper); }
     .btn.primary:hover { background: var(--terra-deep); border-color: var(--terra-deep); }
     .btn.amber { background: var(--amber-soft); border-color: var(--ink); color: var(--ink); }
-    .btn.terra { background: var(--terra); border-color: var(--ink); color: var(--paper); }
+    .btn.terra { background: var(--terra); border-color: var(--ink); color: var(--ink); }   /* --paper on --terra is 2.75:1; --terra is a fill behind --ink (5.20:1) */
     .btn.ghost { background: transparent; }
     .btn.sm { padding: 8px 16px; font-size: 13px; }
     .btn.lg { padding: 16px 30px; font-size: 17px; }
@@ -930,7 +922,7 @@
               </svg>
             </div>
             <h4>Tripwire — eyes at <em>every entrance.</em></h4>
-            <p>Cameras at the gate. Permanent plates register once. Temporary passes get thirty seconds. Anything else trips the wire.</p>
+            <p>Cameras at the gate. Plates on file are recognized. Short-stay passes register in thirty seconds. Anything else trips the wire.</p>
           </div>
           <div class="aud-card tow">
             <div class="stamp-mini">
@@ -950,7 +942,7 @@
         <div class="comp-head"><h3>Steps.</h3><div class="tag">.step + Fraunces italic numerals</div></div>
         <div class="steps">
           <div class="step"><div class="num">1</div><h5>we install.</h5><p>Solar cameras at the entrance. <em>No wiring, no permits we can't pull, no monthly fees.</em></p></div>
-          <div class="step"><div class="num">2</div><h5>plates register.</h5><p>Permanent and Temporary, both via QR. <em>No app, no sticker.</em></p></div>
+          <div class="step"><div class="num">2</div><h5>plates register.</h5><p>Every parking pass and short-stay pass — through QR. <em>No app, no sticker.</em></p></div>
           <div class="step"><div class="num">3</div><h5>camera reads plates.</h5><p>Every plate gets read and checked against the registry. <em>Instantly.</em></p></div>
           <div class="step"><div class="num">4</div><h5>only the right cars get a tow.</h5><p>A 15-minute grace window for anyone unregistered. After that — handled, with the photo attached.</p></div>
         </div>

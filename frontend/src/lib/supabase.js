@@ -1,3 +1,5 @@
+import { createClient } from '@supabase/supabase-js';
+
 // ── Supabase client ──────────────────────────────────────────
 export const SUPABASE_URL = 'https://nzdkoouoaedbbccraoti.supabase.co';
 export const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im56ZGtvb3VvYWVkYmJjY3Jhb3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMzg2OTQsImV4cCI6MjA4ODcxNDY5NH0.WrlTCKEmmziBUX1E9vBmBpHRSg7_RRKBLIxSPKy189E';
@@ -22,10 +24,7 @@ export function _supabaseFetch(input, init) {
   }
   return fetch(input, init);
 }
-export const supabase = window.supabase
-  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { global: { fetch: _supabaseFetch } })
-  : null;
-if (!supabase) console.error('supabase-js failed to load — the dashboard cannot read data');
+export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { global: { fetch: _supabaseFetch } });
 
 export function applySupabaseAuth(token) {
   _supabaseToken = token || null;

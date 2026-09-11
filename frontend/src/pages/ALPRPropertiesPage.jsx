@@ -1,13 +1,18 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { db } from '../lib/db.js';
 import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
 import { scopePropsToPartner } from '../shared/scope.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
+import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { RegisterPassModal } from '../ui/RegisterPassModal.jsx';
-import { ALPRPropertyDetailPage } from './ALPRPropertyDetailPage.jsx';
 import { RegisteredDrill } from './RegisteredDrill.jsx';
+import { lazyPage } from '../lib/lazyPage.js';
+
+// Heavy — lazy-loaded so opening the Lots list doesn't pull in the full
+// property-detail bundle (which itself pulls in TruckParkingLog).
+const ALPRPropertyDetailPage = lazyPage(() => import('./ALPRPropertyDetailPage.jsx'));
 
 export function ALPRPropertiesPage({ user, impersonating = false }) {
   const { addToast } = useToast();
@@ -124,7 +129,7 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
     setSaving(false);
   }
 
-  if (selectedId) return <ErrorBoundary label="this property"><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} user={user} /></ErrorBoundary>;
+  if (selectedId) return <ErrorBoundary label="this property"><React.Suspense fallback={<SkeletonCards />}><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} user={user} /></React.Suspense></ErrorBoundary>;
 
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading properties...</div></div>;
 
@@ -147,7 +152,7 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
         <div style={{fontSize:16,fontWeight:800,color:'var(--text-primary)'}}>Lots</div>
         {user?._role !== 'partner' && (
-          <button onClick={() => setShowAdd(!showAdd)} style={{background:'rgba(74,222,128,.12)',color:'#4ade80',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{showAdd ? 'Cancel' : '+ Add Lot'}</button>
+          <button onClick={() => setShowAdd(!showAdd)} style={{background:'rgba(74,222,128,.12)',color:'var(--text-primary)',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{showAdd ? 'Cancel' : '+ Add Lot'}</button>
         )}
       </div>
 

@@ -143,8 +143,15 @@ function pngPixelsEqual(a, b) {
 // Only html/png are captures — filter out stray files (.DS_Store, editor
 // backups, manifest.json) so they never show up as missing/extra.
 const isCaptureFile = (f) => /\.(html|png)$/.test(f);
-const baseFiles = new Set(readdirSync(BASELINE).filter(isCaptureFile));
-const curFiles = new Set(readdirSync(CURRENT).filter(isCaptureFile));
+// VISUAL_DOM_ONLY=1 (CI): compare the DOM captures only. The PNG baselines were
+// captured on macOS; Linux runners rasterise fonts differently, so pixel-exact
+// screenshots are not portable across platforms. The DOM comparison is the
+// load-bearing byte-identity gate; screenshots stay a local gate.
+const DOM_ONLY = process.env.VISUAL_DOM_ONLY === '1';
+const keep = (f) => isCaptureFile(f) && !(DOM_ONLY && f.endsWith('.png'));
+if (DOM_ONLY) console.error('visual:check: VISUAL_DOM_ONLY=1 — PNG comparison skipped on this platform');
+const baseFiles = new Set(readdirSync(BASELINE).filter(keep));
+const curFiles = new Set(readdirSync(CURRENT).filter(keep));
 
 const missing = [...baseFiles].filter((f) => !curFiles.has(f)).sort();
 const extra = [...curFiles].filter((f) => !baseFiles.has(f)).sort();

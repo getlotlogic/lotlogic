@@ -1,9 +1,37 @@
+# Two jobs, two different things.
+#
+#   e2e (local dist)  -- `pull_request`. Builds frontend/, serves dist/ on
+#     localhost and runs everything that needs no credentials and no network:
+#     the node tests, the two self-serving specs, the visual/DOM no-op gate and
+#     the unauthenticated half of the a11y sweep. This is the one that actually
+#     guards a PR, and it can be a required check today.
+#
+#   e2e + a11y  -- `deployment_status`. The full credentialed suite against the
+#     Vercel preview built from the PR's own commit.
+#
+# IMPORTANT, about that second job: GitHub only ever runs a workflow's
+# `deployment_status` (and `push`) triggers from the version of this file on
+# the DEFAULT BRANCH. Until this file is merged to `main`, no deployment_status
+# event can start it -- a PR that adds or edits it gets no preview run at all,
+# and a PR-only reader sees nothing rather than a failure. So:
+#
+#   * do NOT mark "e2e + a11y" as a required status check before this file is
+#     on main -- every PR would block forever on a check that cannot start;
+#   * mark "e2e (local dist)" required instead (it runs from the PR's own
+#     branch, like any `pull_request` job);
+#   * after this lands on main, watch one real PR produce an "e2e + a11y" run
+#     before promoting it to required.
+#
+# The repo is PUBLIC, so `deployment_status` can also be delivered from forks.
+# The job is gated on the event's repository being this one -- otherwise a fork
+# could aim the credentialed run at a URL it controls.
 name: Playwright
 
 on:
   push:
     branches: [main]
   pull_request:
+  deployment_status:
   workflow_dispatch:
     inputs:
       base_url:
@@ -11,12 +39,136 @@ on:
         required: false
 
 concurrency:
-  group: playwright-${{ github.ref }}
+  # A deployment_status run is keyed on the preview URL it tests, not on
+  # github.ref -- which is empty for that event, so every preview run across
+  # every branch used to collapse into one group and cancel its neighbours.
+  group: playwright-${{ github.event.deployment_status.environment_url || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  local:
+    name: e2e (local dist)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            frontend/package-lock.json
+            tests/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      # Frontend node tests. `npm run check:naming` is NOT repeated here --
+      # frontend-build.yml already runs it on every pull_request.
+      - name: Frontend node tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Install test deps
+        working-directory: tests
+        run: npm ci
+
+      - name: Install browsers
+        working-directory: tests
+        run: npx playwright install --with-deps chromium webkit
+
+      # These two build and serve their own dist/ (fixtures/buildAndServeFrontend.ts),
+      # so they need no BASE_URL and no credentials.
+      - name: Self-serving e2e specs
+        working-directory: tests
+        run: npx playwright test e2e/pay2park-visit.spec.ts e2e/error-reporting.spec.ts --project=chromium-desktop
+
+      # Backgrounded with its stdout/stderr redirected to a file: a child that
+      # keeps the step's output pipe open makes the step itself hang.
+      - name: Serve dist/
+        run: |
+          nohup python3 -m http.server 8252 --directory frontend/dist \
+            > /tmp/dist-server.log 2>&1 &
+          echo "$!" > /tmp/dist-server.pid
+          for _ in $(seq 1 30); do
+            if curl -fsS -o /dev/null "http://localhost:8252/index.html"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::dist/ server never came up on :8252" >&2
+          cat /tmp/dist-server.log >&2
+          exit 1
+
+      # No TEST_OWNER_A_* here, so capture.mjs falls back to the login shell --
+      # which is exactly what tests/visual/baseline/ holds.
+      - name: Visual / DOM no-op gate
+        working-directory: tests
+        env:
+          BASE_URL: http://localhost:8252
+          # PNG baselines are macOS captures; Linux font rasterisation differs.
+          # CI compares the DOM captures only (see tests/visual/compare.mjs).
+          VISUAL_DOM_ONLY: "1"
+        run: npm run visual:check
+
+      # Unauthenticated pages only. The one credentialed case is tagged @auth
+      # (see a11y/axe.spec.ts); without this filter it would throw on the
+      # missing env var rather than skip.
+      - name: a11y (unauthenticated pages)
+        working-directory: tests
+        env:
+          BASE_URL: http://localhost:8252
+        run: npx playwright test a11y/axe.spec.ts --grep-invert "@auth" --project=chromium-desktop
+
+      - name: Stop dist/ server
+        if: always()
+        run: kill "$(cat /tmp/dist-server.pid)" || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-local-${{ github.run_id }}
+          path: tests/playwright-report
+          retention-days: 14
+
   e2e:
     name: e2e + a11y
+    # Only a Vercel Preview deploy that actually succeeded gets tested — a
+    # Production deployment_status (main, post-merge) is handled by the
+    # `push: main` trigger above instead, and a failed/pending deploy has
+    # nothing at a URL yet.
+    #
+    # The repository check matters because this repo is PUBLIC. Note the field:
+    # the deployment_status webhook payload carries `repository_url` (a string)
+    # inside `deployment_status`, and the full repository object at the TOP
+    # level -- there is no `deployment_status.repository`. Gating on that
+    # non-existent path would evaluate to null, never match, and silently
+    # disable this job for good, so the guard reads `github.event.repository`.
+    #
+    # What it buys: the credentialed run only fires for an event delivered for
+    # THIS repository. What it does not buy: for a pull request opened from a
+    # fork, Vercel still creates the deployment on this repo, so the guard
+    # passes while environment_url points at a preview built from fork code --
+    # and loginAs() would type the TEST_* credentials into it. Until that is
+    # closed (require a maintainer label, or drop credentials for fork PRs),
+    # treat "e2e + a11y" on a fork PR as needing a human look first.
+    #
+    # `pull_request` is excluded here; that event has its own job above.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'deployment_status' &&
+       github.event.deployment_status.state == 'success' &&
+       github.event.deployment_status.environment == 'Preview' &&
+       github.event.repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -43,9 +195,25 @@ jobs:
 
       - name: Resolve BASE_URL
         id: base
+        env:
+          # A boolean-as-string, not the secret itself — never echo the value.
+          BYPASS_SECRET_SET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET != '' }}
         run: |
+          # A Vercel Preview sits behind Deployment Protection (confirmed:
+          # it 302s to vercel.com/sso-api without a bypass) — so testing one
+          # without VERCEL_AUTOMATION_BYPASS_SECRET set can only either hang
+          # on the SSO redirect or, worse, silently pass against nothing.
+          # Fail loudly here instead of falling back to production, which
+          # would defeat the entire point of Task 18.
+          if [ "${{ github.event_name }}" = "deployment_status" ] && [ "$BYPASS_SECRET_SET" != "true" ]; then
+            echo "::error::deployment_status fired but the VERCEL_AUTOMATION_BYPASS_SECRET GitHub Actions secret is not set. The Vercel preview is behind Deployment Protection and will redirect to vercel.com/sso-api instead of serving the app. Create the bypass secret in Vercel -> Project -> Settings -> Deployment Protection -> Protection Bypass for Automation, then add it as the VERCEL_AUTOMATION_BYPASS_SECRET GitHub Actions secret." >&2
+            exit 1
+          fi
           if [ -n "${{ inputs.base_url }}" ]; then
             echo "value=${{ inputs.base_url }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.deployment_status.environment_url }}" ]; then
+            # The preview built from THIS commit. Test the change, not production.
+            echo "value=${{ github.event.deployment_status.environment_url }}" >> "$GITHUB_OUTPUT"
           elif [ -n "${{ secrets.VERCEL_PREVIEW_URL }}" ]; then
             echo "value=${{ secrets.VERCEL_PREVIEW_URL }}" >> "$GITHUB_OUTPUT"
           else
@@ -62,6 +230,7 @@ jobs:
           TEST_OWNER_B_PASSWORD: ${{ secrets.TEST_OWNER_B_PASSWORD }}
           TEST_PARTNER_A_EMAIL: ${{ secrets.TEST_PARTNER_A_EMAIL }}
           TEST_PARTNER_A_PASSWORD: ${{ secrets.TEST_PARTNER_A_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: npm test
 
       - name: Upload report

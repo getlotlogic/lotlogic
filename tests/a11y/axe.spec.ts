@@ -20,48 +20,44 @@ const BLOCKING = new Set(['serious', 'critical']);
 /**
  * Known failures accepted for now, keyed by the label passed to `scan()`.
  *
- * `color-contrast` on `/` and the two pitch pages is not a page-level
- * mistake: the brand tokens themselves are too light against the cream ground
- * (`--amber #D97706` = 2.66:1 and `--terra-deep #9A5530` = 4.27:1 against
- * `--paper`/`--paper-2`, where AA wants 4.5:1 for body text and 3:1 for large).
- * Those tokens are copy-pasted into 18 HTML files, so darkening them is a brand
- * change across the whole marketing site, not a test fix — it belongs with
- * FE-10 + FE-12 (one shared stylesheet) in Wave 2 of the enterprise-readiness
- * program, and needs the owner's eye on the new colors.
+ * Both waivers that used to live here are retired.
  *
- * Remove an entry the moment its tokens are darkened; the count check below
- * will tell you when a waiver has stopped matching reality.
+ * The `/` and pitch-page `color-contrast` waivers: FE-10 darkened the brand
+ * tokens and FE-12 (Task 16) moved them out of 18 copy-pasted `:root` blocks
+ * into one shared `frontend/styles/brand.css` that every marketing page links.
+ * The Slice-3 fix round re-solved every text token against `--paper-3` too —
+ * the third paper ground, a real content background that Tasks 15/16 never
+ * measured, on which all six were still failing: `--ink-3` -> `#625848`,
+ * `--ink-4` -> `#5F5746`, `--amber` -> `#874904`, `--terra-deep` -> `#84461B`,
+ * `--status-ok` -> `#3A6039`, `--status-no` -> `#993A2C` (>= 4.66:1 on all
+ * three grounds).
  *
- * `dashboard-owner` is the same class of problem, surfaced for the first time
- * once the login flow this scan depends on (`loginAs`) was fixed to match the
- * current dashboard UI — this check never actually completed a run before.
- * 8 nodes: the header wordmark (`#c2580b` on white, 4.47:1 — the same brand
- * orange as the landing-page waiver, just short of AA), the "+ Add Lot" pill
- * button (`#4ade80` text on its own `rgba(74,222,128,.12)` tint, 1.54:1), and
- * the six bottom-nav labels (`#9ca3af` on white, 2.53:1 — one shared CSS
- * class, `.nav-label`, repeated per tab). Same call as the marketing waiver:
- * this is the brand palette, not a per-page mistake, and belongs with FE-10 +
- * FE-12 in Wave 2 rather than a token darkened unilaterally by a test fix.
+ * `dashboard-owner` had the same class of problem (header wordmark, "+ Add
+ * Lot" pill, six bottom-nav labels) plus a real `aria-required-parent` bug
+ * (six bottom-nav `role="tab"` buttons + the active one counted twice by
+ * axe, missing a `role="tablist"` wrapper). Wave 2 Task 15 (FE-10) fixed
+ * both: `--accent`/`--yellow` #C2580B -> #B85309 (4.91:1), `.theme-light
+ * .nav-item` #9ca3af -> #6B7280 (4.83:1), the "+ Add Lot" pill's inline
+ * `#4ade80` -> `#15803D`, and `frontend/src/App.jsx`'s
+ * bottom nav now wraps its tab buttons in a `role="tablist"` div. This suite
+ * runs against BASE_URL (the deployed site), not the local file, so these
+ * fixes can't be proven here until this branch ships — the waiver entries are
+ * removed now on the strength of the local contrast-checker + computed-style
+ * proof (see Tasks 15 and 16's reports); if the deployed scan still fails on
+ * any of these rules, that's a real regression, not a stale waiver.
  *
- * `dashboard-owner` also waives `aria-required-parent` (7 nodes: the six
- * bottom-nav `role="tab"` buttons + the active one counted twice by axe) —
- * unlike the color tokens, this ONE already has a real fix committed on this
- * branch (`frontend/dashboard.html`, the `<nav class="bottom-nav">` block:
- * the tab buttons are now wrapped in a `role="tablist"` div). This suite runs
- * against BASE_URL (the deployed site), not the local file, so the fix can't
- * take effect here until this branch ships — delete this waiver entry the
- * next time this scan runs after that deploy; if it's still failing then,
- * the fix didn't take.
+ * The pill's `#15803D` was itself wrong: it was measured only against the
+ * light theme's tint and scores 3.09:1 on the dark one. No single literal
+ * clears both grounds, so it is now `var(--text-primary)` (14.18:1 dark /
+ * 15.28:1 light) — Ruling S3-b.
+ *
+ * The WAIVED map stays in place (not deleted) as the documented home for
+ * this pattern. Re-add an entry here only if a real new violation shows up
+ * against the preview — leave the map as an empty `{}` otherwise: it's the
+ * extension point for `scan()`'s node-count-drift check, empty on purpose,
+ * not dead code.
  */
-const WAIVED: Record<string, { rule: string; nodes: number }[]> = {
-  landing: [{ rule: 'color-contrast', nodes: 3 }],
-  'pitch:/pitch-apartments.html': [{ rule: 'color-contrast', nodes: 2 }],
-  'pitch:/pitch-tow.html': [{ rule: 'color-contrast', nodes: 4 }],
-  'dashboard-owner': [
-    { rule: 'color-contrast', nodes: 8 },
-    { rule: 'aria-required-parent', nodes: 7 },
-  ],
-};
+const WAIVED: Record<string, { rule: string; nodes: number }[]> = {};
 
 async function scan(page: any, label: string) {
   const results = await new AxeBuilder({ page })
@@ -106,7 +102,10 @@ test.describe('accessibility @a11y', () => {
     await scan(page, 'login');
   });
 
-  test('dashboard (owner) has no serious a11y violations', async ({ page }) => {
+  // @auth — needs TEST_OWNER_A_* credentials. CI's offline `pull_request` job
+  // runs this file with `--grep-invert @auth`, so this is the one case that is
+  // skipped there; the credentialed preview job runs the whole file.
+  test('dashboard (owner) has no serious a11y violations @auth', async ({ page }) => {
     await loginAs(page, accounts.ownerA());
     await scan(page, 'dashboard-owner');
   });
@@ -115,6 +114,18 @@ test.describe('accessibility @a11y', () => {
     for (const path of ['/pitch-apartments.html', '/pitch-tow.html']) {
       await page.goto(path);
       await scan(page, `pitch:${path}`);
+    }
+  });
+
+  // Ruling S3-c. These two were the pages the marketing-token fix (Task 16)
+  // changed but nothing scanned: services.html and brand-v2.html are the only
+  // two that put token-coloured text on `--paper-3`, the ground Tasks 15/16
+  // never measured. They are unauthenticated, so they run in CI's local-dist
+  // job as well as against the preview.
+  test('services and brand pages are accessible', async ({ page }) => {
+    for (const path of ['/services.html', '/brand-v2.html']) {
+      await page.goto(path);
+      await scan(page, `marketing:${path}`);
     }
   });
 });

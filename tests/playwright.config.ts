@@ -3,6 +3,18 @@ import { defineConfig, devices } from '@playwright/test';
 const BASE_URL = process.env.BASE_URL ?? 'https://lotlogic-beta.vercel.app';
 const API_URL = process.env.API_URL ?? 'https://lotlogic-backend-production.up.railway.app';
 
+// Vercel Preview deployments sit behind Deployment Protection (confirmed:
+// `curl <preview>/dashboard.html` 302s to vercel.com/sso-api). Vercel's
+// documented escape hatch for automation is a per-project "Protection Bypass
+// for Automation" secret, sent as a header — see
+// https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection#protection-bypass-for-automation.
+// Only set when the secret is present; against production/live-beta this is
+// simply absent and the headers are omitted.
+const BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+const bypassHeaders: Record<string, string> = BYPASS_SECRET
+  ? { 'x-vercel-protection-bypass': BYPASS_SECRET, 'x-vercel-set-bypass-cookie': 'true' }
+  : {};
+
 export default defineConfig({
   testDir: './',
   testMatch: ['e2e/**/*.spec.ts', 'a11y/**/*.spec.ts'],
@@ -24,6 +36,7 @@ export default defineConfig({
     video: 'retain-on-failure',
     extraHTTPHeaders: {
       'x-lotlogic-test': '1',
+      ...bypassHeaders,
     },
   },
   projects: [
