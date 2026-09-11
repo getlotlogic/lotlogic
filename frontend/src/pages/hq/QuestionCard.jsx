@@ -37,7 +37,12 @@ export function QuestionCard({ question, onAnswered }) {
       data-testid="question"
       style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 10 }}
     >
-      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{question.question}</div>
+      <h4
+        tabIndex={-1}
+        style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}
+      >
+        {question.question}
+      </h4>
       <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
         {question.worker} · {GATE_LABEL[question.gate_kind] || 'needs a decision'}
       </div>
@@ -52,6 +57,7 @@ export function QuestionCard({ question, onAnswered }) {
           value={answer}
           onChange={(e) => setAnswer(e.target.value)}
           placeholder="Your answer"
+          aria-label={`Your answer to: ${question.question}`}
           disabled={busy}
           style={{
             flex: 1, minWidth: 160, background: 'var(--bg-surface, var(--bg-card))', color: 'var(--text)',
@@ -64,14 +70,14 @@ export function QuestionCard({ question, onAnswered }) {
           style={{
             fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6,
             cursor: busy || !answer.trim() ? 'default' : 'pointer',
-            background: 'rgba(34,197,94,.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,.35)',
+            background: 'rgba(34,197,94,.15)', color: 'var(--text-primary)', border: '1px solid rgba(34,197,94,.35)',
             opacity: busy || !answer.trim() ? .6 : 1,
           }}
         >
           {busy ? 'Sending…' : 'Answer'}
         </button>
       </div>
-      {err && <div style={{ color: '#f87171', fontSize: 12, marginTop: 6 }}>{err}</div>}
+      {err && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>{err}</div>}
     </div>
   );
 }

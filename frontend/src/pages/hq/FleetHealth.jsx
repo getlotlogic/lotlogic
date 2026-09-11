@@ -19,7 +19,7 @@ export function FleetHealth({ fleet }) {
         <div>{running} running of {cap}</div>
       </div>
       {budget_stop && (
-        <div style={{ fontSize: 12, color: '#fbbf24', fontWeight: 700, marginTop: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--yellow)', fontWeight: 700, marginTop: 8 }}>
           Budget stop is active — no new work is being claimed.
         </div>
       )}

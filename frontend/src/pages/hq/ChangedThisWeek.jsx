@@ -14,7 +14,7 @@ export function ChangedThisWeek({ items }) {
         <div key={i} style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{KIND_LABEL[it.kind] || it.kind}</span>
           <span>{it.title}</span>
-          <span style={{ opacity: .7 }}>· {it.business} · {it.worker}</span>
+          <span>· {it.business} · {it.worker}</span>
         </div>
       ))}
     </div>

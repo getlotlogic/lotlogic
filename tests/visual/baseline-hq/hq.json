@@ -1,0 +1,52 @@
+{
+  "sections": [
+    "areas",
+    "priorities",
+    "red",
+    "questions",
+    "changed",
+    "fleet"
+  ],
+  "counts": {
+    "areas": 8,
+    "priorities": 3,
+    "red": 2,
+    "questions": 3,
+    "changed": 6
+  },
+  "healthWords": [
+    {
+      "area": "ops",
+      "health": "red"
+    },
+    {
+      "area": "money",
+      "health": "amber"
+    },
+    {
+      "area": "evidence",
+      "health": "green"
+    },
+    {
+      "area": "customers",
+      "health": "green"
+    },
+    {
+      "area": "code",
+      "health": "green"
+    },
+    {
+      "area": "marketing",
+      "health": "green"
+    },
+    {
+      "area": "sales",
+      "health": "green"
+    },
+    {
+      "area": "cross",
+      "health": "green"
+    }
+  ],
+  "fleetLabels": "598 ok / 14 failed$41.20 of $150.009 running of 60Dead: water-reviews"
+}

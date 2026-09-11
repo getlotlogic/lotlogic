@@ -55,6 +55,11 @@
       --red: #EF4444;
       --yellow: #FBBF24;
       --purple: #C084FC;
+      /* --green as small BODY TEXT (not a large KPI numeral) fails 4.5:1 in
+         .theme-light below (3.3:1 on --bg-card) — --green-text is the same
+         color family recalibrated to pass small-text contrast in both
+         themes. Use this, not --green, for green status prose. */
+      --green-text: #22C55E;
       /* Decorative */
       --unknown-pattern: repeating-linear-gradient(45deg, #2A2C31 0 6px, #1E2024 6px 12px);
       --unknown-border: rgba(245,245,240,.08);
@@ -103,6 +108,7 @@
       --red: #DC2626;
       --yellow: #B85309;
       --purple: #7C3AED;
+      --green-text: #15803D; /* 5.0:1 on --bg-card (#FFFFFE); --green here is 3.3:1 */
       --unknown-pattern: repeating-linear-gradient(45deg, #D9D5C5 0 6px, #EFECDF 6px 12px);
       --unknown-border: rgba(0,0,0,.1);
       --snapshot-bg: #E5E1D2;

@@ -1,11 +1,16 @@
 import React from 'react';
 
 // Health dot PLUS the word — a colour-only dot is invisible to a colour-blind
-// operator at 6am, which is exactly who this screen is for.
+// operator at 6am, which is exactly who this screen is for. Colours are
+// theme-aware CSS variables (dashboard.html), not literals — a fixed hex
+// can't clear 4.5:1 text contrast against both the dark and light --bg-card
+// (the light and dark themes need opposite-direction luminance), and
+// --green specifically is calibrated for large KPI numerals (3:1) elsewhere
+// in the app, not small body text, so this uses --green-text instead.
 const HEALTH = {
-  red:   { color: '#f87171', word: 'red — needs attention', rank: 0 },
-  amber: { color: '#fbbf24', word: 'amber — keep an eye on it', rank: 1 },
-  green: { color: '#22c55e', word: 'green — all clear', rank: 2 },
+  red:   { color: 'var(--red)', word: 'red — needs attention', rank: 0 },
+  amber: { color: 'var(--yellow)', word: 'amber — keep an eye on it', rank: 1 },
+  green: { color: 'var(--green-text)', word: 'green — all clear', rank: 2 },
 };
 
 // Ordered by health, not alphabetically — red, then amber, then green,
@@ -30,6 +35,9 @@ export function AreaStrip({ areas }) {
   const ordered = byHealth(areas || []);
   return (
     <div
+      role="group"
+      aria-label="LotLogic's eight areas, scroll for more"
+      tabIndex={0}
       style={{
         display: 'flex',
         gap: 10,
@@ -49,7 +57,7 @@ export function AreaStrip({ areas }) {
             data-area={area.slug}
             style={{
               background: 'var(--bg-card)',
-              border: `1px solid ${h.color}55`,
+              border: `1px solid ${h.color}`,
               borderRadius: 10,
               padding: 12,
               flex: '0 0 220px',

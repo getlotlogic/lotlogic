@@ -50,7 +50,7 @@ export function RedList({ findings, onClosed }) {
                 {f.evidence_url && (
                   <>
                     {' · '}
-                    <a href={f.evidence_url} target="_blank" rel="noreferrer" style={{ color: '#a78bfa' }}>evidence</a>
+                    <a href={f.evidence_url} target="_blank" rel="noreferrer" style={{ color: 'var(--purple)' }}>evidence</a>
                   </>
                 )}
               </div>
@@ -58,6 +58,7 @@ export function RedList({ findings, onClosed }) {
             {closingId !== f.id ? (
               <button
                 onClick={() => startClose(f.id)}
+                aria-label={`Close finding: ${f.title}`}
                 style={{
                   fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6, cursor: 'pointer',
                   background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border)',
@@ -72,6 +73,7 @@ export function RedList({ findings, onClosed }) {
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                   placeholder="Reason"
+                  aria-label={`Reason for closing: ${f.title}`}
                   style={{
                     background: 'var(--bg-surface, var(--bg-card))', color: 'var(--text)',
                     border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', fontSize: 13,
@@ -83,7 +85,7 @@ export function RedList({ findings, onClosed }) {
                   style={{
                     fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6,
                     cursor: busyId === f.id || !reason.trim() ? 'default' : 'pointer',
-                    background: 'rgba(34,197,94,.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,.35)',
+                    background: 'rgba(34,197,94,.15)', color: 'var(--text-primary)', border: '1px solid rgba(34,197,94,.35)',
                     opacity: busyId === f.id || !reason.trim() ? .6 : 1,
                   }}
                 >
@@ -92,7 +94,7 @@ export function RedList({ findings, onClosed }) {
               </div>
             )}
           </div>
-          {errId === f.id && <div style={{ color: '#f87171', fontSize: 12, marginTop: 6 }}>Could not close — try again.</div>}
+          {errId === f.id && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>Could not close — try again.</div>}
         </div>
       ))}
     </div>

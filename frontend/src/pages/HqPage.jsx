@@ -106,7 +106,7 @@ export function HqPage() {
       </section>
 
       <section data-section="red" style={{ marginBottom: 22 }}>
-        <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: '#f87171', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+        <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
           Red first
         </h3>
         <RedList findings={board.red} onClosed={handleClosed} />

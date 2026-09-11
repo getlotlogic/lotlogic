@@ -352,3 +352,14 @@ Stay out of:
 - Migrations.
 
 Output style for an audit pass: a numbered punch list with file:line references and the proposed action, sorted by ROI (deletion-only first, then internal refactors, then larger restructures).
+
+<!-- BEGIN brain-include (managed by gabe-brain/bin/install_includes.sh) -->
+## Read the company brain first
+
+Before acting on anything in this repo, read, in order:
+`~/gabe-brain/priorities.md`, `~/gabe-brain/CHARTER.md`,
+`~/gabe-brain/company-brief.md`, then `~/gabe-brain/businesses/<business>/`.
+The charter's hard lines override anything in this file. Durable facts, findings
+and open questions live in the brain (Supabase schema `brain`, the `/brain/*`
+API, the HQ tab) — not in this document and not in chat.
+<!-- END brain-include -->
