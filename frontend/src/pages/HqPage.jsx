@@ -60,10 +60,50 @@ export function HqPage() {
     setBoard((prev) => (prev ? { ...prev, red: prev.red.filter((f) => f.id !== id) } : prev));
   }, []);
 
-  // Never loaded a board and the one attempt so far was refused outright —
-  // this viewer was never cleared to see it. Nothing to show, not even an
-  // error (the tow-activity idiom for a platform-admin-only read).
-  if (!board) return null;
+  // No board yet and no attempt has resolved either way — the first fetch
+  // is still in flight. Nothing to show yet, but this is NOT the cold-failure
+  // case below: render a minimal loading line rather than a blank screen
+  // that is indistinguishable from "never going to load".
+  if (!board && !error) {
+    return (
+      <div data-testid="hq-loading" className="page-enter" style={{ padding: '16px 12px', maxWidth: 1000, margin: '0 auto', fontSize: 13, color: 'var(--text-muted)' }}>
+        Loading HQ…
+      </div>
+    );
+  }
+
+  // A cold failure: the FIRST fetch came back 403/503/network-error before
+  // any board ever loaded. `return null` here would leave a platform admin
+  // looking at a blank tab with no error and no way to retry short of the
+  // silent 60s interval — indistinguishable from an app that is still
+  // loading. Show the reason and the same Refresh button every other error
+  // state on this page uses.
+  if (!board && error) {
+    return (
+      <div className="page-enter" style={{ padding: '16px 12px calc(var(--bottom-nav-height, 58px) + env(safe-area-inset-bottom) + 24px)', maxWidth: 1000, margin: '0 auto' }}>
+        <div
+          data-testid="hq-unavailable"
+          style={{
+            background: 'var(--bg-card)', border: '1px solid var(--red)', borderRadius: 10,
+            padding: 16, display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start',
+          }}
+        >
+          <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>Board unavailable</div>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{error.message || 'Could not load the board.'}</div>
+          <button
+            data-testid="hq-refresh"
+            onClick={load}
+            style={{
+              fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6, cursor: 'pointer',
+              background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border)',
+            }}
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const staleLabel = error && lastGoodAt ? `Last updated ${fmtClock(lastGoodAt)}` : null;
 

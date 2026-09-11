@@ -358,7 +358,7 @@ Output style for an audit pass: a numbered punch list with file:line references 
 
 Before acting on anything in this repo, read, in order:
 `~/gabe-brain/priorities.md`, `~/gabe-brain/CHARTER.md`,
-`~/gabe-brain/company-brief.md`, then `~/gabe-brain/businesses/<business>/`.
+`~/gabe-brain/company-brief.md`, then `~/gabe-brain/areas/<area>/`.
 The charter's hard lines override anything in this file. Durable facts, findings
 and open questions live in the brain (Supabase schema `brain`, the `/brain/*`
 API, the HQ tab) — not in this document and not in chat.
