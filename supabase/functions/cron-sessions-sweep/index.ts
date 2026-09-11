@@ -21,6 +21,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import { findStaleGroups, flushGroup } from "../camera-snapshot/weak_plate_reads.ts";
+import { handleSystemPaused, heartbeat, redactError } from "./heartbeat.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -49,9 +50,14 @@ const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 // violations while the camera ingest is paused.
 const SYSTEM_PAUSED = (Deno.env.get("SYSTEM_PAUSED") ?? "false").toLowerCase() === "true";
 
+// Wave 2.7 dead-man (heartbeat / redactError / handleSystemPaused): see
+// ./heartbeat.ts — pulled out to its own module (M-5) so heartbeat.test.ts
+// can import them without this file's module-scope createClient() call
+// needing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY to be set.
+
 Deno.serve(async (_req: Request) => {
   const started = Date.now();
-  if (SYSTEM_PAUSED) return json(200, { ok: true, paused: true });
+  if (SYSTEM_PAUSED) return await handleSystemPaused(db);
   try {
     const promoted = await registrationTransition();
     const grace = await graceExpiry();
@@ -67,6 +73,7 @@ Deno.serve(async (_req: Request) => {
     const closedResident = await closeResident();
     const closedExpired = await closeExpired();
 
+    await heartbeat(db, true, null);
     return json(200, {
       ok: true,
       promoted,
@@ -86,6 +93,7 @@ Deno.serve(async (_req: Request) => {
     });
   } catch (err) {
     console.error("cron-sessions-sweep error:", err instanceof Error ? err.stack ?? err.message : err);
+    await heartbeat(db, false, redactError(err));
     return json(500, { ok: false, error: String(err) });
   }
 });
