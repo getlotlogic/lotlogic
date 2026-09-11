@@ -25,6 +25,7 @@ const AnalyticsPage    = lazyPage(() => import('./pages/AnalyticsPage.jsx'));
 const TowActivityPage  = lazyPage(() => import('./pages/TowActivityPage.jsx'));
 const TrainingPage     = lazyPage(() => import('./pages/TrainingPage.jsx'));
 const AdminConsolePage = lazyPage(() => import('./pages/AdminConsolePage.jsx'));
+const HqPage           = lazyPage(() => import('./pages/HqPage.jsx'));
 
 const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';
 const FRANK_APP_TAB_LIVE = true; // live in Frank's partner portal since 2026-08-07
@@ -171,7 +172,7 @@ export function App() {
     const valid = isOwner
       ? ['overview', 'lots', 'analytics', 'training', 'towactivity', 'account',
          ...(showMoney ? ['earnings', 'invoices'] : []),
-         ...(isPlatformAdmin ? ['admin', 'app'] : [])]
+         ...(isPlatformAdmin ? ['admin', 'app', 'hq'] : [])]
       : ['lots', 'lookup', 'activity', 'account',
          ...(((viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? ['app'] : [])];
     if (!valid.includes(tab)) setTab('lots');
@@ -520,7 +521,8 @@ export function App() {
   const NavIconAdmin = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('path', {d:'M12 2l7 4v6c0 4.4-3 7.5-7 9-4-1.5-7-4.6-7-9V6z'}));
   const NavIconLookup = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('circle', {cx:'11',cy:'11',r:'7'}), React.createElement('line', {x1:'21',y1:'21',x2:'16.65',y2:'16.65'}));
   const NavIconApp = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('rect', {x:'6.5',y:'2.5',width:'11',height:'19',rx:'2.5'}), React.createElement('line', {x1:'10.5',y1:'18.5',x2:'13.5',y2:'18.5'}));
-  const navIcons = { app: NavIconApp, overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, training: NavIconAnalytics, towactivity: NavIconTow, admin: NavIconAdmin, lookup: NavIconLookup };
+  const NavIconHq = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('rect', {x:'4',y:'10',width:'7',height:'11'}), React.createElement('rect', {x:'13',y:'4',width:'7',height:'17'}), React.createElement('line', {x1:'4',y1:'21',x2:'20',y2:'21'}));
+  const navIcons = { app: NavIconApp, overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, training: NavIconAnalytics, towactivity: NavIconTow, admin: NavIconAdmin, lookup: NavIconLookup, hq: NavIconHq };
   // Tab roles (kept intentionally narrow so each surface has one meaning):
   //   Jobs     → every violation needing action (enforcement + ALPR unified)
   //   Lots     → register + manage properties (plates, passes, cameras, plate detections)
@@ -543,6 +545,9 @@ export function App() {
     // Soft launch of Frank's app-preview tab: platform admins only, for QA
     // before the partner-side entry (below) is switched on.
     ...(isPlatformAdmin ? [{ id: 'app', label: 'App', badge: 0 }] : []),
+    // Platform-admin only: the fleet status board (businesses, red
+    // findings, questions waiting on Gabe, fleet health). Task 23.
+    ...(isPlatformAdmin ? [{ id: 'hq', label: 'HQ', badge: 0 }] : []),
     { id: 'account',     label: 'Account',     badge: 0 },
   ] : [
     // Partner navigation. Earnings + Billing/Invoices are owner-only
@@ -700,6 +705,7 @@ export function App() {
           {tab === 'analytics' && isOwner && <AnalyticsPage lots={lots} violations={violations} partners={partners} isOwner={isOwner} onNavigate={setTab} />}
           {tab === 'invoices' && isOwner && showMoney && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} isPlatformAdmin={isPlatformAdmin} />}
           {tab === 'admin' && isPlatformAdmin && <AdminConsolePage user={owner} />}
+          {tab === 'hq' && isPlatformAdmin && <HqPage />}
           {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} />}
           {tab === 'app' && (isPlatformAdmin || (FRANK_APP_TAB_LIVE && isOperator && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID)) && <PartnerAppPage />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
