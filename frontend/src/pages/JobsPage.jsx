@@ -183,19 +183,9 @@ export function JobsPage({ lots, violations, alprViolations = [], loading, lotSt
         return;
       }
 
-      const extra = {};
-      // Pass fee schedule for revenue calculation on boot/tow
-      if ((action === 'boot' || action === 'tow') && user) {
-        extra._performerEmail = user.email;
-        if (user._role === 'partner') {
-          extra._partner = { id: user.id, boot_fee: user.boot_fee, tow_fee: user.tow_fee, revenue_share: user.revenue_share };
-        } else {
-          // Owner acting directly — record gross revenue with 100% to LotLogic (no partner split)
-          extra._ownerFees = { boot_fee: 75, tow_fee: 250 };
-          extra._ownerId = user.id;
-        }
-      }
-      const result = await db.recordAction(violId, action, extra);
+      // Fee schedule and audit row are computed server-side now (Wave 2.2
+      // Task 7) — the browser no longer needs the partner/owner fee plumbing.
+      const result = await db.recordAction(violId, action, {});
       if (result && result.success !== false) {
         addToast(`${actionLabels[action] || action} recorded`, 'success');
       }

@@ -274,110 +274,27 @@ export const db = {
     return [];
   },
   async recordAction(violId, action, extra = {}) {
-    if (!supabase) throw new Error('Data service unavailable');
-    try {
-      if (action === 'plate_correction') {
-        const { error } = await supabase.from('violations').update({
-          plate_text: extra.plate_text,
-        }).eq('id', violId);
-        if (error) throw new Error(error.message || 'Plate update failed');
-        return { success: true };
-      }
-      // Build clean update object — only real DB columns
-      const updates = {
-        action_taken: action,
-        status: 'resolved',
-        resolved_at: new Date().toISOString(),
-      };
-      // Calculate revenue from fee schedule for boot/tow
-      if (action === 'boot' || action === 'tow') {
-        if (extra._partner) {
-          const p = extra._partner;
-          const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
-          const share = p.revenue_share != null ? p.revenue_share : 0.30;
-          updates.gross_revenue = grossFee;
-          updates.our_revenue = Math.round(grossFee * share);
-          updates.partner_id = p.id;
-        } else if (extra._ownerFees) {
-          const f = extra._ownerFees;
-          const grossFee = action === 'boot' ? (f.boot_fee || 75) : (f.tow_fee || 250);
-          updates.gross_revenue = grossFee;
-          updates.our_revenue = grossFee; // Owner keeps 100%
-        }
-      }
-      // Dismissed / already gone / no action = zero revenue (action-rate only)
-      // Also clear zone_id so the backend won't dedup-match this resolved
-      // violation against new detections in the same zone.
-      // Fetch camera_id + zone_id BEFORE update (dismiss clears zone_id)
-      const { data: _vPre } = await supabase.from('violations').select('camera_id, zone_id').eq('id', violId).single();
-      const _preCameraId = _vPre?.camera_id;
-      const _preZoneId = _vPre?.zone_id;
-
-      if (action === 'dismissed' || action === 'already_gone' || action === 'no_action') {
-        updates.gross_revenue = 0;
-        updates.our_revenue = 0;
-        updates.zone_id = null;
-      }
-      const { error } = await supabase.from('violations').update(updates).eq('id', violId);
-      if (error) throw new Error(error.message || 'Update failed');
-
-      // Reset zone_occupancy so the next scan can fire a new violation
-      if (_preCameraId && _preZoneId) {
-        await supabase.from('zone_occupancy')
-          .update({ violation_triggered: false })
-          .eq('camera_id', _preCameraId)
-          .eq('zone_id', _preZoneId);
-      }
-
-      // Log boot/tow actions for invoicing
-      if (action === 'boot' || action === 'tow') {
-        try {
-          // Fetch violation details for the log
-          const { data: viol } = await supabase.from('violations').select('lot_id, plate_text, vehicle_color, vehicle_type').eq('id', violId).single();
-          const lot_id = viol?.lot_id;
-          const vehicleParts = [viol?.vehicle_color, viol?.vehicle_type].filter(Boolean);
-          const vehicle_description = vehicleParts.length ? vehicleParts.join(' ') : (viol?.vehicle_type || null);
-          // Determine who performed the action and fee split
-          let logEntry = {
-            violation_id: violId,
-            lot_id,
-            action_type: action,
-            plate_text: viol?.plate_text || null,
-            vehicle_description,
-            performed_at: updates.resolved_at,
-          };
-          if (extra._partner) {
-            const p = extra._partner;
-            const grossFee = action === 'boot' ? (p.boot_fee || 75) : (p.tow_fee || 250);
-            const share = p.revenue_share != null ? p.revenue_share : 0.30;
-            logEntry.partner_id = p.id;
-            logEntry.performed_by = 'partner';
-            logEntry.performer_email = extra._performerEmail || null;
-            logEntry.gross_fee = grossFee;
-            logEntry.our_revenue = Math.round(grossFee * share);
-            logEntry.partner_payout = grossFee - logEntry.our_revenue;
-            logEntry.owner_payout = 0;
-          } else if (extra._ownerFees) {
-            logEntry.owner_id = extra._ownerId || null;
-            logEntry.performed_by = 'owner';
-            logEntry.performer_email = extra._performerEmail || null;
-            const grossFee = action === 'boot' ? (extra._ownerFees.boot_fee || 75) : (extra._ownerFees.tow_fee || 250);
-            logEntry.gross_fee = grossFee;
-            logEntry.our_revenue = grossFee;
-            logEntry.partner_payout = 0;
-            logEntry.owner_payout = grossFee;
-          }
-          await supabase.from('action_logs').insert(logEntry);
-        } catch (logErr) {
-          console.warn('Action logged to violations but action_log insert failed:', logErr);
-        }
-      }
-
+    if (action === 'plate_correction') {
+      // Not money and not an enforcement decision: leave it on the direct path.
+      if (!supabase) throw new Error('Data service unavailable');
+      const { error } = await supabase.from('violations')
+        .update({ plate_text: extra.plate_text }).eq('id', violId);
+      if (error) throw new Error(error.message || 'Plate update failed');
       return { success: true };
-    } catch (e) {
-      console.error('recordAction error:', e);
-      throw e;
     }
+    // Everything else goes through the backend. The fee schedule and the audit
+    // row are the server's -- the browser used to compute both, and the audit
+    // half went into a table that does not exist.
+    await apiFetch(`/violations/${violId}/resolve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        status: 'resolved',
+        action_taken: action,
+        notes: extra.notes || undefined,
+      }),
+    });
+    return { success: true };
   },
   // Mark a violation as departed (vehicle left zone, confirmed by consecutive empty snapshots)
   // Does NOT resolve the violation — operator must still dismiss it manually
