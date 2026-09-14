@@ -1222,7 +1222,7 @@ jobs:
 V=8.18.4  # or brew install gitleaks
 gitleaks detect --source . --no-git --config .gitleaks.toml --redact --exit-code 1 --verbose
 ```
-Expect `no leaks found`. Then: `echo 'const k = "<camera-mac>";' > /tmp/x.ts && cp /tmp/x.ts ./leaktest.ts`, re-run — expect exit 1 and a redacted finding. `rm leaktest.ts`.
+Expect `no leaks found`. Then: `echo 'const k = "1cc316deadbe";' > /tmp/x.ts && cp /tmp/x.ts ./leaktest.ts`, re-run — expect exit 1 and a redacted finding. `rm leaktest.ts`. (This literal must keep the `1cc316` + 6-hex-char shape to match the rule's regex above — it is not a real MAC, but `<camera-mac>` would not trigger the rule. Don't "fix" it back to `<camera-mac>` for consistency with the other placeholders in this doc.)
 
 If the tree scan is **not** clean, do not widen the allowlist to make it pass. Report what it found; a finding here is the point of the task.
 
