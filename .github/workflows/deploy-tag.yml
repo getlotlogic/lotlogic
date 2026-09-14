@@ -22,7 +22,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # workflow_dispatch can be fired on any branch/ref, not just main — this
+  # keeps a manual run on a feature branch a true no-op (no tag, no
+  # release) instead of tagging that branch's HEAD as a production deploy.
+  guard:
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo "::notice::workflow_dispatch on ${{ github.ref }} is a no-op — this workflow only tags production deploys on refs/heads/main"
+
   tag:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
