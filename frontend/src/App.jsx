@@ -488,7 +488,16 @@ export function App() {
     };
   }, [owner]);
 
-  if (!owner) return <LoginPage onLogin={login} />;
+  // Same theme root the rest of the app renders under (see the `.app` div
+  // below) — without it, `.theme-light .login-page` etc. never match and
+  // the login page ignores the operator's theme choice.
+  if (!owner) {
+    return (
+      <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
+        <LoginPage onLogin={login} />
+      </div>
+    );
+  }
 
   const pending = effectiveViolations.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status)).length;
   const alprPending = alprViolations.filter(v => v.status === 'pending').length;
