@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { fmtDateTime } from '../lib/format.js';
 import { supabase } from '../lib/supabase.js';
 import { useToast } from '../ui/Toast.jsx';
+import { EventPhoto, usePhotoUrl } from '../ui/eventPhoto.jsx';
 
 export function TrainingPage({ user, isOwner }) {
   // Operator review of cross-camera plate pairs with image evidence and
@@ -20,7 +21,7 @@ export function TrainingPage({ user, isOwner }) {
   const [filter, setFilter] = useState('unverified'); // unverified | verified | dismissed | all
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(null);
-  const [lightbox, setLightbox] = useState(null); // { url, plate, camera, ts }
+  const [lightbox, setLightbox] = useState(null); // { eventId, url, plate, camera, ts }
   // Escape closes the evidence viewer (was mouse-dismiss only — keyboard trap).
   useEffect(() => {
     if (!lightbox) return;
@@ -54,7 +55,10 @@ export function TrainingPage({ user, isOwner }) {
         propIds.length ? supabase.from('properties').select('id, name').in('id', propIds) : Promise.resolve({ data: [] }),
         camIds.length ? supabase.from('alpr_cameras').select('id, name').in('id', camIds) : Promise.resolve({ data: [] }),
         plates.length ? supabase.from('plate_events')
-          .select('normalized_plate, camera_id, image_url, confidence, created_at')
+          // `id`, not `image_url`: the photograph is minted per render by
+          // EventPhoto/usePhotoUrl. `image_url` stays as a FILTER — "this read
+          // has a photograph" is still the thing being selected for.
+          .select('id, normalized_plate, camera_id, confidence, created_at')
           .in('normalized_plate', plates)
           .not('image_url', 'is', null)
           .gte('created_at', new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString())
@@ -112,28 +116,35 @@ export function TrainingPage({ user, isOwner }) {
     const camId = side === 'a' ? pair.plate_a_camera_id : pair.plate_b_camera_id;
     const ev = evidence[`${plate}|${camId}`];
     const camName = cameras[camId] || (camId ? camId.slice(0, 6) : '—');
+    // Every row in `evidence` was selected with `image_url IS NOT NULL`, so an
+    // event id here means a photograph exists — known synchronously, which is
+    // what the keyboard handlers and the zoom cursor gate on. The URL itself
+    // arrives when the presign does, and the lightbox is handed the same
+    // already-resolved URL rather than fetching it a second time.
+    const url = usePhotoUrl(ev?.id);
+    const open = () => url && setLightbox({ url, plate, camera: camName, ts: ev.created_at });
     return (
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* Reviewing these photos IS the Training task — they must be
             keyboard-operable, not click-only. Same pattern as EarningsPage. */}
         <div
-          role={ev?.image_url ? 'button' : undefined}
-          tabIndex={ev?.image_url ? 0 : undefined}
-          aria-label={ev?.image_url ? `View evidence photo for plate ${plate} from ${camName}` : undefined}
-          onKeyDown={(e) => { if (ev?.image_url && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setLightbox({ url: ev.image_url, plate, camera: camName, ts: ev.created_at }); } }}
+          role={ev?.id ? 'button' : undefined}
+          tabIndex={ev?.id ? 0 : undefined}
+          aria-label={ev?.id ? `View evidence photo for plate ${plate} from ${camName}` : undefined}
+          onKeyDown={(e) => { if (ev?.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); } }}
           style={{
             aspectRatio: '16/9',
             background: '#0a0a0a',
             borderRadius: 8,
             overflow: 'hidden',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: ev?.image_url ? 'zoom-in' : 'default',
+            cursor: ev?.id ? 'zoom-in' : 'default',
             border: '1px solid var(--border-subtle)',
           }}
-          onClick={() => ev?.image_url && setLightbox({ url: ev.image_url, plate, camera: camName, ts: ev.created_at })}
+          onClick={open}
         >
-          {ev?.image_url ? (
-            <img src={ev.image_url} alt={plate} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          {ev?.id ? (
+            <EventPhoto eventId={ev.id} alt={plate} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           ) : (
             <span style={{ fontSize: 11, color: '#666' }}>no image</span>
           )}

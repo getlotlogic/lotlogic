@@ -5,6 +5,7 @@ import { fmtDate, fmtTime } from '../lib/format.js';
 import { useIntervalFetch } from '../hooks.js';
 import { useFocusTrap, useUid } from '../ui/focusTrap.js';
 import { ConfirmActionModal } from '../ui/Dialog.jsx';
+import { usePhotoUrl } from '../ui/eventPhoto.jsx';
 
 // ── Confirmation review — billing_status queues per alpr_violations row ────
 // Classifies each row by the same CASE logic as the DB view
@@ -113,7 +114,11 @@ const OPERATOR_ACTION_CALLERS = {
 //   label     - short descriptor rendered under the thumb ("Plate", "Tow")
 //   onOpen    - (src, caption, downloadHref) => void, called when clicked
 //   timestamp - ISO timestamp used in the lightbox caption
-function EvidenceThumb({ src, plate, label, onOpen, timestamp, mobile }) {
+function EvidenceThumb({ eventId, plate, label, onOpen, timestamp, mobile }) {
+  // null until the 15-minute presign lands, and null forever when the read
+  // carries no photograph. Both cases render the same placeholder tile, which
+  // is a fixed size — so the queue's geometry does not move when photos load.
+  const src = usePhotoUrl(eventId);
   const dim = mobile ? { w: 56, h: 42, fs: 10 } : { w: 80, h: 60, fs: 11 };
   const caption = (plate || '—') + ' · ' + (label || 'snapshot') +
     (timestamp ? ' · ' + fmtDate(timestamp) + ' ' + fmtTime(timestamp) : '');
@@ -399,7 +404,9 @@ export function ConfirmationReviewView({ user, lots, partnersProp }) {
       if (allEventIds.length > 0) {
         const { data: events, error: eventsErr } = await supabase
           .from('plate_events')
-          .select('id, image_url, confidence, event_type, created_at')
+          // `id` carries the photograph now: the thumbnail presigns it
+          // through usePhotoUrl rather than rendering a public r2.dev URL.
+          .select('id, confidence, event_type, created_at')
           .in('id', allEventIds);
         if (eventsErr) throw new Error(eventsErr.message);
         (events || []).forEach(ev => { eventsById[ev.id] = ev; });
@@ -591,14 +598,14 @@ export function ConfirmationReviewView({ user, lots, partnersProp }) {
       },
         React.createElement('div', { style: { display: 'flex', gap: 4 } },
           React.createElement(EvidenceThumb, {
-            src: plateEv && plateEv.image_url,
+            eventId: plateEv && plateEv.id,
             plate: r.plate_text,
             label: 'Plate',
             timestamp: (plateEv && plateEv.created_at) || r.created_at,
             onOpen: openLightbox,
           }),
           (truckEv || (evidence && evidence.truck_plate)) && React.createElement(EvidenceThumb, {
-            src: truckEv && truckEv.image_url,
+            eventId: truckEv && truckEv.id,
             plate: (evidence && evidence.truck_plate) || '',
             label: 'Camera saw truck',
             timestamp: (truckEv && truckEv.created_at) || r.tow_confirmed_at,

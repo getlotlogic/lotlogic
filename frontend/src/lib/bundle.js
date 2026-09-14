@@ -146,7 +146,10 @@ export function bundleVehicleEvents(plateEvents, verifiedPairs = []) {
       presence_strength: isLingering ? 'lingered' : 'brief',
       status: 'flagged',
       evidence: evs.map(e => ({
-        url: e.image_url,
+        // The plate read's id, not a URL: the dashboard presigns it per render
+        // (Wave 2.5 Task 10) instead of pointing an <img> at a permanent
+        // public r2.dev address.
+        event_id: e.id,
         taken_at: e.created_at,
         confidence: Number(e.confidence) || 0,
         camera_id: e.camera_id,

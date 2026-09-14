@@ -2,6 +2,36 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { db } from '../lib/db.js';
 import { apiFetch } from '../lib/api.js';
+import { usePhotoUrl } from '../ui/eventPhoto.jsx';
+
+// One camera frame in a visit's thumbnail strip. Its own component because the
+// presigned photo URL resolves asynchronously and a hook cannot be called
+// inside the parent's .map(). The lightbox is handed the URL this tile already
+// resolved, so opening a frame never waits on a second presign.
+function FrameTile({ frame, cameraName, onOpen }) {
+  const url = usePhotoUrl(frame.id);
+  const conf = Number(frame.confidence ?? 0);
+  return (
+    <div
+      onClick={() => url && onOpen({ url, plate: frame.normalized_plate, camera: cameraName, ts: frame.created_at, conf })}
+      style={{
+        background:'#0a0a0a', borderRadius:8, overflow:'hidden',
+        aspectRatio:'16/9', cursor: url ? 'zoom-in' : 'default',
+        border: frame.match_status === 'partner_truck' ? '1px solid rgba(34,197,94,.45)' : '1px solid var(--border-subtle)',
+        position:'relative',
+      }}>
+      {url ? (
+        <img src={url} alt={frame.normalized_plate} loading="lazy" style={{width:'100%',height:'100%',objectFit:'cover'}} />
+      ) : (
+        <div style={{display:'flex',alignItems:'center',justifyContent:'center',width:'100%',height:'100%',color:'#666',fontSize:11}}>no image</div>
+      )}
+      <div style={{position:'absolute',bottom:0,left:0,right:0,padding:'4px 6px',background:'linear-gradient(transparent, rgba(0,0,0,.85))',color:'#fff',fontSize:10,fontFamily:'ui-monospace,monospace',display:'flex',justifyContent:'space-between'}}>
+        <span style={{fontWeight:700}}>{frame.normalized_plate || '—'}</span>
+        <span style={{opacity:.85}}>{conf.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
 
 // ── TowActivityPage ─────────────────────────────
 // Operator-facing repository of every tow-truck sighting at the property's
@@ -250,7 +280,10 @@ export function TowActivityPage({ user }) {
       const orFilter = orClauses
         ? `${orClauses},match_status.eq.partner_truck`
         : 'match_status.eq.partner_truck';
-      const SELECT_COLS = 'id, created_at, normalized_plate, plate_text, confidence, image_url, match_status, camera_id, raw_data, property_id';
+      // No `image_url`: a frame is rendered by presigning its `id` through
+      // EventPhoto. Every row here has an id, and a row without a photograph
+      // simply resolves to nothing — the same "no image" tile as before.
+      const SELECT_COLS = 'id, created_at, normalized_plate, plate_text, confidence, match_status, camera_id, raw_data, property_id';
       const [exactRes, windowRes] = await Promise.all([
         supabase.from('plate_events').select(SELECT_COLS)
           .in('property_id', propIds)
@@ -549,29 +582,14 @@ export function TowActivityPage({ user }) {
                 </div>
               )}
               <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:8}}>
-                {v.frames.map(f => {
-                  const conf = Number(f.confidence ?? 0);
-                  return (
-                    <div key={f.id}
-                      onClick={() => f.image_url && setLightbox({ url: f.image_url, plate: f.normalized_plate, camera: cameras[f.camera_id] || f.camera_id, ts: f.created_at, conf })}
-                      style={{
-                        background:'#0a0a0a', borderRadius:8, overflow:'hidden',
-                        aspectRatio:'16/9', cursor: f.image_url ? 'zoom-in' : 'default',
-                        border: f.match_status === 'partner_truck' ? '1px solid rgba(34,197,94,.45)' : '1px solid var(--border-subtle)',
-                        position:'relative',
-                      }}>
-                      {f.image_url ? (
-                        <img src={f.image_url} alt={f.normalized_plate} loading="lazy" style={{width:'100%',height:'100%',objectFit:'cover'}} />
-                      ) : (
-                        <div style={{display:'flex',alignItems:'center',justifyContent:'center',width:'100%',height:'100%',color:'#666',fontSize:11}}>no image</div>
-                      )}
-                      <div style={{position:'absolute',bottom:0,left:0,right:0,padding:'4px 6px',background:'linear-gradient(transparent, rgba(0,0,0,.85))',color:'#fff',fontSize:10,fontFamily:'ui-monospace,monospace',display:'flex',justifyContent:'space-between'}}>
-                        <span style={{fontWeight:700}}>{f.normalized_plate || '—'}</span>
-                        <span style={{opacity:.85}}>{conf.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  );
-                })}
+                {v.frames.map(f => (
+                  <FrameTile
+                    key={f.id}
+                    frame={f}
+                    cameraName={cameras[f.camera_id] || f.camera_id}
+                    onOpen={setLightbox}
+                  />
+                ))}
               </div>
             </div>
           );

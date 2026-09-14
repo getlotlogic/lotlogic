@@ -187,7 +187,7 @@ async function loadDriftSessions(lookbackDays) {
   const cutoff = new Date(Date.now() - lookbackDays * 86400 * 1000).toISOString();
   const { data, error } = await supabase
     .from('plate_events')
-    .select('id, session_id, plate_text, image_url, image_dhash, created_at, camera_id, raw_data')
+    .select('id, session_id, plate_text, image_dhash, created_at, camera_id, raw_data')
     .gte('created_at', cutoff)
     .not('session_id', 'is', null)
     .not('plate_text', 'is', null)
@@ -253,7 +253,36 @@ function lev(a, b) {
   return prev[n];
 }
 
-function render(html) { document.getElementById('root').innerHTML = html; }
+// ── Photos ───────────────────────────────────────────────────────
+// The tuner renders strings into innerHTML, so it cannot await a photo URL
+// mid-template. Instead every frame is emitted as an <img data-photo-event>
+// with no src, and render() fills them in afterwards from the same
+// scope-checked presign endpoint the dashboard uses
+// (GET /alpr/plate-events/{id}/photo). Memoised per event for the page's
+// lifetime — the tuner is a one-shot inspector, not a long-lived session.
+const _photoUrls = new Map();
+async function photoUrl(eventId) {
+  if (!eventId) return null;
+  if (_photoUrls.has(eventId)) return _photoUrls.get(eventId);
+  const p = (async () => {
+    try {
+      const jwt = getStoredJwt();
+      const r = await fetch(`${BACKEND_URL}/alpr/plate-events/${encodeURIComponent(eventId)}/photo`,
+        jwt ? { headers: { Authorization: 'Bearer ' + jwt } } : undefined);
+      if (!r.ok) return null;
+      return (await r.json()).url || null;
+    } catch { return null; }
+  })();
+  _photoUrls.set(eventId, p);
+  return p;
+}
+
+function render(html) {
+  document.getElementById('root').innerHTML = html;
+  for (const img of document.querySelectorAll('img[data-photo-event]')) {
+    photoUrl(img.dataset.photoEvent).then(url => { if (url) img.src = url; });
+  }
+}
 
 function renderLogin(err) {
   render(`
@@ -323,8 +352,8 @@ function renderRun(run, drift) {
       <div class="variant-row">
         <div class="variant-label">${escapeHtml(variant)}</div>
         <div class="frames">
-          ${evs.slice(0, 5).filter(e => e.image_url).map(e => `
-            <img class="frame" loading="lazy" src="${escapeHtml(e.image_url)}" alt="frame">
+          ${evs.slice(0, 5).filter(e => e.id).map(e => `
+            <img class="frame" loading="lazy" data-photo-event="${escapeHtml(e.id)}" alt="frame">
           `).join('')}
         </div>
       </div>

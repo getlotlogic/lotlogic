@@ -10,6 +10,7 @@ import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
 import { useIntervalFetch, useNowTick } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
+import { EventPhoto, usePhotoUrl } from '../ui/eventPhoto.jsx';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { CrossCameraSightings } from '../ui/CrossCameraSightings.jsx';
 import { ApartmentPermits } from './ApartmentPermits.jsx';
@@ -59,6 +60,12 @@ function SnapsLightbox({ snaps, startIndex, plate, onClose }) {
     }
   }
   const snap = snaps[index];
+  // The evidence frames now carry the plate read's id; the picture itself is a
+  // 15-minute presigned URL minted here. Neighbours are warmed so the arrow
+  // keys and the swipe never land on a blank frame.
+  const snapUrl = usePhotoUrl(snap && snap.event_id);
+  usePhotoUrl(snaps[index + 1] && snaps[index + 1].event_id);
+  usePhotoUrl(snaps[index - 1] && snaps[index - 1].event_id);
   const taken = snap?.taken_at ? new Date(snap.taken_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '';
   const conf = snap?.confidence != null ? Math.round(snap.confidence * (snap.confidence <= 1 ? 100 : 1)) + '%' : null;
   return (
@@ -88,10 +95,10 @@ function SnapsLightbox({ snaps, startIndex, plate, onClose }) {
         onClick={(e) => e.stopPropagation()}
         style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',minHeight:0,position:'relative'}}
       >
-        {snap?.url && (
+        {snapUrl && (
           <img
-            key={snap.url}
-            src={snap.url}
+            key={snap.event_id}
+            src={snapUrl}
             alt={`${plate || 'vehicle'} snapshot ${index + 1}`}
             style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:6,background:'#000',animation:'snap-fade-in 200ms ease-out'}}
           />
@@ -169,10 +176,12 @@ function SightingStrip({ sightings, cameras, nowTick }) {
           return (
             <div key={ev.id} title={title} style={{flexShrink:0,width:72,display:'flex',flexDirection:'column',gap:2}}>
               <div style={{position:'relative',width:72,height:54,borderRadius:6,overflow:'hidden',border:'1px solid var(--border-subtle)',background:'var(--bg-inset)'}}>
-                {ev.image_url
-                  ? <img src={ev.image_url} alt="plate sighting" loading="lazy" style={{width:'100%',height:'100%',objectFit:'cover'}} />
-                  : <div style={{width:'100%',height:'100%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:'var(--text-faint)'}}>No image</div>
-                }
+                <EventPhoto
+                  eventId={ev.id}
+                  alt="plate sighting"
+                  style={{width:'100%',height:'100%',objectFit:'cover'}}
+                  placeholder={<div style={{width:'100%',height:'100%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:'var(--text-faint)'}}>No image</div>}
+                />
                 <div style={{position:'absolute',top:3,right:3,width:8,height:8,borderRadius:'50%',background:statusColor,boxShadow:'0 0 0 2px rgba(0,0,0,.35)'}} />
               </div>
               <div style={{fontSize:10,color:'var(--text-faint)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
@@ -298,7 +307,9 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
       const [eventsRes, pairsRes] = await Promise.all([
         supabase
           .from('plate_events')
-          .select('id, camera_id, normalized_plate, plate_text, confidence, image_url, match_status, created_at, raw_data')
+          // `id` is the photo handle now — bundleVehicleEvents carries it into
+          // each evidence frame and the thumbnails presign it on render.
+          .select('id, camera_id, normalized_plate, plate_text, confidence, match_status, created_at, raw_data')
           .eq('property_id', propertyId)
           .gte('created_at', since)
           .order('created_at', { ascending: true })
@@ -1024,7 +1035,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                             onClick={e => { e.stopPropagation(); setNoRegSnapLightbox({ snaps: sorted, startIndex: i, plate: row.raw_plate || row.normalized_plate }); }}
                             onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setNoRegSnapLightbox({ snaps: sorted, startIndex: i, plate: row.raw_plate || row.normalized_plate }); } }}
                           >
-                            {ev.url && <img src={ev.url} alt="evidence frame" loading="lazy" />}
+                            <EventPhoto eventId={ev.event_id} alt="evidence frame" />
                             <span className="snc">{ev.confidence != null ? Math.round(ev.confidence * (ev.confidence <= 1 ? 100 : 1)) + '%' : ''}</span>
                             {ev.taken_at && <span className="snt">{fmtDateTime(ev.taken_at)}</span>}
                           </div>
@@ -1105,7 +1116,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               const camName = ev?.alpr_cameras?.name;
               return (
                 <div key={v.id} style={{background:'var(--bg-card)',border:'1px solid rgba(248,113,113,.3)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
-                  {ev?.image_url && <img src={ev.image_url} alt="plate" loading="lazy" style={{width:60,height:46,objectFit:'cover',borderRadius:6,border:'1px solid var(--border-subtle)',flexShrink:0}} />}
+                  <EventPhoto eventId={ev?.id} alt="plate" style={{width:60,height:46,objectFit:'cover',borderRadius:6,border:'1px solid var(--border-subtle)',flexShrink:0}} />
                   <div style={{minWidth:0,flex:1}}>
                     <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                       <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{v.plate_text}</span>
@@ -1153,7 +1164,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
                 const s = statusLabel[ev.match_status] || { label: ev.match_status, color: 'var(--text-faint)' };
                 return (
                   <div key={ev.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
-                    {ev.image_url && <img src={ev.image_url} alt="plate" loading="lazy" style={{width:60,height:46,objectFit:'cover',borderRadius:6,border:'1px solid var(--border-subtle)',flexShrink:0}} />}
+                    <EventPhoto eventId={ev.id} alt="plate" style={{width:60,height:46,objectFit:'cover',borderRadius:6,border:'1px solid var(--border-subtle)',flexShrink:0}} />
                     <div style={{minWidth:0,flex:1}}>
                       <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                         <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{ev.plate_text}</span>
@@ -1345,10 +1356,8 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             : 'var(--text-faint)';
           return (
             <div key={ev.id} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',alignItems:'center',gap:12}}>
-              {ev.image_url && (
-                <img src={ev.image_url} alt="plate" loading="lazy"
-                  style={{width:52,height:40,objectFit:'cover',borderRadius:6,border:'1px solid var(--border-subtle)',flexShrink:0,background:'var(--bg-inset)'}} />
-              )}
+              <EventPhoto eventId={ev.id} alt="plate"
+                style={{width:52,height:40,objectFit:'cover',borderRadius:6,border:'1px solid var(--border-subtle)',flexShrink:0,background:'var(--bg-inset)'}} />
               <div style={{minWidth:0,flex:1}}>
                 <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                   <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{ev.plate_text}</span>

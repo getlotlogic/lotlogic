@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiFetch } from '../lib/api.js';
 import { db } from '../lib/db.js';
+import { EventPhoto, usePhotoUrl } from './eventPhoto.jsx';
 import { fmtVisitDate, fmtStay, fmtCooldownDateTime, fmtHrsShort } from '../lib/passFormat.js';
 
 // ── Truck Parking Log ────────────────────────────────────────
@@ -87,7 +88,7 @@ export function CooldownChip({ passId, priorFlagCount, registeredAt, priorEnd })
           )}
           {visits && visits.map(v => (
             <div className="cooldown-visit-row" key={v.id}>
-              {v.photo_url && <img className="cooldown-visit-thumb" src={v.photo_url} alt="" />}
+              <EventPhoto eventId={v.photo_event_id} className="cooldown-visit-thumb" alt="" />
               <span className="cooldown-visit-date">{fmtVisitDate(v.date)}</span>
               <span className="cooldown-visit-stay">{fmtStay(v.stay_hours)}</span>
               <span className="cooldown-visit-outcome">{v.outcome}</span>
@@ -117,11 +118,16 @@ export function ReregTowFlag({ pass }) {
         chipBg:'#dc2626', chip:'🚨 TOW', title:'Re-registered while already parked',
         body:'Registered a new pass while a prior one here is still active (same plate).' };
   const ref = (id) => id ? '#' + String(id).slice(-8) : '';
-  const passRow = (label, from, until, id, photo) => (
+  // The photo slot keeps its 48×34 box whether or not a photograph resolves —
+  // the grey tile IS the placeholder, so the two proof rows never jump.
+  const passRow = (label, from, until, id, photoEventId) => (
     <div style={{display:'flex',alignItems:'center',gap:10,padding:'6px 0',borderTop:'1px solid var(--border)'}}>
-      {photo
-        ? <img src={photo} alt="" style={{width:48,height:34,objectFit:'cover',borderRadius:5,flex:'none'}} />
-        : <div style={{width:48,height:34,borderRadius:5,flex:'none',background:'var(--border)'}} />}
+      <EventPhoto
+        eventId={photoEventId}
+        alt=""
+        style={{width:48,height:34,objectFit:'cover',borderRadius:5,flex:'none'}}
+        placeholder={<div style={{width:48,height:34,borderRadius:5,flex:'none',background:'var(--border)'}} />}
+      />
       <div style={{display:'flex',flexDirection:'column',minWidth:0}}>
         <span style={{fontSize:12,fontWeight:700,color:'var(--text-primary)'}}>{label} · {ref(id)}</span>
         <span style={{fontSize:12,color:'var(--text-muted)'}}>{fmtCooldownDateTime(from)} → {fmtCooldownDateTime(until)}</span>
@@ -151,8 +157,8 @@ export function ReregTowFlag({ pass }) {
       </div>
       <div style={{marginTop:2}}>
         <div style={{fontSize:11,fontWeight:600,letterSpacing:'.03em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:2}}>Proof — two passes at once</div>
-        {passRow('Already active', pass.matched_valid_from, pass.matched_valid_until, pass.matched_active_pass_id, pass.matched_image_url)}
-        {passRow('This registration', pass.valid_from, pass.valid_until, pass.id, pass.first_seen_image_url)}
+        {passRow('Already active', pass.matched_valid_from, pass.matched_valid_until, pass.matched_active_pass_id, pass.matched_first_seen_event_id)}
+        {passRow('This registration', pass.valid_from, pass.valid_until, pass.id, pass.first_seen_event_id)}
       </div>
     </div>
   );
@@ -176,6 +182,12 @@ function PassPhotoViewer({ photos, startIndex, plate, exitEventId, onClose }) {
   const touchX = useRef(null);
   const n = photos.length;
   const cur = photos[i] || photos[0];
+  // Three presigns in flight at once — the frame on screen and its two
+  // neighbours — so an arrow key or a swipe lands on an already-minted URL.
+  // db.photoUrl memoises per event, so revisiting a frame costs nothing.
+  const curUrl = usePhotoUrl(cur && cur.id);
+  const nextUrl = usePhotoUrl(photos[i + 1] && photos[i + 1].id);
+  const prevUrl = usePhotoUrl(photos[i - 1] && photos[i - 1].id);
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') onClose();
@@ -207,7 +219,7 @@ function PassPhotoViewer({ photos, startIndex, plate, exitEventId, onClose }) {
         style={{position:'absolute',top:'max(10px, env(safe-area-inset-top))',right:12,width:44,height:44,borderRadius:22,border:'1px solid rgba(255,255,255,.3)',background:'rgba(0,0,0,.5)',color:'#fff',fontSize:20,cursor:'pointer',zIndex:2}}
       >✕</button>
       <div onClick={(e) => e.stopPropagation()} style={{maxWidth:'96vw',display:'flex',flexDirection:'column',alignItems:'center',gap:10}}>
-        <img src={cur.url} alt={cap(cur)} style={{maxWidth:'96vw',maxHeight:'76vh',objectFit:'contain',borderRadius:8,background:'#000'}} />
+        <img src={curUrl || undefined} alt={cap(cur)} style={{maxWidth:'96vw',maxHeight:'76vh',objectFit:'contain',borderRadius:8,background:'#000'}} />
         <div style={{color:'#fff',fontSize:14,textAlign:'center',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',justifyContent:'center'}}>
           <span style={{fontFamily:'ui-monospace, monospace',fontWeight:800,letterSpacing:1}}>{plate || ''}</span>
           <span style={{opacity:.85}}>{cap(cur)}</span>
@@ -226,9 +238,10 @@ function PassPhotoViewer({ photos, startIndex, plate, exitEventId, onClose }) {
               style={{width:44,height:44,borderRadius:22,border:'1px solid rgba(255,255,255,.3)',background:'rgba(255,255,255,.08)',color:'#fff',fontSize:18,cursor:i===n-1?'default':'pointer',opacity:i===n-1?.35:1}}>→</button>
           </div>
         )}
-        {/* Preload neighbours so swiping never shows a blank frame */}
-        {photos[i + 1] && <img src={photos[i + 1].url} alt="" style={{display:'none'}} />}
-        {photos[i - 1] && <img src={photos[i - 1].url} alt="" style={{display:'none'}} />}
+        {/* Preload neighbours so swiping never shows a blank frame. Both the
+            presign and the image bytes are warmed, in that order. */}
+        {nextUrl && <img src={nextUrl} alt="" style={{display:'none'}} />}
+        {prevUrl && <img src={prevUrl} alt="" style={{display:'none'}} />}
       </div>
     </div>
   );
@@ -239,7 +252,8 @@ function PassPhotoViewer({ photos, startIndex, plate, exitEventId, onClose }) {
 // camera tracker box {x1,y1,x2,y2,res_w,res_h}. Without a box (older events)
 // it renders exactly like the plain cover image. Full-frame evidence stays
 // available in the viewer — only the thumbnail crops.
-function CroppedImg({ src, box }) {
+function CroppedImg({ eventId, box }) {
+  const src = usePhotoUrl(eventId);
   const [dims, setDims] = useState(null);
   const base = {position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover'};
   let style = base;
@@ -257,6 +271,7 @@ function CroppedImg({ src, box }) {
       style = { ...base, objectPosition: `${cx}% ${cy}%`, transformOrigin: `${cx}% ${cy}%`, transform: `scale(${zoom})` };
     }
   }
+  if (!src) return null;
   return <img src={src} alt="" loading="lazy" style={style}
     onLoad={box ? (e) => setDims({ w: e.target.naturalWidth, h: e.target.naturalHeight }) : undefined} />;
 }
@@ -281,17 +296,17 @@ export function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
       (async () => {
         try {
           let photos = await db.getPassPhotos(pass.id);
-          // A pass can carry a photo pointer without a linked event row
-          // (older backfills) — keep it, deduped.
-          if (pass.first_seen_image_url && !photos.some(p => p.url === pass.first_seen_image_url)) {
-            photos.unshift({ id: pass.first_seen_event_id, url: pass.first_seen_image_url, at: pass.first_seen_at || null, camera: null });
+          // A pass can point at its first-seen read without that read being
+          // linked back to the pass (older backfills) — keep it, deduped by id.
+          if (pass.first_seen_event_id && !photos.some(p => p.id === pass.first_seen_event_id)) {
+            photos.unshift({ id: pass.first_seen_event_id, at: pass.first_seen_at || null, camera: null });
           }
           // No linked photos at all → the old best-frame fuzzy fallback, so
           // properties/passes that only ever had window-matched frames keep
           // their picture.
           if (photos.length === 0 && propertyId && pass.plate_text) {
             const ev = await db.getBestVehicleFrame(propertyId, pass.plate_text, pass.back_plate, pass.valid_from, pass.valid_until);
-            if (ev?.image_url) photos = [{ id: ev.id || 'best', url: ev.image_url, at: ev.created_at, camera: ev.camera_name || null }];
+            if (ev?.event_id) photos = [{ id: ev.event_id, at: ev.created_at, camera: ev.camera_name || null }];
           }
           setCache(c => ({ ...c, [pass.id]: photos.length ? { photos } : { empty: true } }));
         } catch {
@@ -308,12 +323,18 @@ export function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
   // FIXED-HEIGHT strip — this is the layout-shift fix. The old variable-height
   // grid popped in after lazy-load and shoved the No tow / Mark towed buttons
   // 100-300px mid-reach; operators reported taps landing on the wrong thing.
-  // Now: if the pass is KNOWN to have a photo at first paint
-  // (first_seen_image_url), the row's space is reserved synchronously, so
-  // loading in the photos changes NOTHING about the card's geometry. All
-  // photos render in one horizontally-scrollable row at the same height.
+  // Now: if the pass is KNOWN to have a photo at first paint, the row's space
+  // is reserved synchronously, so loading in the photos changes NOTHING about
+  // the card's geometry. All photos render in one horizontally-scrollable row
+  // at the same height.
+  //
+  // The "known" signal is `first_seen_event_id` — the pass's own column, so
+  // still synchronous at first paint. It used to be `first_seen_image_url`,
+  // which stopped being fetched when photo URLs became presigned-on-demand
+  // (Wave 2.5 Task 10). A pass that has a first-seen read has a photograph of
+  // it: the two were written together.
   const STRIP_H = 140;
-  const reserve = photos.length > 0 || !!pass.first_seen_image_url || !!entry?.loading;
+  const reserve = photos.length > 0 || !!pass.first_seen_event_id || !!entry?.loading;
   const capText = (p) => `${p.camera || 'camera'}${p.at ? ' · ' + new Date(p.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}`;
   return (
     <div ref={containerRef} style={{
@@ -335,7 +356,7 @@ export function PassPhotoStrip({ pass, propertyId, cache, setCache }) {
               aria-label={`View photo ${idx + 1} of ${photos.length} for ${pass.plate_text || 'parking pass'} — ${capText(p)}`}
               style={{position:'relative',display:'block',flex:'0 0 auto',height:'100%',aspectRatio:'16/9',padding:0,border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',background:'#000',cursor:'zoom-in',scrollSnapAlign:'start'}}
             >
-              <CroppedImg src={p.url} box={p.box} />
+              <CroppedImg eventId={p.id} box={p.box} />
               <span style={{position:'absolute',bottom:0,left:0,right:0,padding:'3px 7px',background:'linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0))',fontSize:10,color:'#fff',textAlign:'left',display:'flex',justifyContent:'space-between',gap:6}}>
                 <span style={{fontWeight:700,letterSpacing:'.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{capText(p)}</span>
                 {p.id === pass.exited_via_plate_event_id && <span style={{fontWeight:700}}>exit</span>}

@@ -2,6 +2,75 @@ import { supabase } from './supabase.js';
 import { API, apiFetch, getSessionToken } from './api.js';
 import { lotDayBound } from './lotdate.js';
 
+// ── Photo URLs: the one place a photo URL is minted ──────────────
+// Every `<img src>` and `<a href>` that used to take plate_events.image_url
+// straight out of Supabase now goes through here. `image_url` is a permanent,
+// unauthenticated https://pub-….r2.dev address: whoever saw one once keeps it
+// forever, and nothing ties it to the account that was allowed to see it.
+// GET /alpr/plate-events/{id}/photo instead hands back a 15-minute presigned
+// URL, and only after checking that THIS session owns the property the read
+// belongs to.
+//
+// Memoised per event id, because a list of 50 reads must be 50 rows and not 50
+// round trips repeated on every re-render:
+//   - a resolved URL is reused until 2 minutes before the backend's own
+//     `expires_at` (and never for more than 10 minutes), so an <img> can never
+//     be handed a URL that dies while it is loading;
+//   - an in-flight request is shared, so ten thumbnails of the same event
+//     issue one fetch;
+//   - "this read has no photo" (404) is cached permanently — it cannot become
+//     true later — while a transient failure (503, offline) is retried after
+//     15 seconds rather than blanking the photo for the rest of the session.
+const PHOTO_CACHE_MAX_MS = 10 * 60 * 1000;
+const PHOTO_EXPIRY_MARGIN_MS = 2 * 60 * 1000;
+const PHOTO_RETRY_MS = 15 * 1000;
+const _photoCache = new Map(); // eventId -> { url, until } | { none: true, until } | { promise }
+
+export function clearPhotoUrlCache() { _photoCache.clear(); }
+
+// The cached URL for an event, or null — synchronously, with no fetch.
+// Exists so a component that re-mounts (a page whose row component is defined
+// inside its parent gets a new identity on every parent render) can paint the
+// photo it already had instead of flashing empty and resolving it again.
+export function peekPhotoUrl(eventId) {
+  const hit = eventId && _photoCache.get(eventId);
+  if (!hit || hit.promise) return null;
+  return (hit.until === Infinity || hit.until > Date.now()) ? (hit.url || null) : null;
+}
+
+export async function photoUrl(eventId) {
+  if (!eventId) return null;
+  const hit = _photoCache.get(eventId);
+  if (hit) {
+    if (hit.promise) return hit.promise;
+    if (hit.until === Infinity || hit.until > Date.now()) return hit.url || null;
+  }
+  const promise = (async () => {
+    try {
+      const body = await apiFetch(`/alpr/plate-events/${encodeURIComponent(eventId)}/photo`);
+      const url = body && body.url;
+      if (!url) throw new Error('presign returned no url');
+      // Trust the backend's expiry over our own ceiling when it is shorter.
+      const serverUntil = body.expires_at ? Date.parse(body.expires_at) - PHOTO_EXPIRY_MARGIN_MS : NaN;
+      const until = Math.min(
+        Date.now() + PHOTO_CACHE_MAX_MS,
+        Number.isFinite(serverUntil) ? serverUntil : Infinity,
+      );
+      _photoCache.set(eventId, { url, until });
+      return url;
+    } catch (err) {
+      // 404 = this read genuinely has no photograph. Permanent.
+      // Anything else = the backend or the network had a bad moment.
+      _photoCache.set(eventId, err && err.status === 404
+        ? { none: true, until: Infinity }
+        : { none: true, until: Date.now() + PHOTO_RETRY_MS });
+      return null;
+    }
+  })();
+  _photoCache.set(eventId, { promise });
+  return promise;
+}
+
 // ── Normalize Supabase violation to app format ───────────────
 // Revenue in DB is dollars; multiply by 100 for fmtMoney (cents display)
 export function normalizeViolation(v) {
@@ -828,22 +897,18 @@ export const db = {
   },
   async getVisitorPasses(propertyId, opts = {}) {
     if (supabase) {
-      // Pull the joined first-seen plate_event so the Active Pass Tracker can
-      // show the camera snapshot of the vehicle BEFORE registration.
+      // `*` already carries `first_seen_event_id` — the camera frame of the
+      // vehicle BEFORE registration, which the Active Pass Tracker shows. It
+      // used to embed that plate_event purely to read `image_url` off it; the
+      // photo now comes from photoUrl(first_seen_event_id), so the join (and
+      // the round trip it cost on every pass list) is gone.
       let q = supabase.from('visitor_passes')
-        .select('*, first_seen_event:plate_events!visitor_passes_first_seen_event_id_fkey(image_url, created_at)')
+        .select('*')
         .eq('property_id', propertyId);
       if (opts.status) q = q.eq('status', opts.status);
       q = q.order('created_at', { ascending: false }).limit(opts.limit || 100);
       const { data, error } = await q;
-      if (!error && data) {
-        // Flatten the join so callers can read p.first_seen_image_url like
-        // they do on the parking-log endpoint response.
-        return data.map(p => ({
-          ...p,
-          first_seen_image_url: p.first_seen_event?.image_url || null,
-        }));
-      }
+      if (!error && data) return data;
     }
     return [];
   },
@@ -873,7 +938,7 @@ export const db = {
     // known roster instead of blanking.
     const { data, error } = await supabase
       .from('visitor_passes')
-      .select('*, first_seen_event:plate_events!visitor_passes_first_seen_event_id_fkey(image_url, created_at)')
+      .select('*')
       .eq('property_id', propertyId)
       .eq('status', 'active')
       .is('exited_at', null)
@@ -886,8 +951,7 @@ export const db = {
     const now = Date.now();
     return (data || [])
       // Canonical window predicate: no expiry, or expiry still ahead of now.
-      .filter(p => !p.valid_until || new Date(p.valid_until).getTime() > now)
-      .map(p => ({ ...p, first_seen_image_url: p.first_seen_event?.image_url || null }));
+      .filter(p => !p.valid_until || new Date(p.valid_until).getTime() > now);
   },
   async countVisitorPasses(propertyId) {
     if (supabase) {
@@ -1034,7 +1098,7 @@ export const db = {
       // `normalized_plate` is NOT a column on alpr_violations (was causing a 400
       // / empty result — the tow-button violation map never populated). Embed via
       // the explicit FK constraint name so the join is unambiguous.
-      .select('id, plate_text, property_id, plate_event_id, status, action_taken, violation_type, created_at, plate_events!alpr_violations_plate_event_id_fkey(image_url, created_at, alpr_cameras:camera_id(name))')
+      .select('id, plate_text, property_id, plate_event_id, status, action_taken, violation_type, created_at, plate_events!alpr_violations_plate_event_id_fkey(id, created_at, alpr_cameras:camera_id(name))')
       .eq('property_id', propertyId)
       .is('action_taken', null)
       .order('created_at', { ascending: false })
@@ -1051,7 +1115,10 @@ export const db = {
     const norm = (plateText || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const { data, error } = await supabase
       .from('plate_events')
-      .select('id, plate_text, normalized_plate, image_url, created_at, camera_id, alpr_cameras:camera_id(name, location_description)')
+      // `image_url` is a FILTER here, never a selected column: "this read has
+      // a photograph" is a fact worth querying on; the URL itself is minted
+      // per request by photoUrl(id).
+      .select('id, plate_text, normalized_plate, created_at, camera_id, alpr_cameras:camera_id(name, location_description)')
       .eq('property_id', propertyId)
       .eq('normalized_plate', norm)
       .not('image_url', 'is', null)
@@ -1065,6 +1132,9 @@ export const db = {
   // fuzzy server-side (latest_vehicle_frame RPC) so pass rows show a picture far
   // more often than an exact front-plate match would. Also returns the frame's
   // make/model/color so a pass with no stored MMC can still display what we saw.
+  // The row carries `event_id` (latest_vehicle_frame RPC v5) — the frame is
+  // rendered by presigning that, not by the `image_url` the RPC still returns
+  // for one release.
   async getBestVehicleFrame(propertyId, plateText, backPlate, fromTs, untilTs) {
     if (!supabase || !propertyId || !plateText) return null;
     const norm  = (plateText || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -1087,13 +1157,15 @@ export const db = {
       // The three box fields let thumbnails crop a busy multi-vehicle frame
       // to the vehicle that actually produced the read (only newer events
       // carry them; older rows crop to nothing = full frame as before).
-      .select('id, image_url, created_at, plate_box:raw_data->plate_box, vehicle_box:raw_data->vehicle_box, cam_box:raw_data->cam_box, alpr_cameras:camera_id(name)')
+      .select('id, created_at, plate_box:raw_data->plate_box, vehicle_box:raw_data->vehicle_box, cam_box:raw_data->cam_box, alpr_cameras:camera_id(name)')
       .eq('visitor_pass_id', passId)
+      // A filter, not a column: the strip only wants reads that HAVE a
+      // photograph. The photograph itself is presigned per render, by id.
       .not('image_url', 'is', null)
       .order('created_at', { ascending: true })
       .limit(10);
     if (error) throw error;
-    return (data || []).map(e => ({ id: e.id, url: e.image_url, at: e.created_at, camera: e.alpr_cameras?.name || null, box: e.vehicle_box || e.cam_box || e.plate_box || null }));
+    return (data || []).map(e => ({ id: e.id, at: e.created_at, camera: e.alpr_cameras?.name || null, box: e.vehicle_box || e.cam_box || e.plate_box || null }));
   },
   // The exact camera frame that closed a pass (the exit/departure proof),
   // fetched by the pass's exited_via_plate_event_id. Returns image + camera + time.
@@ -1101,11 +1173,13 @@ export const db = {
     if (!supabase || !plateEventId) return null;
     const { data, error } = await supabase
       .from('plate_events')
-      .select('image_url, created_at, confidence, alpr_cameras:camera_id(name)')
+      .select('id, created_at, confidence, image_url, alpr_cameras:camera_id(name)')
       .eq('id', plateEventId)
       .maybeSingle();
+    // `image_url` is read only to answer "is there a photograph at all"; the
+    // caller renders it by presigning `event_id`.
     if (error || !data || !data.image_url) return null;
-    return { image_url: data.image_url, created_at: data.created_at, confidence: data.confidence, camera_name: data.alpr_cameras?.name || null };
+    return { event_id: data.id, created_at: data.created_at, confidence: data.confidence, camera_name: data.alpr_cameras?.name || null };
   },
   async getRecentPlateEvents(propertyId, limit = 50) {
     if (supabase) {
@@ -1114,7 +1188,7 @@ export const db = {
         // plate_events↔plate_sessions has 3 relationships (session_id here, plus
         // entry/exit_plate_event_id back-refs), so a bare plate_sessions(state)
         // embed is ambiguous → 300. Pin the FK we mean (plate_events.session_id).
-        .select('id, plate_text, normalized_plate, confidence, image_url, event_type, camera_id, created_at, visitor_pass_id, resident_plate_id, match_status, match_reason, matched_at, session_id, plate_sessions!plate_events_session_id_fkey(state)')
+        .select('id, plate_text, normalized_plate, confidence, event_type, camera_id, created_at, visitor_pass_id, resident_plate_id, match_status, match_reason, matched_at, session_id, plate_sessions!plate_events_session_id_fkey(state)')
         .eq('property_id', propertyId)
         .order('created_at', { ascending: false })
         .limit(limit);
@@ -1176,7 +1250,7 @@ export const db = {
   },
   async getALPRViolations(propertyId, status) {
     if (supabase) {
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, vehicle_make, vehicle_model, vehicle_color, vehicle_type, alpr_cameras:camera_id(id, name, gate_id))');
+      let q = supabase.from('alpr_violations').select('*, plate_events(id, confidence, event_type, camera_id, created_at, usdot_number, mc_number, vehicle_make, vehicle_model, vehicle_color, vehicle_type, alpr_cameras:camera_id(id, name, gate_id))');
       if (propertyId) q = q.eq('property_id', propertyId);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
@@ -1195,7 +1269,7 @@ export const db = {
     if (supabase) {
       const propIds = await this._getPropertyIds(userId, role);
       if (propIds.length === 0) return [];
-      let q = supabase.from('alpr_violations').select('*, plate_events(image_url, confidence, event_type, camera_id, created_at, usdot_number, mc_number, vehicle_make, vehicle_model, vehicle_color, vehicle_type, alpr_cameras:camera_id(id, name, gate_id)), properties(name, address)').in('property_id', propIds);
+      let q = supabase.from('alpr_violations').select('*, plate_events(id, confidence, event_type, camera_id, created_at, usdot_number, mc_number, vehicle_make, vehicle_model, vehicle_color, vehicle_type, alpr_cameras:camera_id(id, name, gate_id)), properties(name, address)').in('property_id', propIds);
       if (status) q = q.eq('status', status);
       q = q.order('created_at', { ascending: false }).limit(200);
       const { data, error } = await q;
@@ -1227,7 +1301,7 @@ export const db = {
       const hi = new Date(t + PAIR_WINDOW_SEC * 1000).toISOString();
       const { data } = await supabase
         .from('plate_events')
-        .select('image_url, created_at, alpr_cameras!inner(gate_id, name)')
+        .select('id, created_at, alpr_cameras!inner(gate_id, name)')
         .eq('alpr_cameras.gate_id', gateId)
         .neq('camera_id', camId)
         .not('image_url', 'is', null)
@@ -1239,7 +1313,8 @@ export const db = {
     };
     const paired = await Promise.all(violations.map(fetchOne));
     violations.forEach((v, i) => {
-      v._paired_snapshot_url = paired[i]?.image_url || null;
+      // The paired read's EVENT ID, not its URL — JobsPage presigns it.
+      v._paired_snapshot_event_id = paired[i]?.id || null;
       v._paired_camera_name = paired[i]?.alpr_cameras?.name || null;
     });
     return violations;

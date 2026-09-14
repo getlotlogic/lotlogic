@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase.js';
 import { isVehicleInZone } from '../lib/geometry.js';
 import { colorHex } from '../lib/vehicles.js';
 import { resolveCameraSnapshot } from '../lib/db.js';
+import { usePhotoUrl } from './eventPhoto.jsx';
 
 // ── Image zoom overlay ──────────────────────────────────────
 export function ImageZoom({ src, alt, onClose }) {
@@ -90,6 +91,11 @@ function ProofImage({ src, label, detection, timestamp }) {
 }
 
 export function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, cameraZones, matchedDetection, tunnelSnapshotUrl, onClose, onAutoGone }) {
+  // An ALPR violation's detection photo is a plate read, not a YOLO snapshot:
+  // its URL is presigned on demand rather than carried on the row. The two
+  // legacy `_*_snapshot_url` fields still win when present, so the "Current"
+  // camera-snapshot fallback restored in PR #243 is untouched by this.
+  const detectionUrl = usePhotoUrl(violation._snapshot_event_id);
   if (!violation) return null;
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   const det = matchedDetection;
@@ -178,7 +184,7 @@ export function ViolationProofModal({ violation, latestSnapshotUrl, latestDetect
         {/* Photos — front and center */}
         <div style={{display:'flex', gap:16, marginBottom:16}}>
           <ProofImage
-            src={violation._detection_snapshot_url || violation._snapshot_url}
+            src={violation._detection_snapshot_url || violation._snapshot_url || detectionUrl}
             label="Detection"
             detection={det}
             timestamp={initialTime}

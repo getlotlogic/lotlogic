@@ -1,10 +1,19 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { usePhotoUrl } from './eventPhoto.jsx';
 
 // ── Violation snapshot with AI bounding box ───────────────────
 // Renders a snapshot image with a single bounding box around the
 // violating vehicle only. Computes object-fit:cover offset so the
 // box aligns perfectly with the actual image pixels.
-export function ViolationSnapshot({ src, detections, matchedDetection, style, onClick, maxHeight, borderRadius }) {
+export function ViolationSnapshot({ src: srcProp, eventId, detections, matchedDetection, style, onClick, maxHeight, borderRadius }) {
+  // Two photo sources, one renderer. `src` is the legacy YOLO pipeline's
+  // snapshots.storage_url, which is still a plain URL. `eventId` is an ALPR
+  // plate read, whose photograph is minted per view as a 15-minute presigned
+  // URL (Wave 2.5 Task 10) and is therefore not known until this resolves —
+  // which is exactly why the "No photo" tile below doubles as the loading
+  // state: it already reserves the full 16:7 box.
+  const presigned = usePhotoUrl(eventId);
+  const src = srcProp || presigned;
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const imgRef = useRef(null);

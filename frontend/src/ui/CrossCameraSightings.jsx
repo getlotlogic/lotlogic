@@ -1,5 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.js';
+import { usePhotoUrl } from './eventPhoto.jsx';
+
+// One other-camera sighting. Its own component because the presigned photo URL
+// arrives asynchronously and a hook cannot live inside the parent's .map() —
+// the DOM it renders is unchanged.
+function SightingCard({ row, when, cameraName, fmtDateTime }) {
+  const url = usePhotoUrl(row.id);
+  const delta = Math.round((new Date(row.created_at).getTime() - new Date(when).getTime()) / 1000);
+  const sign = delta >= 0 ? '+' : '−';
+  return (
+    <a href={url || '#'} target="_blank" rel="noopener noreferrer"
+       style={{flex:'0 0 auto',width:120,textDecoration:'none',color:'inherit',borderRadius:6,overflow:'hidden',border:'1px solid rgba(0,0,0,.12)',background:'#000'}}>
+      {url ? (
+        <img src={url} alt={row.normalized_plate} loading="lazy" style={{width:'100%',height:80,objectFit:'cover',display:'block'}} />
+      ) : (
+        <div style={{width:'100%',height:80,background:'#222'}} />
+      )}
+      <div style={{padding:'4px 6px',background:'#fff'}}>
+        <div style={{fontFamily:"'Courier New',monospace",fontSize:11,fontWeight:800,color:'#7c2d12',letterSpacing:'.04em'}}>{row.normalized_plate || '—'}</div>
+        <div style={{fontSize:9,color:'#6b7280',marginTop:1}}>{cameraName || 'camera'} · {sign}{Math.abs(delta)}s</div>
+        <div style={{fontSize:9,color:'#6b7280'}}>{fmtDateTime(row.created_at)}</div>
+      </div>
+    </a>
+  );
+}
 
 // ── CrossCameraSightings ──
 // Renders plate_events from cameras OTHER than the ones that fed the
@@ -25,7 +50,7 @@ export function CrossCameraSightings({ plate, propertyId, when, excludeCameraIds
       // cameras already represented in the no-reg evidence array.
       const { data } = await supabase
         .from('plate_events')
-        .select('id, created_at, normalized_plate, plate_text, confidence, image_url, camera_id')
+        .select('id, created_at, normalized_plate, plate_text, confidence, camera_id')
         .eq('property_id', propertyId)
         .gte('created_at', lo)
         .lte('created_at', hi)
@@ -56,25 +81,15 @@ export function CrossCameraSightings({ plate, propertyId, when, excludeCameraIds
         Other-camera sightings near {fmtDateTime(when)} ({rows.length})
       </div>
       <div style={{display:'flex',gap:8,overflowX:'auto',WebkitOverflowScrolling:'touch',paddingBottom:4}}>
-        {rows.map(r => {
-          const delta = Math.round((new Date(r.created_at).getTime() - new Date(when).getTime()) / 1000);
-          const sign = delta >= 0 ? '+' : '−';
-          return (
-            <a key={r.id} href={r.image_url || '#'} target="_blank" rel="noopener noreferrer"
-               style={{flex:'0 0 auto',width:120,textDecoration:'none',color:'inherit',borderRadius:6,overflow:'hidden',border:'1px solid rgba(0,0,0,.12)',background:'#000'}}>
-              {r.image_url ? (
-                <img src={r.image_url} alt={r.normalized_plate} loading="lazy" style={{width:'100%',height:80,objectFit:'cover',display:'block'}} />
-              ) : (
-                <div style={{width:'100%',height:80,background:'#222'}} />
-              )}
-              <div style={{padding:'4px 6px',background:'#fff'}}>
-                <div style={{fontFamily:"'Courier New',monospace",fontSize:11,fontWeight:800,color:'#7c2d12',letterSpacing:'.04em'}}>{r.normalized_plate || '—'}</div>
-                <div style={{fontSize:9,color:'#6b7280',marginTop:1}}>{cameraNames[r.camera_id] || 'camera'} · {sign}{Math.abs(delta)}s</div>
-                <div style={{fontSize:9,color:'#6b7280'}}>{fmtDateTime(r.created_at)}</div>
-              </div>
-            </a>
-          );
-        })}
+        {rows.map(r => (
+          <SightingCard
+            key={r.id}
+            row={r}
+            when={when}
+            cameraName={cameraNames[r.camera_id]}
+            fmtDateTime={fmtDateTime}
+          />
+        ))}
       </div>
     </div>
   );

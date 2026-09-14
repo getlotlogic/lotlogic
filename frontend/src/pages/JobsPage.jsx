@@ -11,6 +11,7 @@ import { useToast } from '../ui/Toast.jsx';
 import { SearchIcon } from '../ui/icons.jsx';
 import { ViolationProofModal } from '../ui/ProofModal.jsx';
 import { ViolationSnapshot } from '../ui/ViolationSnapshot.jsx';
+import { EventPhoto } from '../ui/eventPhoto.jsx';
 
 // ── Jobs tab (current violations) ─────────────────────────────
 export function JobsPage({ lots, violations, alprViolations = [], loading, lotStates, onAction, isOwner, deepLinkViolationId, user, onNavigate }) {
@@ -50,8 +51,11 @@ export function JobsPage({ lots, violations, alprViolations = [], loading, lotSt
     _origStatus: av.status,
     lot_id: null,
     _lot_name: av.properties?.name || 'Unknown Property',
-    _snapshot_url: av.plate_events?.image_url || null,
-    _paired_snapshot_url: av._paired_snapshot_url || null,
+    // Event IDs, not URLs. An ALPR violation's photograph is presigned per
+    // view (Wave 2.5 Task 10); `_snapshot_url` stays reserved for the legacy
+    // YOLO pipeline's snapshots.storage_url, which these rows never have.
+    _snapshot_event_id: av.plate_events?.id || null,
+    _paired_snapshot_event_id: av._paired_snapshot_event_id || null,
     _paired_camera_name: av._paired_camera_name || null,
     _detections: null,
     plate_text: av.plate_text,
@@ -553,8 +557,11 @@ export function JobsPage({ lots, violations, alprViolations = [], loading, lotSt
                     borderRadius:10, padding:'10px 12px',
                     display:'flex', flexWrap:'wrap', alignItems:'center', gap:10,
                   }}>
-                    {v._snapshot_url && (
+                    {v._snapshot_url ? (
                       <img src={v._snapshot_url} alt={`Vehicle ${v.plate_text || ''}`} loading="lazy"
+                        style={{width:56, height:56, objectFit:'cover', borderRadius:8, border:'1px solid var(--border)', flexShrink:0}} />
+                    ) : (
+                      <EventPhoto eventId={v._snapshot_event_id} alt={`Vehicle ${v.plate_text || ''}`}
                         style={{width:56, height:56, objectFit:'cover', borderRadius:8, border:'1px solid var(--border)', flexShrink:0}} />
                     )}
                     <div style={{flex:1, minWidth:180}}>
@@ -752,16 +759,16 @@ export function JobsPage({ lots, violations, alprViolations = [], loading, lotSt
                 </div>
               )}
               {/* Snapshot photo with single bounding box on violating vehicle */}
-              <ViolationSnapshot src={v._snapshot_url} detections={v._detections} matchedDetection={matchViolationDetection(v._detections, v.zone_id, camZonesMap[v.camera_id])} maxHeight={220} borderRadius={0} onClick={v._snapshot_url ? () => setSelectedViol(v) : undefined} />
+              <ViolationSnapshot src={v._snapshot_url} eventId={v._snapshot_event_id} detections={v._detections} matchedDetection={matchViolationDetection(v._detections, v.zone_id, camZonesMap[v.camera_id])} maxHeight={220} borderRadius={0} onClick={(v._snapshot_url || v._snapshot_event_id) ? () => setSelectedViol(v) : undefined} />
               {/* Paired-camera snapshot — the second camera at the same gate that
                   fired around the same time. Helps operator visually verify a real
                   paired transit before dispatching. */}
-              {v._paired_snapshot_url && (
+              {v._paired_snapshot_event_id && (
                 <div style={{borderTop:'1px solid rgba(255,255,255,.06)'}}>
                   <div style={{fontSize:10, color:'var(--text-muted)', padding:'6px 12px', letterSpacing:'.06em', textTransform:'uppercase', fontWeight:700}}>
                     Paired camera{v._paired_camera_name ? ` — ${v._paired_camera_name}` : ''}
                   </div>
-                  <ViolationSnapshot src={v._paired_snapshot_url} maxHeight={160} borderRadius={0} />
+                  <ViolationSnapshot eventId={v._paired_snapshot_event_id} maxHeight={160} borderRadius={0} />
                 </div>
               )}
               {/* Live vehicle presence indicator */}

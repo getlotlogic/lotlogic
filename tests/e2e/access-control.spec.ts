@@ -135,6 +135,40 @@ test.describe('property access control @access', () => {
     expect(res.status()).toBe(401);
   });
 
+  // ── Vehicle photographs (Wave 2.5 Task 10) ──────────────────────
+  // GET /alpr/plate-events/{id}/photo is how the dashboard gets a picture now:
+  // a 15-minute presigned R2 URL, minted only after the backend has checked
+  // that the caller owns the property the read belongs to. Before it existed,
+  // every photograph was a permanent public r2.dev address handed out by
+  // PostgREST, and the only thing standing between a stranger and a vehicle
+  // photo was not knowing the URL.
+  //
+  // The assertion that matters is NEGATIVE and holds regardless of seed data:
+  // an authenticated tenant who cannot prove ownership of an event id must
+  // never receive a signed URL. The seeded Playwright accounts own legacy
+  // `lots` rows and no ALPR `properties`/`plate_events` at all, so every event
+  // id in existence is foreign to owner A — which makes a random uuid exactly
+  // as good a probe as a real foreign id, and a far more stable one.
+  test('owner A cannot presign a plate photo they do not own', async ({ request }) => {
+    const a = await apiLogin(request, accounts.ownerA());
+    const foreignEventId = '00000000-0000-4000-8000-0000000000ff';
+
+    const res = await request.get(`${API_URL}/alpr/plate-events/${foreignEventId}/photo`, {
+      headers: { Authorization: `Bearer ${a.token}` },
+    });
+    // 404, not 403: the response must not confirm whether the event exists.
+    expect(res.status(), 'a photo outside the caller\'s scope must 404').toBe(404);
+    const body = await res.json().catch(() => ({}));
+    expect(body.url, 'no presigned URL may be returned for a foreign read').toBeUndefined();
+  });
+
+  test('plate photos are not reachable without a session', async ({ request }) => {
+    const res = await request.get(
+      `${API_URL}/alpr/plate-events/00000000-0000-4000-8000-0000000000ff/photo`,
+    );
+    expect(res.status(), 'the photo route sits behind the login wall').toBe(401);
+  });
+
   test('direct URL to foreign property shows empty or unauthorized state', async ({
     page,
     request,
