@@ -12,6 +12,52 @@ export function normalizeViolation(v) {
   };
 }
 
+// ── Shared: try loading an image URL, returns true if it loads successfully ──
+export async function tryLoadImageUrl(url, timeout = 5000) {
+  const img = new Image();
+  const ok = await new Promise(r => {
+    img.onload = () => r(true);
+    img.onerror = () => r(false);
+    img.src = url;
+    setTimeout(() => r(false), timeout);
+  });
+  return ok && img.naturalWidth > 0;
+}
+
+// ── Shared: resolve best snapshot URL for a camera ────────────
+// Tries DB snapshot first (if fresh), then tunnel URL. Returns
+// { url, capturedAt, snap } or null. Used by ViolationProofModal's live
+// poll so the "Current" photo works even when the puller is down and DB
+// snapshots are stale.
+export async function resolveCameraSnapshot(cameraId, tunnelSnapshotUrl, maxAgeSec = 120) {
+  // 1. Try latest DB snapshot
+  if (supabase) {
+    try {
+      const { data } = await supabase
+        .from('snapshots')
+        .select('storage_url, url, captured_at, vehicles_detected, raw_detections')
+        .eq('camera_id', cameraId)
+        .order('captured_at', { ascending: false })
+        .limit(1);
+      if (data?.[0]) {
+        const s = data[0];
+        const age = s.captured_at ? (Date.now() - new Date(s.captured_at).getTime()) / 1000 : Infinity;
+        const base = s.storage_url || s.url || '';
+        if (age < maxAgeSec && base) {
+          return { url: base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now(), capturedAt: s.captured_at, snap: s };
+        }
+      }
+    } catch {}
+  }
+  // 2. Try tunnel snapshot URL directly
+  if (tunnelSnapshotUrl) {
+    const tUrl = tunnelSnapshotUrl + (tunnelSnapshotUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    const ok = await tryLoadImageUrl(tUrl);
+    if (ok) return { url: tUrl, capturedAt: new Date().toISOString(), snap: null };
+  }
+  return null;
+}
+
 // ── Supabase data layer (with Rails API fallback) ─────────────
 // Real Supabase table names: lot_owners, enforcement_partners, lots, cameras,
 // violations, snapshots, camera_zones
