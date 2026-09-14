@@ -13,6 +13,7 @@ import {
   pgRest, backendRegister, getRecaptchaToken, friendlyErrorMessage,
   escapeHtml, showNotFound, showConnectionError, normalizePlate, normalizePhone,
   newIdempotencyKey, REGION_TOKENS, PROPERTY_COLUMNS, propertyQuery, BACKEND_URL,
+  resolvePolicySrc,
 } from './shared/register.js';
 import { DEFAULT_TRUCK_PLAZA_POLICY } from './shared/policy.js';
 
@@ -152,6 +153,12 @@ function showTruckPlazaForm() {
         <span>I understand payment is non-refundable, does not exempt my vehicle from the parking policies, and that violating any rule may result in towing at my expense.</span>
       </label>
       ` : '';
+  // The posted policy image. Prefer the stored URL (Wave 2.3 -- adding a site no
+  // longer means committing a JPEG to this repo); fall back to the committed
+  // /policy/<qr>.jpg for the sites that predate it; fall back again to the text
+  // policy when neither exists. The onerror listener below already handles the
+  // last hop and is unchanged.
+  const policySrc = resolvePolicySrc(property, qrCodeId);
   app.innerHTML = `
     <div class="logo">
       <div class="shield"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F1B14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M9 10h2a2 2 0 0 1 0 4H9zm0 0v4"/></svg></div>
@@ -185,11 +192,12 @@ function showTruckPlazaForm() {
       <div style="margin-top:18px;background:#1F1B14;color:#F4ECD8;border:1.5px solid #1F1B14;padding:16px 18px;font-size:13px;line-height:1.55;letter-spacing:.02em;">
         <div style="font-family:'Fraunces',serif;font-style:italic;font-size:16px;margin-bottom:10px;color:#F4ECD8;">Towing enforced — please read the rules.</div>
         <!-- The property's official posted policy, rendered as a document image.
-             Keyed by qr_code_id so each property can drop in /policy/<qr>.jpg. Falls back to
-             the text policy only if no image exists for this property. The page viewport
-             blocks pinch-zoom, so the wrapping link opens the full-size image in a new tab. -->
-        <a href="/policy/${escapeHtml(qrCodeId)}.jpg" target="_blank" rel="noopener" id="policyImgLink" style="display:block;">
-          <img src="/policy/${escapeHtml(qrCodeId)}.jpg"
+             Prefers the stored policy_image_url row (Wave 2.3); falls back to the
+             committed /policy/<qr>.jpg for sites that predate it, then to the
+             text policy if neither exists. The page viewport blocks pinch-zoom,
+             so the wrapping link opens the full-size image in a new tab. -->
+        <a href="${escapeHtml(policySrc)}" target="_blank" rel="noopener" id="policyImgLink" style="display:block;">
+          <img src="${escapeHtml(policySrc)}"
                alt="Official truck parking policies — tap to open full size"
                style="width:100%;height:auto;display:block;border-radius:6px;background:#FFFFFF;"
                id="policyImg" />

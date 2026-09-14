@@ -306,8 +306,21 @@ export function escapeHtml(str) {
 // with it (see visit.js's loadPropertyRow). propertyQuery is parameterized
 // on `columns` so resident.js and apt.js can build their own (shorter)
 // query the same way instead of hand-concatenating the string themselves.
-export const PROPERTY_COLUMNS = 'id,name,address,property_type,policy_text,policy_phone';
+// policy_image_url (Wave 2.3) is in the narrow list, not the wide/narrow
+// pay_to_park_enabled dance above: Task 17 deploys the backend (which applies
+// the migration granting anon SELECT on it) before the frontend, so by the
+// time this ships the column always exists.
+export const PROPERTY_COLUMNS = 'id,name,address,property_type,policy_text,policy_phone,policy_image_url';
 
 export function propertyQuery(qrCodeId, columns) {
   return `/properties?select=${columns}&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`;
+}
+
+// The posted policy image src for a truck-plaza registration form. Prefers
+// the stored `policy_image_url` row (Wave 2.3 -- adding a site no longer
+// means committing a JPEG to this repo); falls back to the committed
+// /policy/<qr>.jpg for sites that predate it. A pure function (not inlined
+// in visit.js) so it's unit-testable without a DOM.
+export function resolvePolicySrc(property, qrCodeId) {
+  return (property && property.policy_image_url) || `/policy/${qrCodeId}.jpg`;
 }
