@@ -26,9 +26,14 @@ AI-powered parking enforcement platform. Cameras detect vehicles in zones, creat
 - **Backend**: Python API on Railway at `https://lotlogic-backend-production.up.railway.app`
   - Backend source lives in its own repo, `getlotlogic/lotlogic-backend` — not here
 - **Database**: Supabase (PostgreSQL) at `https://nzdkoouoaedbbccraoti.supabase.co`
-- **Snapshot Puller**: Async camera polling service in `puller/`, deployed as Railway worker
-- **Monitoring**: Python agent system in `monitoring/` with Claude AI analysis (containerized)
-- **Detection Pipeline**: Camera RTSP -> Snapshots (30s poll) -> YOLO -> Zone filtering -> Violation creation
+- **Retired: the camera-zone pipeline.** `puller/` (Railway worker polling RTSP
+  snapshots), `monitoring/` (the zone-guardian agent) and the YOLO zone-overlap
+  violation engine were the original design. Their producer stopped in March
+  2026; the live pipeline is the camera-based ALPR one below. The folders and
+  the two Railway services still exist — deleting them is programme fat
+  decision 2 and needs an answer, not a commit. **Do not build on them, and do
+  not read `zone_occupancy`, `snapshots.raw_detections` or `camera_zones` as
+  live data.**
 - **Camera-based ALPR pipeline** (rebuilt 2026-04-19, live): Milesight 4G Traffic Sensing Camera → HTTP POST with JSON body (`values.image` = base64 JPEG, `values.devMac` = camera id) → `supabase/functions/camera-snapshot/` → calls Plate Recognizer `/v1/plate-reader/` synchronously → uploads snapshot to R2 bucket `parking-snapshots` → inserts `plate_events` → opens/closes `plate_sessions` via the session state machine → allowlist match against `resident_plates` / `visitor_passes` (cron sweepers create `alpr_violations` on grace/pass expiry) → fires `tow-confirm` + `tow-dispatch-email` fire-and-forget. Consolidated reference: `docs/archive/specs/2026-04-20-alpr-pipeline-post-gut-consolidated-design.md` (indexes the three sub-specs: milesight ingest, session state machine, USDOT OCR fallback). `pr-ingest` edge function remains deployed for cameras that DO webhook in via PR, but receives no production traffic.
 - **USDOT / MC first-class** (2026-04-20): plateless tractors are supported end-to-end. QR forms (`visit.html` + `resident.html` truck-plaza branches) accept optional USDOT + MC (5-8 digits); if no license plate is given, frontend synthesizes `plate_text = DOT-<usdot>` / `MC-<mc>`. Backend stores `usdot_number` / `mc_number` columns on `visitor_passes` and `resident_plates` (migration 015). `camera-snapshot::findActive{Resident,VisitorPass}` branches on plate prefix to match against those columns instead of `plate_text`. Camera-side synthesis runs via the ParkPow USDOT OCR fallback when Plate Recognizer returns zero plates (feature-flagged via `ENABLE_USDOT_FALLBACK=true` + `PARKPOW_USDOT_TOKEN`).
 
@@ -78,83 +83,7 @@ lotlogic/
 
 ## Detection Pipeline Gotchas & Learnings
 
-### Issue: Zones Not Detecting Violations (March 2025)
-**Root cause**: Cowork identified that zones weren't picking up violations. Multiple potential causes:
-1. **Camera too far from zone** - YOLO bounding boxes become too small at distance, confidence drops below threshold
-2. **Confidence threshold too aggressive** - If backend filters detections above a certain confidence, close-but-not-perfect detections get dropped
-3. **Zone polygon mismatch** - Zone polygons drawn in the UI (percentage-based 0-100 SVG coords) may not align with where vehicles actually appear in the camera frame
-4. **Resolution too low** - At 640x360 (default), plates become unreadable at distance. Plate Recognizer needs clear character rendering
-5. **Snapshot-to-violation gap** - Camera sees vehicles (vehicles_detected > 0 in snapshots) but violation engine doesn't create violations if zone overlap check fails
-
-### Zone Matching: IoU Bounding Box Overlap (Upgraded March 2025)
-The backend violation engine matches detections to zones using **IoU-style bounding box overlap**.
-A detection's bbox must overlap the zone polygon by at least **30%** (configurable via `ZONE_IOU_THRESHOLD`
-env var) to count as a match. If a detection overlaps multiple zones, it's assigned to the zone with
-the highest overlap percentage.
-
-This replaced the previous center-point-in-polygon approach which caused repeated production failures
-(e.g., zone 7 had vehicles overlapping by 47% but centroid landing 0.003 outside the boundary).
-
-- **Overlap threshold**: 30% default (`ZONE_IOU_THRESHOLD` env var, 0-1 scale)
-- **`zone_overlap` column** on `violations` table stores the overlap percentage (0-1 scale)
-- The dedup system weights presence scoring by overlap — higher overlap = stronger presence signal
-- Zone polygons still use **0-1 normalized coords** in the DB
-- Detection bboxes still use **0-1 normalized** `[x1, y1, x2, y2]`
-- **Raw detections have `zone_id: none`** — zone matching happens in the violation engine, not at snapshot level
-
-**Historical note**: The Z1/Z7 centroid gap issues (March 2025) are fully resolved by IoU matching —
-vehicles no longer need their exact center point inside the zone, just sufficient bounding box overlap.
-
-### Zone Guardian Agent (Updated March 2025)
-`monitoring/zone_guardian.py` — Autonomous agent that runs every 10 minutes, scans ALL cameras/lots,
-and monitors IoU overlap quality for all zone-detection pairs:
-- **low_overlap_risk**: Vehicles overlap zone between 10-30% — below IoU threshold, no violations created
-- **threshold_borderline**: Vehicles at 30-35% overlap — zone works but fragile to camera shifts
-- **near_miss**: Vehicles detected near zone but not overlapping at all
-- **zone_too_small**: Zone polygon too small for reliable overlap matching
-
-**Auto-fix mode**: `--auto-fix` flag automatically patches zone polygons via the backend API,
-expanding them to increase overlap above the 30% IoU threshold.
-
-**Usage**:
-- `python zone_guardian.py --scan` — single scan
-- `python zone_guardian.py --daemon` — continuous monitoring (every 10 min)
-- `python zone_guardian.py --scan --auto-fix` — scan and auto-patch zones
-- `python zone_guardian.py --scan --camera-id <uuid>` — scan specific camera
-
-### Detection Monitoring System (Added March 2025)
-`monitoring/agent_tools.py` -> `check_zone_detection_health()` now automatically detects:
-- **Silent zones**: Online camera with zones configured but zero violations ever
-- **Detection dropoff**: Zone had violations in 7-day window but zero in last 24h
-- **Confidence skew (high)**: Avg confidence > 95% means over-filtering, missing borderline violations
-- **Confidence skew (low)**: Avg confidence < 30% means bad angle/distance/obstruction
-- **Vehicles seen but no violations**: Snapshots detect vehicles but violation engine creates nothing
-- **Low resolution risk**: Camera resolution below 640x360 minimum
-- **No zones configured**: Camera online and taking snapshots but no zones defined
-
-### Auto-Diagnosis System (Updated March 2025)
-`monitoring/agent_tools.py` -> `diagnose_zone_issues()` goes deeper — compares actual detection
-bounding boxes against zone polygons from recent snapshots to find WHY zones fail:
-- **low_overlap**: Vehicles overlap zone but below the 30% IoU threshold (zone too small or offset)
-- **overlap_borderline**: Vehicles at 30-40% overlap — zone works but fragile to camera changes
-- **zone_near_miss**: Vehicles detected NEAR zone but not overlapping (zone needs shifting)
-- **zone_no_vehicles**: Zone in area where no vehicles appear in frame
-- **zone_too_small**: Zone covers < 0.5% of frame, unreliable matching
-- **invalid_polygon**: Zone has < 3 polygon points
-
-### Database Schema vs Code Gotchas
-- `cameras` table does NOT have an `online` column — use `status` and `active` instead
-- Camera status values: `active`
-- Zone polygon coords are **0-1 normalized** in the DB, not 0-100 percentage
-- Detection bboxes are also **0-1 normalized** `[x1, y1, x2, y2]`
-- Camera has `resolution_width`/`resolution_height` AND `snapshot_width`/`snapshot_height` columns
-
-### Key Thresholds
-- **Zone IoU threshold**: 30% default (`ZONE_IOU_THRESHOLD` env var) — minimum bbox overlap to match a zone
-- Plate recognition alarm: < 20% = critical, < 50% = warning
-- Camera heartbeat staleness: 10 minutes
-- Confidence display: green > 0.8, yellow 0.5-0.8, red < 0.5
-- Snapshot poll interval: 30 seconds default
+Archived: `docs/archive/2026-03-zone-pipeline-learnings.md` (retired camera-zone pipeline, March 2025 debugging notes — not current).
 
 ## Revenue Model
 - `gross_revenue` = boot_fee ($75 default) or tow_fee ($250 default)
@@ -226,7 +155,7 @@ users out or blank their data.
 - **No shared types between Python and frontend.** A Pydantic field rename silently breaks the UI.
 - **Gitignored lockfile.** CI dependency resolution is non-deterministic.
 - **Secrets rotate by find-and-replace.** The old shared API key was embedded in the browser bundle and in CLAUDE.md — rotation was intrusive.
-- **Edge functions deploy out-of-band.** `supabase/functions/*` lives here but `supabase functions deploy` is a manual step. Repo can drift from deployed runtime. When you touch an edge function, diff against `mcp__supabase__get_edge_function` before pushing.
+- **Edge functions deploy out-of-band.** `supabase/functions/*` lives here but `supabase functions deploy` is a manual step. Repo can drift from deployed runtime. When you touch an edge function, diff against `mcp__supabase__get_edge_function` before pushing. **Planned fix, not yet landed:** Wave 2.9 Task 3 designs a `.github/workflows/edge-functions.yml` that deploys on push to `main` (`deno check` + `deno test` first, matrix computed from the import graph so a shared file redeploys every slug that reaches it). As of this note there is no such workflow file on any branch in this repo — this bullet stays true until Task 3 actually merges.
 - **This repo holds no migrations.** All DB schema lives in
   `lotlogic-backend/migrations/`, applied by `scripts/db/migrate.sh` and gated
   by the `schema-rebuild` + `schema-drift` CI jobs there. Edge functions in
@@ -299,7 +228,10 @@ Spec: [`getlotlogic/lotlogic-backend` → `docs/superpowers/specs/2026-04-18-tow
 
 ## Deploying edge functions
 
-Edge functions deploy independently of the Vercel push-to-main flow. **Diff against deployed runtime before overwriting.**
+Edge functions deploy independently of the Vercel push-to-main flow — see the
+"Edge functions deploy out-of-band" bottleneck above; Wave 2.9 Task 3's CI
+deploy workflow has not landed as of this note, so this is still a manual
+step. **Diff against deployed runtime before overwriting.**
 
 ```bash
 # Diff first (recommended):
@@ -312,6 +244,12 @@ supabase functions deploy tow-dispatch-email
 # Set secrets where needed:
 supabase secrets set JWT_SECRET=$SUPABASE_JWT_SECRET  # tow-dispatch-email
 ```
+
+Once Wave 2.9 Task 1's per-function `deno.lock` files land (pinned
+`supabase-js`, one lockfile per slug — not yet on `main` as of this note):
+changing a function's import means re-running `deno cache --lock=deno.lock
+<entry>.ts` for that slug before deploying, or CI's `deno check --frozen`
+gate goes red.
 
 New env vars required:
 - `tow-dispatch-email`: `JWT_SECRET` (= the Supabase JWT secret = backend's `JWT_SECRET`), `BACKEND_URL` (optional, defaults to prod), `SENDGRID_API_KEY` (primary provider) OR `RESEND_API_KEY` (fallback), `FROM_EMAIL` (must be on a domain-authenticated sender — currently `dispatch@lotlogicparking.com`), `FROM_NAME` (optional, "LotLogic" default), `EMAIL_OVERRIDE_TO` (optional test-recipient override; unset in prod).

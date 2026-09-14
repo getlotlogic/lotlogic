@@ -95,6 +95,27 @@ Plus: 🔑`JWT_SECRET` (must match Supabase), 🔑`PLATE_RECOGNIZER_API_KEY`,
 🔑`SENDGRID_API_KEY`, `INVOICE_FROM_EMAIL`/`INVOICE_RECIPIENT_EMAIL`,
 🔑`ADMIN_API_KEY` (empty in prod), `SUPABASE_URL`, `DASHBOARD_URL`.
 
+**QuickBooks OAuth, harvested from the archived
+`lotlogic-backend/docs/archive/2026-04-18-quickbooks-production-setup.md`
+(2026-04-18) before it was archived — Task 11's tests don't cover re-OAuth:**
+Intuit issues a **separate Client ID/Secret pair per environment**
+(sandbox vs. production); `QUICKBOOKS_ENVIRONMENT` picks the API base in
+`lotlogic-backend/services/quickbooks.py::_API_BASE`, and if it disagrees
+with which pair of keys is set, every call 401s. The redirect URI must match
+byte-for-byte between Intuit's app config and `QUICKBOOKS_REDIRECT_URI`:
+`https://lotlogic-backend-production.up.railway.app/quickbooks/oauth/callback`.
+Required scope: `com.intuit.quickbooks.accounting` (hardcoded in
+`build_authorize_url`). To reconnect: as the owner account, `GET
+/quickbooks/oauth/start` (dashboard Billing tab → Connect QuickBooks) → sign
+into the Intuit account that owns the real company → pick that company, not
+a sandbox one → Intuit redirects to `.../quickbooks/oauth/callback` → the
+backend exchanges the code, **upserts the `integrations` row keyed on
+`(provider, realm_id)`**, and creates the "Tow Processing Fee" Item if
+missing. Verify with `GET /quickbooks/status` (owner JWT) — expect
+`{"connected": true, "realm_id": ..., "tow_item_id": ...}`. A `Token
+exchange failed` error means the refresh token expired or OAuth was never
+completed in the target env; re-run the flow.
+
 **Local-only secret files (back up to vault NOW):**
 `/Users/gabe/lotlogic/.env.local` (Supabase service role, Cloudflare API token, R2 keys, ingest secrets),
 `/Users/gabe/Documents/lotlogic/leadgen/.env` (Gmail app password, Apify, Supabase service key).
@@ -197,7 +218,7 @@ ZeroTier Central. Camera IPs/creds are in `~/.claude/.../memory/reference_camera
 6. Cloudflare: DNS for `lotlogicparking.com` (keep Resend/SendGrid auth CNAMEs
    DNS-only / gray cloud), Email Routing, R2 bucket `parking-snapshots`,
    `wrangler deploy` the `email-tow-action` worker.
-7. Re-OAuth QuickBooks (`/quickbooks/oauth/start`); re-set `integration_secrets['rut_watchdog']`.
+7. Re-OAuth QuickBooks (`/quickbooks/oauth/start` — see the OAuth detail in §5); re-set `integration_secrets['rut_watchdog']`.
 8. Verify: backend `/health` 200, dashboard loads + roster shows, a test QR
    registration appears, run Playwright access-control spec.
 

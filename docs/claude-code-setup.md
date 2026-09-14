@@ -20,6 +20,11 @@ Both hooks are self-contained bash + python3 stdlib, `chmod +x`, no
 new runtime deps. The secret-scan hook is identical to the backend
 repo's copy on purpose — same rules everywhere.
 
+**CI will independently run gitleaks** as of Wave 2.9 Task 5
+(`.github/workflows/secrets-scan.yml`, working-tree + git-history
+scans) — that workflow lives on branch `wave2/delivery-t5` and has not
+merged to `main` as of this note, so `main`'s CI does not run it yet.
+
 ### Skills (`.claude/skills/`)
 
 - `ui-naming-rule` — **auto-loaded by Claude** when editing any user-
