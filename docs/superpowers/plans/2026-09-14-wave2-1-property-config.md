@@ -21,6 +21,15 @@
 
 Each constant migrates **one at a time**, behind the loader, with a test that pins today's behaviour when `config` is absent. Nothing in this plan changes an observable outcome at Charlotte or at any N Style site on the day it lands; the behaviour change is opt-in, one JSON key at a time.
 
+**How a property is read today — the measured list.** There is no loader and no cache: every caller writes its own `SELECT` against `public.properties`. Counted on `lotlogic-backend` `origin/main` @ `dc833b6` (`git grep -n "FROM public.properties" -- '*.py'`, test files excluded) and on `lotlogic` `origin/main`:
+
+- **Eight single-column policy reads** — the ones this wave actually replaces: `routers/app_api.py:296` (`total_spaces`), `:356` (`app_rates`), `routers/public_registration.py:234` (`guest_auto_approve`), `:384` (`property_type`), `:570` (`property_type, tow_company_id`), `:680`, `services/apartment_notify.py:276` (`name`), `:317` (`name, reject_tow_disclaimer`).
+- **Six ownership probes** (`SELECT 1 … WHERE id = :pid AND owner_id = …`) — `routers/lots.py:528`, `routers/resident_plates.py:40`, `routers/violations.py:840` and `:850`, `routers/visitor_passes.py:55` and `:65`. These are scope checks, not config reads; they stay exactly as they are.
+- **Four joined/multi-column reads** — `routers/admin.py:79`, `routers/app_api.py:247`, `routers/plaza_payments.py:429` (never-edit), `services/apartment_notify.py:68`.
+- **Two edge-function reads** — `supabase/functions/camera-snapshot/index.ts:273` (`select("property_type")`) and `camera-snapshot/sessions.ts:70` (`select("cooldown_hours")`). Task 14 replaces the second.
+
+Eighteen backend call sites across nine files, plus two in Deno. That is the surface a loader collapses, and it is why the loader gets a 60-second TTL rather than none: the camera path already pays for one property read per event, and this must not become two.
+
 **Tech Stack:** Python 3.11, FastAPI, SQLAlchemy 2 async + asyncpg, pydantic v2 / pydantic-settings, Supabase Postgres 17 behind a supavisor **SESSION-mode** pooler, pytest + pytest-asyncio (strict mode), ruff 0.16.5, Railway deploy from `main`, Supabase edge functions (Deno) + pg_cron, Vercel-hosted `frontend/src/**` built by `frontend/scripts/build.mjs` (Wave 2.6 landed — the dashboard is ES modules under `frontend/src/pages/`, no in-browser Babel).
 
 **Spec:** `/Users/gabe/lotlogic/docs/superpowers/specs/2026-09-03-enterprise-readiness-program.md` — §3 Wave 2 item **2.1**; systemic move **S2**; Appendix A findings **BACKEND-17, DB-6, PIPE-7 (property half), PLATFORM-2, PLATFORM-4, PLATFORM-5, PLATFORM-15**.
@@ -41,7 +50,7 @@ Wave 2.1 also assumes **Wave 1** is in (green CI, request ids, Sentry) and takes
 
 Every task's requirements implicitly include this section.
 
-- **Never edit these files.** `routers/plaza_payments.py`, `services/plaza_settle.py`, `services/plaza_sweep.py`, `services/plaza_reconcile.py`, `services/square.py`, `services/stripe_plaza.py`. The Stripe cutover owns them, and `services/square.py::PRICE_CENTS` plus the `chk_plaza_payments_amount_matches_hours` CHECK are **Wave 3.6's** job, not this one (see Scope calls §1). `services/plaza_notify.py` is read-only here too — its `_LOT_TZ` literal is inventoried but migrated by Task 11 *only* if the branch is rebased onto a merged Stripe cutover; otherwise Task 11 leaves it and records the miss.
+- **Never edit these files.** `routers/plaza_payments.py`, `services/plaza_settle.py`, `services/plaza_sweep.py`, `services/plaza_reconcile.py`, `services/square.py`, `services/stripe_plaza.py`. The Stripe cutover owns them, and `services/square.py::PRICE_CENTS` plus the `chk_plaza_payments_amount_matches_hours` CHECK are **Wave 3.6's** job, not this one (see Scope calls §1). `services/plaza_notify.py` is read-only here too, and that has a consequence Task 10 must respect: **`services/plaza_reconcile.py` and `services/tow_digest.py` do not own a timezone literal — they import `_LOT_TZ` from `services/plaza_notify.py:33`.** One of the two importers (`plaza_reconcile.py`) is on the never-edit list outright, and the owner (`plaza_notify.py`) is read-only, so the whole three-file chain is **deferred to the Stripe-cutover rebase** and is not Task 10's work (decision D11). Task 10 covers `routers/app_api.py`, `routers/quickbooks.py` and `services/apartment_notify.py` only; Task 15's census allowlist records the deferred chain by name so the drift guard does not go red on a literal nobody is allowed to touch.
 - **A NULL `config` must change nothing.** This is the acceptance test for the entire wave. Every task ships a test asserting the pre-existing behaviour with `config IS NULL`, and only then a second test asserting the new behaviour with a config present. If a task cannot write the first test, the task is wrong.
 - **Additive migrations only.** No column is dropped in this wave. `properties.cooldown_hours` stays and keeps working (Task 8 makes it the *fallback* the config reads, not a second source of truth). Deletions are a separate, later commit once every reader is proven to be on the loader.
 - **`config` is never anon-readable and never client-writable.** `properties` today grants `anon` SELECT on exactly eight columns (`address, id, name, pay_to_park_enabled, policy_phone, policy_text, property_type, qr_code_id`) but grants `anon` and `authenticated` INSERT/UPDATE across **all** columns — so a column added without an explicit `REVOKE` inherits a write grant. `frontend/src/lib/db.js::updateProperty` writes `properties` straight through PostgREST with the user's JWT. Task 1's migration therefore `REVOKE`s `SELECT, INSERT, UPDATE (config)` from `anon` and `INSERT, UPDATE (config)` from `authenticated` in the same file that adds the column. Config writes go through the backend or they do not happen.
@@ -75,8 +84,9 @@ Every task's requirements implicitly include this section.
 | `routers/app_api.py` *(modify, T7)* | `BOOKABLE_KINDS` becomes config-derived; `monthly` becomes quotable and bookable. |
 | `migrations/20260914*_cooldown_from_config.sql` **(new, T8)** | `set_pass_cooldown_flag()` + `count_on_cooldown()` read `property_config()`; `properties.cooldown_hours` becomes the documented fallback. |
 | `services/plate_matcher.py` *(modify, T9)* | Module constants become `PropertyConfig` field defaults; every call site takes the loaded config. |
-| `services/lot_time.py` **(new, T10)** | `lot_tz(config)`, `lot_day_bounds(config, ymd)`, `fmt_local(config, dt)`. The one formatter; eleven `America/New_York` literals collapse into it. |
+| `services/lot_time.py` **(new, T10)** | `lot_tz(config)`, `lot_day_bounds(config, ymd)`, `fmt_local(config, dt)`. The one formatter. Three call sites collapse into it now (`app_api`, `quickbooks`, `apartment_notify`); the `plaza_notify._LOT_TZ` chain and the two dead weather jobs are deferred — Task 10's scope note. |
 | `services/notices.py` **(new, T11)** | `resolve_recipients(config, …)` — the one place an override, an extra-recipient list and a disable flag are applied, and the one place a redirect is stamped. |
+| `migrations/20260914*_notice_override_stamp.sql` **(new, T11)** | `outbound_notices.overridden_to text` — the column that makes a redirected send visible in the dashboard forever after. (`outbound_notices` itself already exists; Wave 2.7 Task 12 built it.) |
 | `services/revenue.py` **(new, T12)** | `revenue_split(config, partner)` — per-property override on top of the partner default. |
 | `services/tow_retention.py` *(modify, T13)* | `parse_overrides` keeps working; a new `camera_retention_days(config, api_key)` prefers `config.tow_evidence.cameras` and falls back to the env var. |
 | `supabase/functions/_shared/propertyConfig.ts` **(new, T14)** | `getPropertyConfig(db, propertyId)` — one RPC, per-invocation memo. The edge half of the loader. |
@@ -100,14 +110,16 @@ The doc merges seven findings into 2.1. Decisions, made here so no executor re-l
 3. **`properties.policy_text` / `policy_phone` stay columns.** They are already anon-readable (the QR registration page reads them unauthenticated through `properties_public`), they are the legally-operative driver-facing copy, and moving them behind a config document that `anon` must not read would break `visit.html`. What moves into config is the *metadata*: `policy.require_ack`, `policy.version`, `policy.max_stay_note`. `frontend/src/shared/policy.js::DEFAULT_TRUCK_PLAZA_POLICY` (PLATFORM-4 — Charlotte's rules as the hardcoded default for every future plaza) stops being a runtime fallback and becomes a **seed template** offered by the Task 4 editor; a property with no `policy_text` renders nothing rather than silently inheriting Charlotte's rules. Recorded as decision **D5**.
 4. **PLATFORM-5's Wave 1 half is already done.** §2 item 12 unset `EMAIL_OVERRIDE_TO` and added the start-up warning. What remains for 2.1 is the *structural* half: one global switch that replaces recipients at **every** site becomes `config.notices.override_to` per site, and a redirected send is stamped so the dashboard can show it forever after (Task 11).
 5. **`revenue_share` stays on `enforcement_partners`; config adds an override.** The partner row is the contract default and `tests/test_partner_allowlist.py` already defends it from partner self-edit (SEC-5). A per-property `config.revenue.share_override` is additive and platform-admin-only, so the existing negative tests keep passing unchanged. Recorded as decision **D4**.
-6. **Timezone: one column's worth of behaviour, eleven literals.** `PLATFORM-15`. Wave 1 item 8 already fixed the Parking Log symptom with `frontend/src/lib/lotdate.js::LOT_TIMEZONE`, whose own comment says *"Wave 2 replaces the constant with a `properties.timezone` column."* This plan puts it at `config.timezone` rather than a bare column, because it travels with every other site rule and because the SQL function makes it readable from a trigger. `lotdate.js` keeps `LOT_TIMEZONE` as its fallback and gains an optional argument (Task 10).
+6. **Timezone: one column's worth of behaviour, spread over eleven places — but only five of them are Task 10's.** `PLATFORM-15`. Wave 1 item 8 already fixed the Parking Log symptom with `frontend/src/lib/lotdate.js::LOT_TIMEZONE`, whose own comment says *"Wave 2 replaces the constant with a `properties.timezone` column."* This plan puts it at `config.timezone` rather than a bare column, because it travels with every other site rule and because the SQL function makes it readable from a trigger. **In scope for Task 10:** `routers/app_api.py:66`, `routers/quickbooks.py:199`, `services/apartment_notify.py:327`, plus `lotdate.js` (which keeps `LOT_TIMEZONE` as its fallback and gains an optional argument) and the `markets.timezone` fallback underneath. **Deferred:** the single `_LOT_TZ` at `services/plaza_notify.py:33` and its two importers (`plaza_reconcile.py`, `tow_digest.py`) — `plaza_notify` is read-only this wave and `plaza_reconcile` is never-edit, so that chain moves on the Stripe-cutover rebase (decision D11). **Out permanently:** the two weather functions' `TZ` constants, both jobs being switched off and on fat decision 13's delete list.
 7. **`enforcement_type`, `enforcement_hours`, `rules`, `monthly_fee`, `notes_migrated` — untouched.** Four of the 29 `properties` columns are read by nothing (verified: zero references in `routers/`, `services/`, `supabase/functions/`, `frontend/src/`), and `notes_migrated` is on fat decision 27's delete list. Migrating dead columns into a config document dignifies them. They are listed in the inventory as **drop candidates**, not as config keys.
 
 ---
 
 ## The inventory — every constant this wave is responsible for
 
-`where it lives today` is a real file:line or object name on `origin/main` + `wave2/schema-baseline`. `config key` is relative to the `properties.config` document root.
+`where it lives today` is a real file:line or object name, verified 2026-09-14 against **`lotlogic-backend` `origin/main` @ `dc833b6`** and **`lotlogic` `origin/main`** (the two refs pre-flight checked). `config key` is relative to the `properties.config` document root.
+
+**One caveat on the numbers.** Wave 2.4 (`wave2/schema-baseline`), which this plan is gated on, shifts `models.py` down by nine lines — `revenue_share` is at 43/413 on `origin/main` and at 52/422 once 2.4 merges. Every other file cited here is byte-identical on both refs. **Grep the symbol, do not trust the line number**; the symbol is given in every row for exactly that reason.
 
 ### Stay caps and pass policy
 
@@ -139,7 +151,7 @@ The doc merges seven findings into 2.1. Decisions, made here so no executor re-l
 
 | # | Constant / value | Where it lives today | Proposed config key |
 |---|---|---|---|
-| 17 | `GRACE_MINUTES = 10` | `services/plate_matcher.py:66` | `grace.registration_minutes` |
+| 17 | `GRACE_MINUTES = 10` | `services/plate_matcher.py:63` | `grace.registration_minutes` |
 | 18 | `GRACE_EXPIRY_MINUTES` env, default `15` | `supabase/functions/cron-sessions-sweep/index.ts:38` — **disagrees with #17** | `grace.registration_minutes` |
 | 19 | `GRACE_MS = 15 * 60_000` | `supabase/functions/cron-no-reg-sweep/index.ts:13` — third copy | `grace.registration_minutes` |
 | 20 | `OVERSTAY_GRACE_MINUTES` env, default `5` | `cron-sessions-sweep/index.ts:30` | `grace.overstay_minutes` |
@@ -152,11 +164,11 @@ The doc merges seven findings into 2.1. Decisions, made here so no executor re-l
 
 | # | Constant / value | Where it lives today | Proposed config key |
 |---|---|---|---|
-| 25 | `PLATE_CONFIDENCE_MIN = 0.92` | `services/plate_matcher.py:61` | `pipeline.plate_confidence_min` |
+| 25 | `PLATE_CONFIDENCE_MIN = 0.92` | `services/plate_matcher.py:59` (and a **stale third copy in the module docstring at :15, which says 0.85**) | `pipeline.plate_confidence_min` |
 | 26 | `PR_MIN_SCORE` env, default `0.8` | `camera-snapshot/index.ts:35` — **disagrees with #25** | `pipeline.plate_confidence_min` |
-| 27 | `CAMERA_SUSPEND_THRESHOLD = 0.70` | `services/plate_matcher.py:62` | `pipeline.camera_suspend_threshold` |
-| 28 | `CAMERA_SUSPEND_MIN_EVENTS = 5`, `CAMERA_SUSPEND_DURATION_MIN = 30` | `services/plate_matcher.py:63-64` | `pipeline.camera_suspend_min_events`, `pipeline.camera_suspend_minutes` |
-| 29 | `MIN_CONFIRMING_EVENTS = 2`, `CONFIRM_WINDOW_MIN = 5` | `services/plate_matcher.py:67-68` | `pipeline.min_confirming_events`, `pipeline.confirm_window_minutes` |
+| 27 | `CAMERA_SUSPEND_THRESHOLD = 0.70` | `services/plate_matcher.py:60` | `pipeline.camera_suspend_threshold` |
+| 28 | `CAMERA_SUSPEND_MIN_EVENTS = 5`, `CAMERA_SUSPEND_DURATION_MIN = 30` | `services/plate_matcher.py:61-62` | `pipeline.camera_suspend_min_events`, `pipeline.camera_suspend_minutes` |
+| 29 | `MIN_CONFIRMING_EVENTS = 2`, `CONFIRM_WINDOW_MIN = 5` | `services/plate_matcher.py:64-65` | `pipeline.min_confirming_events`, `pipeline.confirm_window_minutes` |
 | 30 | `PR_MIN_PLATE_LEN` env, default `5` | `camera-snapshot/index.ts:60` | `pipeline.min_plate_length` |
 | 31 | `REQUIRE_VEHICLE_SCORE` env, default `0.7` | `camera-snapshot/index.ts:64` | `pipeline.require_vehicle_score` |
 | 32 | `TOW_CONFIRM_MIN_CONFIDENCE` env, default `0.65` | `tow-confirm/index.ts:26` | `pipeline.tow_confirm_min_confidence` |
@@ -167,7 +179,9 @@ The doc merges seven findings into 2.1. Decisions, made here so no executor re-l
 
 | # | Constant / value | Where it lives today | Proposed config key |
 |---|---|---|---|
-| 35 | `ZoneInfo("America/New_York")` | `services/plaza_reconcile.py:_LOT_TZ`, `services/tow_digest.py:_LOT_TZ`, `services/plaza_notify.py:33`, `services/apartment_notify.py:327` (inline), `routers/app_api.py:66 LOT_TZ`, `routers/quickbooks.py:199` (`tz_name = "America/New_York"` with a "property table doesn't carry market_id today" comment) | `timezone` (top level) |
+| 35 | `ZoneInfo("America/New_York")` — **in scope for Task 10** | `routers/app_api.py:66` (`LOT_TZ`), `routers/quickbooks.py:199` (`tz_name = "America/New_York"`, with a comment that literally names the missing column: *"property table doesn't carry market_id today; default tz"*), `services/apartment_notify.py:327` (inline `_zi("America/New_York")`) | `timezone` (top level) |
+| 35b | `_LOT_TZ = ZoneInfo("America/New_York")` — **deferred, not Task 10** | **One** literal, at `services/plaza_notify.py:33`. `services/plaza_reconcile.py` and `services/tow_digest.py` do **not** own a copy — they import this one. `plaza_notify.py` is read-only this wave and `plaza_reconcile.py` is on the never-edit list, so the chain moves after the Stripe-cutover rebase (decision D11). Task 15 allowlists it. | `timezone` *(later)* |
+| 35c | `markets.timezone`, default `"America/New_York"` | `models.py:27`; read at `routers/quickbooks.py:204` through a `Property → Lot → Market` hop that only resolves when the property is **also** present in the legacy `lots` table — which is why line 199 needs a hardcoded fallback at all | `timezone` — **reconcile, do not duplicate**: Task 10 makes `config.timezone` the answer and leaves `markets.timezone` as the legacy fallback under it, exactly as `cooldown_hours` sits under `cooldown.hours` |
 | 36 | `tz = "America/New_York"` default arg | `tow-dispatch-email/index.ts:13`, `tow-dispatch-sms/index.ts:19`, `tow-confirm/index.ts:307` | `timezone` |
 | 37 | `const TZ = "America/New_York"` | `weather-pull/index.ts:15`, `weather-risk-eval/index.ts:21` (both jobs inactive — fat decision 13) | `timezone` *(only if the jobs survive)* |
 | 38 | `LOT_TIMEZONE = 'America/New_York'` | `frontend/src/lib/lotdate.js:9` — its own comment says Wave 2 replaces it | `timezone`, via the property row |
@@ -190,7 +204,7 @@ The doc merges seven findings into 2.1. Decisions, made here so no executor re-l
 
 | # | Constant / value | Where it lives today | Proposed config key |
 |---|---|---|---|
-| 48 | `revenue_share` default `0.25` | `models.py:52` (`Column(Numeric(5,4), default=0.25)`), `models.py:422`; applied at `routers/violations.py:431, 512, 766` and `routers/snapshots.py:192` | `revenue.share_override` (null ⇒ partner row wins) |
+| 48 | `revenue_share` default `0.25` | `models.py:43` (`Column(Numeric(5,4), default=0.25)`) and `models.py:413` (52/422 after Wave 2.4 merges — grep the symbol); applied at `routers/violations.py:431, 512, 766` and `routers/snapshots.py:192` | `revenue.share_override` (null ⇒ partner row wins) |
 | 49 | `tow_fee_cents` / `boot_fee_cents` | `enforcement_partners` columns | `revenue.tow_fee_cents` / `revenue.boot_fee_cents` (null ⇒ partner row wins) |
 
 ### Tow-evidence retention — the per-camera pattern this wave absorbs
@@ -211,6 +225,7 @@ The doc merges seven findings into 2.1. Decisions, made here so no executor re-l
 | 56 | `app_enabled`, `pay_to_park_enabled` | `properties` columns | `features.*` (mirrored; the flags themselves stay columns — fat decision 9 turns one off by UPDATE) |
 | 57 | `app_rates` (incl. `monthly_pass: 15000`) | `properties` JSONB; read `routers/app_api.py:263, 356, 361, 464` | `pricing.app_rates` |
 | 58 | `enforcement_type`, `enforcement_hours`, `rules`, `monthly_fee`, `notes_migrated` | `properties` columns, **zero readers anywhere** | *(drop candidates — not migrated)* |
+| 59 | `enforce_truck_plaza_cooldown()` | A `BEFORE INSERT` trigger (`trg_visitor_passes_cooldown`) that still fires on **every** parking-pass registration and whose entire body has been `RETURN NEW;` since the 2026-05-31 policy change — verified byte-for-byte in production. It is fat decision 27(a). | *(drop candidate — not migrated. Task 8 rewrites the **other** cooldown trigger, `set_pass_cooldown_flag`; do not confuse the two, and do not teach this stub to read config. Delete it in the fat cull, not here.)* |
 
 ---
 
@@ -227,7 +242,7 @@ The doc merges seven findings into 2.1. Decisions, made here so no executor re-l
 | 7 | `app_api` sells the monthly pass | 6, 2 | A |
 | 8 | Cooldown: trigger + `count_on_cooldown` read config | 5 | A |
 | 9 | Plate-confidence floors + grace windows behind the loader | 2 | B |
-| 10 | `services/lot_time.py` — timezone, eleven literals to one | 2 | B |
+| 10 | `services/lot_time.py` — timezone, three call sites (plaza chain deferred) | 2 | B |
 | 11 | `services/notices.py` — recipients and overrides per property | 2 | B |
 | 12 | `services/revenue.py` — per-property split override | 2 | B |
 | 13 | Absorb `TOW_FOOTAGE_RETENTION_OVERRIDES` into `config.tow_evidence` | 2 | D |
@@ -327,20 +342,62 @@ ALTER TABLE public.properties
   CHECK (config IS NULL OR jsonb_typeof(config) = 'object');
 
 -- ── Grants ────────────────────────────────────────────────────────────────
--- properties grants INSERT/UPDATE to anon and authenticated across ALL
--- columns, so a new column inherits a write grant unless this file takes it
--- away. frontend/src/lib/db.js::updateProperty writes properties straight
--- through PostgREST with the user's JWT — without these REVOKEs, a leasing
--- office could PATCH its own cooldown to 0 from a browser console, bypassing
--- every validation in Task 2.
+-- properties holds TABLE-LEVEL INSERT and UPDATE for both anon and
+-- authenticated (relacl: anon=awdDxtm, authenticated=arwdDxtm), so a new
+-- column inherits a write grant the moment it is added. And
+-- frontend/src/lib/db.js::updateProperty writes properties straight through
+-- PostgREST with the user's JWT, under RLS policies (admin_write_properties
+-- ALL, properties_owner_update) that let an owner PATCH their own row. Without
+-- what follows, a leasing office could set its own cooldown to 0 from a
+-- browser console and bypass every validation in Task 2.
+--
+-- A column-level REVOKE CANNOT fix this. Postgres will not subtract a column
+-- privilege from a role that holds the table-level one: `REVOKE UPDATE
+-- (config) ... FROM authenticated` emits a WARNING and changes nothing. The
+-- only thing that works is to drop the table-level grant and re-grant column
+-- lists — the same shape as 20260707170000_properties_anon_column_scope.sql,
+-- which is how anon's SELECT came to be scoped to eight columns.
+--
+-- The 29 columns enumerated below are every column properties had BEFORE this
+-- migration, in ordinal order. The three new ones are deliberately absent.
+-- Re-granting them is not optional politeness: db.js::updateProperty is how
+-- the dashboard edits a property's name, address, policy text and feature
+-- flags today, and a revoke without a matching re-grant breaks all of it.
+-- test_the_29_pre_existing_columns_keep_their_write_grant is the guard.
+
+REVOKE INSERT, UPDATE ON public.properties FROM anon, authenticated;
+
+GRANT INSERT (
+     id, tow_company_id, name, address, qr_code_id, total_spaces, created_at,
+     owner_id, market_id, partner_id, lat, lng, enforcement_type,
+     enforcement_hours, rules, monthly_fee, active, onboarded_at,
+     notes_migrated, property_type, policy_text, policy_phone,
+     cooldown_hours, app_enabled, app_rates, guest_auto_approve,
+     permanent_plates_disabled, reject_tow_disclaimer, pay_to_park_enabled
+  ) ON public.properties TO anon, authenticated;
+
+GRANT UPDATE (
+     id, tow_company_id, name, address, qr_code_id, total_spaces, created_at,
+     owner_id, market_id, partner_id, lat, lng, enforcement_type,
+     enforcement_hours, rules, monthly_fee, active, onboarded_at,
+     notes_migrated, property_type, policy_text, policy_phone,
+     cooldown_hours, app_enabled, app_rates, guest_auto_approve,
+     permanent_plates_disabled, reject_tow_disclaimer, pay_to_park_enabled
+  ) ON public.properties TO anon, authenticated;
+
+-- anon's SELECT is ALREADY column-scoped (eight columns, by the 20260707
+-- migration above), so a new column is not auto-granted and a column-level
+-- REVOKE here does work. Kept as an explicit belt-and-braces assertion rather
+-- than relying on the earlier migration staying as it is.
 REVOKE SELECT (config, config_updated_at, config_updated_by) ON public.properties FROM anon;
-REVOKE INSERT (config, config_updated_at, config_updated_by) ON public.properties FROM anon;
-REVOKE UPDATE (config, config_updated_at, config_updated_by) ON public.properties FROM anon;
-REVOKE INSERT (config, config_updated_at, config_updated_by) ON public.properties FROM authenticated;
-REVOKE UPDATE (config, config_updated_at, config_updated_by) ON public.properties FROM authenticated;
--- authenticated KEEPS SELECT(config): an owner may read their own site's
--- configuration (RLS still scopes the row), they just may not write it. The
--- write path is PUT /properties/{id}/config, platform-admin only (decision D7).
+
+-- authenticated KEEPS its table-level SELECT, and therefore SELECT(config):
+-- an owner may read their own site's configuration (RLS still scopes the row
+-- to owner_id / partner_id), they just may not write it. The write path is
+-- PUT /properties/{id}/config, platform-admin only (decision D7).
+--
+-- REFERENCES is left alone for both roles. It cannot read or change a value;
+-- revoking it would churn the ACL diff for no security gain.
 
 -- properties_public is the anon-facing view used by the QR registration pages.
 -- It enumerates its columns, so config is already excluded — this is the
@@ -373,7 +430,41 @@ MIGRATION_GLOBS = (
 )
 ```
 
-- [ ] **Step 3: Write the tests**
+- [ ] **Step 3: Fix the harness's anon column grant so it matches production**
+
+`tests/plaza/schema/live_schema.sql:133` grants `anon` SELECT on **seven**
+columns:
+
+```sql
+GRANT SELECT (id, name, address, property_type, policy_text, policy_phone, qr_code_id)
+  ON public.properties TO anon;
+```
+
+Production grants **eight** — the same seven plus `pay_to_park_enabled`
+(verified live). Every grant assertion in Step 4 would therefore be testing a
+world that does not exist, and would keep passing after a change that widened
+anon's real SELECT. Add the missing column:
+
+```sql
+GRANT SELECT (id, name, address, property_type, policy_text, policy_phone,
+              qr_code_id, pay_to_park_enabled)
+  ON public.properties TO anon;
+```
+
+The extract is also missing the table-level `GRANT INSERT, UPDATE ... TO anon,
+authenticated` that production has, which is precisely the grant D1's revoke
+removes — add it immediately above, so the harness can prove the revoke
+actually subtracts something:
+
+```sql
+GRANT INSERT, UPDATE ON public.properties TO anon, authenticated;
+```
+
+Run the existing `tests/plaza/` suite once **before** touching anything else in
+this task: if adding these grants breaks a test, the harness and production
+disagreed about more than one column and that is worth knowing now.
+
+- [ ] **Step 4: Write the tests**
 
 `tests/plaza/test_property_config_column.py`:
 
@@ -420,7 +511,10 @@ async def test_a_non_object_is_rejected(db_conn, seed_truck_plaza, bad):
             text("UPDATE public.properties SET config = :c::jsonb WHERE id = :p"),
             {"c": bad, "p": str(seed_truck_plaza.property_id)},
         )
-        await db_conn.commit()
+        # The CHECK fires on the statement, not the commit, so the commit must
+        # be OUTSIDE the block — inside, it is unreachable and the test would
+        # still pass if the constraint were dropped and the commit failed for
+        # some other reason.
     await db_conn.rollback()
 
 
@@ -439,6 +533,13 @@ async def test_anon_cannot_read_or_write_config(db_conn):
 
 @pytest.mark.asyncio
 async def test_authenticated_may_read_but_not_write_config(db_conn):
+    """THE test for D1. It fails without the migration's table-level
+    REVOKE: `information_schema.column_privileges` expands a table-level
+    UPDATE across every column, so before the revoke this query returns
+    {'SELECT','INSERT','UPDATE','REFERENCES'} and both asserts below blow up.
+    A column-level `REVOKE UPDATE (config)` would leave it exactly as it was
+    (Postgres warns and does nothing), so this test also catches the wrong
+    fix, not just the missing one."""
     rows = set((await db_conn.execute(text("""
         SELECT privilege_type
           FROM information_schema.column_privileges
@@ -448,9 +549,58 @@ async def test_authenticated_may_read_but_not_write_config(db_conn):
     assert "SELECT" in rows, "an owner may see their own site's configuration"
     assert "UPDATE" not in rows, "config is written through the backend, not PostgREST"
     assert "INSERT" not in rows
+
+
+#: Every column properties had before this migration, ordinal order. Duplicated
+#: here on purpose: if someone adds a column to the migration's GRANT list
+#: without adding it here, that is a review conversation, not a silent pass.
+PRE_EXISTING_COLUMNS = (
+    "id", "tow_company_id", "name", "address", "qr_code_id", "total_spaces",
+    "created_at", "owner_id", "market_id", "partner_id", "lat", "lng",
+    "enforcement_type", "enforcement_hours", "rules", "monthly_fee", "active",
+    "onboarded_at", "notes_migrated", "property_type", "policy_text",
+    "policy_phone", "cooldown_hours", "app_enabled", "app_rates",
+    "guest_auto_approve", "permanent_plates_disabled", "reject_tow_disclaimer",
+    "pay_to_park_enabled",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["anon", "authenticated"])
+async def test_the_29_pre_existing_columns_keep_their_write_grant(db_conn, role):
+    """The other half of D1, and the one that would actually take the product
+    down. Dropping the table-level UPDATE without re-granting the 29 columns
+    breaks frontend/src/lib/db.js::updateProperty — which is how the dashboard
+    edits a property's name, address, policy text and feature flags. A revoke
+    that over-reaches is a worse outage than the hole it closes."""
+    granted = set((await db_conn.execute(text("""
+        SELECT column_name
+          FROM information_schema.column_privileges
+         WHERE table_schema='public' AND table_name='properties'
+           AND grantee=:role AND privilege_type='UPDATE'
+    """), {"role": role})).scalars().all())
+    assert granted == set(PRE_EXISTING_COLUMNS), (
+        f"{role} UPDATE grant drifted: "
+        f"missing={set(PRE_EXISTING_COLUMNS) - granted}, extra={granted - set(PRE_EXISTING_COLUMNS)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_column_count_is_still_29_plus_3(db_conn):
+    """If a later migration adds a column to properties, the GRANT lists above
+    stop being 'every pre-existing column' and this test says so before the new
+    column silently becomes unwritable by the dashboard."""
+    total = (await db_conn.execute(text(
+        "SELECT count(*) FROM information_schema.columns "
+        "WHERE table_schema='public' AND table_name='properties'"))).scalar_one()
+    assert total == 32, (
+        f"properties now has {total} columns, not 29 + config/config_updated_at/"
+        "config_updated_by. Decide whether the new column belongs in the "
+        "anon/authenticated UPDATE grant, then update this test and the migration."
+    )
 ```
 
-- [ ] **Step 4: Apply, regenerate, verify**
+- [ ] **Step 5: Apply, regenerate, verify**
 
 ```bash
 cd /Users/gabe/lotlogic-backend
@@ -460,24 +610,28 @@ pytest tests/plaza/test_property_config_column.py -q
 python scripts/db/check_drift.py --ledger-file <(psql "$PROD_SCHEMA_READER_URL" -qAt \
   -c "select name || '|' || version from supabase_migrations.schema_migrations")
 ```
-Expected: 8 passed; `check_drift.py` clean; `git status` shows the three regenerated artifacts changed.
+Expected: all pass; `check_drift.py` clean; `git status` shows the three regenerated artifacts changed **plus a large ACL diff in `expected_schema.sql`** — the table-level grant becoming 29 column grants is exactly what D1's fix looks like in a `pg_dump`. Review that diff rather than rubber-stamping it: it is the only place the re-grant list is visible end-to-end.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add migrations/20260914*_properties_config.sql tests/plaza/ scripts/db/expected_schema.sql \
         scripts/db/expected_census.txt docs/db/schema.md
-git commit -m "feat(config): properties.config jsonb, with anon/authenticated write revoked
+git commit -m "feat(config): properties.config jsonb, with the write grant scoped to the old columns
 
 One document per site for everything that should differ between one property
 and the next. Additive and inert: NULL means every default, and nothing reads
 the column yet.
 
-The REVOKEs are the point. properties grants INSERT/UPDATE to anon and
-authenticated across all columns and frontend/src/lib/db.js writes properties
-through PostgREST with the user's JWT, so a config column that inherited those
-grants would let a leasing office PATCH its own cooldown to zero from a browser
-console. authenticated keeps SELECT so an owner can see their site's rules.
+The grant surgery is the point. properties held TABLE-LEVEL INSERT/UPDATE for
+anon and authenticated, and frontend/src/lib/db.js writes properties through
+PostgREST with the user's JWT, so config inherited a write grant the moment it
+existed — a leasing office could have set its own cooldown to zero from a
+browser console. A column-level REVOKE cannot subtract from a table-level
+grant (Postgres warns and does nothing), so this drops the table grant and
+re-grants the 29 pre-existing columns by name, the same shape
+20260707170000_properties_anon_column_scope.sql used for anon's SELECT.
+authenticated keeps SELECT so an owner can still see their site's rules.
 
 Wave 2.1 / S2. Depends on Wave 2.4's migration runner and drift check."
 ```
@@ -495,12 +649,12 @@ Wave 2.1 / S2. Depends on Wave 2.4's migration runner and drift check."
 - Produces, for every later task:
   - `PropertyConfig` — a frozen pydantic `BaseModel` with nested `PassesConfig`, `CooldownConfig`, `GraceConfig`, `PipelineConfig`, `NoticesConfig`, `RevenueConfig`, `PolicyConfig`, `FeaturesConfig`, `PricingConfig`, `TowEvidenceConfig`. `model_config = ConfigDict(extra="forbid", frozen=True)`.
   - `PropertyConfig.defaults() -> PropertyConfig`
-  - `DEFAULTS_JSON: dict` — `PropertyConfig.defaults().model_dump(mode="json")`, the document Task 5's SQL function must reproduce byte-for-byte.
+  - `DEFAULTS_JSON: dict[str, dict]` — **keyed by property type**: `{"apartment": …, "truck_plaza": …}`, each value `PropertyConfig.defaults(t).model_dump(mode="json")`. Two documents, not one, because `property_config_defaults(p_property_type)` in Task 5 returns two and `defaults()` already branches on type (72 h / no ack vs 48 h / ack required). A single `DEFAULTS_JSON` would make "the SQL function reproduces it exactly" an ambiguous claim and would give the Task 5 parity test nothing to parameterise over.
   - `await load_property_config(db, property_id, *, fresh: bool = False) -> PropertyConfig`
   - `invalidate_property_config(property_id | None) -> None`
   - `parse_property_config(raw: dict | None, *, property_type: str = "apartment") -> PropertyConfig`
 
-**The defaults-are-the-constants rule.** Every field default in this file is copied from the inventory table above, with the file:line it came from in the field's comment. Where two copies disagree today (#17 vs #18: `GRACE_MINUTES = 10` in Python vs `GRACE_EXPIRY_MINUTES = 15` in the sweep; #25 vs #26: `0.92` vs `0.8`), the default is **the one that governs enforcement today** — the sweep's 15 minutes and the matcher's 0.92 — and the disagreement is recorded in the field comment as the reason the constant had to move. Task 9 and Task 14 then converge the two readers on the single value, which is a behaviour change at exactly one site and is called out in that task's verification step.
+**The defaults-are-the-constants rule.** Every field default in this file is copied from the inventory table above, with the file:line it came from in the field's comment. Where two copies disagree today (#17 vs #18: `GRACE_MINUTES = 10` at `plate_matcher.py:63` vs `GRACE_EXPIRY_MINUTES = 15` in the sweep — and a *third*, stale, value of 15 in that module's own docstring at `:24`; #25 vs #26: `0.92` at `:59` vs `0.8` at the ingest gate, with the docstring at `:15` claiming 0.85), the default is **the one that governs enforcement today** — the sweep's 15 minutes and the matcher's 0.92 — and the disagreement is recorded in the field comment as the reason the constant had to move. Task 9 and Task 14 then converge the two readers on the single value, which is a behaviour change at exactly one site and is called out in that task's verification step.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -534,10 +688,19 @@ def test_an_empty_object_is_also_the_defaults():
 
 def test_the_shipped_defaults_are_todays_constants():
     """Each of these is a line of code that exists on main right now. When one
-    of them changes, this test is the thing that says so out loud."""
-    d = pc.PropertyConfig.defaults()
+    of them changes, this test is the thing that says so out loud.
+
+    Asks for the TRUCK PLAZA defaults explicitly. `defaults()` with no
+    argument is the apartment document, where max_stay_hours is 72 (the
+    Field(le=72) bound on the guest registration form) — the 48 below is the
+    stay-limit trigger's number and belongs to a truck plaza. Calling it bare
+    and asserting 48 is how this test failed its own first run in review."""
+    d = pc.PropertyConfig.defaults("truck_plaza")
     assert d.timezone == "America/New_York"                  # 11 literals, PLATFORM-15
     assert d.passes.max_stay_hours == 48                     # enforce_truck_plaza_stay_limit, 48.5
+    # …and the other branch, so neither can drift unnoticed:
+    assert pc.PropertyConfig.defaults().passes.max_stay_hours == 72
+    assert pc.PropertyConfig.defaults("apartment").passes.max_stay_hours == 72
     assert d.passes.min_stay_minutes == 30                   # same trigger, 0.5h
     assert d.passes.bookable_durations == ["h24", "h48"]     # app_api.py:73 BOOKABLE_KINDS
     assert d.passes.monthly_pass_days == 30
@@ -550,7 +713,7 @@ def test_the_shipped_defaults_are_todays_constants():
     assert d.grace.exit_hint_buffer_minutes == 5
     assert d.grace.dispatch_hold_minutes == 5
     assert d.grace.overstay_max_age_hours == 6
-    assert d.pipeline.plate_confidence_min == 0.92           # plate_matcher.py:61
+    assert d.pipeline.plate_confidence_min == 0.92           # plate_matcher.py:59
     assert d.pipeline.camera_suspend_threshold == 0.70
     assert d.pipeline.camera_suspend_min_events == 5
     assert d.pipeline.camera_suspend_minutes == 30
@@ -616,11 +779,15 @@ def test_a_truck_plaza_gets_a_different_policy_default():
     assert plaza.passes.max_stay_hours == 48
 
 
-def test_defaults_json_is_plain_json():
-    """Task 5's SQL function must reproduce this document exactly, so it may
-    not contain a Decimal, a datetime or a set."""
+@pytest.mark.parametrize("ptype", ["apartment", "truck_plaza"])
+def test_defaults_json_is_plain_json(ptype):
+    """Task 5's SQL function must reproduce these documents exactly, so neither
+    may contain a Decimal, a datetime or a set. Two documents, keyed by
+    property type — property_config_defaults(p_property_type) returns two."""
     import json
-    json.dumps(pc.DEFAULTS_JSON)
+    assert set(pc.DEFAULTS_JSON) == {"apartment", "truck_plaza"}
+    json.dumps(pc.DEFAULTS_JSON[ptype])
+    assert pc.DEFAULTS_JSON[ptype] == pc.PropertyConfig.defaults(ptype).model_dump(mode="json")
 
 
 @pytest.mark.asyncio
@@ -690,10 +857,18 @@ Two rules about what belongs here:
 * **``extra="forbid"``.** A typo in a config editor must be a 400, not a
   silently ignored setting. The whole reason a JSONB blob is tolerable here is
   that nothing ever reads it untyped.
+* **``frozen=True`` is for immutability, not hashability.** Several fields are
+  ``list`` or ``dict``, so a ``PropertyConfig`` is NOT hashable and cannot be a
+  ``functools.lru_cache`` key or a set member. The cache below is keyed by
+  **property id**; keep it that way.
 
 The SQL half lives in ``public.property_config(uuid)`` (migration
 ``20260914*_property_config_fn.sql``) and must return the same document for the
-same row — ``tests/plaza/test_property_config_sql.py`` diffs the two.
+same row — ``tests/plaza/test_property_config_sql.py`` diffs the two, for each
+property type. ``DEFAULTS_JSON`` is keyed by property type for exactly that
+reason: ``property_config_defaults(p_property_type)`` returns two documents
+(72 h / no ack for an apartment, 48 h / ack required for a truck plaza), so the
+Python side must expose two as well.
 """
 from __future__ import annotations
 
@@ -766,8 +941,9 @@ class CooldownConfig(_Base):
 
 
 class GraceConfig(_Base):
-    #: THREE copies today and two of them disagree:
-    #:   services/plate_matcher.py:66        GRACE_MINUTES       = 10
+    #: FOUR copies today and two of them disagree with the rest:
+    #:   services/plate_matcher.py:63        GRACE_MINUTES       = 10
+    #:   services/plate_matcher.py:24        docstring says 15   (stale, Task 9)
     #:   cron-sessions-sweep/index.ts:38     GRACE_EXPIRY_MINUTES= 15
     #:   cron-no-reg-sweep/index.ts:13       GRACE_MS            = 15 * 60_000
     #: The sweep is what actually creates the violation, so 15 is the number
@@ -783,19 +959,21 @@ class GraceConfig(_Base):
 
 
 class PipelineConfig(_Base):
-    #: services/plate_matcher.py:61 PLATE_CONFIDENCE_MIN = 0.92 — the floor an
+    #: services/plate_matcher.py:59 PLATE_CONFIDENCE_MIN = 0.92 — the floor an
     #: OCR read must clear before it can reach the enforcement path at all.
+    #: (That module's own docstring at :15 still says 0.85; it has been wrong
+    #: for months and Task 9 rewrites it to name this key instead of a value.)
     #: camera-snapshot/index.ts:35 PR_MIN_SCORE defaults to 0.8 for the
     #: *ingest* gate, which is a different (earlier, looser) question; both
     #: read this key and Task 14 documents which stage each applies to.
     plate_confidence_min: float = Field(0.92, ge=0.0, le=1.0)
-    camera_suspend_threshold: float = Field(0.70, ge=0.0, le=1.0)   # plate_matcher.py:62
-    camera_suspend_min_events: int = Field(5, ge=1, le=1_000)       # plate_matcher.py:63
-    camera_suspend_minutes: int = Field(30, ge=1, le=1_440)         # plate_matcher.py:64
-    #: plate_matcher.py:67. "non-negotiable — the only defense against
+    camera_suspend_threshold: float = Field(0.70, ge=0.0, le=1.0)   # plate_matcher.py:60
+    camera_suspend_min_events: int = Field(5, ge=1, le=1_000)       # plate_matcher.py:61
+    camera_suspend_minutes: int = Field(30, ge=1, le=1_440)         # plate_matcher.py:62
+    #: plate_matcher.py:64. "non-negotiable — the only defense against
     #: shape-twin OCR." Configurable UPWARD only: ge=2, not ge=1.
     min_confirming_events: int = Field(2, ge=2, le=20)
-    confirm_window_minutes: int = Field(5, ge=1, le=1_440)           # plate_matcher.py:68
+    confirm_window_minutes: int = Field(5, ge=1, le=1_440)           # plate_matcher.py:65
     min_plate_length: int = Field(5, ge=1, le=16)                    # camera-snapshot:60
     require_vehicle_score: float = Field(0.7, ge=0.0, le=1.0)        # camera-snapshot:64
     tow_confirm_min_confidence: float = Field(0.65, ge=0.0, le=1.0)  # tow-confirm:26
@@ -1364,7 +1542,19 @@ async def test_the_error_messages_still_match_the_public_registration_regex():
     assert _STAY_LIMIT_RE.search("truck plaza stay must be at least 30 minutes (got 0.33 hours)")
 ```
 
-`seed_truck_plaza.set_config(doc)` is a small addition to `tests/plaza/conftest.py`'s `TruckPlazaSeed` (one `UPDATE … SET config = :c::jsonb`, plus a `config = NULL` reset in the per-test truncate block so a config never leaks between tests).
+`seed_truck_plaza.set_config(doc)` is a small addition to `tests/plaza/conftest.py`'s `TruckPlazaSeed` — one `UPDATE public.properties SET config = :c::jsonb WHERE id = :pid`.
+
+**The reset needs its own statement, not the truncate.** `TRUNCATE_TABLES` deliberately does **not** list `properties` (the docstring says so: *"``properties`` is deliberately absent — the truck-plaza seed row lives there and is created once per session"*), so a config written by one test would leak into every test after it and quietly change what the stay-limit trigger allows. Add an explicit reset to the `db_conn` fixture's per-test cleanup, alongside the `TRUNCATE`:
+
+```python
+# properties is NOT truncated (the seed row is session-scoped), so anything a
+# test wrote to the config document has to be undone by hand. cooldown_hours
+# goes back to 24 because that is the live Charlotte value the seed carries and
+# public.property_config() folds it in under the defaults.
+await conn.execute(text(
+    "UPDATE public.properties SET config = NULL, config_updated_at = NULL, "
+    "config_updated_by = NULL, cooldown_hours = 24"))
+```
 
 - [ ] **Step 4:** apply, regen, full suite, commit as `feat(config): the truck-plaza stay cap comes from property config (unblocks the monthly pass)`.
 
@@ -1421,32 +1611,51 @@ async def test_a_monthly_pass_holder_is_exempt_when_configured(...)
 ## Task 9: Plate-confidence floors and grace windows behind the loader
 
 **Files:**
-- Modify: `services/plate_matcher.py` (the seven module constants at lines 61–68 and every use)
+- Modify: `services/plate_matcher.py` — the seven module constants at **lines 59–65** (`PLATE_CONFIDENCE_MIN`, `CAMERA_SUSPEND_THRESHOLD`, `CAMERA_SUSPEND_MIN_EVENTS`, `CAMERA_SUSPEND_DURATION_MIN`, `GRACE_MINUTES`, `MIN_CONFIRMING_EVENTS`, `CONFIRM_WINDOW_MIN`), their uses at 126, 127, 179, 308, 311, 363, 366, 376, **and the module docstring at lines 13–32**
 - Test: `tests/test_plate_matcher_config.py`
 
 **Interfaces:** the constants stay as module-level names **re-exported from `PropertyConfig` defaults** (`PLATE_CONFIDENCE_MIN = PropertyConfig.defaults().pipeline.plate_confidence_min`) so nothing that imports them breaks, and every *function* in the module takes `cfg: PropertyConfig` and reads `cfg.pipeline.*`. The matcher already loads the event's `property_id` in `_load_event`, so the config load costs one extra query per event, cached for 60 s — measured against the 150–1,000 plate reads a day one site produces, that is effectively one query per minute per site.
 
 **The one real behaviour change in this wave, called out here:** `GRACE_MINUTES = 10` in `plate_matcher.py` disagrees with `GRACE_EXPIRY_MINUTES = 15` in the sweep that actually files the violation. Converging on 15 widens the grace window in the matcher by five minutes — i.e. it makes the system *less* likely to flag an innocent registrant, which is the direction `plate_matcher.py`'s own docstring says to err in ("an innocent registrant being auto-towed is a worse failure than missing a real violation"). Verify it explicitly, and state it in the commit message rather than letting it ride as an implementation detail.
 
-- [ ] Steps: defaults re-exported → each function takes `cfg` → a test per constant proving the default path is unchanged → one test proving a per-property override takes effect → the grace convergence test, named `test_the_matcher_and_the_sweep_now_agree_on_the_grace_window`.
+**Fix the docstring, which is already lying.** `plate_matcher.py`'s module docstring is the first thing any reader — human or agent — sees about how enforcement is gated, and two of its numbers have been wrong for months:
+
+| Docstring says | Constant actually is |
+|---|---|
+| `:15` — "Per-camera OCR confidence floor (PLATE_CONFIDENCE_MIN, default **0.85**)" | `:59` — `0.92` |
+| `:24` — "we wait GRACE_MINUTES (default **15**)" | `:63` — `10` |
+
+That is a third stale copy of both numbers, in the one place nobody greps. The census test in Task 15 cannot catch it (it is prose, and the value `0.85` appears nowhere else), so it has to be fixed by hand here. **Rewrite the docstring to name the config keys, not values** — "below `cfg.pipeline.plate_confidence_min`", "we wait `cfg.grace.registration_minutes`" — so it cannot go stale again. Keep every word of the safety rationale; it is the best statement of intent in the repo and the reason `min_confirming_events` is `ge=2`.
+
+- [ ] Steps: the docstring rewritten to name `cfg.pipeline.*` / `cfg.grace.*` rather than literals → defaults re-exported → each function takes `cfg` → a test per constant proving the default path is unchanged → one test proving a per-property override takes effect → the grace convergence test, named `test_the_matcher_and_the_sweep_now_agree_on_the_grace_window` → one test asserting the docstring contains no bare decimal that duplicates a `pipeline.*` default.
 
 ---
 
-## Task 10: `services/lot_time.py` — one timezone, eleven literals
+## Task 10: `services/lot_time.py` — one timezone helper, three call sites now
 
 **Files:**
 - Create: `services/lot_time.py`
-- Modify: `services/tow_digest.py`, `services/plaza_reconcile.py` *(if the Stripe constraint permits — otherwise record the miss)*, `services/apartment_notify.py`, `routers/app_api.py`, `routers/quickbooks.py`
+- Modify: `routers/app_api.py:66` (`LOT_TZ`), `routers/quickbooks.py:199` (`tz_name`), `services/apartment_notify.py:327` (inline `_zi("America/New_York")`)
 - Modify (frontend): `frontend/src/lib/lotdate.js` (accept a timezone argument), `frontend/src/pages/TruckParkingLog.jsx` (pass the property's)
 - Test: `tests/test_lot_time.py`
+- **Not modified:** `services/plaza_notify.py`, `services/plaza_reconcile.py`, `services/tow_digest.py` — see the scope note below.
+
+**Scope, corrected (D3).** An earlier draft of this task listed `tow_digest.py` and `plaza_reconcile.py` as owning `_LOT_TZ`. They do not. There is **one** `_LOT_TZ`, defined at `services/plaza_notify.py:33`, and both of those modules import it. That matters because:
+
+- `services/plaza_notify.py` is read-only this wave (Global Constraints), and
+- `services/plaza_reconcile.py` is on the **never-edit** list outright.
+
+So the three-file chain cannot be migrated here without editing a forbidden file, and it is **deferred to the Stripe-cutover rebase** (decision D11). Inventory row 35b records it; Task 15's census allowlist names `services/plaza_notify.py:33` explicitly so the drift guard does not go red on a literal nobody is allowed to touch. The deferral costs nothing today — all three modules serve the Charlotte plaza, which is in Eastern time — and it stops this task from being un-executable as written.
+
+Two literals are also **out of scope permanently** for this task: `supabase/functions/weather-pull/index.ts:15` and `weather-risk-eval/index.ts:21`. Both jobs are switched off in the database and both are on fat decision 13's delete list; migrating a timezone into a job you may be deleting is the fat this program exists to stop.
 
 **Interfaces:** `lot_tz(cfg) -> ZoneInfo`, `lot_now(cfg)`, `lot_day_bounds(cfg, ymd) -> tuple[datetime, datetime]` (UTC instants), `fmt_local(cfg, dt, fmt)`. Every one takes the config, never a bare string, so a caller cannot forget.
 
-**Note the honest one:** `routers/quickbooks.py:199` currently carries `tz_name = "America/New_York"  # property table doesn't carry market_id today; default tz.` — a comment that names the missing column. After this task the property row *does* carry it, and that comment is deleted rather than rewritten.
+**`quickbooks.py` is the interesting one, and it has a second timezone home.** Line 199 carries `tz_name = "America/New_York"  # property table doesn't carry market_id today; default tz.` — a comment naming the missing column — and then lines 200–205 try to recover a real zone by hopping `Property → Lot → Market` to reach `markets.timezone` (`models.py:27`, same default), which only resolves when the property is *also* present in the legacy `lots` table. After this task `config.timezone` is the answer and the `markets.timezone` hop becomes the fallback **under** it, exactly as `properties.cooldown_hours` sits under `cooldown.hours` in Task 8. Do not delete the market hop and do not duplicate the value into both — resolve in one place, `lot_tz(cfg)`, and let it consult the market only when the config is silent.
 
-`frontend/src/lib/lotdate.js:9` says `// Wave 2 replaces the constant with a properties.timezone column.` Keep `LOT_TIMEZONE` as the module default so every existing call site behaves identically, add `timeZone` as an optional argument to `tzOffsetOn` / `tzOffsetAt` / `lotDayBound` (two already take it), and thread the property's value in from the Parking Log. A property whose config has never been written sends the same string it sends today.
+`frontend/src/lib/lotdate.js:9` says `// Wave 2 replaces the constant with a properties.timezone column.` Keep `LOT_TIMEZONE` as the module default so every existing call site behaves identically, add `timeZone` as an optional argument to `tzOffsetOn` / `tzOffsetAt` / `lotDayBound` (the first two already take it), and thread the property's value in from the Parking Log. A property whose config has never been written sends the same string it sends today.
 
-- [ ] Steps: the module → six backend call sites → the frontend argument → tests including a DST-boundary case (`lot_day_bounds(cfg, "2026-11-01")` must span 25 hours) and one asserting a `Pacific/Honolulu` config actually shifts the day.
+- [ ] Steps: the module → the three backend call sites → the `markets.timezone` fallback wired under `lot_tz` → the frontend argument → tests including a DST-boundary case (`lot_day_bounds(cfg, "2026-11-01")` must span 25 hours), one asserting a `Pacific/Honolulu` config actually shifts the day, and one asserting a NULL config still produces byte-identical bounds to today's `lotdate.js` output for the 8 PM–midnight window that Wave 1 item 8 fixed.
 
 ---
 
@@ -1489,7 +1698,7 @@ Precedence, in one place: `notices.dispatch_enabled = false` → `Resolved(to=[]
 
 **Interfaces:** `revenue_split(cfg, partner) -> Decimal` and `fees(cfg, partner) -> tuple[int, int]`, both returning the partner row's value when the config override is `None` — which is every property on day one.
 
-**Do not disturb SEC-5.** `tests/test_partner_allowlist.py` proves a partner login cannot set its own `revenue_share`, and `migrations/*_revoke_partner_fee_update.sql` revokes the column-level UPDATE. A config override is platform-admin-only by construction (Task 3), so those tests are untouched — and this task adds one more: `test_a_partner_cannot_reach_the_config_override`.
+**Do not disturb SEC-5.** `tests/test_partner_allowlist.py` proves a partner login cannot set its own `revenue_share`, and `migrations/20260903125943_enforcement_partners_revoke_fee_update.sql` revokes the column-level UPDATE. A config override is platform-admin-only by construction (Task 3), so those tests are untouched — and this task adds one more: `test_a_partner_cannot_reach_the_config_override`.
 
 - [ ] Steps: the helper → four call sites → tests: default config gives byte-identical `our_revenue` for the existing fixtures; an override of `0.30` changes it; a partner token gets 403 on the config PUT.
 
@@ -1579,7 +1788,19 @@ MIGRATED = {
     ("interval '24 hours'", "cooldown.hours", {"migrations/_archive/", "docs/"}),
     ("America/New_York", "timezone", {"services/property_config.py",
                                       "migrations/", "docs/",
-                                      "frontend/src/lib/lotdate.js"}),   # the fallback
+                                      "frontend/src/lib/lotdate.js",     # the fallback
+                                      # DEFERRED, not missed — plaza_notify.py
+                                      # is read-only this wave and
+                                      # plaza_reconcile.py is never-edit, so
+                                      # this one _LOT_TZ and its two importers
+                                      # move on the Stripe-cutover rebase
+                                      # (decision D11, inventory row 35b).
+                                      # Delete this entry then; do not widen it.
+                                      "services/plaza_notify.py",
+                                      # Both jobs are inactive and on fat
+                                      # decision 13's delete list.
+                                      "supabase/functions/weather-pull/",
+                                      "supabase/functions/weather-risk-eval/"}),
     ("GRACE_MINUTES", "grace.registration_minutes", {"services/property_config.py"}),
     # ... one row per inventory line
 }
@@ -1628,7 +1849,7 @@ Each one is a thing you can picture, then one yes/no question with the answer I 
 **Q: Platform-admin only for editing, with owners getting a read-only "Site rules" card so they can see what their site is set to?** *Recommended: **yes**. Wave 2.2 adds real roles; when it lands, "property manager may edit these four keys" becomes a one-line change instead of a re-architecture.*
 
 **8. Timezone, now or when it bites.**
-*What/where:* Eleven places in the two repos have `America/New_York` typed into them. Every property you have is in Eastern time, so nothing is wrong today. The first Central-time site makes all eleven wrong at once, in the quiet way — a parking log that ends the day an hour early, a digest that goes out at 6 AM instead of 7.
+*What/where:* Eleven places in the two repos have `America/New_York` typed into them. Every property you have is in Eastern time, so nothing is wrong today. The first Central-time site makes all eleven wrong at once, in the quiet way — a parking log that ends the day an hour early, a digest that goes out at 6 AM instead of 7. (Task 10 moves five of them; three more are deferred by decision 11 below and two are in jobs that are switched off.)
 **Q: Set every existing property's timezone to `America/New_York` explicitly in the same migration, so behaviour is provably unchanged and site #11 is a form field?** *Recommended: **yes**. It is one line of SQL now and a bug hunt across two codebases later.*
 
 **9. The two grace windows that disagree.**
@@ -1638,3 +1859,7 @@ Each one is a thing you can picture, then one yes/no question with the answer I 
 **10. The camera-retention overrides in the Railway box.**
 *What/where:* `TOW_FOOTAGE_RETENTION_OVERRIDES=1cc31653ac72:2` is a string in a Railway variable box saying the north camera's SD card only holds about two days of footage, against a ten-day default. It works. It is also the exact shape every future per-camera setting wants, and it is invisible to anyone who does not know to look in Railway.
 **Q: Move it into the property's config (keeping the Railway variable working as a fallback for one release) so it shows up in the editor alongside everything else?** *Recommended: **yes**. Low stakes — the worst case of getting it wrong is a wrong expiry date in a digest email — which is exactly why it is the right place to prove the pattern before Wave 3.4 uses it on the tow path.*
+
+**11. The three plaza files this wave has to leave alone.**
+*What/where:* The daily tow digest, the money reconciliation and the plaza pass emails all get their "what time is it at the lot" from one line in `services/plaza_notify.py`. That file — and `plaza_reconcile.py`, which imports from it — are the Stripe cutover's files, and this plan's own rule is that nobody else edits them until that lands. So three of the eleven timezone literals stay put for now. It costs nothing today: all three serve Charlotte, which is Eastern.
+**Q: Leave those three alone and move them as the first commit after the Stripe cutover merges, rather than making an exception to the never-edit rule now?** *Recommended: **yes**. The never-edit rule on the money files is the reason the pay-to-park path has stayed clean; spending it on a timezone constant that is currently correct is a bad trade.*
