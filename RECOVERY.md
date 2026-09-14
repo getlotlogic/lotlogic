@@ -17,7 +17,7 @@ back this system:
 ## 1. "If the laptop died right now" — current status
 - ✅ **Code**: both repos pushed to GitHub. Recoverable.
 - ✅ **Running infra**: Vercel/Railway/Supabase/Cloudflare are cloud-hosted, not on the laptop.
-- ✅ **Edge functions**: all 17 live functions now in git (4 were pulled back in on 2026-06-05).
+- ✅ **Edge functions**: 16 of the 18 live functions are in git. `test-resend-probe` and `system-notice` are deployed with no source here — see §4.
 - ⚠️ **Secrets**: real values live only in laptop `.env*` files + provider dashboards + this person's head. → vault (§9).
 - ✅ **DB schema**: rebuilds from git (`scripts/db/migrate.sh --baseline`), proven by CI. ⚠️ **DB data**: Supabase backups only → still CONFIRM (§7).
 - ⚠️ **Claude memory** (`~/.claude/.../memory/`): institutional knowledge, laptop-only → back up (§9).
@@ -52,30 +52,56 @@ audit trail, independently revocable). Single-secret services → shared vault (
 ## 3. Repositories & deploy map
 | Repo / path | Deploys to | Trigger |
 |---|---|---|
-| `lotlogic/frontend/*` | Vercel (project `lotlogic`, root dir `frontend/`) | auto on push to `main` |
-| `lotlogic/supabase/functions/*` (all 16) | Supabase Edge | auto via `.github/workflows/edge-functions.yml` on push to `main` — type-checks and tests every function, then deploys only the slugs whose sources or transitive imports changed (matrix computed by `supabase/functions/_ci/slugs.mjs`) |
-| — staged or manual redeploy | Supabase Edge | run **Edge functions** from the Actions tab with `only` = a comma-separated slug list (or `all`); a blank `only` is rejected |
-| — rollback one function | Supabase Edge | same manual run, `ref` = the tag or SHA to deploy from, `only` = the slug |
-| `lotlogic/cloudflare-workers/email-tow-action` | Cloudflare Workers | **manual** `wrangler deploy` (now in git as of 2026-06-05) |
-| `lotlogic/puller`, `lotlogic/monitoring` | Railway workers | auto on push |
-| `lotlogic-backend` | Railway API (`lotlogic-backend-production.up.railway.app`) | auto on push to `main` |
+| `lotlogic/frontend/*` | Vercel (project `lotlogic`, root dir `frontend/`) | auto on push to `main`; tagged `frontend-<ts>-<sha>` by `.github/workflows/deploy-tag.yml` |
+| `lotlogic/supabase/functions/*` (all 16) | Supabase Edge | auto on push to `main` via `.github/workflows/edge-functions.yml` — type-checked and tested first, and only the slugs whose sources changed are deployed |
+| `lotlogic/cloudflare-workers/email-tow-action` | Cloudflare Workers | **manual** `wrangler deploy` |
+| `lotlogic/puller`, `lotlogic/monitoring` | Railway workers | auto on push — **both are the retired camera-zone pipeline; see programme fat decision 2 (turn off / delete)** |
+| `lotlogic-backend` | Railway API (`lotlogic-backend-production.up.railway.app`) | auto on push to `main`; tagged `backend-<ts>-<sha>` by `.github/workflows/deploy-tag.yml` |
 
-GitHub Actions secrets required: 🔑 `SUPABASE_ACCESS_TOKEN`, 🔑 `SUPABASE_URL`,
-🔑 `INTERNAL_TOKEN`, and the Playwright `TEST_*` account creds.
+GitHub Actions secrets required: 🔑 `SUPABASE_ACCESS_TOKEN` (edge deploys),
+🔑 `SUPABASE_URL`, 🔑 `INTERNAL_TOKEN`, the Playwright `TEST_*` account creds,
+and 🔑 `VERCEL_AUTOMATION_BYPASS_SECRET` (preview e2e). The deploy-tag and
+secret-scan workflows use the automatic `GITHUB_TOKEN` and need nothing added.
 
 ---
 
-## 4. Edge functions (17 live, Supabase project `nzdkoouoaedbbccraoti`)
-All are `verify_jwt=false` except `simbase-usage` + `test-resend-probe`. All need
-`SUPABASE_URL` + 🔑`SUPABASE_SERVICE_ROLE_KEY`; cron/internal ones also 🔑`INTERNAL_TOKEN`.
+## 4. Edge functions (16 live, Supabase project `nzdkoouoaedbbccraoti`)
+All need `SUPABASE_URL` + 🔑`SUPABASE_SERVICE_ROLE_KEY`.
 
-camera-snapshot · pr-ingest · camera-debug · cron-sessions-sweep · cron-no-reg-sweep ·
-cron-plate-pair-learn · check-violations · notify-expiring-plates · tow-dispatch-email ·
-tow-confirm · tow-dispatch-sms · simbase-usage · weather-pull · weather-risk-eval ·
-camera-watchdog · walk-around-ocr · test-resend-probe (throwaway — can delete).
+`verify_jwt` is declared per function in `supabase/config.toml`, which the CLI
+reads at deploy time — that file, not a CLI flag, is the source of truth.
+**`verify_jwt=true` is not authentication**: the key it accepts is the
+publishable anon key, which ships in every page of lotlogicparking.com.
 
-Deploy drift guard: before overwriting any function, diff against the deployed
-copy (`supabase functions download <slug>` or the MCP `get_edge_function`).
+**15 of the 16 are `verify_jwt = false`; only `simbase-usage` is `true`.** What actually gates each:
+
+| Gate | Functions |
+|---|---|
+| 🔑`INTERNAL_TOKEN` bearer | check-violations · cron-sessions-sweep · notify-expiring-plates · tow-confirm · tow-dispatch-email · tow-dispatch-sms · cron-no-reg-sweep · cron-plate-pair-learn · weather-pull · weather-risk-eval |
+| Shared secret row `public.integration_secrets['rut_watchdog']`, sent as the body's `secret` field or `X-Watchdog-Secret` | **camera-watchdog** — its callers are field RUT routers on the private ZeroTier mesh that **cannot send a Bearer header**. Do not "standardise" this onto `INTERNAL_TOKEN`: every camera uptime heartbeat would stop, and `camera-down-check` reads missing heartbeats as a site brownout |
+| Trailing-path URL secret | camera-snapshot (🔑`CAMERA_SNAPSHOT_URL_SECRET`) · pr-ingest (🔑`PR_INGEST_URL_SECRET`) |
+| 🔑`CAMERA_DEBUG_TOKEN` | camera-debug |
+| Backend-issued HS256 JWT, verified in-function, scoped on `properties.tow_company_id` | walk-around-ocr |
+| Anon key only — reads a third-party billing API, writes nothing | simbase-usage |
+
+A camera's MAC **is** its `alpr_cameras.api_key`, the value `camera-snapshot`
+matches an inbound frame against. Treat MACs as credentials: they belong in the
+database and in the vault, never in source. They come back with a DB restore.
+
+**Two functions are deployed in Supabase with no source in this repo:**
+`test-resend-probe` (v34, `verify_jwt=true`) and `system-notice` (v3) — found
+by Task 3 while building the deploy matrix above. Because that matrix is
+computed from `supabase/functions/_ci/slugs.mjs`, which only sees what's in
+this repo, neither workflow will ever deploy, update, or roll either of them
+back. Their source is not reconstructable from git; recovering it means
+`supabase functions download test-resend-probe` / `system-notice` against the
+live project. They are not counted in the "16 live" above because that count
+is this repo's deploy surface, not everything Supabase is currently running.
+
+Deploy drift guard: the workflow is the only thing that should deploy. Before
+any hand deploy, diff against the deployed copy (`supabase functions download
+<slug>` or the MCP `get_edge_function`) — live source that is not in git has
+happened here before.
 
 ---
 
@@ -211,3 +237,107 @@ ZeroTier Central. Camera IPs/creds are in `~/.claude/.../memory/reference_camera
 - [ ] Back up `~/.claude/.../memory/` (§9.3).
 - [ ] Record the ZeroTier network ID + how to authorize a new node (§8).
 - [ ] Verify SSH keys aren't keychain-only (§9.6).
+- [ ] Confirm the first `backend-*` and `frontend-*` tags appeared after the next deploy of each repo.
+- [ ] Do one **rehearsed** rollback of the frontend (12.2) at a quiet hour, and write the elapsed time next to the procedure. A procedure nobody has ever run is a wish.
+
+---
+
+## 12. Rollback — how to undo a deploy
+
+Every production deploy is tagged by CI at the moment of the push
+(`.github/workflows/deploy-tag.yml` in each repo). The tag's annotation names
+the tag that was live before it, so the rollback target is always one command
+away:
+
+```bash
+git fetch --tags origin
+git tag --list 'backend-*'  | tail -2   # or frontend-*
+git show <newest-tag> | head -8         # the annotation names the previous one
+```
+
+There is no staging environment (that is Wave 3.3), so every rollback below is
+performed against production. Tell someone before you start.
+
+### 12.1 Backend (Railway)
+
+Railway builds this repo's `main` with the Dockerfile and serves it at
+`lotlogic-backend-production.up.railway.app`.
+
+1. Find the target: `git show $(git tag --list 'backend-*' | tail -1) | head -8`
+   → the line `Previous production tag: backend-…` is where you are going.
+2. **Railway dashboard → project → the API service → Deployments.** Find the
+   deployment whose commit is that tag's SHA (the tag name ends in the short
+   SHA). Use **Redeploy** on it. Railway rebuilds that commit; it does not
+   change what is on `main`.
+3. Watch `/ready` — not `/health`. `/health` answers "ok" without touching the
+   database and stayed green through both August wedges.
+   `watch -n5 'curl -s -o /dev/null -w "%{http_code}\n" https://lotlogic-backend-production.up.railway.app/ready'`
+   Expect `200` within about 90 seconds.
+4. **Then fix `main`.** A Railway redeploy is not a code change: the next push
+   to `main` deploys the bad commit again. Either `git revert <bad sha>` and
+   push, or ship the fix forward. Until you do, the running code and `main`
+   disagree — say so in the channel.
+5. **If the bad deploy included a migration**, the rollback is not complete:
+   Railway redeploying old code against a new schema is its own outage. Stop,
+   read `recovery/db-state.md` and `docs/db/schema-drift.md`, and roll the schema
+   back first. Wave 2.4 (#84) gives you the tools: `migrations/0000_baseline.sql`
+   plus `scripts/db/migrate.sh` rebuild any schema from git, and
+   `scripts/db/check_drift.py` tells you where production and `migrations/`
+   disagree. There is still no automatic *down* migration — take a `pg_dump`
+   first and write down what you undo as you undo it.
+
+### 12.2 Frontend (Vercel)
+
+Vercel builds `frontend/` from `main` on push.
+
+1. Find the target tag as above, with `frontend-*`.
+2. **Vercel dashboard → project `lotlogic` (team `gabebs1-2452s-projects`) →
+   Deployments.** Find the Production deployment built from that tag's commit
+   and use **Instant Rollback**. This is an alias switch, not a rebuild — it
+   takes seconds and cannot fail on a build error.
+3. Verify: load `https://lotlogicparking.com/app` in a private window and check
+   that the dashboard renders and a property's roster loads. Then load the QR
+   page for the plaza (`/visit?...`) — that is the surface a driver standing in
+   a lot is using.
+4. **Then fix `main`**, same reasoning as 12.1: the next push re-deploys the bad
+   commit and silently un-does the rollback.
+
+### 12.3 Edge functions (Supabase)
+
+Supabase keeps no deployment history and has no rollback button. Redeploying the
+old source **is** the rollback, and `.github/workflows/edge-functions.yml` can do
+it from a tag.
+
+1. **GitHub → Actions → "Edge functions" → Run workflow.**
+2. Set **ref** to the `frontend-*` tag you want back, and **only** to the slug(s)
+   to restore — e.g. `ref: frontend-20260914-1130-a1b2c3d`, `only: camera-snapshot`.
+   Leaving `only` blank redeploys all 16 from that ref, which is the right move
+   if you do not know which one broke.
+3. The run type-checks and tests before it deploys, so a rollback to a commit
+   that was itself broken fails loudly instead of shipping.
+4. Verify the one that matters — the camera path:
+   ```sql
+   -- most recent frame the pipeline accepted
+   select id, camera_id, plate_text, created_at
+     from plate_events order by created_at desc limit 5;
+   ```
+   A gap that starts at the bad deploy and does not close within a few minutes
+   of the rollback means the rollback did not take. Check the function's logs
+   (`mcp__supabase__query_logs`, service `edge-function`).
+5. **Then fix `main`**, same reasoning: the next push to `main` deploys the bad
+   source again.
+6. `camera-snapshot`, `pr-ingest` and `cron-sessions-sweep` write to the database
+   on every invocation. Rolling one of them back does not un-write what the bad
+   version wrote. Check `plate_events`, `visitor_passes` and `alpr_violations`
+   for rows created during the bad window before you call it done.
+
+### 12.4 What is NOT covered here
+
+- **Database schema.** See §7 and `lotlogic-backend/recovery/db-state.md`.
+  Wave 2.4 owns making this a procedure.
+- **Git history rewrites.** Credentials that were committed and later removed are
+  still in history. Removing them means a force-push that invalidates every
+  clone and every open PR. Not an emergency operation; decide it deliberately.
+- **Cloudflare Worker (`email-tow-action`)**: `wrangler rollback` from the
+  `cloudflare-workers/email-tow-action` directory; it deploys by hand, so it is
+  not tagged.
