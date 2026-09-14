@@ -95,7 +95,9 @@ export function ViolationProofModal({ violation, latestSnapshotUrl, latestDetect
   // its URL is presigned on demand rather than carried on the row. The two
   // legacy `_*_snapshot_url` fields still win when present, so the "Current"
   // camera-snapshot fallback restored in PR #243 is untouched by this.
-  const detectionUrl = usePhotoUrl(violation._snapshot_event_id);
+  // `violation` may be null; hooks must run before the early return, so read
+  // the id defensively rather than dereferencing above the guard.
+  const detectionUrl = usePhotoUrl(violation && violation._snapshot_event_id);
   if (!violation) return null;
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   const det = matchedDetection;

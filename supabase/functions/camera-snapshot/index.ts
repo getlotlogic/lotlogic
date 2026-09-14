@@ -12,6 +12,25 @@ import { computeImageHashes } from "./image-hash.ts";
 import { rotateJpegBytes, type RotationDir } from "./image-rotate.ts";
 import { extractMmc, mmcColumns, isMmcBlocked, handleMmcFailureStatus, type PrMmcData } from "./mmc.ts";
 
+// ─── plate_events dual-write: image_url AND image_key (Wave 2.5 Task 10) ───
+// Every insert below that stores a photograph writes BOTH the public r2.dev
+// URL and the bare R2 object key. The key is what the presign endpoint
+// GET /alpr/plate-events/{id}/photo actually needs: a stored URL cannot be
+// re-signed. The endpoint works today by stripping settings.r2_public_url off
+// image_url, and that fallback is pinned by
+// tests/plaza/test_photo_presign.py::test_image_url_only_row_still_resolves —
+// but without a writer, image_key would stay NULL for every row written after
+// Task 13 Part C's backfill, so the backfill could never make the column
+// authoritative and image_url could never be retired. Hence: both, for one
+// release. image_url is NOT dropped by Wave 2.5.
+//
+// DEPLOY ORDER — this function must be deployed AFTER the migration
+// migrations/20260914143648_plate_events_image_key.sql reaches production.
+// PostgREST rejects an insert naming a column that is not in its schema cache
+// (PGRST204), so deploying this ahead of the migration fails EVERY ingest.
+// The migration is applied by the Wave 2.4 runner at backend deploy; run
+// `supabase functions deploy camera-snapshot` only once it has.
+
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";
 // Self-hosted Plate Recognizer Snapshot SDK toggle. When this env is set
@@ -641,6 +660,7 @@ Deno.serve(async (req: Request) => {
               normalized_plate: "",
               confidence: 0,
               image_url: imageUrl,
+              image_key: upRes.ok ? key : null,
               image_sha256: imageHashes.sha256,
               image_dhash: imageHashes.dhash,
               event_type: "entry",
@@ -916,6 +936,7 @@ Deno.serve(async (req: Request) => {
           normalized_plate: "",
           confidence: 0,
           image_url: imageUrl,
+          image_key: upRes.ok ? key : null,
           image_sha256: imageHashes.sha256,
           image_dhash: imageHashes.dhash,
           event_type: "entry",
@@ -1062,6 +1083,7 @@ Deno.serve(async (req: Request) => {
         normalized_plate: normalized,
         confidence: result.score,
         image_url: imageUrl,
+        image_key: upRes.ok ? key : null,
         image_sha256: imageHashes.sha256,
         image_dhash: imageHashes.dhash,
         event_type: isPairedRead ? "paired_read" : direction,
