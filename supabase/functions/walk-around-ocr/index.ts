@@ -5,6 +5,9 @@
 // tow-evidence bucket, OCRs via Plate Recognizer, returns plate + candidates +
 // vehicle attributes (make/model/color/type/region/orientation via mmc=true).
 // Does NOT write violations. Partner scope = properties.tow_company_id.
+// Genuinely authenticated, so NOT gated on INTERNAL_TOKEN (SEC-3, Wave 2.9
+// Task 4) — the caller is an operator's browser, which has no internal token
+// and never should; requiring one would break the walk-around.
 
 import { createClient } from "@supabase/supabase-js";
 

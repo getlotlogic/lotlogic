@@ -142,8 +142,9 @@ export function extractMilesightPayload(obj: Record<string, unknown>): Extracted
 
   // Normalize the devMac to lowercase + alphanumeric-only so it matches
   // the convention used by alpr_cameras.api_key. Without this, an SC211
-  // sending "1CC31660025E" wouldn't match a DB row stored as
-  // "1cc31660025e" — every read would silently 200 with unknown_camera.
+  // sending "AABBCCDDEEFF" wouldn't match a DB row stored as
+  // "aabbccddeeff" — every read would silently 200 with unknown_camera.
+  // (placeholder — a real MAC is a camera credential)
   const devMac = typeof values.devMac === "string"
     ? (values.devMac as string).toLowerCase().replace(/[^a-z0-9]/g, "")
     : null;
@@ -207,7 +208,7 @@ export function extractMilesightPayload(obj: Record<string, unknown>): Extracted
  * {
  *   "event_type": "Plate Event" | "Visitor Event" | "White List Event" | "Black List Event" | ...,
  *   "device_name": "...",
- *   "mac_address": "1cc31653ac72",
+ *   "mac_address": "aabbccddeeff",
  *   "sn": "...",
  *   "time": "2026-05-12 10:30:00",
  *   "detection_region": "1",
@@ -254,7 +255,7 @@ export function extractMilesightLprPayload(obj: Record<string, unknown>): Extrac
   if (bytes.byteLength < 1024) return null;
 
   // Normalize MAC: lowercase, strip separators. alpr_cameras.api_key is the
-  // bare hex (e.g. '1cc31653ac72'), matching the Milesight TS4467 convention.
+  // bare hex (e.g. 'aabbccddeeff'), matching the Milesight TS4467 convention.
   const cameraHint = mac.toLowerCase().replace(/[^a-f0-9]/g, "");
 
   // Parse plate confidence — TS4467 sends as string, sometimes percent, sometimes 0..1.

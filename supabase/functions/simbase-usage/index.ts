@@ -5,8 +5,12 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 // dashboard. No persistence — just a wrapper around SIMbase's /v2/usage
 // endpoint with formatted output.
 //
-// Auth: relies on Supabase's default JWT requirement (Authorization: Bearer
-// <anon_key>). Treat as internal-only.
+// Auth: verify_jwt only, which the PUBLISHABLE anon key satisfies — that is
+// not authentication (SEC-3, Wave 2.9 Task 4). Left as-is on purpose: this
+// function holds no service-role key, reads a third-party billing API and
+// writes nothing, so the worst case is a stranger reading our SIM spend. If it
+// ever gains a write or a service-role client, gate it on
+// _shared/internal_auth.ts first.
 
 const SIMBASE_API_KEY = Deno.env.get("SIMBASE_API_KEY") ?? "";
 const SIMBASE_BASE = "https://api.simbase.com";

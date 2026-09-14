@@ -9,6 +9,10 @@
 //
 // Auth: shared secret stored in public.integration_secrets['rut_watchdog']
 // (not in code/git). Sent as the `secret` body field or X-Watchdog-Secret.
+// Deliberately NOT gated on INTERNAL_TOKEN (SEC-3, Wave 2.9 Task 4): the field
+// RUT routers cannot send an Authorization header, so requiring one would stop
+// every heartbeat — and camera-down-check reads absent heartbeats as a site
+// brownout, so the break would announce itself as a false camera outage.
 //
 // Body: { api_key: string (camera MAC), up: boolean, latency_ms?: number,
 //         secret?: string, note?: string }

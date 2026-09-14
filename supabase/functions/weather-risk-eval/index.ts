@@ -15,6 +15,7 @@
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { requireInternalToken } from "../_shared/internal_auth.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -145,6 +146,16 @@ export async function run(db: SupabaseClient, opts: { dryRun?: boolean } = {}): 
 }
 
 serve(async (req) => {
+  // SEC-3 (Wave 2.9 Task 4). ENFORCE_INTERNAL_TOKEN defaults to "true"; set it
+  // to "false" for one deploy if a caller turns out to be sending no header, so
+  // the 401s show up in the logs before they show up as a dead cron job.
+  if ((Deno.env.get("ENFORCE_INTERNAL_TOKEN") ?? "true") !== "false") {
+    const denied = requireInternalToken(req);
+    if (denied) return denied;
+  } else if (requireInternalToken(req)) {
+    console.warn("internal_token: would have rejected this caller (enforcement off)");
+  }
+
   try {
     const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
     const dryRun = new URL(req.url).searchParams.get("dryRun") === "1";
