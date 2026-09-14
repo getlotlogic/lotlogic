@@ -49,6 +49,35 @@ test('§4 claims exactly 16 live (in-repo) functions and names every slug the de
   }
 });
 
+test('§12.3 does not contradict the edge-functions workflow\'s `only` input semantics', () => {
+  const text = doc();
+
+  // The workflow's `only` input is required — a blank `only` is a hard error,
+  // not an implicit "deploy everything". Confirm that's still true of the
+  // workflow before trusting the doc's claim about it.
+  const workflowPath = path.join(REPO_ROOT, '.github/workflows/edge-functions.yml');
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const onlyInputBlock = workflow.match(/only:\s*\n(?:.*\n)*?\s*required:\s*(\S+)/);
+  assert.ok(onlyInputBlock, 'could not find the `only` workflow_dispatch input in edge-functions.yml');
+  assert.equal(onlyInputBlock[1], 'true', '`only` is no longer a required workflow_dispatch input — update this test and the doc together');
+
+  // slugs.mjs must still reject a blank spec outright.
+  const slugsPath = path.join(REPO_ROOT, 'supabase/functions/_ci/slugs.mjs');
+  const slugsSrc = readFileSync(slugsPath, 'utf8');
+  assert.match(slugsSrc, /workflow_dispatch needs `only`/, 'slugs.mjs no longer throws on a blank `only` spec');
+
+  // The doc must never claim a blank `only` performs a full redeploy — that
+  // claim is what shipped as a regression in an earlier draft.
+  assert.doesNotMatch(
+    text,
+    /[Ll]eaving `only` blank redeploys all/,
+    '§12.3 falsely claims a blank `only` redeploys everything; the workflow rejects a blank `only`'
+  );
+  // The doc must instead tell the reader to type `all` explicitly.
+  assert.match(text, /`only: all`/, '§12.3 should instruct `only: all` to redeploy every function');
+  assert.match(text, /blank `only` is rejected/, '§12.3 should state that a blank `only` is rejected by the workflow');
+});
+
 test('frontend-repo paths RECOVERY.md cites for this repo exist on this branch', () => {
   const relPaths = [
     '.github/workflows/edge-functions.yml',

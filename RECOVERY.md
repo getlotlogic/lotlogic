@@ -294,7 +294,9 @@ Vercel builds `frontend/` from `main` on push.
 2. **Vercel dashboard → project `lotlogic` (team `gabebs1-2452s-projects`) →
    Deployments.** Find the Production deployment built from that tag's commit
    and use **Instant Rollback**. This is an alias switch, not a rebuild — it
-   takes seconds and cannot fail on a build error.
+   takes seconds and cannot fail on a build error. Equivalent via CLI, run
+   locally/by hand — never in CI, since no Vercel token exists in Actions:
+   `vercel rollback <deployment-url-or-id> --token=$VERCEL_TOKEN`.
 3. Verify: load `https://lotlogicparking.com/app` in a private window and check
    that the dashboard renders and a property's roster loads. Then load the QR
    page for the plaza (`/visit?...`) — that is the surface a driver standing in
@@ -311,8 +313,11 @@ it from a tag.
 1. **GitHub → Actions → "Edge functions" → Run workflow.**
 2. Set **ref** to the `frontend-*` tag you want back, and **only** to the slug(s)
    to restore — e.g. `ref: frontend-20260914-1130-a1b2c3d`, `only: camera-snapshot`.
-   Leaving `only` blank redeploys all 16 from that ref, which is the right move
-   if you do not know which one broke.
+   `only` is a required input: a blank `only` is rejected by the workflow
+   (`slugsForOnly()` in `supabase/functions/_ci/slugs.mjs` throws
+   `workflow_dispatch needs \`only\`: a comma-separated slug list, or \`all\`.`
+   before anything deploys). If you do not know which function broke, type
+   **`only: all`** explicitly to redeploy every function from that ref.
 3. The run type-checks and tests before it deploys, so a rollback to a commit
    that was itself broken fails loudly instead of shipping.
 4. Verify the one that matters — the camera path:
