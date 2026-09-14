@@ -5,7 +5,10 @@
 // not UTC. Sending a bare date, or one stamped with `Z`, ended the day at
 // 19:59:59 Eastern — every truck that registered between 8 PM and midnight fell
 // outside "today" in the log and in the CSV export.
-// Wave 2 replaces the constant with a `properties.timezone` column.
+// Wave 2 (property config): every property still resolves to Eastern today
+// (no property has a configured timezone yet), so this constant stays as
+// the default `timeZone` for every function below. A caller that knows a
+// property's configured zone (`property.config?.timezone`) passes it in.
 export const LOT_TIMEZONE = 'America/New_York';
 
 // The UTC offset in force in `timeZone` on the calendar day `ymd` ("-04:00").
@@ -40,12 +43,15 @@ export function tzOffsetAt(date, timeZone = LOT_TIMEZONE) {
 // "2026-09-03" → "2026-09-03T00:00:00.000-04:00" / "...T23:59:59.999-04:00".
 // Anything that is not a bare calendar date is passed straight through, because
 // the caller already sent a full timestamp.
-export function lotDayBound(ymd, edge) {
+// `timeZone` defaults to LOT_TIMEZONE, so a caller that never passes one (or
+// passes undefined, e.g. a property whose config has never been written)
+// gets byte-identical output to before this argument existed.
+export function lotDayBound(ymd, edge, timeZone = LOT_TIMEZONE) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || '')) return ymd;
   const time = edge === 'end' ? '23:59:59.999' : '00:00:00.000';
-  let off = tzOffsetOn(ymd);
+  let off = tzOffsetOn(ymd, timeZone);
   if (!off) return ymd; // No Intl offset support: leave the old behaviour alone.
-  const refined = tzOffsetAt(new Date(`${ymd}T${time}${off}`));
+  const refined = tzOffsetAt(new Date(`${ymd}T${time}${off}`), timeZone);
   return `${ymd}T${time}${refined || off}`;
 }
 

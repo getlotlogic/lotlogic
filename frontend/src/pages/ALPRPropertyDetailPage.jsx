@@ -839,7 +839,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
               Live
             </div>
           </div>
-          <ErrorBoundary label="truck parking log"><React.Suspense fallback={<SkeletonCards />}><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} /></React.Suspense></ErrorBoundary>
+          <ErrorBoundary label="truck parking log"><React.Suspense fallback={<SkeletonCards />}><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} timeZone={property?.config?.timezone} /></React.Suspense></ErrorBoundary>
         </>
       ) : (
         // Apartment permit registry (M3): pending approval queue + resident /
@@ -857,7 +857,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
             </div>
             <div className="pd-section-meta">All registrations · all time</div>
           </div>
-          <ErrorBoundary label="history"><React.Suspense fallback={<SkeletonCards />}><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} mode="history" /></React.Suspense></ErrorBoundary>
+          <ErrorBoundary label="history"><React.Suspense fallback={<SkeletonCards />}><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} timeZone={property?.config?.timezone} mode="history" /></React.Suspense></ErrorBoundary>
         </>
       )}
 

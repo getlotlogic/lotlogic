@@ -3,12 +3,19 @@ import { fmtMoney, fmtTime, fmtDateTime } from '../lib/format.js';
 import { supabase } from '../lib/supabase.js';
 import { API } from '../lib/api.js';
 import { db } from '../lib/db.js';
+import { lotDayBound } from '../lib/lotdate.js';
 import { useActiveRoster, useIntervalFetch } from '../hooks.js';
 import { useToast } from '../ui/Toast.jsx';
 import { ConfirmActionModal } from '../ui/Dialog.jsx';
 import { CooldownChip, ReregTowFlag, PassPhotoStrip } from '../ui/passPhotos.jsx';
 
-export function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = false, isOwner = false, mode = 'default' }) {
+// `timeZone` is the property's configured zone (`property.config?.timezone`),
+// passed down from ALPRPropertyDetailPage, which already fetched the property
+// row. undefined (a property whose config has never been written, or a caller
+// that predates this prop) falls through to lotDayBound's own default —
+// LOT_TIMEZONE, same as before this prop existed (Wave 2 property config,
+// decision 8: every property resolves to Eastern today either way).
+export function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = false, isOwner = false, mode = 'default', timeZone }) {
   // mode='history' → the permanent, all-time record (no date lower bound): every
   // registration ever, all statuses, searchable + CSV. 'default' = the live ops
   // log (last 4 days). Same machinery either way.
@@ -198,15 +205,22 @@ export function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = f
       // already has >540). getAllParkingLog pages through the whole result set;
       // once every row is in memory the client-side search box covers 100% of
       // history. Default (live-ops) mode keeps a single 500-row recent window.
+      // Resolve the bare calendar-date filters to full instants in the
+      // property's zone here, not inside db.js: a value that's already a
+      // full timestamp passes straight through db.js's own lotDayBound call
+      // unchanged (see lotdate.js), so this is the one place the zone needs
+      // to be threaded through.
+      const dateFrom = lotDayBound(filters.date_from, 'start', timeZone);
+      const dateTo = lotDayBound(filters.date_to, 'end', timeZone);
       const logFetch = isHistory
         ? db.getAllParkingLog(propertyId, {
-            date_from: filters.date_from,
-            date_to: filters.date_to,
+            date_from: dateFrom,
+            date_to: dateTo,
             status: filters.status,
           })
         : db.getParkingLog(propertyId, {
-            date_from: filters.date_from,
-            date_to: filters.date_to,
+            date_from: dateFrom,
+            date_to: dateTo,
             status: filters.status,
             page: 1,
             page_size: 500,
@@ -256,7 +270,7 @@ export function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = f
       setErr(e.message || 'Failed to load log');
     }
     setLoading(false);
-  }, [propertyId, filters, isPayToPark]);
+  }, [propertyId, filters, isPayToPark, timeZone]);
 
   // Handler for the tow / no-tow confirmation modal. Calls the existing
   // backend endpoints (force-bill for tow-confirmation, mark-no-tow for
@@ -389,7 +403,12 @@ export function TruckParkingLog({ propertyId, propertyType, payToParkEnabled = f
       // It has no filter for name/company/phone/spot/ref — for those the CSV
       // still covers the date window, and we say so out loud rather than
       // handing over a file that quietly disagrees with the screen.
-      const exportParams = { ...filters, format: 'csv' };
+      const exportParams = {
+        ...filters,
+        date_from: lotDayBound(filters.date_from, 'start', timeZone),
+        date_to: lotDayBound(filters.date_to, 'end', timeZone),
+        format: 'csv',
+      };
       const searchIsPlateShaped = /^[A-Za-z0-9\s-]{2,}$/.test(trimmedSearch)
         && normalizePlateForSearch(trimmedSearch).length >= 2;
       if (hasSearch && searchIsPlateShaped) {
