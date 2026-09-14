@@ -1,6 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { db } from './lib/db.js';
 import { supabase } from './lib/supabase.js';
+import { startVisiblePoll } from './lib/visiblePoll.js';
+
+// FE-8. A dashboard left open on an office monitor used to poll forever. Every
+// recurring fetch in this app goes through here.
+export function useVisiblePolling(fn, ms, deps = []) {
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+  useEffect(
+    () => startVisiblePoll({ fn: () => fnRef.current(), ms }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ms, ...deps],
+  );
+}
 
 // ── Theme hook ────────────────────────────────────────────────
 export function useTheme() {
@@ -66,14 +79,17 @@ export function useActiveRoster(propertyId) {
     reqRef.current++;            // invalidate any in-flight fetch from a prior id
     setLoading(true);
     refresh();
-    const poll = setInterval(refresh, 60000);
+    // Only the 60s safety poll is gated by tab visibility — the realtime
+    // channel below is push-based, costs nothing while idle, and is what
+    // makes the roster feel live, so it is left running regardless.
+    const stopPoll = startVisiblePoll({ fn: refresh, ms: 60000 });
     let ch = null;
     if (supabase) {
       ch = supabase.channel('active-roster-' + propertyId + '-' + Math.random().toString(36).slice(2, 8))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'visitor_passes', filter: 'property_id=eq.' + propertyId }, refresh)
         .subscribe();
     }
-    return () => { clearInterval(poll); if (ch) { try { supabase.removeChannel(ch); } catch {} } };
+    return () => { stopPoll(); if (ch) { try { supabase.removeChannel(ch); } catch {} } };
   }, [propertyId, refresh]);
   return { roster, loading, error, refresh };
 }
@@ -86,17 +102,22 @@ export function useIntervalFetch(fn, ms, deps) {
       try { await fn(); } catch (_) { /* caller is responsible for error state */ }
     };
     run();
-    if (ms > 0) {
-      const h = setInterval(run, ms);
-      return () => { cancelled = true; clearInterval(h); };
-    }
-    return () => { cancelled = true; };
+    // FE-8: gated by tab visibility, and refreshes once immediately on
+    // return — every caller of useIntervalFetch inherits this for free.
+    const stop = startVisiblePoll({ fn: run, ms });
+    return () => { cancelled = true; stop(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 }
 
 // Keep a dashboard-wide ticker so every "time-left" label counts down in lockstep
 // without each component setting its own interval.
+//
+// FE-8: deliberately NOT gated by tab visibility. It touches no network — it
+// only re-renders whatever countdown text is already on screen — and gating
+// it would freeze visible countdowns in a tab that was briefly backgrounded
+// (e.g. switched away and immediately back), showing a stale time-left value
+// until the next tick catches up.
 const NOW_TICK_LISTENERS = new Set();
 let NOW_TICK_INTERVAL = null;
 export function useNowTick(everyMs = 30000) {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchBoard } from '../lib/brainApi.js';
+import { useVisiblePolling } from '../hooks.js';
 import { AreaStrip } from './hq/AreaStrip.jsx';
 import { RedList } from './hq/RedList.jsx';
 import { QuestionCard } from './hq/QuestionCard.jsx';
@@ -44,10 +45,8 @@ export function HqPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    const t = setInterval(load, REFRESH_MS);
-    return () => clearInterval(t);
-  }, [load]);
+  // FE-8: gated by tab visibility.
+  useVisiblePolling(load, REFRESH_MS, [load]);
 
   // Optimistic removal only — the brief's "re-fetches next tick" means the
   // standing 60s interval above, not an immediate re-fetch. An immediate

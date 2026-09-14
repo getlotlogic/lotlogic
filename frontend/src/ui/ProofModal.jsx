@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase.js';
 import { isVehicleInZone } from '../lib/geometry.js';
 import { colorHex } from '../lib/vehicles.js';
 import { resolveCameraSnapshot } from '../lib/db.js';
+import { startVisiblePoll } from '../lib/visiblePoll.js';
 
 // ── Image zoom overlay ──────────────────────────────────────
 export function ImageZoom({ src, alt, onClose }) {
@@ -128,8 +129,11 @@ export function ViolationProofModal({ violation, latestSnapshotUrl, latestDetect
       } catch (e) { console.warn('Live snapshot poll error:', e); }
     };
     poll(); // fetch immediately on open
-    const iv = setInterval(poll, 10000);
-    return () => { cancelled = true; clearInterval(iv); };
+    // FE-8: gated by tab visibility. The modal itself unmounts on close
+    // (stopping the poll), and this additionally stops it while the tab is
+    // hidden and re-fetches once on return.
+    const stop = startVisiblePoll({ fn: poll, ms: 10000 });
+    return () => { cancelled = true; stop(); };
   }, [violation.camera_id]);
 
   // Check if vehicle is still in zone using live snapshot detections

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { db } from '../lib/db.js';
 import { apiFetch } from '../lib/api.js';
+import { useVisiblePolling } from '../hooks.js';
 
 // ── TowActivityPage ─────────────────────────────
 // Operator-facing repository of every tow-truck sighting at the property's
@@ -325,10 +326,8 @@ export function TowActivityPage({ user }) {
   // list, which is the part of this page that works for everyone.
   const refresh = useCallback(() => { load(); loadEvidence(); }, [load, loadEvidence]);
   useEffect(() => { setLoading(true); refresh(); }, [refresh]);
-  useEffect(() => {
-    const t = setInterval(refresh, 60_000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  // FE-8: gated by tab visibility.
+  useVisiblePolling(refresh, 60_000, [refresh]);
 
   // Cluster events into visits: consecutive reads within 20 minutes
   // collapse to one row. Walks the (descending) events list and starts a

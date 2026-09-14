@@ -3,6 +3,7 @@ import { supabase, applySupabaseAuth } from './lib/supabase.js';
 import { apiFetch } from './lib/api.js';
 import { db } from './lib/db.js';
 import { useTheme, useOnlineStatus } from './hooks.js';
+import { startVisiblePoll } from './lib/visiblePoll.js';
 import { haptic, NotifyManager } from './lib/notify.js';
 import { useToast } from './ui/Toast.jsx';
 import { SkeletonCards } from './ui/Skeletons.jsx';
@@ -269,7 +270,7 @@ export function App() {
 
   function logout() {
     loadIdRef.current++; // Invalidate any in-flight loadData calls
-    clearInterval(timerRef.current);
+    if (timerRef.current) { timerRef.current(); timerRef.current = null; }
     if (realtimeRef.current) { supabase?.removeChannel(realtimeRef.current); realtimeRef.current = null; }
     if (alprRealtimeRef.current) { supabase?.removeChannel(alprRealtimeRef.current); alprRealtimeRef.current = null; }
     setOwner(null); setLots([]); setLotsLoaded(false); setLotStates({}); setViolations([]); setAlprViolations([]); setPartners([]); setViewAs(null);
@@ -338,8 +339,9 @@ export function App() {
       } catch { /* ignore */ }
     }
     refreshTrainingBadge();
-    const t = setInterval(refreshTrainingBadge, 60_000);
-    return () => { cancelled = true; clearInterval(t); };
+    // FE-8: gated by tab visibility.
+    const stop = startVisiblePoll({ fn: refreshTrainingBadge, ms: 60_000 });
+    return () => { cancelled = true; stop(); };
   }, [owner]);
 
   // Load data on mount if session was restored
@@ -349,19 +351,25 @@ export function App() {
   useEffect(() => { if (reconnected && owner) loadData(owner, true); }, [reconnected]);
 
   // Auto-refresh + session expiration check
+  // FE-8: gated by tab visibility (timerRef now holds the stop() function
+  // startVisiblePoll returns, not a raw interval id — logout() above calls
+  // it the same way).
   useEffect(() => {
     if (!owner) return;
-    if (!autoRefresh) { clearInterval(timerRef.current); return; }
-    timerRef.current = setInterval(() => {
-      // Check session expiration (7 days)
-      if (owner._ts && Date.now() - owner._ts > 7 * 86400000) {
-        addToast('Session expired. Please log in again.', 'error');
-        logout();
-        return;
-      }
-      if (navigator.onLine) loadData(owner, true);
-    }, refreshInterval);
-    return () => clearInterval(timerRef.current);
+    if (!autoRefresh) { if (timerRef.current) { timerRef.current(); timerRef.current = null; } return; }
+    timerRef.current = startVisiblePoll({
+      fn: () => {
+        // Check session expiration (7 days)
+        if (owner._ts && Date.now() - owner._ts > 7 * 86400000) {
+          addToast('Session expired. Please log in again.', 'error');
+          logout();
+          return;
+        }
+        if (navigator.onLine) loadData(owner, true);
+      },
+      ms: refreshInterval,
+    });
+    return () => { if (timerRef.current) { timerRef.current(); timerRef.current = null; } };
   }, [owner, loadData, autoRefresh, refreshInterval]);
 
   // Fast snapshot poll (every 10s) — refreshes latest_snapshot for cameras with active violations
@@ -430,8 +438,9 @@ export function App() {
       } catch (e) { console.warn('Fast snapshot poll error:', e); }
     };
     pollSnapshots(); // run immediately on mount, don't wait 10s
-    const iv = setInterval(pollSnapshots, 10000);
-    return () => clearInterval(iv);
+    // FE-8: gated by tab visibility — this is the heaviest poll in the app.
+    const stop = startVisiblePoll({ fn: pollSnapshots, ms: 10000 });
+    return () => stop();
   }, [owner]);
 
   // Subscribe to realtime violation changes

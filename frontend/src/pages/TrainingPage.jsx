@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { fmtDateTime } from '../lib/format.js';
 import { supabase } from '../lib/supabase.js';
 import { useToast } from '../ui/Toast.jsx';
+import { useVisiblePolling } from '../hooks.js';
 
 export function TrainingPage({ user, isOwner }) {
   // Operator review of cross-camera plate pairs with image evidence and
@@ -83,11 +84,8 @@ export function TrainingPage({ user, isOwner }) {
   // Auto-refresh every 60s to match cron-plate-pair-learn cadence. New
   // pairs land in the table within ~1 minute of a truck transiting both
   // cameras; this surface should show them without the operator having
-  // to reload.
-  useEffect(() => {
-    const t = setInterval(() => { load(); }, 60_000);
-    return () => clearInterval(t);
-  }, [load]);
+  // to reload. FE-8: gated by tab visibility.
+  useVisiblePolling(load, 60_000, [load]);
 
   async function setPairState(id, patch, toastMsg) {
     if (!supabase) return;

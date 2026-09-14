@@ -8,6 +8,7 @@ import { useToast } from '../ui/Toast.jsx';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { RegisterPassModal } from '../ui/RegisterPassModal.jsx';
 import { RegisteredDrill } from './RegisteredDrill.jsx';
+import { startVisiblePoll } from '../lib/visiblePoll.js';
 import { lazyPage } from '../lib/lazyPage.js';
 
 // Heavy — lazy-loaded so opening the Lots list doesn't pull in the full
@@ -106,8 +107,9 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
       setKpiCounts(counts);
     });
     load();
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
+    // FE-8: gated by tab visibility.
+    const stop = startVisiblePoll({ fn: load, ms: 60_000 });
+    return () => stop();
   }, [properties]);
 
   async function handleAdd(e) {
