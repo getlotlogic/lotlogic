@@ -1,0 +1,189 @@
+# Every Supabase edge function: type-check, test, then deploy the ones whose
+# sources actually changed.
+#
+# Replaces .github/workflows/auto-deploy-camera-snapshot.yml and
+# auto-deploy-cron-sessions-sweep.yml, which covered 2 of 16 functions with
+# hand-maintained path lists. Neither list was true: camera-snapshot's had to
+# name pr-ingest files by hand, and cron-sessions-sweep's missed its import of
+# ../camera-snapshot/weak_plate_reads.ts entirely. The matrix here is computed
+# from the import graph by supabase/functions/_ci/slugs.mjs, so it cannot go
+# stale that way.
+#
+# Secret required (already exists on this repo): SUPABASE_ACCESS_TOKEN — a
+# personal access token from supabase.com/dashboard/account/tokens with access
+# to project nzdkoouoaedbbccraoti. No new secrets.
+#
+# Staged / manual deploy: run this from the Actions tab with `only` set to a
+# comma-separated slug list (or the literal `all`). A blank `only` is an error,
+# not "deploy everything" — see slugsForOnly() for why.
+#
+# Rollback: same manual run, with `ref` set to the tag or SHA you want back and
+# `only` set to the slug.
+
+name: Edge functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/edge-functions.yml'
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/edge-functions.yml'
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Comma-separated slugs to deploy, or `all`. Required.'
+        required: true
+      ref:
+        description: 'Git ref to deploy from, for rollback (blank = this branch)'
+        required: false
+
+concurrency:
+  # Never cancel a half-finished deploy matrix: a cancelled run leaves some
+  # functions on the new code and some on the old.
+  group: edge-functions-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_REF: nzdkoouoaedbbccraoti
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      all: ${{ steps.p.outputs.all }}
+      deploy: ${{ steps.p.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Walker self-test
+        run: node --test supabase/functions/_ci/slugs.test.mjs
+
+      - id: p
+        name: Compute the matrix
+        env:
+          ONLY: ${{ inputs.only }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          walker=supabase/functions/_ci/slugs.mjs
+          all=$(node "$walker" list)
+          echo "all=$all" >> "$GITHUB_OUTPUT"
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            # Manual staged deploy / rollback: exactly what was asked for, and
+            # the walker refuses a blank list or an unknown slug.
+            deploy=$(node "$walker" only "$ONLY")
+          elif [ "$EVENT" != "push" ]; then
+            # pull_request: check everything, deploy nothing.
+            deploy='[]'
+          elif [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            # First push, force-push, or a rewritten history: we cannot know
+            # what changed, so redeploy everything rather than guess low.
+            echo "::notice::no usable before-sha; deploying every function"
+            deploy="$all"
+          else
+            deploy=$(git diff --name-only "$BEFORE" "$SHA" | node "$walker" changed)
+          fi
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Edge functions"
+            echo "- slugs checked: $(node -p 'JSON.parse(process.argv[1]).length' "$all")"
+            echo "- to deploy ($(node -p 'JSON.parse(process.argv[1]).length' "$deploy")): \`$deploy\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  check:
+    name: check ${{ matrix.slug }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        slug: ${{ fromJSON(needs.plan.outputs.all) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # CWD must be inside the slug: Deno resolves deno.json and deno.lock by
+      # walking up from the working directory, not from the entry file. Running
+      # this from supabase/functions/ makes 10 of 16 functions fail on a phantom
+      # "Import @supabase/supabase-js not a dependency".
+      #
+      # --frozen: fail if the committed deno.lock is out of date, rather than
+      # silently resolving something newer. Without it this gate is advisory.
+      # A red lockfile here means someone changed an import and did not re-run
+      # `deno cache --lock=deno.lock --frozen=false index.ts *.test.ts`.
+      - name: deno check
+        working-directory: supabase/functions/${{ matrix.slug }}
+        run: deno check --frozen index.ts
+
+      - name: deno test
+        working-directory: supabase/functions/${{ matrix.slug }}
+        run: |
+          set -euo pipefail
+          if ls ./*.test.ts >/dev/null 2>&1; then
+            deno test --allow-all --no-check --frozen
+          else
+            echo "no tests in this function"
+          fi
+
+  deploy:
+    name: deploy ${{ matrix.slug }}
+    needs: [plan, check]
+    # `needs: check` with no always() is the gate: one red type-check or test in
+    # ANY function blocks every deploy in the run (D2).
+    if: >-
+      needs.plan.outputs.deploy != '[]' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      # A matrix of 16 concurrent `supabase functions deploy` calls against one
+      # project is a good way to find that project's rate limit during an
+      # incident.
+      max-parallel: 2
+      matrix:
+        slug: ${{ fromJSON(needs.plan.outputs.deploy) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # verify_jwt is declared per function in supabase/config.toml, which the
+      # CLI reads. Do NOT pass --no-verify-jwt here: the flag and the file would
+      # be two sources of truth, and the file is the one that survives a deploy
+      # made from a laptop. (The two workflows this replaces passed the flag;
+      # config.toml already says verify_jwt = false for both of those slugs, so
+      # dropping it changes nothing.)
+      - name: supabase functions deploy
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SLUG: ${{ matrix.slug }}
+        run: supabase functions deploy "$SLUG" --project-ref "$PROJECT_REF"

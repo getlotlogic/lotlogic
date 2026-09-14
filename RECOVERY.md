@@ -53,9 +53,9 @@ audit trail, independently revocable). Single-secret services → shared vault (
 | Repo / path | Deploys to | Trigger |
 |---|---|---|
 | `lotlogic/frontend/*` | Vercel (project `lotlogic`, root dir `frontend/`) | auto on push to `main` |
-| `lotlogic/supabase/functions/camera-snapshot` | Supabase Edge | auto via `.github/workflows/auto-deploy-camera-snapshot.yml` |
-| `lotlogic/supabase/functions/cron-sessions-sweep` | Supabase Edge | auto via `auto-deploy-cron-sessions-sweep.yml` |
-| all other edge functions | Supabase Edge | **manual** `supabase functions deploy <slug> --project-ref nzdkoouoaedbbccraoti` |
+| `lotlogic/supabase/functions/*` (all 16) | Supabase Edge | auto via `.github/workflows/edge-functions.yml` on push to `main` — type-checks and tests every function, then deploys only the slugs whose sources or transitive imports changed (matrix computed by `supabase/functions/_ci/slugs.mjs`) |
+| — staged or manual redeploy | Supabase Edge | run **Edge functions** from the Actions tab with `only` = a comma-separated slug list (or `all`); a blank `only` is rejected |
+| — rollback one function | Supabase Edge | same manual run, `ref` = the tag or SHA to deploy from, `only` = the slug |
 | `lotlogic/cloudflare-workers/email-tow-action` | Cloudflare Workers | **manual** `wrangler deploy` (now in git as of 2026-06-05) |
 | `lotlogic/puller`, `lotlogic/monitoring` | Railway workers | auto on push |
 | `lotlogic-backend` | Railway API (`lotlogic-backend-production.up.railway.app`) | auto on push to `main` |
