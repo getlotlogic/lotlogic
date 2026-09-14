@@ -3,7 +3,7 @@
 
 .PHONY: help build-frontend build-puller build-monitoring build-all \
         run-frontend run-puller run-monitoring \
-        migrate logs status
+        logs status
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -32,12 +32,6 @@ run-puller: build-puller ## Run snapshot puller locally
 
 run-monitoring: build-monitoring ## Run monitoring agents locally
 	docker run --rm --env-file monitoring/.env lotlogic-monitoring
-
-# ── Database ───────────────────────────────────────────
-
-migrate: ## Run database migrations
-	docker build -t lotlogic-migrate -f puller/Dockerfile.migrate puller/
-	docker run --rm --env-file puller/.env lotlogic-migrate
 
 # ── Lead Gen ───────────────────────────────────────────
 
@@ -83,4 +77,4 @@ status: ## Show git status and branch info
 	@echo "Puller:     puller/"
 	@echo "Monitoring: monitoring/"
 	@echo "Backend:    getlotlogic/lotlogic-backend (separate repo)"
-	@echo "Migrations: migrations/"
+	@echo "Migrations: lotlogic-backend/migrations/"
