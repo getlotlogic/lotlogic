@@ -12,6 +12,8 @@
 
 **Spec:** `/Users/gabe/lotlogic/docs/superpowers/specs/2026-09-03-enterprise-readiness-program.md` — §3 Wave 2 rows **2.2** and **2.3**; systemic move **S3**; Appendix A findings **PLATFORM-8, DB-13, BACKEND-6, SEC-4, SEC-6, SEC-8, SEC-12, FE-16** (2.2) and **PLATFORM-1, PLATFORM-11** (2.3).
 
+**Revision:** post-preflight (`.superpowers/sdd/2026-09-14-wave2-2-tenancy-rbac-onboarding/preflight.md`). Nine blocking defects and four fix-in-plan items are closed; the corrections that matter most to an executor are called out in the Facts table and in scope calls 6 and 11–13. In particular: **`violations.gross_revenue` holds cents**, **`organizations` carries no foreign keys and is never truncated**, **`upload_bytes` takes `(data, key, content_type)` and returns a tuple**, and **the QR sheet is `qr-sheet.html`, not a dashboard tab**.
+
 ---
 
 ## Global Constraints
@@ -36,7 +38,11 @@ Every task's requirements implicitly include this section.
 ### Migrations (Wave 2.4 runner conventions)
 
 - File name `migrations/YYYYMMDDHHMMSS_snake_case_name.sql` in the **backend** repo (`/Users/gabe/lotlogic-backend`), 14-digit UTC timestamp from `date -u +%Y%m%d%H%M%S`. `scripts/db/migrate.sh` hard-errors on any other filename.
-- **Additive only.** No `DROP TABLE`, no `DROP COLUMN`, no `ALTER COLUMN … TYPE`, no narrowing `CHECK` on an existing column, no `NOT NULL` added to an existing column. Every statement in this plan is `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `INSERT … WHERE NOT EXISTS`, or `UPDATE … WHERE col IS NULL`. Re-running any migration in this plan must be a no-op.
+- **Additive only, with exactly one written-down exception.** No `DROP TABLE`, no `DROP COLUMN`, no `ALTER COLUMN … TYPE`, no narrowing `CHECK` on an existing column, no `NOT NULL` added to an existing column. Every statement in this plan is `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `INSERT … WHERE NOT EXISTS`, or `UPDATE … WHERE col IS NULL`. Re-running any migration in this plan must be a no-op.
+  **The exception is Task 1's `CREATE OR REPLACE FUNCTION public.is_platform_admin()`.** It is required, not optional — see scope call 12 and Gabe decision D10 — and it is still re-runnable. No other existing object is redefined anywhere in this wave.
+- **No foreign key from `organizations` to `lot_owners` or `enforcement_partners`.** `enforcement_partners` is truncated between every pay-to-park test and `TRUNCATE … CASCADE` follows referencing tables; an FK there would carry the cascade into `organizations`, then `properties.organization_id`, then the session-scoped plaza seed and every pass and event row hanging off it. Plain `uuid` columns plus two partial unique indexes. `organizations` is **never** added to `TRUNCATE_TABLES`.
+- **Every new fixture owns its rows.** Mint uuids inside the fixture, insert your own `properties` / `lot_owners` / `organizations` rows, delete them in teardown. Never `UPDATE` a seeded row (`seed_truck_plaza` asserts on the plaza property, and `properties` is deliberately not truncated), and never use a constant id in a table that is not truncated — the second use dies on the primary key.
+- **Any test that executes a whole migration file goes through the raw asyncpg connection**, as `tests/plaza/conftest.py::_apply_schema` does and documents: the asyncpg dialect sends one prepared statement, which cannot carry multiple commands or a dollar-quoted block.
 - Apply via the Supabase MCP `apply_migration` or the Supabase CLI — **never** the raw SQL editor, which does not record in `supabase_migrations.schema_migrations`.
 - Every new table gets `ENABLE ROW LEVEL SECURITY` and `REVOKE ALL … FROM anon, authenticated` **in the same file**. The backend reaches these tables as the service role; no PostgREST client reads them.
 - A new column on `public.properties` is **not** granted to `anon`. Production revoked the table-level SELECT and granted back a named column list (`20260707170000_properties_anon_column_scope.sql`), so a new column is private by default. Task 12 grants exactly one new column to `anon` on purpose, and says why in the file.
@@ -102,20 +108,25 @@ Every task's requirements implicitly include this section.
 | `properties` | 11 rows; **every one** has `qr_code_id`, `owner_id`, `partner_id`, `tow_company_id`, `policy_text`. `market_id` is set on 1 of 11 (Charlotte). `organization_id` does not exist. |
 | `properties.tow_company_id` vs `partner_id` | **Equal on all 11 rows** (`count(*) FILTER (WHERE tow_company_id IS DISTINCT FROM partner_id) = 0`). Widening the partner branch to `tow_company_id OR partner_id` is a no-op today and matches both RLS and the frontend's `scopePropsToPartner`. |
 | `properties.qr_code_id` shape | A slug: `charlotte-travel-plaza`, `villas-at-1825`, `fort-mill-townhomes-iii`. `UNIQUE`. Consumed as `/temp/<qr>` and `/perm/<qr>` (Vercel rewrites → `visit.html` / `resident.html`). |
-| `lot_owners` | 7 rows. 2 are `is_platform_admin`. One row (`Stevensons Apartments (Friedlam)`) owns **9** properties and has **no password set** — that is the "all nine N Style sites" org, and its login has never been used. |
+| `lot_owners` | 7 rows. 2 are `is_platform_admin`. One row — **`Stevensons Apartments (Friedlam)`** — owns **9** properties and has **no password set**; its login has never been used. That row is the nine-site organization. **N Style is the tow partner, not the owner** — an `enforcement_partners` row. The program doc's "all nine N Style sites" phrasing names the sites by who tows at them; the owning company is Friedlam. |
 | `enforcement_partners` | 3 rows. `markets` has exactly 1 row. |
 | `properties.app_enabled` | `false` on all 11 (Wave 1 item 13 turned the plaza's off). `pay_to_park_enabled` likewise false on all 11. |
-| `action_logs` | **`to_regclass('public.action_logs')` is NULL — the table does not exist.** `frontend/src/lib/db.js:324` inserts into it on every boot/tow and swallows the error in a `console.warn`. Every tow audit record ever "written" was discarded. This is SEC-8, and it is worse than the finding's wording. |
+| `action_logs` | **`to_regclass('public.action_logs')` is NULL — the table does not exist.** `frontend/src/lib/db.js:370` inserts into it on every boot/tow and swallows the error in a `console.warn`. Every tow audit record ever "written" was discarded. This is SEC-8, and it is worse than the finding's wording. |
 | `permitted_vehicles` | Also does not exist (same origin: the untrusted `supabase-schema.sql`). Out of scope; recorded for fat decision 11. |
-| `violations.gross_revenue` / `our_revenue` | Still **not** `_cents`-suffixed (Wave 1 item 20 renamed `enforcement_partners.tow_fee`/`boot_fee` → `_cents`, not these). Untouched by this plan. |
+| `violations.gross_revenue` / `our_revenue` | **Hold CENTS**, despite the unsuffixed names. Proof, three ways: `models.ViolationUpdate.gross_revenue  # in cents`; `POST /violations/{id}/action` (violations.py:509-512) assigns `partner.boot_fee_cents` / `tow_fee_cents` straight into `v.gross_revenue`; `/violations/revenue` returns `gross_revenue_cents=gross` and `gross_revenue_dollars=round(gross / 100, 2)`. **Never multiply or divide these by 100.** The naming is DB-7's remaining half and is out of scope here. (`frontend/src/lib/db.js` *does* treat them as dollars — that is the DB-7 bug Task 7 removes by deleting the browser's arithmetic entirely.) |
 | `integrations` | 1 row, no owner/org column. `/quickbooks/oauth/start` and `/status` are **already** `require_platform_admin` with deterministic `ORDER BY connected_at DESC` — half of SEC-6 landed. The remaining half is the missing org column. |
 | RLS helpers | `public.current_owner_id()`, `public.current_partner_id()`, `public.is_platform_admin()` — all `STABLE SECURITY DEFINER`, all read `request.jwt.claim.*` / `request.jwt.claims`. `properties_authenticated_select` is `owner_id = current_owner_id() OR partner_id = current_partner_id()`. |
-| Frontend hardcoded UUID | `frontend/src/App.jsx:30` `const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';` used at lines 177, 563, 710 to gate the App tab. That is FE-16. |
+| Frontend hardcoded UUID | `frontend/src/App.jsx:30` `const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';` used at lines **177, 572, 719** to gate the App tab. That is FE-16. |
 | Policy image today | A **static file committed to the frontend repo**: `frontend/policy/<qr_code_id>.jpg`, read by `src/visit.js:191` with an `onerror` fallback to `policy_text`. Adding site #12's policy means a frontend commit and a Vercel deploy. |
-| The four ownership copies | `routers/visitor_passes.py:37`, `routers/resident_plates.py:31`, `routers/lots.py:523` (inline), `routers/quickbooks.py:181/318` (inline `Property.owner_id == subject.id`). `plaza_payments.py`, `apartment_passes.py`, `apartment_docs.py` all **import** the visitor_passes one. |
-| Route guard vocabulary | `services/auth.py`: `require_subject`, `require_user_subject`, `require_platform_admin`, `resolve_subject`. `routers/app_api.py`: `require_app_phone`. `main.PUBLIC_PATHS` is a 25-entry tuple plus three prefix/suffix rules in `main._is_public_path`. |
+| The four ownership copies | `routers/visitor_passes.py:37`, `routers/resident_plates.py:31`, `routers/lots.py:523` (inline), `routers/quickbooks.py:185` and `:322` (inline `Property.owner_id == subject.id` **as one predicate inside a query that projects `Property.tow_company_id`** — the predicate is what changes, not the projection). `plaza_payments.py`, `apartment_passes.py`, `apartment_docs.py` all **import** the visitor_passes one. |
+| Route guard vocabulary | `services/auth.py`: `require_subject`, `require_user_subject`, `require_platform_admin`, `resolve_subject`. `routers/app_api.py`: `require_app_phone`. `main.PUBLIC_PATHS` is a **19**-entry tuple plus three prefix/suffix rules in `main._is_public_path` (`/plaza/payments/*/status`, `/app/*`, and the debug-only docs rule). The 19: `/health`, `/ready`, `/violations/sms-webhook`, `/operator-portal.html`, `/zone_editor.html`, `/billing.html`, `/auth/login`, `/auth/set-password`, `/auth/request-password`, `/auth/seed-test-account`, `/alpr/ingest`, `/quickbooks/oauth/callback`, `/violations/action`, `/visitor_passes/check-active`, `/visitor_passes/register`, `/resident_plates/register`, `/apartment/uploads`, `/plaza/quote-and-start`, `/plaza/webhook`. |
 | SEC-12 | **Already closed.** `violation_dedup.py`'s `/violations/{id}/acknowledge` calls `assert_lot_access`; `/reminders/run` is `require_platform_admin`. Wave 1 item 5 landed. |
-| Wave 2.4 | On branch `wave2/schema-baseline`, **not yet on `origin/main`**. `scripts/db/` (migrate.sh, regen_expected.sh, expected_schema.sql, expected_census.txt, inventory.sql) and CI's `schema-rebuild` job exist only there. |
+| Wave 2.4 | **Merged to backend `origin/main`** on 2026-09-14 (`07f111d`, PR #84). `scripts/db/migrate.sh`, `regen_expected.sh`, `expected_schema.sql`, `expected_census.txt`, `inventory.sql` and CI's `schema-rebuild` job are all on `main`. This wave's six migrations land under the runner and the drift check from day one; Gabe decision D10 is therefore already answered. |
+| `services/storage.upload_bytes` | Signature is **`upload_bytes(data: bytes, key: str, content_type: str) -> tuple[str, str]`**, returning `(storage_key, public_url)` — data FIRST, and it returns a tuple, not a URL string. It raises on failure (unlike `upload_snapshot`, which swallows). Build the public URL from its **second return value**, never by string-concatenating `r2_public_url` yourself. |
+| `services/quickbooks` OAuth state | `build_authorize_url()` mints `secrets.token_urlsafe(24)` and records it in the module-level `_oauth_states` dict with a timestamp; `verify_state(state)` **pops** it (single use, 10-minute sweep). `exchange_code(code, realm_id, db)` takes **no subject** — and `GET /quickbooks/oauth/callback` is in `PUBLIC_PATHS`, so there is no `Subject` at the callback at all. |
+| `tests/plaza/conftest.py` canary | `PRODUCTION_CANARY_TABLES = ("alpr_violations", "lot_owners", "pending_invoices")` and `_apply_schema` checks it **before** `DROP SCHEMA public` — so a table the harness itself creates must not stay on that list, or a persistent `TEST_DATABASE_URL` refuses to start on session two. |
+| `tests/plaza/conftest.py` multi-statement SQL | `_apply_schema` connects with **raw asyncpg** and says why: "the asyncpg dialect sends everything as a prepared statement, which cannot carry more than one command, while these scripts are multi-statement and full of dollar-quoted function bodies". Any test that executes a whole migration file must do the same. |
+| `tests/plaza/conftest.py` seed | `seed_truck_plaza` **asserts** on the session-scoped plaza row (`property_type == 'truck_plaza'`, `policy_text is not None`) and `properties` is deliberately absent from `TRUNCATE_TABLES`. A fixture that `UPDATE`s that row breaks every later test in the session. |
 | Wave 2.6 | **Landed.** `frontend/src/` is ~30 modules; `frontend/package.json` has `build`, `test`, `check:naming`; `dist/` is the Vercel output dir. |
 | Wave 2.7 / 2.8 | **Landed.** `services/alerts.py`, `services/job_registry.py`, `services/findings.py`, `routers/ops.py` (5 platform-admin endpoints), `ops_job_runs`, `ops_findings`, `outbound_notices`. |
 
@@ -131,11 +142,15 @@ Decided here so no executor re-litigates them.
 
 3. **`SEC-6` is half-landed; this plan finishes the org half only.** The gate and the deterministic ordering are already on `main`. Task 11 adds `integrations.organization_id` and makes the resolution per-org with a documented fallback to the single unowned row, so the one live QuickBooks connection keeps working untouched. It does **not** build a per-org OAuth flow — there is one billing entity today, and a second one is what makes that worth writing.
 
-4. **`SEC-8` is bigger than the finding's wording, and the fix is a route change, not just a table.** The finding says the audit record "is written by the browser and dropped on failure". Verified: it is written by the browser into a table **that does not exist**, so it is dropped *always* — and the same browser code computes `gross_revenue` and `our_revenue` from client-held fee values and writes them straight to `violations` through Supabase, bypassing the backend entirely. Task 6 adds `admin_audit_log`; Task 7 routes the action through the existing `POST /violations/{id}/resolve`, derives the fee server-side from `enforcement_partners.{boot,tow}_fee_cents`, and writes the audit row in the same transaction. The `violations.gross_revenue` / `our_revenue` columns keep their names and units — renaming money columns is DB-7's job and it is done.
+4. **`SEC-8` is bigger than the finding's wording, and the fix is a route change, not just a table.** The finding says the audit record "is written by the browser and dropped on failure". Verified: it is written by the browser into a table **that does not exist**, so it is dropped *always* — and the same browser code computes `gross_revenue` and `our_revenue` from client-held fee values and writes them straight to `violations` through Supabase, bypassing the backend entirely. Task 6 adds `admin_audit_log`; Task 7 routes the action through the existing `POST /violations/{id}/resolve`, derives the fee server-side from `enforcement_partners.{boot,tow}_fee_cents`, and writes the audit row in the same transaction. **`violations.gross_revenue` / `our_revenue` already hold cents** (see the Facts table), so the server-side assignment is a straight copy of the fee column and there is no `× 100` or `// 100` anywhere in this plan. The half of DB-7 still open is that the *browser* treats those columns as dollars — Task 7 closes it by deleting the browser's arithmetic, not by renaming a column.
 
 5. **`SEC-12` is already closed — this plan locks it in rather than re-fixing it.** Task 5's route-walk test is what makes the closure permanent, which is precisely what the 2.2 row asks for ("permanently retires the class of bug behind items 5 and 15").
 
-6. **The printable QR sheet is a frontend print route, not a backend-rendered PDF.** Rendering a QR server-side means a new Python dependency (`segno`/`qrcode`) inside the image the Dockerfile builds from `requirements.lock`, for one page an admin prints once per site. The frontend already **bundles** `qrcode@1.5.4` (Wave 2.6 moved it off the CDN precisely because a CDN 404 blanked the QR tiles). Task 14 adds `/app/qr-sheet?property=<id>`, `@media print`-styled; Task 13's response returns its URL. No new backend dependency.
+6. **The printable QR sheet is a standalone entry page — `qr-sheet.html`, not a dashboard tab.** Two decisions in one.
+
+   *Not a backend PDF:* rendering a QR server-side means a new Python dependency (`segno`/`qrcode`) inside the image the Dockerfile builds from `requirements.lock`, for one page an admin prints once per site. The frontend already **bundles** `qrcode@1.5.4` (Wave 2.6 moved it off the CDN precisely because a CDN 404 blanked the QR tiles).
+
+   *Not a dashboard tab either:* `App.jsx` takes its current tab from `localStorage.getItem('lotlogic_tab')` (line 95) and **never reads `window.location.pathname`**, and line 178 coerces any tab not in the valid list back to `lots`. A `/app/qr-sheet?property=…` link would therefore open the dashboard on whatever tab the admin last used — the page would be unreachable by URL, which is the only way it is ever opened. So it is a **fourth standalone entry page** alongside `visit.html` / `resident.html` / `apt.html`: `frontend/qr-sheet.html` + `frontend/src/qr-sheet.js`, added to `build.mjs`'s `entryPoints`, fetching its property from the backend with the admin's own JWT out of `localStorage` (`lib/api.js::apiFetch`). `POST /admin/sites` returns `{SITE_URL}/qr-sheet.html?property=<id>`.
 
 7. **The policy image moves to R2 with a public object key, not behind a signed redirect.** The page that renders it (`visit.html`) is scanned by an anonymous driver who holds no credential, and the image is the *posted public policy* — the same document nailed to a post at the entrance. `routers/apartment_docs.py`'s streaming-behind-a-scope-check pattern is right for a lease and wrong for this. The key carries 8 random hex characters so the bucket's public base cannot be used to enumerate. The existing `frontend/policy/<qr>.jpg` files stay in place as the fallback; nothing breaks on deploy day.
 
@@ -144,6 +159,12 @@ Decided here so no executor re-litigates them.
 9. **No `organizations`-scoped RLS policy is added.** Today's policies resolve `current_owner_id()` / `current_partner_id()`, and Task 9 keeps supplying those claims from the *organization's* legacy link — so a brand-new staff login satisfies existing RLS with no policy change and no new SQL helper function. Adding an org-scoped policy now would be a second, untested authorization path for zero behaviour gained. The backend reaches the three new tables as the service role.
 
 10. **`FE-16`'s replacement is a row, not a config constant.** Swapping the hardcoded UUID for an env var or a list moves the problem. `/auth/me` gains a `features` object computed server-side from the subject's own properties (`app_enabled`), and the App tab renders on `features.partner_app`. Site #12 turning the app on is then an `UPDATE`, which is the whole point of Wave 2.
+
+11. **`admin_audit_log.actor_type` records `'user'` when there is a user, and drops `'system'`.** `Subject.type` is `Literal["owner","partner","service"]`, so a CHECK admitting `'system'` admits a value no code path can produce, and `'user'` would be unreachable if it were copied straight from `subject.type`. The rule: `'service'` when `subject.is_service`, else `'user'` when `subject.user_id` is set (a Wave 2.2 login), else `subject.type` (a legacy owner/partner login). The CHECK is `('user','owner','partner','service')` — four values, all reachable, and the distribution across them is itself the rollout's progress meter.
+
+12. **The `is_platform_admin()` SQL function must stop resolving through the shared org identity — and Task 1 fixes it.** This is the one genuine security consequence of the "JWT carries the *organization's* legacy id" design. `public.is_platform_admin()` is `SELECT is_platform_admin FROM lot_owners WHERE id = public.current_owner_id()`, and production has **two** `lot_owners` rows with that flag set. After Task 9, every login in a platform-admin organization presents that org's legacy id — so a `viewer` added to the LotLogic org would inherit **database-level** platform admin through `admin_select_properties` / `admin_write_properties`, regardless of the API-level flag. Task 1 therefore redefines the function: when the token carries a `user_id` claim, the answer is that **user's own** `users.is_platform_admin`; with no such claim (every token issued before this wave) the existing `lot_owners` branch is used verbatim. That is a `CREATE OR REPLACE` on a function, which is not additive in the strict sense — it is called out here as the one deliberate exception, because shipping the org-identity design without it would hand a staff login the admin RLS policies.
+
+13. **`int(gross * share)` stays truncating.** `POST /violations/{id}/action` (violations.py:512) and the tow-confirm correlator (violations.py:766) both already do `int(v.gross_revenue * float(partner.revenue_share))`, so a $350 tow at 25% books $87.50 → 8750 cents exactly, and the truncation only ever bites on a share that produces a fraction of a cent. Rounding differently in a third place would make two call sites disagree about the same tow. Keep `int()`, verbatim; changing the rounding of a money calculation is its own change with its own reconciliation.
 
 ---
 
@@ -170,7 +191,7 @@ Decided here so no executor re-litigates them.
 | `routers/quickbooks.py` *(modify)* | The two inline `Property.owner_id == subject.id` filters go through `tenancy.allowed_property_ids`; connection resolution becomes per-org. |
 | `routers/violations.py` *(modify)* | `resolve_violation` derives the fee server-side and writes the audit row in the same transaction. |
 | `routers/auth.py` *(modify)* | Login resolves `users` first with a legacy fallback; throttle; `/auth/me` returns `organization`, `role`, `features`. |
-| `routers/admin.py` *(modify)* | `POST /admin/sites`, `POST /admin/sites/{id}/policy-image`, `GET /admin/sites/{id}`; `POST /admin/clients` kept as a thin, audited alias. |
+| `routers/admin.py` *(modify)* | `POST /admin/sites`, `POST /admin/sites/{id}/policy-image`, `GET /admin/sites/{id}` (the narrow read the printable sheet calls with the admin's JWT); `POST /admin/clients` kept as a thin, audited alias. |
 | `models.py` *(modify)* | `Organization`, `User`, `Membership` declarative classes; `Property` gains `organization_id`. |
 | `config.py` *(modify)* | `login_max_attempts`, `login_lockout_minutes`, `login_attempt_window_minutes`, `policy_image_max_bytes`. |
 | `tests/test_route_guards.py` **(new)** | The route walk. Fails the build on an unguarded endpoint. |
@@ -180,7 +201,7 @@ Decided here so no executor re-litigates them.
 | `tests/plaza/test_site_onboarding.py` **(new)** | One POST produces a fully-formed, QR-serving site. |
 | `tests/test_login_throttle.py`, `tests/test_admin_sites_api.py` **(new)** | Router-level contract. |
 | `tests/plaza/schema/live_schema.sql` *(modify)* | Gains `lot_owners` and `properties.organization_id` so the harness can exercise the backfill. |
-| `tests/plaza/conftest.py` *(modify)* | `20260914*.sql` glob; new tables in `TRUNCATE_TABLES`. |
+| `tests/plaza/conftest.py` *(modify)* | `20260914*.sql` glob; `memberships` / `users` / `admin_audit_log` / `auth_login_attempts` in `TRUNCATE_TABLES` (**never `organizations`** — see Task 1); `lot_owners` out of `PRODUCTION_CANARY_TABLES`, because the harness now creates it. |
 | `docs/runbooks/new-site.md` **(new)** | PLATFORM-11. Generated from `SiteOnboardRequest`, with a test that fails when they drift. |
 | `scripts/gen_new_site_runbook.py` **(new)** | The generator. |
 
@@ -192,9 +213,10 @@ Decided here so no executor re-litigates them.
 | `frontend/src/lib/db.js` *(modify)* | `recordAction` posts to the backend; the browser-side fee math and the `action_logs` insert are deleted. |
 | `frontend/src/pages/AdminConsolePage.jsx` *(modify)* | The Onboard tab becomes the one site-onboarding screen (the checklist), with the policy-image upload and the QR-sheet link. |
 | `frontend/src/pages/ALPRPropertiesPage.jsx` *(modify)* | The inline add-property form posts to `POST /admin/sites` for admins; non-admins lose a form that could only ever make a half-built site. |
-| `frontend/src/pages/QrSheetPage.jsx` **(new)** | `/app/qr-sheet?property=<id>` — the printable sheet. |
+| `frontend/qr-sheet.html` + `frontend/src/qr-sheet.js` **(new)** | `/qr-sheet.html?property=<id>` — the printable sheet, as a **standalone entry page** beside `visit.html` / `resident.html` / `apt.html`. Not a dashboard tab: `App.jsx` routes from `localStorage`, never from `pathname`. |
+| `frontend/scripts/build.mjs` *(modify)* | `src/qr-sheet.js` joins `entryPoints`, and both new files join the not-silently-empty assert list. |
 | `frontend/src/visit.js` *(modify)* | Prefers `property.policy_image_url`; existing `/policy/<qr>.jpg` stays as the fallback. |
-| `frontend/vercel.json` *(modify)* | No new rewrite needed (`/app/:path*` already covers the sheet). Verify only. |
+| `frontend/vercel.json` | **Unchanged.** The sheet's URL is the file itself; a prettier `/qr-sheet` rewrite is a one-liner if it is ever wanted, and this plan does not add rewrites it does not need. |
 | `tests/e2e/access-control.spec.ts` *(modify)* | Cross-tenant assertions extended to the org era. |
 | `tests/e2e/site-onboarding.spec.ts` **(new)** | Self-serving spec for the onboarding screen's validation and the QR sheet's print layout. |
 
@@ -217,7 +239,7 @@ Decided here so no executor re-litigates them.
 | 11 | SEC-6 — `integrations.organization_id`, per-org QuickBooks resolution | backend | 2 |
 | 12 | Migration — `properties.policy_image_url` + the upload endpoint | backend | 1 |
 | 13 | **`POST /admin/sites`** — the one site-onboarding command | backend | 2, 3, 6, 12 |
-| 14 | The printable QR sheet (`/app/qr-sheet`) | frontend | 13 |
+| 14 | The printable QR sheet (`/qr-sheet.html`, a standalone entry page) | frontend + backend | 13 |
 | 15 | One onboarding screen; retire the direct-Supabase property insert | frontend | 13, 14 |
 | 16 | PLATFORM-11 — `docs/runbooks/new-site.md`, generated from the schema | backend | 13 |
 | 17 | Cutover — apply to prod, regenerate the three schema artifacts, verify | both | all |
@@ -242,7 +264,7 @@ Decided here so no executor re-litigates them.
 **Interfaces:**
 - Consumes: nothing. This task adds rows nobody reads yet.
 - Produces, for Tasks 2, 3, 9, 11, 13:
-  - `public.organizations(id, name, kind, legacy_owner_id, legacy_partner_id, active, created_at)`, `kind ∈ {owner, partner, platform}`.
+  - `public.organizations(id, name, kind, legacy_owner_id, legacy_partner_id, active, created_at)`, `kind ∈ {owner, partner, platform}`. **`legacy_owner_id` and `legacy_partner_id` are plain `uuid` columns with no foreign key** — see Step 1's comment for why.
   - `public.users(id, email, display_name, phone, password_hash, password_set_at, last_login_at, password_reset_token, password_reset_expires_at, is_platform_admin, active, default_organization_id, created_at)`, unique on `lower(email)`.
   - `public.memberships(id, user_id, organization_id, role, created_at)`, `role ∈ {admin, manager, staff, viewer}`, unique on `(user_id, organization_id)`.
   - `public.properties.organization_id uuid` → `organizations(id) ON DELETE SET NULL`.
@@ -290,8 +312,19 @@ CREATE TABLE IF NOT EXISTS public.organizations (
     kind               text NOT NULL,
     -- At most ONE legacy link, or none (a platform org, or an org created
     -- after the cutover that never had a legacy account).
-    legacy_owner_id    uuid REFERENCES public.lot_owners(id) ON DELETE SET NULL,
-    legacy_partner_id  uuid REFERENCES public.enforcement_partners(id) ON DELETE SET NULL,
+    --
+    -- DELIBERATELY NOT FOREIGN KEYS. A REFERENCES enforcement_partners(id)
+    -- here would put `organizations` downstream of a table the pay-to-park
+    -- harness truncates between every test -- and `TRUNCATE ... CASCADE`
+    -- follows referencing tables, so it would reach organizations, then
+    -- properties.organization_id, then the session-scoped plaza seed row and
+    -- every pass/event table hanging off it. One missing FK is a far smaller
+    -- price than a test harness that silently deletes its own fixture.
+    -- Referential integrity is held instead by the two partial UNIQUE indexes
+    -- below plus the kind/link CHECK, and by the fact that exactly one code
+    -- path writes these columns (services/site_onboarding.py and the backfill).
+    legacy_owner_id    uuid,
+    legacy_partner_id  uuid,
     active             boolean NOT NULL DEFAULT true,
     created_at         timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT organizations_name_not_blank CHECK (btrim(name) <> ''),
@@ -373,6 +406,61 @@ CREATE INDEX IF NOT EXISTS properties_organization_id_idx
 -- so a new column is private by default and the public QR forms cannot read it.
 -- That is the intended state for this one.
 
+-- ── The one deliberate non-additive statement in this wave ──────────────────
+--
+-- Task 9 issues a JWT whose owner_id claim is THE ORGANISATION'S legacy id, so
+-- that a login created after this wave satisfies today's RLS with no policy
+-- change. That design has exactly one dangerous consequence, and this is it:
+--
+--   public.is_platform_admin() reads lot_owners.is_platform_admin via
+--   current_owner_id(), and production has TWO lot_owners rows with that flag
+--   set. Without the change below, a 'viewer' added to a platform-admin
+--   organisation would present that org's legacy id and inherit DATABASE-level
+--   platform admin through admin_select_properties / admin_write_properties --
+--   regardless of what the API-level is_platform_admin claim says.
+--
+-- So: when the token carries a user_id claim (every token issued from Task 9
+-- onward), the answer is THAT USER'S OWN flag. With no such claim -- every
+-- token issued before this wave, and every service-role connection -- the
+-- existing lot_owners branch runs verbatim. Backward compatible by
+-- construction, and re-runnable (CREATE OR REPLACE).
+
+CREATE OR REPLACE FUNCTION public.current_app_user_id()
+RETURNS uuid
+LANGUAGE sql
+STABLE SECURITY DEFINER
+SET search_path TO 'public', 'pg_catalog'
+AS $fn$
+    SELECT NULLIF(NULLIF(
+        COALESCE(
+            current_setting('request.jwt.claim.user_id', true),
+            (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'user_id')
+        ),
+        ''
+    ), 'null')::uuid
+$fn$;
+
+REVOKE EXECUTE ON FUNCTION public.current_app_user_id() FROM anon;
+
+CREATE OR REPLACE FUNCTION public.is_platform_admin()
+RETURNS boolean
+LANGUAGE sql
+STABLE SECURITY DEFINER
+SET search_path TO 'public', 'pg_catalog'
+AS $fn$
+    SELECT CASE
+        WHEN public.current_app_user_id() IS NOT NULL THEN
+            COALESCE((SELECT u.is_platform_admin
+                        FROM public.users u
+                       WHERE u.id = public.current_app_user_id()
+                         AND u.active), FALSE)
+        ELSE
+            COALESCE((SELECT is_platform_admin
+                        FROM lot_owners
+                       WHERE id = public.current_owner_id()), FALSE)
+    END
+$fn$;
+
 ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.memberships   ENABLE ROW LEVEL SECURITY;
@@ -397,8 +485,9 @@ class Organization(Base):
     id                = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name              = Column(Text, nullable=False)
     kind              = Column(Text, nullable=False)
-    legacy_owner_id   = Column(UUID(as_uuid=True), ForeignKey("lot_owners.id"))
-    legacy_partner_id = Column(UUID(as_uuid=True), ForeignKey("enforcement_partners.id"))
+    # Plain UUIDs, no ForeignKey -- mirroring the migration. See its comment.
+    legacy_owner_id   = Column(UUID(as_uuid=True))
+    legacy_partner_id = Column(UUID(as_uuid=True))
     active            = Column(Boolean, nullable=False, default=True)
     created_at        = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
@@ -453,13 +542,21 @@ MIGRATION_GLOBS = (
 ```python
 TRUNCATE_TABLES = (
     ...,
-    "memberships", "users", "organizations", "admin_audit_log",
-    "auth_login_attempts",
+    # Wave 2.2. `organizations` is DELIBERATELY ABSENT and must stay absent:
+    # properties.organization_id references it, the statement is one
+    # `TRUNCATE ... CASCADE`, and `properties` is session-scoped (it holds the
+    # plaza seed row `seed_truck_plaza` asserts on). Truncating organizations
+    # would cascade straight through properties into every pass and event
+    # table and delete the harness's own fixture. Tests that need an
+    # organisation create one with a fresh uuid and delete it in teardown.
+    "memberships", "users", "admin_audit_log", "auth_login_attempts",
     ...
 )
 ```
 
-`memberships` before `users` before `organizations` is cosmetic (the statement is one `TRUNCATE … CASCADE`), but keep child-before-parent so the list reads as the dependency order. `admin_audit_log` and `auth_login_attempts` are Tasks 6 and 8 — list them now; the harness skips any table `to_regclass` cannot resolve, so a not-yet-created table is harmless.
+Child-before-parent ordering is cosmetic (one `TRUNCATE … CASCADE`), but keep it so the list reads as the dependency order. `admin_audit_log` and `auth_login_attempts` are Tasks 6 and 8 — list them now; the harness skips any table `to_regclass` cannot resolve, so a not-yet-created table is harmless.
+
+Truncating `users` **does** cascade into `memberships` and into `admin_audit_log.actor_user_id`; both are on the list, so that is intended. Nothing on the list references `organizations`, `properties` or `enforcement_partners`, so nothing reaches the session seed.
 
 In `tests/plaza/schema/live_schema.sql`, add `lot_owners` (the subset does not have it, and `organizations.legacy_owner_id` references it) immediately **before** `CREATE TABLE public.properties`:
 
@@ -489,7 +586,21 @@ CREATE TABLE public.lot_owners (
 );
 ```
 
-**Careful:** `tests/plaza/conftest.py::PRODUCTION_CANARY_TABLES` contains `lot_owners` — it is the "this database is production-shaped, refuse to drop schema public" guard, and it is checked **before** `live_schema.sql` runs, against the database as it arrives. Adding `lot_owners` to the schema file does not trip it. Verify by running the suite twice in a row locally; a second run that skips or errors means the canary now fires on the harness's own leftovers, and the fix is to add a same-session sentinel — not to remove `lot_owners` from the canary list.
+**And remove `lot_owners` from the canary list in the same edit.** `tests/plaza/conftest.py::PRODUCTION_CANARY_TABLES = ("alpr_violations", "lot_owners", "pending_invoices")` is the "this database is production-shaped, refuse to drop schema `public`" guard, and `_apply_schema` checks it **before** the `DROP SCHEMA`, against the database as it arrives. Once the harness creates `lot_owners` itself, its presence is no longer evidence of a production database — it is evidence of the *previous session*. CI is unaffected (a fresh `postgres:17` service container each run), but a developer with a persistent `TEST_DATABASE_URL` would get a hard refusal on session two. So:
+
+```python
+#: A database holding any of these is production-shaped, and this harness drops
+#: schema `public`. Refuse rather than find out.
+#:
+#: `lot_owners` was on this list until Wave 2.2. It came off when live_schema.sql
+#: started creating it: a table the harness makes itself cannot distinguish
+#: "production" from "this harness's own previous session", and with a persistent
+#: TEST_DATABASE_URL it made session two refuse to start. `alpr_violations` and
+#: `pending_invoices` are still production-only and still guard.
+PRODUCTION_CANARY_TABLES = ("alpr_violations", "pending_invoices")
+```
+
+Verify by running `pytest tests/plaza/ -q` **twice in a row** against a persistent `TEST_DATABASE_URL`. Both runs must be green.
 
 - [ ] **Step 4: The test**
 
@@ -498,12 +609,46 @@ CREATE TABLE public.lot_owners (
 ```python
 """The Wave 2.2 tenancy tables exist with the shape the rest of the wave assumes.
 
-Cheap, but not trivial: four of these assertions are the difference between an
+Cheap, but not trivial: five of these assertions are the difference between an
 additive migration and a data-loss migration, and three of them (the partial
-uniques, the case-insensitive email index, the kind/legacy CHECK) are the ones
-a hand-written `CREATE TABLE` gets wrong.
+uniques, the case-insensitive email index, the kind/legacy CHECK) are the ones a
+hand-written `CREATE TABLE` gets wrong.
+
+FIXTURE RULE, and it applies to every test file this plan adds: `organizations`
+is NOT in TRUNCATE_TABLES (truncating it would cascade through
+`properties.organization_id` into the session-scoped plaza seed row that
+`seed_truck_plaza` asserts on). So every row these tests create carries a uuid
+generated in the test and is deleted in teardown. Never `UPDATE` a seeded row;
+never insert a fixed id into `properties`, `lot_owners` or `organizations`.
 """
+import uuid
+
+import pytest
 from sqlalchemy import text
+
+
+@pytest.fixture
+async def tmp_ids(db_conn):
+    """Hand out fresh uuids, then delete everything they name."""
+    made = {"organizations": [], "users": [], "lot_owners": []}
+
+    def new(table):
+        i = uuid.uuid4()
+        made[table].append(i)
+        return i
+
+    yield new
+
+    if made["users"]:
+        await db_conn.execute(text(
+            "DELETE FROM public.memberships WHERE user_id = ANY(CAST(:ids AS uuid[]))"),
+            {"ids": [str(i) for i in made["users"]]})
+    for table in ("users", "organizations", "lot_owners"):
+        if made[table]:
+            await db_conn.execute(
+                text(f"DELETE FROM public.{table} WHERE id = ANY(CAST(:ids AS uuid[]))"),
+                {"ids": [str(i) for i in made[table]]})
+    await db_conn.commit()
 
 
 async def _scalar(db_conn, sql, **kw):
@@ -523,60 +668,95 @@ async def test_properties_has_organization_id(db_conn):
     """) == 1
 
 
-async def test_email_uniqueness_is_case_insensitive(db_conn):
+async def test_organizations_has_no_foreign_keys(db_conn):
+    """A REFERENCES enforcement_partners here would put `organizations`
+    downstream of a table the harness truncates between every test, and
+    `TRUNCATE ... CASCADE` would reach the session-scoped plaza property
+    through properties.organization_id and delete the harness's own fixture."""
+    fks = (await db_conn.execute(text("""
+        SELECT conname FROM pg_constraint
+         WHERE conrelid = 'public.organizations'::regclass AND contype = 'f'
+    """))).scalars().all()
+    assert fks == [], f"organizations must carry no foreign key, found: {fks}"
+
+
+async def test_email_uniqueness_is_case_insensitive(db_conn, tmp_ids):
+    u1, u2 = tmp_ids("users"), tmp_ids("users")
+    tag = u1.hex[:6]
+    await db_conn.execute(text("INSERT INTO public.users (id, email) VALUES (:i, :e)"),
+                          {"i": str(u1), "e": f"Ops+{tag}@Example.com"})
+    rejected = False
+    try:
+        await db_conn.execute(text("INSERT INTO public.users (id, email) VALUES (:i, :e)"),
+                              {"i": str(u2), "e": f"ops+{tag}@example.com"})
+    except Exception:
+        rejected = True
+        await db_conn.rollback()
+    assert rejected, "users.email must be unique case-insensitively"
+
+
+async def test_two_orgs_may_share_a_null_legacy_link(db_conn, tmp_ids):
+    # The PARTIAL index is the point: a plain UNIQUE would let exactly one org
+    # exist without a legacy account -- which is every org created from now on.
+    a, b = tmp_ids("organizations"), tmp_ids("organizations")
     await db_conn.execute(text(
-        "INSERT INTO public.users (email) VALUES ('Ops@Example.com')"))
-    with_dupe = False
+        "INSERT INTO public.organizations (id, name, kind) "
+        "VALUES (:a,'A','owner'),(:b,'B','owner')"), {"a": str(a), "b": str(b)})
+    assert await _scalar(db_conn,
+        "SELECT count(*) FROM public.organizations "
+        "WHERE id = ANY(CAST(:ids AS uuid[])) AND legacy_owner_id IS NULL",
+        ids=[str(a), str(b)]) == 2
+
+
+async def test_one_organization_per_legacy_owner(db_conn, tmp_ids):
+    """The partial unique is what makes the backfill re-runnable: without it a
+    second run makes a second org for the same account."""
+    legacy = uuid.uuid4()          # a plain uuid now -- there is no FK to satisfy
+    a, b = tmp_ids("organizations"), tmp_ids("organizations")
+    await db_conn.execute(text(
+        "INSERT INTO public.organizations (id, name, kind, legacy_owner_id) "
+        "VALUES (:a,'A','owner',:l)"), {"a": str(a), "l": str(legacy)})
+    rejected = False
     try:
         await db_conn.execute(text(
-            "INSERT INTO public.users (email) VALUES ('ops@example.com')"))
+            "INSERT INTO public.organizations (id, name, kind, legacy_owner_id) "
+            "VALUES (:b,'B','owner',:l)"), {"b": str(b), "l": str(legacy)})
     except Exception:
-        with_dupe = True
-    assert with_dupe, "users.email must be unique case-insensitively"
+        rejected = True
+        await db_conn.rollback()
+    assert rejected
 
 
-async def test_two_orgs_may_share_a_null_legacy_link(db_conn):
-    # The partial index is the point: a plain UNIQUE would let exactly one org
-    # exist without a legacy account, which is every org created from now on.
-    await db_conn.execute(text(
-        "INSERT INTO public.organizations (name, kind) VALUES ('A','owner'),('B','owner')"))
-    assert await _scalar(db_conn,
-        "SELECT count(*) FROM public.organizations WHERE legacy_owner_id IS NULL") == 2
-
-
-async def test_kind_and_legacy_link_must_agree(db_conn):
-    await db_conn.execute(text("""
-        INSERT INTO public.lot_owners (business_name, contact_name, phone, email)
-        VALUES ('X','X','','x@example.com')
-    """))
-    oid = await _scalar(db_conn, "SELECT id FROM public.lot_owners LIMIT 1")
+async def test_kind_and_legacy_link_must_agree(db_conn, tmp_ids):
+    org = tmp_ids("organizations")
     rejected = False
     try:
         await db_conn.execute(text("""
-            INSERT INTO public.organizations (name, kind, legacy_owner_id)
-            VALUES ('wrong kind', 'partner', :oid)
-        """), {"oid": oid})
+            INSERT INTO public.organizations (id, name, kind, legacy_owner_id)
+            VALUES (:o, 'wrong kind', 'partner', :l)
+        """), {"o": str(org), "l": str(uuid.uuid4())})
     except Exception:
         rejected = True
+        await db_conn.rollback()
     assert rejected, "a partner-kind org must not carry legacy_owner_id"
 
 
-async def test_membership_role_is_constrained(db_conn):
+async def test_membership_role_is_constrained(db_conn, tmp_ids):
+    org, user = tmp_ids("organizations"), tmp_ids("users")
     await db_conn.execute(text(
-        "INSERT INTO public.organizations (id, name, kind) "
-        "VALUES ('11111111-1111-1111-1111-111111111111','Org','owner')"))
-    await db_conn.execute(text(
-        "INSERT INTO public.users (id, email) "
-        "VALUES ('22222222-2222-2222-2222-222222222222','m@example.com')"))
+        "INSERT INTO public.organizations (id, name, kind) VALUES (:o,'Org','owner')"),
+        {"o": str(org)})
+    await db_conn.execute(text("INSERT INTO public.users (id, email) VALUES (:u, :e)"),
+                          {"u": str(user), "e": f"m+{user.hex[:6]}@example.test"})
     rejected = False
     try:
         await db_conn.execute(text("""
             INSERT INTO public.memberships (user_id, organization_id, role)
-            VALUES ('22222222-2222-2222-2222-222222222222',
-                    '11111111-1111-1111-1111-111111111111', 'superuser')
-        """))
+            VALUES (:u, :o, 'superuser')
+        """), {"u": str(user), "o": str(org)})
     except Exception:
         rejected = True
+        await db_conn.rollback()
     assert rejected, "memberships.role must be one of admin/manager/staff/viewer"
 
 
@@ -589,6 +769,45 @@ async def test_new_tables_are_revoked_from_anon_and_authenticated(db_conn):
            AND grantee IN ('anon','authenticated')
     """))).all()
     assert leaked == [], f"tenancy tables are reachable by a browser key: {leaked}"
+
+
+async def test_is_platform_admin_reads_the_user_row_when_a_user_claim_is_present(
+    db_conn, tmp_ids
+):
+    """Scope call 12 -- the one real security consequence of issuing the
+    ORGANISATION'S legacy id as the owner_id claim. Without this branch a
+    `viewer` added to a platform-admin org inherits admin_select_properties
+    and admin_write_properties at the database level."""
+    user = tmp_ids("users")
+    await db_conn.execute(text(
+        "INSERT INTO public.users (id, email, is_platform_admin) VALUES (:u, :e, false)"),
+        {"u": str(user), "e": f"staff+{user.hex[:6]}@example.test"})
+    claims = '{"user_id": "%s", "owner_id": "%s"}' % (user, uuid.uuid4())
+    await db_conn.execute(text("SELECT set_config('request.jwt.claims', :c, true)"),
+                          {"c": claims})
+    assert (await db_conn.execute(text("SELECT public.is_platform_admin()"))).scalar() is False
+
+    await db_conn.execute(text(
+        "UPDATE public.users SET is_platform_admin = true WHERE id = :u"), {"u": str(user)})
+    await db_conn.execute(text("SELECT set_config('request.jwt.claims', :c, true)"),
+                          {"c": claims})
+    assert (await db_conn.execute(text("SELECT public.is_platform_admin()"))).scalar() is True
+
+
+async def test_is_platform_admin_falls_back_to_lot_owners_without_a_user_claim(
+    db_conn, tmp_ids
+):
+    """Every token issued before this wave carries no user_id claim and must
+    behave exactly as it does today."""
+    owner = tmp_ids("lot_owners")
+    await db_conn.execute(text("""
+        INSERT INTO public.lot_owners (id, business_name, contact_name, phone, email,
+                                       is_platform_admin)
+        VALUES (:o, 'Legacy', 'Legacy', '', :e, true)
+    """), {"o": str(owner), "e": f"legacy+{owner.hex[:6]}@example.test"})
+    await db_conn.execute(text("SELECT set_config('request.jwt.claims', :c, true)"),
+                          {"c": '{"owner_id": "%s"}' % owner})
+    assert (await db_conn.execute(text("SELECT public.is_platform_admin()"))).scalar() is True
 ```
 
 - [ ] **Step 5: Run**
@@ -599,20 +818,31 @@ ruff check . && python -m compileall -q -f . && pytest -x --tb=short -q
 pytest tests/plaza/test_tenancy_tables.py -q   # and again, to prove idempotence
 ```
 
-Expected: all seven pass, and the second full run of `tests/plaza/` is identical (the harness replays the migration into a fresh schema each session; `IF NOT EXISTS` everywhere is what makes a partial apply resumable).
+Expected: all twelve pass, and — with a **persistent** `TEST_DATABASE_URL` — a second consecutive full run of `tests/plaza/` is identical. That second run is the real assertion of this step: it is what proves both the canary edit (a table the harness creates cannot stay on the production-canary list) and the `TRUNCATE` edit (nothing this wave adds reaches the session-scoped `properties` seed).
 
 - [ ] **Step 6: Commit** — do **not** apply to production yet (Task 17 does that, after Task 2 exists, so prod never sits with empty tenancy tables).
 
 ```
 feat(tenancy): organizations, users and memberships, beside the legacy accounts
 
-Three tables and one column, all additive. An organization is the new name for
-one lot_owners or enforcement_partners row and keeps an explicit link to it,
-because that legacy id is what every RLS policy resolves and what every issued
-JWT carries -- so nothing about today's logins changes when these rows appear.
-A user is a person with their own password, which is what ends "a leasing
-office is a shared credential"; a membership is (user, org, role), the only
-place a role is stored.
+Three tables and one column. An organization is the new name for one lot_owners
+or enforcement_partners row and keeps an explicit link to it, because that
+legacy id is what every RLS policy resolves and what every issued JWT carries --
+so nothing about today's logins changes when these rows appear. A user is a
+person with their own password, which is what ends "a leasing office is a shared
+credential"; a membership is (user, org, role), the only place a role is stored.
+
+organizations.legacy_* are plain uuid columns with NO foreign key, on purpose: a
+REFERENCES enforcement_partners would put organizations downstream of a table
+the pay-to-park harness truncates between every test, and TRUNCATE ... CASCADE
+would follow it into properties.organization_id and delete the session-scoped
+plaza seed. Two partial unique indexes plus the kind/link CHECK carry the
+integrity instead.
+
+One statement here is deliberately not additive: is_platform_admin() is
+redefined to read the user's OWN flag when the token carries a user_id claim.
+Without it, issuing the organization's legacy id as the owner_id claim (Task 9)
+would give every login in a platform-admin org the admin RLS policies.
 
 PLATFORM-8, DB-13 (the additive half).
 ```
@@ -785,6 +1015,8 @@ and a partner whose email collides with an owner's -- then execute the file and
 assert on the result. Then they execute it a second time and assert nothing
 moved.
 """
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -795,132 +1027,245 @@ MIGRATION = (Path(__file__).resolve().parents[2]
 
 
 async def _run_backfill(db_conn):
-    # exec_driver_sql, not execute(text(...)): the file contains a DO $backfill$
-    # block whose body is full of colons-free but dollar-quoted SQL, and
-    # SQLAlchemy's bound-parameter scanner must not touch it.
-    await db_conn.commit()
-    raw = await db_conn.connection()
-    await raw.exec_driver_sql(MIGRATION.read_text())
-    await db_conn.commit()
+    """Execute the whole migration file as one script.
+
+    Through the RAW asyncpg connection, exactly as `conftest._apply_schema`
+    does and for the reason its docstring gives: "the asyncpg dialect sends
+    everything as a prepared statement, which cannot carry more than one
+    command, while these scripts are multi-statement and full of dollar-quoted
+    function bodies that must not be split". This file is both -- eight
+    statements plus a `DO $backfill$` block. `execute(text(...))` and
+    `exec_driver_sql` both go through the dialect and both fail on it.
+    """
+    await db_conn.commit()          # leave no open transaction behind
+    raw = await db_conn.get_raw_connection()
+    await raw.driver_connection.execute(MIGRATION.read_text())
+
+
+@dataclass
+class LegacySeed:
+    owner_a: uuid.UUID       # has properties, and a duplicate-email twin
+    owner_dup: uuid.UUID     # same email as owner_a, created LATER
+    owner_admin: uuid.UUID
+    partner_a: uuid.UUID
+    partner_shared: uuid.UUID   # email collides with owner_a
+    property_id: uuid.UUID      # this fixture's OWN property, not the seed
+    email_a: str
+    email_admin: str
 
 
 @pytest.fixture
 async def legacy_rows(db_conn):
+    """The two legacy shapes that break a naive backfill, on rows we own.
+
+    Every id is generated here and deleted in teardown. In particular this
+    fixture creates its OWN `properties` row rather than re-pointing the
+    session-scoped plaza seed: `seed_truck_plaza` asserts on that row, and
+    `properties` is deliberately absent from TRUNCATE_TABLES, so an `UPDATE`
+    to it would leak into every later test in the session. `lot_owners` is not
+    truncated either, which is why the ids are fresh per use rather than
+    constants -- a fixed id dies on the primary key the second time the
+    fixture runs.
+    """
+    s = LegacySeed(
+        owner_a=uuid.uuid4(), owner_dup=uuid.uuid4(), owner_admin=uuid.uuid4(),
+        partner_a=uuid.uuid4(), partner_shared=uuid.uuid4(),
+        property_id=uuid.uuid4(),
+        email_a="", email_admin="",
+    )
+    tag = s.owner_a.hex[:8]
+    s.email_a = f"ops+{tag}@example.test"
+    s.email_admin = f"admin+{tag}@example.test"
+
     await db_conn.execute(text("""
         INSERT INTO public.lot_owners (id, business_name, contact_name, phone, email,
                                        password_hash, is_platform_admin, created_at)
         VALUES
-          ('aaaaaaaa-0000-0000-0000-000000000001','N Style Group','Ana','','ops@nstyle.test',
-           '$2b$12$hash1', false, now() - interval '2 days'),
-          -- same email, newer: the DISTINCT ON must keep the OLDER row's hash
-          ('aaaaaaaa-0000-0000-0000-000000000002','N Style Group (dup)','Ana2','','OPS@NSTYLE.TEST',
-           '$2b$12$hash2', false, now()),
-          ('aaaaaaaa-0000-0000-0000-000000000003','LotLogic','Gabe','','admin@lotlogic.test',
-           '$2b$12$hash3', true, now())
-    """))
+          (:a, 'Friedlam Group', 'Ana', '', :ea, '$2b$12$hash1', false,
+           now() - interval '2 days'),
+          -- SAME email, NEWER row: DISTINCT ON must keep the OLDER row's hash,
+          -- because that is the password people are actually using.
+          (:dup, 'Friedlam Group (dup)', 'Ana2', '', :ea_upper, '$2b$12$hash2', false, now()),
+          (:adm, 'LotLogic', 'Gabe', '', :eadm, '$2b$12$hash3', true, now())
+    """), {"a": str(s.owner_a), "dup": str(s.owner_dup), "adm": str(s.owner_admin),
+           "ea": s.email_a, "ea_upper": s.email_a.upper(), "eadm": s.email_admin})
+
+    market_id = (await db_conn.execute(
+        text("SELECT id FROM public.markets ORDER BY created_at LIMIT 1"))).scalar()
+    if market_id is None:
+        market_id = uuid.uuid4()
+        await db_conn.execute(text(
+            "INSERT INTO public.markets (id, name, state) VALUES (:m, 'Test', 'NC')"),
+            {"m": str(market_id)})
+
     await db_conn.execute(text("""
         INSERT INTO public.enforcement_partners (id, market_id, company_name, contact_name,
                                                  phone, email, created_at)
         VALUES
-          ('bbbbbbbb-0000-0000-0000-000000000001','cccccccc-0000-0000-0000-000000000001',
-           'NMLD Towing','Frank','','dispatch@nmld.test', now()),
-          -- collides with the owner above: owners win, this one gets NO user row
-          ('bbbbbbbb-0000-0000-0000-000000000002','cccccccc-0000-0000-0000-000000000001',
-           'Shared Inbox Towing','Sam','','ops@nstyle.test', now())
-    """))
+          (:p, :m, 'NMLD Towing', 'Frank', '', :ep, now()),
+          -- email collides with owner_a: owners win, this one gets NO user row
+          (:ps, :m, 'Shared Inbox Towing', 'Sam', '', :ea, now())
+    """), {"p": str(s.partner_a), "ps": str(s.partner_shared), "m": str(market_id),
+           "ep": f"dispatch+{tag}@example.test", "ea": s.email_a})
+
     await db_conn.execute(text("""
-        UPDATE public.properties
-           SET owner_id = 'aaaaaaaa-0000-0000-0000-000000000001'
-         WHERE organization_id IS NULL
-    """))
+        INSERT INTO public.properties (id, name, address, property_type, qr_code_id, owner_id)
+        VALUES (:pid, 'Backfill Fixture Site', '1 Test Way', 'apartment', :qr, :a)
+    """), {"pid": str(s.property_id), "qr": f"backfill-fixture-{tag}", "a": str(s.owner_a)})
+    await db_conn.commit()
+
+    yield s
+
+    # Teardown, children first. properties.organization_id is ON DELETE SET NULL,
+    # so the org delete cannot take the property with it -- delete the property
+    # explicitly anyway, because this fixture created it.
+    await db_conn.rollback()
+    await db_conn.execute(text("""
+        DELETE FROM public.memberships
+         WHERE user_id IN (SELECT id FROM public.users WHERE lower(email) IN (:ea, :eadm)
+                            OR email LIKE :like)
+    """), {"ea": s.email_a, "eadm": s.email_admin, "like": f"%+{tag}@example.test"})
+    await db_conn.execute(text("DELETE FROM public.properties WHERE id = :pid"),
+                          {"pid": str(s.property_id)})
+    await db_conn.execute(text("DELETE FROM public.users WHERE email LIKE :like"),
+                          {"like": f"%+{tag}@example.test"})
+    await db_conn.execute(text(
+        "DELETE FROM public.organizations "
+        " WHERE legacy_owner_id = ANY(CAST(:o AS uuid[])) "
+        "    OR legacy_partner_id = ANY(CAST(:p AS uuid[]))"),
+        {"o": [str(s.owner_a), str(s.owner_dup), str(s.owner_admin)],
+         "p": [str(s.partner_a), str(s.partner_shared)]})
+    await db_conn.execute(text(
+        "DELETE FROM public.enforcement_partners WHERE id = ANY(CAST(:p AS uuid[]))"),
+        {"p": [str(s.partner_a), str(s.partner_shared)]})
+    await db_conn.execute(text(
+        "DELETE FROM public.lot_owners WHERE id = ANY(CAST(:o AS uuid[]))"),
+        {"o": [str(s.owner_a), str(s.owner_dup), str(s.owner_admin)]})
     await db_conn.commit()
 
 
+# Every assertion below is scoped to the fixture's OWN ids. `organizations`,
+# `users` and `properties` all carry rows this test did not create --
+# organizations because it is (correctly) not truncated, properties because the
+# plaza seed is session-scoped -- so a bare `count(*)` would be a flake waiting
+# for the next test file.
+
+
 async def test_every_legacy_account_gets_an_organization(db_conn, legacy_rows):
+    s = legacy_rows
     await _run_backfill(db_conn)
-    assert (await db_conn.execute(text(
-        "SELECT count(*) FROM public.organizations WHERE kind='owner'"))).scalar() == 3
-    assert (await db_conn.execute(text(
-        "SELECT count(*) FROM public.organizations WHERE kind='partner'"))).scalar() == 2
+    owners = (await db_conn.execute(text(
+        "SELECT count(*) FROM public.organizations "
+        " WHERE kind='owner' AND legacy_owner_id = ANY(CAST(:o AS uuid[]))"),
+        {"o": [str(s.owner_a), str(s.owner_dup), str(s.owner_admin)]})).scalar()
+    partners = (await db_conn.execute(text(
+        "SELECT count(*) FROM public.organizations "
+        " WHERE kind='partner' AND legacy_partner_id = ANY(CAST(:p AS uuid[]))"),
+        {"p": [str(s.partner_a), str(s.partner_shared)]})).scalar()
+    assert (owners, partners) == (3, 2)
 
 
 async def test_duplicate_emails_collapse_to_the_oldest_row(db_conn, legacy_rows):
+    s = legacy_rows
     await _run_backfill(db_conn)
     rows = (await db_conn.execute(text(
-        "SELECT password_hash FROM public.users WHERE lower(email)='ops@nstyle.test'"))).all()
+        "SELECT password_hash FROM public.users WHERE lower(email) = :e"),
+        {"e": s.email_a})).all()
     assert len(rows) == 1, "one login email is one user"
     assert rows[0][0] == "$2b$12$hash1", "the older account's password must survive"
 
 
 async def test_a_partner_sharing_an_owner_email_gets_no_user_row(db_conn, legacy_rows):
+    s = legacy_rows
     await _run_backfill(db_conn)
     # ...and therefore keeps signing in through the legacy path, which Task 9
     # deliberately keeps. The alternative -- overwriting the owner's hash with
     # the partner's -- would lock a customer out.
-    assert (await db_conn.execute(text(
-        "SELECT count(*) FROM public.users"))).scalar() == 3
+    tag = s.owner_a.hex[:8]
+    mine = (await db_conn.execute(text(
+        "SELECT count(*) FROM public.users WHERE email LIKE :like"),
+        {"like": f"%+{tag}@example.test"})).scalar()
+    assert mine == 3       # owner_a, owner_admin, partner_a -- not partner_shared
 
 
-async def test_every_user_is_an_admin_of_its_own_org(db_conn, legacy_rows):
+async def test_every_backfilled_user_is_an_admin_of_its_own_org(db_conn, legacy_rows):
+    s = legacy_rows
     await _run_backfill(db_conn)
-    orphan_users = (await db_conn.execute(text("""
+    tag = s.owner_a.hex[:8]
+    orphans = (await db_conn.execute(text("""
         SELECT count(*) FROM public.users u
-         WHERE NOT EXISTS (SELECT 1 FROM public.memberships m
-                            WHERE m.user_id = u.id AND m.role = 'admin')
-    """))).scalar()
-    assert orphan_users == 0
+         WHERE u.email LIKE :like
+           AND NOT EXISTS (SELECT 1 FROM public.memberships m
+                            WHERE m.user_id = u.id
+                              AND m.organization_id = u.default_organization_id
+                              AND m.role = 'admin')
+    """), {"like": f"%+{tag}@example.test"})).scalar()
+    assert orphans == 0
 
 
 async def test_platform_admin_flag_carries_over(db_conn, legacy_rows):
+    s = legacy_rows
     await _run_backfill(db_conn)
     assert (await db_conn.execute(text(
-        "SELECT is_platform_admin FROM public.users WHERE email='admin@lotlogic.test'"
-    ))).scalar() is True
+        "SELECT is_platform_admin FROM public.users WHERE lower(email) = :e"),
+        {"e": s.email_admin})).scalar() is True
 
 
-async def test_properties_get_an_organization(db_conn, legacy_rows):
+async def test_the_fixture_property_gets_an_organization(db_conn, legacy_rows):
+    s = legacy_rows
     await _run_backfill(db_conn)
+    org = (await db_conn.execute(text(
+        "SELECT organization_id FROM public.properties WHERE id = :pid"),
+        {"pid": str(s.property_id)})).scalar()
+    assert org is not None
     assert (await db_conn.execute(text(
-        "SELECT count(*) FROM public.properties "
-        "WHERE owner_id IS NOT NULL AND organization_id IS NULL"))).scalar() == 0
+        "SELECT legacy_owner_id FROM public.organizations WHERE id = :g"),
+        {"g": str(org)})).scalar() == s.owner_a
 
 
 async def test_rerunning_changes_nothing(db_conn, legacy_rows):
+    s = legacy_rows
+    tag = s.owner_a.hex[:8]
+    counts = text("""
+        SELECT (SELECT count(*) FROM public.organizations
+                 WHERE legacy_owner_id = ANY(CAST(:o AS uuid[]))
+                    OR legacy_partner_id = ANY(CAST(:p AS uuid[]))),
+               (SELECT count(*) FROM public.users WHERE email LIKE :like),
+               (SELECT count(*) FROM public.memberships m
+                  JOIN public.users u ON u.id = m.user_id
+                 WHERE u.email LIKE :like)
+    """)
+    params = {"o": [str(s.owner_a), str(s.owner_dup), str(s.owner_admin)],
+              "p": [str(s.partner_a), str(s.partner_shared)],
+              "like": f"%+{tag}@example.test"}
     await _run_backfill(db_conn)
-    before = (await db_conn.execute(text("""
-        SELECT (SELECT count(*) FROM public.organizations),
-               (SELECT count(*) FROM public.users),
-               (SELECT count(*) FROM public.memberships)
-    """))).first()
+    before = (await db_conn.execute(counts, params)).first()
     await _run_backfill(db_conn)
-    after = (await db_conn.execute(text("""
-        SELECT (SELECT count(*) FROM public.organizations),
-               (SELECT count(*) FROM public.users),
-               (SELECT count(*) FROM public.memberships)
-    """))).first()
+    after = (await db_conn.execute(counts, params)).first()
     assert before == after
 
 
 async def test_an_owned_property_without_an_org_aborts_the_migration(db_conn, legacy_rows):
-    # Prove the fail-closed block can fail: an owner row that the org pass
-    # cannot reach (deleted mid-flight) must abort, not ship a locked-out tenant.
+    """Prove the fail-closed block can actually fail.
+
+    Point the fixture's own property at an owner id no organization can be
+    built from, and the DO block must raise rather than ship a tenant who
+    cannot see their own site. Only this fixture's property is touched.
+    """
+    s = legacy_rows
     await _run_backfill(db_conn)
     await db_conn.execute(text("""
-        UPDATE public.properties SET organization_id = NULL
-    """))
-    await db_conn.execute(text("""
-        DELETE FROM public.organizations WHERE legacy_owner_id IS NOT NULL
-    """))
-    await db_conn.execute(text("""
-        UPDATE public.properties SET owner_id = 'aaaaaaaa-0000-0000-0000-000000000009'
-    """))
+        UPDATE public.properties
+           SET organization_id = NULL, owner_id = :ghost
+         WHERE id = :pid
+    """), {"ghost": str(uuid.uuid4()), "pid": str(s.property_id)})
     await db_conn.commit()
     with pytest.raises(Exception) as exc:
         await _run_backfill(db_conn)
     assert "organization_id" in str(exc.value) or "no organization" in str(exc.value)
 ```
 
-**Note on the fixture:** `properties` is deliberately absent from `TRUNCATE_TABLES` (the truck-plaza seed row lives there and is created once per session), so `legacy_rows` mutates that seed row's `owner_id` and the tests must not assume a specific property count. `enforcement_partners` **is** truncated between tests, so the partner inserts are safe.
+**Note on the fixture, and it is the rule for every fixture this plan adds:** `properties` and `lot_owners` are deliberately absent from `TRUNCATE_TABLES` — the truck-plaza seed row lives in the first and `seed_truck_plaza` asserts on it; the second is now created by `live_schema.sql` and is not per-test state. So `legacy_rows` creates **its own** property and its own owner rows with uuids minted at fixture time, and deletes every one of them in teardown. It never `UPDATE`s the seed row, and it never uses a constant id (a constant would die on the primary key the second time the fixture runs, because `lot_owners` is not truncated). `enforcement_partners` **is** truncated between tests; the fixture still deletes its partner rows so the teardown reads the same either way.
 
 - [ ] **Step 3: Run**
 
@@ -930,7 +1275,7 @@ pytest tests/plaza/test_tenancy_backfill.py -q
 ruff check . && python -m compileall -q -f . && pytest -x --tb=short -q
 ```
 
-Expected: 8 passed. If `test_an_owned_property_without_an_org_aborts_the_migration` passes without raising, the `DO $backfill$` block is not doing its job and the migration is not fail-closed.
+Expected: 8 passed, and **passing twice in a row** — run `pytest tests/plaza/test_tenancy_backfill.py -q` twice against the same database. A second run that fails on a duplicate key means a fixture is using a constant id or is not tearing down. If `test_an_owned_property_without_an_org_aborts_the_migration` passes without raising, the `DO $backfill$` block is not doing its job and the migration is not fail-closed.
 
 - [ ] **Step 4: Commit**
 
@@ -961,7 +1306,7 @@ it, both paths resolve to the same JWT claims.
 - Consumes: `services.auth.Subject`; an open `AsyncSession`.
 - Produces, for Tasks 4, 9, 11, 13:
   - `tenancy.Role` — `VIEWER < STAFF < MANAGER < ADMIN`, a `str` enum whose values match the `memberships.role` CHECK.
-  - `await tenancy.assert_property_access(db, subject, property_id, *, allow_partner: bool = False, need: Role = Role.STAFF) -> None` — raises `HTTPException(404, "Property not found")` on any miss.
+  - `await tenancy.assert_property_access(db, subject, property_id, *, allow_partner: bool = False, need: Role = Role.STAFF) -> None` — raises `HTTPException(404, "Property not found")` on any miss. **`need` only ever gates the org-membership branch**; the legacy owner/partner branches have no role to check and are unaffected by it. Task 4's frozen alias passes `need=Role.VIEWER` explicitly so a `viewer` membership keeps the read access the alias has always granted — see that task for why the STAFF default is wrong there.
   - `await tenancy.allowed_property_ids(db, subject, *, allow_partner: bool = True, need: Role = Role.VIEWER) -> set[uuid.UUID] | None` — `None` means unrestricted.
   - `await tenancy.user_organizations(db, user_id) -> list[OrgMembership]` where `OrgMembership = (organization_id, kind, role, legacy_owner_id, legacy_partner_id, name)`.
   - `tenancy.roles_at_least(need: Role) -> list[str]`.
@@ -1054,6 +1399,11 @@ staff logins -- the second and third have no lot_owners row at all.
 Read `memberships` on every call rather than trusting the token's `org_ids`
 claim. A JWT lives for hours; a membership revoked this morning must stop
 working this morning.
+
+`need` applies to the MEMBERSHIP branch only. A legacy owner or partner login
+carries no role -- it is the whole account -- so raising `need` cannot take
+access away from anyone who has it today. That asymmetry is deliberate: it is
+what lets Task 4 be a pure substitution.
 """
 from __future__ import annotations
 
@@ -1250,6 +1600,7 @@ different answer. The three that matter most:
   * a staff login with a membership but no lot_owners row (impossible before 2.2)
 """
 import uuid
+from dataclasses import dataclass
 
 import pytest
 from sqlalchemy import text
@@ -1257,105 +1608,160 @@ from sqlalchemy import text
 from services.auth import Subject
 from services.tenancy import Role, allowed_property_ids, assert_property_access
 
-OWNER_ID   = uuid.UUID("aaaa0000-0000-0000-0000-00000000000a")
-PARTNER_ID = uuid.UUID("bbbb0000-0000-0000-0000-00000000000b")
-OTHER_OWNER = uuid.UUID("aaaa0000-0000-0000-0000-00000000000f")
-ORG_ID     = uuid.UUID("0e9a0000-0000-0000-0000-00000000000c")
-STAFF_USER = uuid.UUID("5aff0000-0000-0000-0000-00000000000d")
+
+@dataclass
+class Scoped:
+    property_id: uuid.UUID
+    owner_id: uuid.UUID
+    partner_id: uuid.UUID
+    other_owner: uuid.UUID
+    org_id: uuid.UUID
+    staff_user: uuid.UUID
 
 
 @pytest.fixture
-async def scoped_property(db_conn, seed_truck_plaza):
-    pid = seed_truck_plaza.property_id
+async def scoped_property(db_conn):
+    """A property this test owns outright.
+
+    NOT the plaza seed. `seed_truck_plaza` asserts on that row's
+    property_type and policy_text, `properties` is absent from
+    TRUNCATE_TABLES, and an UPDATE to it leaks into every later test in the
+    session. Every id here is minted per use and deleted in teardown --
+    `organizations` is (correctly) never truncated, so a constant org id would
+    collide on the second use.
+    """
+    s = Scoped(property_id=uuid.uuid4(), owner_id=uuid.uuid4(),
+               partner_id=uuid.uuid4(), other_owner=uuid.uuid4(),
+               org_id=uuid.uuid4(), staff_user=uuid.uuid4())
+    tag = s.property_id.hex[:8]
+    await db_conn.execute(text(
+        "INSERT INTO public.organizations (id, name, kind) VALUES (:g,'Scope Org','owner')"),
+        {"g": str(s.org_id)})
+    await db_conn.execute(text(
+        "INSERT INTO public.users (id, email, active) VALUES (:u, :e, true)"),
+        {"u": str(s.staff_user), "e": f"staff+{tag}@example.test"})
+    await db_conn.execute(text(
+        "INSERT INTO public.memberships (user_id, organization_id, role) "
+        "VALUES (:u, :g, 'staff')"), {"u": str(s.staff_user), "g": str(s.org_id)})
+    # tow_company_id deliberately NULL: the partner is attached by partner_id
+    # only, which is the case the shipped helper got wrong.
     await db_conn.execute(text("""
-        INSERT INTO public.organizations (id, name, kind) VALUES (:g,'Org','owner')
-        ON CONFLICT DO NOTHING
-    """), {"g": str(ORG_ID)})
-    await db_conn.execute(text("""
-        INSERT INTO public.users (id, email, active) VALUES (:u,'staff@example.test',true)
-        ON CONFLICT DO NOTHING
-    """), {"u": str(STAFF_USER)})
-    await db_conn.execute(text("""
-        INSERT INTO public.memberships (user_id, organization_id, role)
-        VALUES (:u, :g, 'staff') ON CONFLICT DO NOTHING
-    """), {"u": str(STAFF_USER), "g": str(ORG_ID)})
-    await db_conn.execute(text("""
-        UPDATE public.properties
-           SET owner_id = :o, partner_id = :p, tow_company_id = NULL, organization_id = :g
-         WHERE id = :pid
-    """), {"o": str(OWNER_ID), "p": str(PARTNER_ID), "g": str(ORG_ID), "pid": str(pid)})
+        INSERT INTO public.properties
+            (id, name, address, property_type, qr_code_id,
+             owner_id, partner_id, tow_company_id, organization_id)
+        VALUES (:pid, 'Scope Fixture Site', '2 Test Way', 'apartment', :qr,
+                :o, :p, NULL, :g)
+    """), {"pid": str(s.property_id), "qr": f"scope-fixture-{tag}",
+           "o": str(s.owner_id), "p": str(s.partner_id), "g": str(s.org_id)})
     await db_conn.commit()
-    return pid
+
+    yield s
+
+    await db_conn.rollback()
+    await db_conn.execute(text("DELETE FROM public.properties WHERE id = :pid"),
+                          {"pid": str(s.property_id)})
+    await db_conn.execute(text("DELETE FROM public.memberships WHERE user_id = :u"),
+                          {"u": str(s.staff_user)})
+    await db_conn.execute(text("DELETE FROM public.users WHERE id = :u"),
+                          {"u": str(s.staff_user)})
+    await db_conn.execute(text("DELETE FROM public.organizations WHERE id = :g"),
+                          {"g": str(s.org_id)})
+    await db_conn.commit()
 
 
-def _subject(**kw):
-    base = dict(type="owner", id=OWNER_ID, email="o@example.test")
+def _subject(scoped, **kw):
+    base = dict(type="owner", id=scoped.owner_id, email="o@example.test")
     base.update(kw)
     return Subject(**base)
 
 
 async def test_owner_of_the_property_passes(db_conn, scoped_property):
-    await assert_property_access(db_conn, _subject(), scoped_property)
+    s = scoped_property
+    await assert_property_access(db_conn, _subject(s), s.property_id)
 
 
 async def test_a_different_owner_gets_404_not_403(db_conn, scoped_property):
+    s = scoped_property
     with pytest.raises(Exception) as exc:
-        await assert_property_access(db_conn, _subject(id=OTHER_OWNER), scoped_property)
+        await assert_property_access(db_conn, _subject(s, id=s.other_owner), s.property_id)
     assert getattr(exc.value, "status_code", None) == 404
 
 
 async def test_platform_admin_passes_where_the_old_copy_returned_403(db_conn, scoped_property):
-    admin = _subject(id=OTHER_OWNER, is_platform_admin=True)
-    await assert_property_access(db_conn, admin, scoped_property)
+    s = scoped_property
+    admin = _subject(s, id=s.other_owner, is_platform_admin=True)
+    await assert_property_access(db_conn, admin, s.property_id)
 
 
 async def test_service_key_passes(db_conn, scoped_property):
-    await assert_property_access(db_conn, Subject(type="service", id=None), scoped_property)
+    await assert_property_access(
+        db_conn, Subject(type="service", id=None), scoped_property.property_id)
 
 
 async def test_partner_is_denied_unless_the_caller_opts_in(db_conn, scoped_property):
-    partner = Subject(type="partner", id=PARTNER_ID, email="p@example.test")
+    s = scoped_property
+    partner = Subject(type="partner", id=s.partner_id, email="p@example.test")
     with pytest.raises(Exception) as exc:
-        await assert_property_access(db_conn, partner, scoped_property)
+        await assert_property_access(db_conn, partner, s.property_id)
     assert getattr(exc.value, "status_code", None) == 404
-    await assert_property_access(db_conn, partner, scoped_property, allow_partner=True)
+    await assert_property_access(db_conn, partner, s.property_id, allow_partner=True)
 
 
 async def test_partner_matches_on_partner_id_not_only_tow_company_id(db_conn, scoped_property):
     # The fixture sets tow_company_id = NULL on purpose. The shipped helper
     # checked only tow_company_id and would 404 here, disagreeing with the RLS
     # policy and with the dashboard's own client-side scoping.
-    partner = Subject(type="partner", id=PARTNER_ID, email="p@example.test")
-    await assert_property_access(db_conn, partner, scoped_property, allow_partner=True)
+    s = scoped_property
+    partner = Subject(type="partner", id=s.partner_id, email="p@example.test")
+    await assert_property_access(db_conn, partner, s.property_id, allow_partner=True)
 
 
 async def test_a_membership_grants_access_with_no_legacy_account(db_conn, scoped_property):
-    staff = Subject(type="owner", id=None, email="staff@example.test", user_id=STAFF_USER)
-    await assert_property_access(db_conn, staff, scoped_property, need=Role.STAFF)
+    s = scoped_property
+    staff = Subject(type="owner", id=None, email="staff@example.test", user_id=s.staff_user)
+    await assert_property_access(db_conn, staff, s.property_id, need=Role.STAFF)
+
+
+async def test_a_viewer_still_reads_through_the_frozen_alias_default(db_conn, scoped_property):
+    """D12. The helper defaults to need=STAFF; the alias Task 4 keeps must pass
+    need=VIEWER, or a viewer membership 404s on every read it guards."""
+    s = scoped_property
+    await db_conn.execute(text(
+        "UPDATE public.memberships SET role='viewer' WHERE user_id=:u"),
+        {"u": str(s.staff_user)})
+    await db_conn.commit()
+    viewer = Subject(type="owner", id=None, email="v@example.test", user_id=s.staff_user)
+    await assert_property_access(db_conn, viewer, s.property_id, need=Role.VIEWER)
+    with pytest.raises(Exception):
+        await assert_property_access(db_conn, viewer, s.property_id)   # STAFF default
 
 
 async def test_a_membership_below_the_required_role_is_denied(db_conn, scoped_property):
-    staff = Subject(type="owner", id=None, email="staff@example.test", user_id=STAFF_USER)
+    s = scoped_property
+    staff = Subject(type="owner", id=None, email="staff@example.test", user_id=s.staff_user)
     with pytest.raises(Exception) as exc:
-        await assert_property_access(db_conn, staff, scoped_property, need=Role.ADMIN)
+        await assert_property_access(db_conn, staff, s.property_id, need=Role.ADMIN)
     assert getattr(exc.value, "status_code", None) == 404
 
 
 async def test_a_deactivated_user_loses_access_immediately(db_conn, scoped_property):
+    s = scoped_property
     await db_conn.execute(text("UPDATE public.users SET active=false WHERE id=:u"),
-                          {"u": str(STAFF_USER)})
+                          {"u": str(s.staff_user)})
     await db_conn.commit()
-    staff = Subject(type="owner", id=None, email="staff@example.test", user_id=STAFF_USER)
+    staff = Subject(type="owner", id=None, email="staff@example.test", user_id=s.staff_user)
     with pytest.raises(Exception):
-        await assert_property_access(db_conn, staff, scoped_property)
+        await assert_property_access(db_conn, staff, s.property_id)
 
 
 async def test_allowed_property_ids_is_none_for_unrestricted(db_conn, scoped_property):
     assert await allowed_property_ids(db_conn, Subject(type="service", id=None)) is None
 
 
-async def test_allowed_property_ids_is_empty_for_a_stranger(db_conn, scoped_property):
-    assert await allowed_property_ids(db_conn, _subject(id=OTHER_OWNER)) == set()
+async def test_allowed_property_ids_is_scoped_to_the_owner(db_conn, scoped_property):
+    s = scoped_property
+    assert await allowed_property_ids(db_conn, _subject(s, id=s.other_owner)) == set()
+    assert s.property_id in await allowed_property_ids(db_conn, _subject(s))
 ```
 
 - [ ] **Step 5: Run**
@@ -1365,7 +1771,7 @@ cd /Users/gabe/lotlogic-backend-tenancy
 ruff check . && python -m compileall -q -f . && pytest -x --tb=short -q
 ```
 
-Expected: 11 new tests pass; `tests/test_no_client_tenant_id.py` still passes (or names a genuine finding you then fix).
+Expected: 12 new tests pass, twice in a row against the same database; `tests/test_no_client_tenant_id.py` still passes (or names a genuine finding you then fix).
 
 - [ ] **Step 6: Commit**
 
@@ -1416,7 +1822,17 @@ async def _assert_property_scope(
     services/tenancy.py in Wave 2.2 and this is now one line.
     """
     await tenancy.assert_property_access(
-        db, subject, property_id, allow_partner=allow_partner
+        db, subject, property_id,
+        allow_partner=allow_partner,
+        # need=VIEWER, NOT the helper's STAFF default. This alias guards a mix
+        # of reads and writes across four routers, and before Wave 2.2 there
+        # was no role concept at all -- every member of an account could do all
+        # of it. Delegating at STAFF would newly 404 a `viewer` membership on
+        # every read this alias covers, which is a permission regression
+        # invented by a default. Tightening individual endpoints to
+        # need=Role.MANAGER (cancel, edit) is a follow-up with its own tests,
+        # not a side effect of this substitution.
+        need=tenancy.Role.VIEWER,
     )
 ```
 
@@ -1443,17 +1859,29 @@ Replace the seven inline lines (`# Tenant scope: mirrors _assert_property_scope 
     await tenancy.assert_property_access(db, subject, lot_id)
 ```
 
-- [ ] **Step 4: `routers/quickbooks.py`**
+- [ ] **Step 4: `routers/quickbooks.py` — replace the predicate, keep the projection**
 
-Both inline filters (`run_weekly_invoicing` ~line 185 and `_owner_partner_ids` ~line 318) select properties by `Property.owner_id == subject.id`. Replace each with an id set from the helper, keeping the surrounding SQL shape:
+There are exactly **two** inline sites, and neither is a `SELECT *`. Read them before editing:
+
+- `run_weekly_invoicing`, **line 185** — inside `select(_distinct(Property.tow_company_id)).where(Property.tow_company_id.is_not(None), Property.owner_id == subject.id)`. It is collecting **partner ids**, not property rows.
+- `_owner_partner_ids`, **line 322** — `select(Property.tow_company_id).where(Property.tow_company_id.is_not(None), Property.owner_id == subject.id)`. Same shape.
+
+So at each site: **keep the `Property.tow_company_id` projection exactly as it is, and swap only the `Property.owner_id == subject.id` predicate** for the helper's id set.
 
 ```python
     prop_ids = await tenancy.allowed_property_ids(db, subject, allow_partner=False)
-    # None = unrestricted (service key / platform admin) -> add no filter, which
-    # is what the raw-SQL branch below already does when owner_scope_id is None.
+    # None = unrestricted (service key / platform admin) -> add no property
+    # filter at all. This query has never had an unrestricted branch, which is
+    # the third thing the inline copy got wrong (BACKEND-6).
+    q = select(_distinct(Property.tow_company_id)).where(
+        Property.tow_company_id.is_not(None))
+    if prop_ids is not None:
+        q = q.where(Property.id.in_(prop_ids))
 ```
 
-and in `run_weekly_invoicing` replace the `select(Property).where(Property.owner_id == subject.id, ...)` with `select(Property).where(Property.id.in_(prop_ids), ...)` guarded by `if prop_ids is not None:`. The raw SQL at line ~245 already takes a nullable `:owner_id`; leave that parameter in place and keep passing `owner_scope_id` — it is a *second*, narrower filter and removing it is not this task's job.
+`prop_ids == set()` makes `Property.id.in_(set())` match nothing — correct, and exactly what the old predicate did for an owner with no properties.
+
+The raw SQL at line ~245 already takes a nullable `:owner_id` parameter; **leave it and keep passing `owner_scope_id`**. It is a second, narrower filter inside the invoice query, and removing it is not this task's job.
 
 **Do not change what QuickBooks invoices.** The acceptance criterion for this step is `tests/test_quickbooks_connection.py` and `tests/test_quickbooks_invoice_builder.py` **unchanged and green**. If either needs editing, the substitution is wrong.
 
@@ -1616,9 +2044,17 @@ GUARD_DEPENDENCIES = frozenset({
 })
 
 #: Routes whose credential is verified INSIDE the handler, not by a dependency.
-#: Each entry is (method, path, reason). Adding one is a code-review decision:
-#: you have read the handler and confirmed it rejects an unauthenticated caller
-#: before doing anything. Do NOT add an entry to make this file green.
+#: Keyed (METHOD, path) -> the reason you verified.
+#:
+#: Almost every one of these is ALSO in main.PUBLIC_PATHS, and must be: the
+#: middleware has to stand aside or Square, Twilio, a camera or a driver's
+#: phone would be 401'd before the handler could check the credential it
+#: actually holds. That overlap is exactly why `_is_unguarded` consults THIS
+#: dict FIRST -- checking PUBLIC_PATHS first made the entire list dead code.
+#:
+#: Adding an entry is a code-review decision: you have read the handler and
+#: confirmed it rejects an unauthenticated caller before doing anything. Do NOT
+#: add an entry to make this file green.
 HANDLER_VERIFIED: dict[tuple[str, str], str] = {
     ("POST", "/alpr/ingest"):
         "per-camera X-Camera-Key, validated against alpr_cameras.api_key in the "
@@ -1680,13 +2116,27 @@ def _api_routes() -> list[APIRoute]:
 
 
 def _is_unguarded(route: APIRoute, method: str) -> bool:
+    """ORDER MATTERS. HANDLER_VERIFIED is consulted BEFORE _is_public_path.
+
+    Almost every entry in HANDLER_VERIFIED is also in main.PUBLIC_PATHS -- it
+    has to be, or the session middleware would 401 the very callers (Square,
+    Twilio, a camera, a driver's phone) whose credential the handler exists to
+    check. Asking `_is_public_path` first therefore classified all of them as
+    "public" and left HANDLER_VERIFIED dead code: a route could lose its
+    in-handler check entirely and nothing would notice, because PUBLIC_PATHS
+    had already excused it.
+
+    Reversed, the two lists say different things and both stay alive:
+    PUBLIC_PATHS says "the session middleware stands aside here", and
+    HANDLER_VERIFIED says "...and this is the credential that makes that safe".
+    """
+    if (method, route.path) in HANDLER_VERIFIED:
+        return False
     if route.path in STATIC_PAGE_PATHS:
         return False
     if main._is_public_path(route.path):
         return False
     if GUARD_DEPENDENCIES & _guard_names(route):
-        return False
-    if (method, route.path) in HANDLER_VERIFIED:
         return False
     return True
 
@@ -1723,6 +2173,30 @@ def test_handler_verified_has_no_stale_entries():
     live = {(m, r.path) for r in _api_routes() for m in (r.methods or set())}
     stale = sorted(k for k in HANDLER_VERIFIED if k not in live)
     assert not stale, f"HANDLER_VERIFIED names routes that no longer exist: {stale}"
+
+
+def test_every_public_api_path_carries_a_written_reason():
+    """The rule that makes HANDLER_VERIFIED load-bearing rather than decorative.
+
+    A path in PUBLIC_PATHS is one the session middleware waves through. For an
+    API route that is only safe because the handler checks something else -- a
+    Square HMAC, a Twilio signature, a per-camera key, a reCAPTCHA token, a
+    single-use JWT in the URL. That reason belongs next to the path, not in
+    someone's head.
+
+    Exempt: the three static operator pages, which serve a file, check nothing,
+    and are queued for deletion by fat decision 5.
+    """
+    documented = {p for _m, p in HANDLER_VERIFIED}
+    undocumented = sorted(
+        p for p in main.PUBLIC_PATHS
+        if p not in STATIC_PAGE_PATHS and p not in documented
+    )
+    assert not undocumented, (
+        "these paths are in main.PUBLIC_PATHS with no HANDLER_VERIFIED entry "
+        "saying what the handler checks instead. Add one, with the reason you "
+        f"verified: {undocumented}"
+    )
 
 
 def test_handler_verified_entries_are_not_already_guarded():
@@ -1792,7 +2266,9 @@ cd /Users/gabe/lotlogic-backend-tenancy
 pytest tests/test_route_guards.py -q
 ```
 
-The first run will almost certainly name a handful of routes. For each one, in order of preference:
+`main.PUBLIC_PATHS` has **19** entries today: three static operator pages (exempt) and **16** API paths. `HANDLER_VERIFIED` above has **17** entries covering exactly those 16 — `/violations/action` appears twice because its GET and POST check the same token for different reasons — so `test_every_public_api_path_carries_a_written_reason` should pass on the first run. If it does not, a path was added to PUBLIC_PATHS without anyone writing down why it is safe; that is the finding.
+
+`test_every_route_is_guarded_or_explicitly_public` is the one that will name routes. For each one, in order of preference:
 1. it should have a guard → **add the dependency** (this is a real finding; fix it in this commit and say so);
 2. it is genuinely public → add it to `main.PUBLIC_PATHS`;
 3. it verifies its own credential → add it to `HANDLER_VERIFIED` **with the reason you verified**.
@@ -1848,7 +2324,7 @@ it did not check".
 -- SEC-8 -- the tow audit record, written by the server, inside the transaction
 -- that does the thing.
 --
--- What it replaces: frontend/src/lib/db.js:324 inserted an audit row from the
+-- What it replaces: frontend/src/lib/db.js:370 inserted an audit row from the
 -- BROWSER into `action_logs` -- a table that, verified 2026-09-14,
 -- to_regclass('public.action_logs') says DOES NOT EXIST. Every insert failed,
 -- every failure was swallowed by a console.warn, and every tow audit record
@@ -1860,9 +2336,14 @@ it did not check".
 -- nothing here ever deletes a row. Retention is Wave 2.5's decision (SEC-11 /
 -- DB-5) -- it is named there rather than guessed here.
 --
--- MONEY IS IN CENTS. Every money column in this repo ends in _cents (the rule
--- Wave 1 item 20 adopted after a $350 tow reported as $3.50). The legacy
--- violations.gross_revenue / our_revenue columns are NOT renamed by this plan.
+-- MONEY IS IN CENTS -- and so, despite their names, are
+-- violations.gross_revenue / our_revenue (models.ViolationUpdate says "# in
+-- cents"; /violations/revenue returns gross_revenue_cents=gross and
+-- gross_revenue_dollars=round(gross/100, 2)). So the audit row's *_cents
+-- columns are a STRAIGHT COPY of those values. There is no x100 and no //100
+-- anywhere in this plan; a conversion here would re-create DB-7, the finding
+-- that reported a $350 tow as $3.50. Renaming those two columns is the half of
+-- DB-7 still open and is not this plan's job.
 
 BEGIN;
 
@@ -1891,8 +2372,15 @@ CREATE TABLE IF NOT EXISTS public.admin_audit_log (
     detail                  jsonb NOT NULL DEFAULT '{}'::jsonb,
     -- Ties the row to the request-id middleware's log lines (Wave 1 item 17).
     request_id              text,
+    -- Four values, all reachable (see services/audit.py::_actor_type):
+    --   'service' -- the shared X-API-Key, or a path with no session subject
+    --   'user'    -- a Wave 2.2 login (subject.user_id is set)
+    --   'owner' / 'partner' -- a legacy login still on the pre-2.2 path
+    -- The mix across these four IS the rollout's progress meter. 'system' was
+    -- on this list in an earlier draft and no code path could produce it --
+    -- Subject.type is Literal["owner","partner","service"] -- so it is gone.
     CONSTRAINT admin_audit_log_actor_type_check
-        CHECK (actor_type IN ('user', 'owner', 'partner', 'service', 'system')),
+        CHECK (actor_type IN ('user', 'owner', 'partner', 'service')),
     CONSTRAINT admin_audit_log_action_not_blank CHECK (btrim(action) <> '')
 );
 
@@ -1972,6 +2460,21 @@ VALUES
 """
 
 
+def _actor_type(subject: Subject) -> str:
+    """Which of the four actor shapes this is.
+
+    `subject.type` alone is not enough: it is Literal["owner","partner","service"],
+    so copying it would make 'user' unreachable and leave a Wave 2.2 staff login
+    indistinguishable from the legacy owner account it shares an RLS identity
+    with -- which is the one distinction an audit trail has to make.
+    """
+    if subject.is_service:
+        return "service"
+    if subject.user_id is not None:
+        return "user"
+    return subject.type
+
+
 def _request_id() -> Optional[str]:
     # Soft dependency: services/observability.py is Wave 1 item 17 and is
     # present, but a unit test may import this module without an active request.
@@ -1998,7 +2501,7 @@ async def record(
 ) -> None:
     """Append one audit row to `db`'s OPEN transaction. Does not commit."""
     await db.execute(text(_INSERT), {
-        "actor_type": "service" if subject.is_service else subject.type,
+        "actor_type": _actor_type(subject),
         "actor_user_id": str(subject.user_id) if subject.user_id else None,
         "actor_account_id": str(subject.id) if subject.id else None,
         "actor_email": subject.email,
@@ -2073,12 +2576,24 @@ async def test_money_is_recorded_in_cents(db_conn):
     assert (await _rows(db_conn))[0][1] == 35000
 
 
-async def test_a_service_subject_is_recorded_as_service(db_conn):
+async def test_the_four_actor_types_are_all_reachable(db_conn):
+    """D15. 'user' must be distinguishable from the legacy owner account it
+    shares an RLS identity with -- that distinction is the point of the table."""
+    import uuid as _uuid
     await audit.record(db_conn, Subject(type="service", id=None),
                        audit.Action.SITE_ONBOARDED)
+    await audit.record(db_conn, SUBJECT, audit.Action.PASS_CANCELLED)
+    await audit.record(db_conn, Subject(type="partner", id=_uuid.uuid4(),
+                                        email="p@example.test"),
+                       audit.Action.PASS_CANCELLED)
+    await audit.record(db_conn, Subject(type="owner", id=SUBJECT.id,
+                                        email="staff@example.test",
+                                        user_id=_uuid.uuid4()),
+                       audit.Action.PASS_CANCELLED)
     await db_conn.commit()
-    assert (await db_conn.execute(text(
-        "SELECT actor_type FROM public.admin_audit_log"))).scalar() == "service"
+    seen = (await db_conn.execute(text(
+        "SELECT actor_type FROM public.admin_audit_log ORDER BY id"))).scalars().all()
+    assert seen == ["service", "owner", "partner", "user"]
 
 
 async def test_an_unknown_action_string_is_rejected_only_if_blank(db_conn):
@@ -2137,9 +2652,24 @@ Task 7 puts the write sites in and takes the browser out of the loop.
 - Consumes: `services/audit.py` (Task 6); the existing `POST /violations/{violation_id}/resolve`.
 - Produces: `resolve_violation` now derives `gross_revenue` from the partner's fee schedule when the client omits it, and writes one `admin_audit_log` row per action.
 
-- [ ] **Step 1: Derive the fee server-side in `routers/violations.py::resolve_violation`**
+- [ ] **Step 1: Derive the fee server-side in `routers/violations.py::resolve_violation`, in cents**
 
-Today the endpoint takes `update.gross_revenue` from the client and multiplies it by the partner's share. Keep accepting it (the field is in `ViolationUpdate` and removing it is a breaking API change), but stop *needing* it:
+**Read `POST /violations/{violation_id}/action` (violations.py:493–515) first and copy it.** That endpoint already does this correctly and its comment already explains the trap:
+
+```python
+                # Fall back to the partner's default fee schedule. Both sides
+                # of this assignment are cents — the fee columns used to hold
+                # whole dollars, which is why a $350 tow was reported as $3.50
+                # (DB-7); see 20260903131539_partner_fees_to_cents.sql.
+                v.gross_revenue = (
+                    partner.boot_fee_cents if body.action == "boot" else partner.tow_fee_cents
+                )
+            v.our_revenue = int(v.gross_revenue * float(partner.revenue_share))
+```
+
+`violations.gross_revenue` and `our_revenue` **hold cents** (`models.ViolationUpdate.gross_revenue  # in cents`; `/violations/revenue` returns `gross_revenue_cents=gross` alongside `gross_revenue_dollars=round(gross / 100, 2)`). So the assignment is a straight copy of the fee column. **There is no `× 100` and no `// 100` in this task, anywhere.** A conversion here would re-create the exact 100× error DB-7 exists to have fixed.
+
+`resolve_violation` takes `update.gross_revenue` from the client and multiplies it by the partner's share. Keep accepting it (the field is in `ViolationUpdate`; removing it is a breaking API change and the deployed dashboard still sends it), but stop *needing* it:
 
 ```python
     if update.action_taken in ("boot", "tow") or update.gross_revenue is not None:
@@ -2147,28 +2677,32 @@ Today the endpoint takes `update.gross_revenue` from the client and multiplies i
             select(EnforcementPartner).where(EnforcementPartner.id == v.partner_id)
         )).scalar_one_or_none()
         if partner:
-            # The fee schedule is the server's, not the browser's. SEC-8: the
+            # The fee schedule is the server's, not the browser's (SEC-8: the
             # dashboard computed this from values it held in React state and
-            # wrote the result straight to `violations` through PostgREST.
-            # enforcement_partners.{boot,tow}_fee_cents are the post-DB-7
-            # columns; `violations.gross_revenue` is a legacy DOLLARS column and
-            # is NOT renamed here (that is DB-7's job and it is done for the
-            # partner side only).
+            # wrote the result straight to `violations` through PostgREST).
+            # EVERY value in this block is cents — client-supplied, fee column
+            # and stored column alike. Do not convert. Same shape as
+            # record_violation_action above; keep them identical so one tow
+            # cannot book two different numbers depending on which route the
+            # dashboard happened to call.
             if update.gross_revenue is not None:
-                gross_dollars = int(update.gross_revenue)
-            elif update.action_taken == "boot":
-                gross_dollars = int(partner.boot_fee_cents // 100)
+                v.gross_revenue = int(update.gross_revenue)
             else:
-                gross_dollars = int(partner.tow_fee_cents // 100)
-            v.gross_revenue = gross_dollars
-            v.our_revenue = int(gross_dollars * float(partner.revenue_share))
+                v.gross_revenue = (
+                    partner.boot_fee_cents if update.action_taken == "boot"
+                    else partner.tow_fee_cents
+                )
+            # int(), not round(): violations.py:512 and :766 both truncate, and
+            # a third rounding rule would make two call sites disagree about
+            # the same tow. See scope call 13.
+            v.our_revenue = int(v.gross_revenue * float(partner.revenue_share))
 ```
 
-Then, before the existing `await db.commit()`:
+Then, before the existing `await db.commit()` — again with no conversion:
 
 ```python
-    gross_cents = int(v.gross_revenue * 100) if v.gross_revenue is not None else None
-    ours_cents = int(v.our_revenue * 100) if v.our_revenue is not None else None
+    gross_cents = v.gross_revenue
+    ours_cents = v.our_revenue
     await audit.record(
         db, subject, audit.Action.VIOLATION_RESOLVED,
         target_table="violations", target_id=str(violation_id),
@@ -2181,19 +2715,44 @@ Then, before the existing `await db.commit()`:
     )
 ```
 
-Do the same in the email-action POST (`violation_action`), with `audit.Action.VIOLATION_ACTION_EMAIL` and `detail={"action": body.action, "via": "email_token"}`. That path's subject is not a session subject — construct `Subject(type="system", ...)`? **No:** `SubjectType` is a `Literal["owner","partner","service"]`. Pass `Subject(type="service", id=None, email=None)` and set `detail["via"]="email_token"`; the `actor_type` CHECK accepts `'service'` and the detail says which one it was. Do not widen `SubjectType` for this.
+Do the same in the email-action POST (`violation_action`), with `audit.Action.VIOLATION_ACTION_EMAIL` and `detail={"action": body.action, "via": "email_token"}`. That path has no session subject — and do **not** invent one: `SubjectType` is `Literal["owner","partner","service"]`. Pass `Subject(type="service", id=None, email=None)`; `_actor_type` records `'service'` and `detail["via"]` says which service path it was. Do not widen `SubjectType` for this.
 
-- [ ] **Step 2: Audit the other three write sites**
+- [ ] **Step 2: Keep the zone re-arm, server-side**
+
+`db.recordAction` does one more thing the backend does not, and it is the thing that makes enforcement keep working (`frontend/src/lib/db.js:309–329`): on a **non-revenue** outcome it reads the violation's `camera_id` + `zone_id`, nulls `violations.zone_id`, and resets `zone_occupancy.violation_triggered = false` for that `(camera_id, zone_id)` — so the dedup layer can fire a fresh violation for the same space next scan. Move it verbatim into `resolve_violation`, before the commit:
+
+```python
+    # Zone re-arm. Moved from frontend/src/lib/db.js:309-329 with Wave 2.2 --
+    # it is the reason a dismissed violation does not permanently deafen the
+    # dedup layer for that space. Only on outcomes that earn no revenue: a
+    # booted or towed vehicle is still there, and re-arming would file a
+    # duplicate against it.
+    if update.action_taken in ("dismissed", "no_action", "already_gone"):
+        pre_camera_id, pre_zone_id = v.camera_id, v.zone_id
+        v.zone_id = None
+        if pre_camera_id and pre_zone_id:
+            await db.execute(text("""
+                UPDATE public.zone_occupancy
+                   SET violation_triggered = false
+                 WHERE camera_id = CAST(:cid AS uuid) AND zone_id = :zid
+            """), {"cid": str(pre_camera_id), "zid": pre_zone_id})
+```
+
+Capture `camera_id` / `zone_id` **before** nulling, exactly as the browser does — the browser's `SELECT camera_id, zone_id ... .single()` ahead of the update exists for that reason and its comment says so.
+
+**`record_violation_action` (`POST /violations/{id}/action`) has the same gap.** Add the identical block there in the same commit, or the two routes disagree about whether a dismissal re-arms the zone — which is how four ownership helpers happened.
+
+- [ ] **Step 3: Audit the other three write sites**
 
 - `routers/visitor_passes.py::cancel_pass` → `audit.Action.PASS_CANCELLED`, `property_id=row["property_id"]`, `target_table="visitor_passes"`, `detail={"reason": payload.reason}`.
 - `routers/resident_plates.py::cancel_resident_plate` → same action, `target_table="resident_plates"`.
 - `routers/lots.py::update_partner` → `audit.Action.PARTNER_FEES_UPDATED`, `target_table="enforcement_partners"`, `detail={"fields": sorted(changed_fields)}`. **This is the SEC-5/PLATFORM-6 surface** — the fee edit that used to be able to zero out LotLogic's revenue now leaves a row naming who changed which fields.
 
-All four calls go **before** the existing `await db.commit()` in their handler. None adds a commit.
+All of these calls go **before** the existing `await db.commit()` in their handler. None adds a commit.
 
-- [ ] **Step 3: Take the browser out of the loop (`frontend/src/lib/db.js`)**
+- [ ] **Step 4: Take the browser out of the loop (`frontend/src/lib/db.js`)**
 
-`recordAction` currently: computes `gross_revenue` / `our_revenue` / `partner_payout` from `extra._partner` and `extra._ownerFees`, `UPDATE`s `violations` through Supabase, then inserts into the nonexistent `action_logs`. Replace the whole boot/tow branch with one backend call:
+`recordAction` currently does four things: computes `gross_revenue` / `our_revenue` / `partner_payout` from `extra._partner` and `extra._ownerFees` **in dollars** (`p.tow_fee || 250`) and writes them into columns that hold **cents** — that is the live half of DB-7 — `UPDATE`s `violations` through Supabase, re-arms the zone (lines 309–329, now moved server-side by Step 2), and inserts into the nonexistent `action_logs` (line 370). Replace the whole branch with one backend call:
 
 ```js
   async recordAction(violId, action, extra = {}) {
@@ -2221,23 +2780,29 @@ All four calls go **before** the existing `await db.commit()` in their handler. 
   },
 ```
 
-Delete the `action_logs` insert, the `logEntry` object, the `grossFee` / `share` arithmetic and the now-unused `extra._partner` / `extra._ownerFees` / `extra._performerEmail` plumbing at the three `JobsPage.jsx` call sites (169, 198, 328).
+Delete: the `action_logs` insert (line 370) and its `logEntry` object; the `grossFee` / `share` arithmetic; the `_vPre` pre-fetch and the `zone_occupancy` reset at lines 309–329 (Step 2 owns them now); and the now-unused `extra._partner` / `extra._ownerFees` / `extra._performerEmail` plumbing at the three `JobsPage.jsx` call sites (169, 198, 328).
+
+**Leave `db.deleteViolation`'s own zone reset (lines 579–588) alone.** It is a different path with a different lifecycle and this task does not touch it.
 
 **Naming rule:** no user-facing string changes in this task. `npm run check:naming` must pass unchanged.
 
-- [ ] **Step 4: Tests**
+- [ ] **Step 5: Tests**
 
-`tests/plaza/test_violation_resolve_audit.py` — against real Postgres, with a partner whose `tow_fee_cents` is 35000 and `revenue_share` 0.25:
+`tests/plaza/test_violation_resolve_audit.py` — against real Postgres, with a partner whose `tow_fee_cents` is **35000** and `revenue_share` **0.25**. Every number below is cents:
 
-1. `POST /violations/{id}/resolve` with `action_taken="tow"` and **no** `gross_revenue` writes `gross_revenue = 350` and `our_revenue = 87`, derived from the partner row.
-2. The same call writes exactly one `admin_audit_log` row with `action='violation.resolved'`, `gross_fee_cents=35000`, `lotlogic_revenue_cents=8700`, `partner_payout_cents=26300`, and `actor_email` equal to the caller's.
-3. A client that *does* send `gross_revenue` still wins (backward compatibility — the dashboard on `main` sends it until this task's frontend half deploys).
-4. A resolve that fails its invoiced-at guard (409) writes **no** audit row — the row and the mutation share a transaction.
-5. A cross-tenant caller gets 404 and writes no audit row.
+1. `POST /violations/{id}/resolve` with `action_taken="tow"` and **no** `gross_revenue` writes `gross_revenue = 35000` and `our_revenue = 8750`, read straight off the partner row. *A `350` here is DB-7 reborn and the test exists to say so.*
+2. The same call writes exactly one `admin_audit_log` row with `action='violation.resolved'`, `gross_fee_cents=35000`, `lotlogic_revenue_cents=8750`, `partner_payout_cents=26250`, and `actor_email` equal to the caller's.
+3. The numbers from `POST /violations/{id}/resolve` and `POST /violations/{id}/action` are **identical** for the same violation and the same partner — resolve one violation each way and assert `(gross_revenue, our_revenue)` matches. Two routes, one tow, one answer.
+4. A client that *does* send `gross_revenue` still wins, in cents (send `40000`, expect `40000` / `10000`) — backward compatibility, because the dashboard on `main` sends it until this task's frontend half deploys.
+5. **Zone re-arm (D8).** Given a violation with `camera_id` and `zone_id` set and a `zone_occupancy` row with `violation_triggered = true`: resolving it `dismissed` nulls `violations.zone_id` and flips that row back to `false`. Resolving it `tow` does **neither** — the vehicle is still there and re-arming would file a duplicate against it. *Without this test the dedup layer stays permanently deaf for that space and nothing fails.*
+6. A resolve that fails its invoiced-at guard (409) writes **no** audit row and leaves `zone_occupancy` untouched — the row, the mutation and the re-arm share a transaction.
+7. A cross-tenant caller gets 404 and writes no audit row.
+
+Fixtures follow the plan's rule: this file creates its own `properties`, `violations`, `camera_zones`/`zone_occupancy` and `enforcement_partners` rows with fresh uuids and deletes them in teardown.
 
 Frontend: `tests/e2e/partner-fee-editor.spec.ts` stays green unchanged; run the self-serving specs and `npm run visual:check`.
 
-- [ ] **Step 5: Run both gates, commit twice (one per repo)**
+- [ ] **Step 6: Run both gates, commit twice (one per repo)**
 
 ```
 fix(violations): the fee schedule and the audit row are the server's
@@ -2249,9 +2814,16 @@ and swallowed the failure.
 
 resolve_violation now derives the fee from enforcement_partners.{boot,tow}_fee_cents
 when the client omits it (the client value still wins while the old dashboard is
-deployed), and writes one admin_audit_log row in the same transaction. The
-partner fee editor -- the SEC-5 surface -- now leaves a row naming who changed
-which fields.
+deployed), in CENTS on both sides of the assignment -- violations.gross_revenue
+holds cents despite its name, and the browser's `p.tow_fee || 250` dollars were
+the live half of DB-7. It writes one admin_audit_log row in the same transaction,
+and it now performs the zone re-arm the browser used to do: on a dismissal the
+violation's zone_id is cleared and zone_occupancy.violation_triggered is reset,
+so the dedup layer can fire again for that space. Without moving that, deleting
+the browser code would have left every dismissed space permanently deaf.
+
+The partner fee editor -- the SEC-5 surface -- now leaves a row naming who
+changed which fields.
 ```
 
 ---
@@ -2577,7 +3149,24 @@ and then — the single most important line in this task:
 
 - [ ] **Step 3: `/auth/me` gains two keys and loses none**
 
-Append to the returned dict on both branches:
+**`/auth/me` has no `default` in scope.** `default` is a local of `login()`; `me()` is a separate handler with two branches of its own (owner / partner) and no membership lookup at all. Resolve it once, before the branch-specific work, from the subject:
+
+```python
+    # Wave 2.2. The session's organisation, resolved HERE -- `login()`'s
+    # `default` is a local of that function and is not in scope in this one.
+    # `subject.user_id` is None for every legacy login and for a service key,
+    # in which case there is no organisation to report and the key is null.
+    org = None
+    if subject.user_id is not None:
+        memberships = await tenancy.user_organizations(db, subject.user_id)
+        default_org_id = (await db.execute(text(
+            "SELECT default_organization_id FROM public.users WHERE id = :u"
+        ), {"u": str(subject.user_id)})).scalar()
+        org = next((m for m in memberships if m.organization_id == default_org_id),
+                   memberships[0] if memberships else None)
+```
+
+then append to the returned dict **on both branches**, identically:
 
 ```python
         # Wave 2.2. Present only when the session resolved through the tenancy
@@ -2585,9 +3174,9 @@ Append to the returned dict on both branches:
         # falls back to what it already does. Never remove a key from this
         # response -- App.jsx merges it into a persisted localStorage session.
         "organization": (
-            {"id": str(default.organization_id), "name": default.name,
-             "kind": default.kind, "role": default.role}
-            if default is not None else None
+            {"id": str(org.organization_id), "name": org.name,
+             "kind": org.kind, "role": org.role}
+            if org is not None else None
         ),
         # FE-16. Computed from the subject's OWN properties, so site #12 turning
         # the reservation app on is an UPDATE, not a frontend deploy with a
@@ -2627,6 +3216,8 @@ Verified: `app_enabled` is `false` on all 11 production rows today (Wave 1 item 
 6. An account with `password_hash IS NULL` still falls through to the legacy path and still gets `403 Password not set` — the N Style case.
 7. A partner login gets `account_type: "partner"` and a `partner_id` claim, unchanged.
 8. `GET /auth/me` returns every pre-2.2 key **plus** `organization` and `features`; assert key-by-key against a literal list so a future refactor cannot drop one.
+9. **D13 regression:** `GET /auth/me` on a **legacy** session — `subject.user_id is None`, the owner branch **and** the partner branch — returns `200` with `organization: None`. An earlier draft appended `login()`'s local `default` to this handler; on the legacy path that is a `NameError` and a 500 on the endpoint the dashboard polls on every load. Assert both branches explicitly, not just the owner one.
+10. `GET /auth/me` on a **tenancy** session returns the org whose id equals `users.default_organization_id`, and a user whose `default_organization_id` is NULL gets its first membership rather than `None`.
 
 - [ ] **Step 6: Full gate, then commit**
 
@@ -2765,9 +3356,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS integrations_provider_org_key
 COMMIT;
 ```
 
-- [ ] **Step 2: One resolver, used everywhere**
+- [ ] **Step 2: One resolver, in the one place that reads the connection**
 
-In `services/quickbooks.py`, replace the three `select(Integration).where(provider=='quickbooks').order_by(connected_at.desc()).limit(1)` sites with:
+There is **one** such query in `services/quickbooks.py` — `get_active_integration` (line 135) — plus the copy inside `routers/quickbooks.py::status` (line 68). Two sites, not three. Change both to call the resolver:
 
 ```python
 async def get_connection(db: AsyncSession, organization_id: uuid.UUID | None = None):
@@ -2793,18 +3384,95 @@ async def get_connection(db: AsyncSession, organization_id: uuid.UUID | None = N
         ).order_by(Integration.connected_at.desc()).limit(1))
 ```
 
-`exchange_code` stamps `organization_id` from the connecting subject's default org when the subject has one and is **not** a platform admin; a platform admin's connect leaves it `NULL` (the platform's own books). Write an `audit.record(..., Action.QUICKBOOKS_CONNECTED, organization_id=...)` in the same transaction.
+- [ ] **Step 3: The org travels in the OAuth state, because the callback has no subject**
 
-- [ ] **Step 3: Tests**
+**`GET /quickbooks/oauth/callback` is in `main.PUBLIC_PATHS` and `exchange_code(code, realm_id, db)` takes no subject.** Intuit redirects the browser back to us; there is no `Authorization` header, no `Subject`, and nothing to stamp an `organization_id` or an audit actor from. An earlier draft said "`exchange_code` stamps `organization_id` from the connecting subject" — there is no connecting subject at that point in the flow.
+
+The only thing that crosses the round trip is `state`. So carry it there.
+
+`services/quickbooks.py` already mints `state = secrets.token_urlsafe(24)` and holds it server-side in the module-level `_oauth_states` dict with a timestamp, `verify_state` popping it (single use, 10-minute sweep). Widen the value from a timestamp to a pair, and hand the org id back on the way out:
+
+```python
+#: state token -> (minted_at, organization_id | None). Held server-side rather
+#: than signed into the string: the token is already 24 unguessable bytes and
+#: already single-use, so there is nothing for a signature to add -- and a
+#: server-side value cannot be replayed after `verify_state` pops it.
+_oauth_states: dict[str, tuple[datetime, Optional[uuid.UUID]]] = {}
+
+
+def build_authorize_url(
+    state: Optional[str] = None, *, organization_id: Optional[uuid.UUID] = None,
+) -> tuple[str, str]:
+    state = state or secrets.token_urlsafe(24)
+    _oauth_states[state] = (datetime.now(timezone.utc), organization_id)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+    for s, (t, _org) in list(_oauth_states.items()):
+        if t < cutoff:
+            _oauth_states.pop(s, None)
+    ...
+
+
+def consume_state(state: str) -> tuple[bool, Optional[uuid.UUID]]:
+    """Pop a state token. Returns (was_valid, organization_id).
+
+    Replaces verify_state(), which returned a bare bool and threw the org away.
+    Keep the old name as a one-line alias if anything else imports it.
+    """
+    entry = _oauth_states.pop(state, None)
+    if entry is None:
+        return False, None
+    return True, entry[1]
+```
+
+`exchange_code` gains a keyword-only `organization_id: uuid.UUID | None = None` and stamps it on the row it creates (leaving it unchanged on a reconnect of an existing `realm_id`). The callback becomes:
+
+```python
+    ok, organization_id = consume_state(state)
+    if not ok:
+        raise HTTPException(400, "Invalid or expired state")
+    integ = await exchange_code(code, realmId, db, organization_id=organization_id)
+```
+
+- [ ] **Step 4: The audit row is written by `oauth_start`, which *does* have a subject**
+
+`GET /quickbooks/oauth/start` is `Depends(require_platform_admin)`. That is the authenticated end of this flow and the only end that knows who a human is, so that is where the audit row goes:
+
+```python
+@router.get("/oauth/start")
+async def oauth_start(
+    subject: Subject = Depends(require_platform_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    # A platform admin connecting on LotLogic's behalf leaves organization_id
+    # NULL -- the platform's own books, which is the one live row today. An
+    # org-scoped connect passes that org's id, and it rides back through the
+    # state token (Step 3) because the callback has no subject to ask.
+    organization_id = None if subject.is_platform_admin or subject.is_service else ...
+    url, state = build_authorize_url(organization_id=organization_id)
+    await audit.record(
+        db, subject, audit.Action.QUICKBOOKS_CONNECTED,
+        organization_id=organization_id, target_table="integrations",
+        detail={"stage": "authorize_redirect"},
+    )
+    await db.commit()
+    return {"auth_url": url}
+```
+
+The row records the *intent* and its actor, stamped at the moment a named human asked for it. The callback writes no audit row at all, and the reason is one line in its docstring: **there is no subject there to attribute it to, and an audit row with no actor is worse than none.**
+
+- [ ] **Step 5: Tests**
 
 `tests/plaza/test_quickbooks_connection_scope.py`:
 1. With only the unowned row, `get_connection(db)` and `get_connection(db, org)` both return it — today's behaviour, preserved.
 2. With an org row present, `get_connection(db, that_org)` returns it and `get_connection(db, other_org)` returns the unowned one.
 3. Two rows for the same `(provider, org)` cannot be inserted (the partial unique).
-4. `exchange_code` called by a platform admin leaves `organization_id` NULL.
-5. `tests/test_quickbooks_connection.py` and `tests/test_quickbooks_invoice_builder.py` green **unchanged** — if either needs an edit, the resolver changed behaviour it should not have.
+4. `exchange_code(..., organization_id=None)` leaves the column NULL — the platform's own books, which is the one live row.
+5. **`consume_state` round-trips the org id** and is single-use: a second `consume_state` with the same token returns `(False, None)`. *This is the whole D6 fix; without it the callback has nothing to stamp.*
+6. An expired state (mint one, wind `_oauth_states`'s timestamp back 11 minutes) returns `(False, None)`.
+7. `GET /quickbooks/oauth/start` writes exactly one `admin_audit_log` row with `action='quickbooks.connected'` and the caller's email; the **callback writes none** — assert the count does not move across a simulated callback.
+8. `tests/test_quickbooks_connection.py` and `tests/test_quickbooks_invoice_builder.py` green **unchanged**. If either needs an edit, the resolver changed behaviour it should not have. If either calls `verify_state`, keep the one-line alias rather than editing the test.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```
 fix(quickbooks): the connection knows whose books it is (SEC-6, org half)
@@ -2813,6 +3481,14 @@ integrations.organization_id, nullable, with one resolver: the org's own row if
 it has one, otherwise the platform's unowned row. The one live connection is
 LotLogic's own and is deliberately left unowned, so nothing about weekly
 invoicing changes today.
+
+The org id travels in the OAuth state token, because the callback genuinely has
+no subject to ask -- it is in PUBLIC_PATHS, Intuit redirects a browser to it,
+and exchange_code takes no Subject. _oauth_states already holds a server-side,
+single-use, unguessable token per flow; its value grows from a timestamp to
+(timestamp, organization_id) and consume_state hands the org back. The audit row
+is written by /oauth/start, the authenticated end, where a named human exists to
+attribute it to; the callback writes none and says why.
 
 The gate and the deterministic ordering landed earlier; a per-org OAuth flow is
 worth writing when a second billing entity exists.
@@ -2829,7 +3505,7 @@ worth writing when a second billing entity exists.
 - Test: `tests/test_policy_image_upload.py`
 
 **Interfaces:**
-- Consumes: `services/storage.upload_bytes(key, data, content_type) -> str`, `settings.r2_public_url`, `services/tenancy.assert_property_access`.
+- Consumes: `services/storage.upload_bytes(data, key, content_type) -> tuple[str, str]` — **data first, and it returns `(storage_key, public_url)`, not a URL string**; `settings.r2_public_url`; `services/tenancy.assert_property_access`.
 - Produces: `properties.policy_image_url text`, readable by `anon`; `POST /admin/sites/{property_id}/policy-image` (multipart, platform-admin) returning `{"policy_image_url": ...}`.
 
 **Why this is its own task:** adding site #12's posted policy today means committing `frontend/policy/<qr>.jpg` to the frontend repo and waiting for a Vercel deploy. That is one of the three "a new site costs a deploy" steps, and Task 13 cannot claim to be a one-command onboarding while it is true.
@@ -2909,8 +3585,12 @@ async def upload_policy_image(
     # 8 random hex characters: the snapshots bucket has a public base URL, so an
     # object key must not be guessable from the property id alone.
     key = f"policy/{property_id}/{secrets.token_hex(4)}{ext}"
-    await upload_bytes(key, b"".join(chunks), file.content_type)
-    url = f"{settings.r2_public_url.rstrip('/')}/{key}"
+    # upload_bytes(data, key, content_type) -> (storage_key, public_url).
+    # Data FIRST, and take the URL from its second return value rather than
+    # rebuilding it: storage.py owns how a public URL is formed, and it raises
+    # on a failed put (unlike upload_snapshot, which swallows), so a failure
+    # here surfaces to the admin instead of writing a dead URL to the row.
+    _stored_key, url = await upload_bytes(b"".join(chunks), key, file.content_type)
 
     updated = (await db.execute(text("""
         UPDATE public.properties SET policy_image_url = :url
@@ -2984,7 +3664,7 @@ The committed JPEGs stay as the fallback; nothing breaks on deploy day.
 - Consumes: Tasks 2, 3, 6, 12.
 - Produces:
   - `SiteOnboardRequest` — **the new-site checklist** (Task 16 generates the runbook from it).
-  - `SiteOnboardResponse` — property id, org id, qr ids and URLs, the QR-sheet URL, one setup link per created login, and a `checklist` object naming what is still outstanding.
+  - `SiteOnboardResponse` — property id, org id, qr ids and URLs, the QR-sheet URL (`{SITE_URL}/qr-sheet.html?property=<id>`, a standalone entry page — see Task 14), one setup link per created login, and a `checklist` object naming what is still outstanding.
   - `site_onboarding.mint_qr_code_id(db, name) -> str`.
 
 **What it replaces.** Two half-paths:
@@ -3173,7 +3853,10 @@ The router commits once and rolls back on any failure, exactly as `onboard_clien
             "code_id": qr_code_id,
             "pass_url": f"{site}/temp/{qr_code_id}",
             "permanent_url": f"{site}/perm/{qr_code_id}",
-            "sheet_url": f"{site}/app/qr-sheet?property={prop_id}",
+            # A standalone entry page, not a dashboard tab -- App.jsx routes
+            # from localStorage, never from the pathname, so an /app/... link
+            # could not open it. See Task 14 and scope call 6.
+            "sheet_url": f"{site}/qr-sheet.html?property={prop_id}",
         },
         "logins": [{"email": e, "role": r, "setup_link": f"{site}/set-password?token={t}"}
                    for e, r, t in created_logins],
@@ -3238,126 +3921,197 @@ The request schema IS the new-site checklist. Task 16 generates the runbook from
 
 ---
 
-### Task 14: The printable QR sheet
+### Task 14: The printable QR sheet — a standalone entry page
 
 **Files:**
-- Create: `frontend/src/pages/QrSheetPage.jsx`
-- Modify: `frontend/src/App.jsx` (one lazy route), `frontend/styles/` (a print block)
+- Create: `frontend/qr-sheet.html`, `frontend/src/qr-sheet.js`
+- Modify: `frontend/scripts/build.mjs` (`entryPoints` + the not-silently-empty assert list), `frontend/styles/` (a print block)
+- Modify: `routers/admin.py` — `GET /admin/sites/{property_id}` returns the fields the sheet renders
 - Test: `tests/e2e/qr-sheet.spec.ts` (self-serving, runs in `e2e (local dist)`)
 
 **Interfaces:**
-- Consumes: `qrcode@1.5.4` (already a bundled dependency), `db.getProperty(id)`, Task 13's `qr.sheet_url`.
-- Produces: `/app/qr-sheet?property=<uuid>` — one page, two QR codes, `@media print` styled to an 8.5×11 sheet.
+- Consumes: `qrcode@1.5.4` (already a bundled dependency), `src/lib/api.js::apiFetch` (which reads the admin's JWT out of `localStorage['lotlogic_session']._token`), Task 13's `qr.sheet_url`.
+- Produces: `/qr-sheet.html?property=<uuid>` — one page, two QR codes, `@media print` styled to a US-Letter sheet.
 
-Scope call 6 explains why this is a frontend page and not a backend PDF: the alternative is a new Python dependency inside the production image for a page an admin prints once per site, when `qrcode` is already in the bundle. Wave 2.6 moved that library off the CDN precisely because a CDN 404 blanked the QR tiles (FE-4) — so the bundled copy is the reliable one.
+**Not a dashboard tab, and not a backend PDF.** Scope call 6 has both halves; the first is the one a reviewer will want to re-litigate, so it is restated here with the evidence:
 
-- [ ] **Step 1: The page**
+> `App.jsx` reads its current tab from `localStorage.getItem('lotlogic_tab')` (line 95) and **never** looks at `window.location.pathname`. Line 178 then coerces any tab outside the valid list back to `'lots'`. A `/app/qr-sheet?property=…` link would open the dashboard on whatever tab the admin last used — the page would be unreachable by the only means it is ever reached, a link. Making it reachable means teaching `App.jsx` to route on `pathname`, which is a router: a change to every tab's history behaviour, the deep-link semantics of eight lazy pages, and the visual baseline, in service of one printable page.
 
-```jsx
-import React, { useEffect, useRef, useState } from 'react';
-import QRCode from 'qrcode';
-import { db } from '../lib/db.js';
+So it is a **fourth standalone entry page**, exactly like `visit.html` / `resident.html` / `apt.html`: its own HTML shell, its own esbuild entry, no React, no dashboard shell. `POST /admin/sites` returns `{SITE_URL}/qr-sheet.html?property=<id>`.
 
-// The sheet an operator prints and posts at the entrance. Two codes: one for a
-// parking pass, one for a permanent one. Deliberately boring -- it is printed in
-// black on white, at a distance, by someone standing in a parking lot.
-//
-// Naming rule: the codes are labelled by what a person DOES with them, never by
-// a pass class. "Scan to get a parking pass" / "Scan to register a vehicle".
-export default function QrSheetPage() {
-  const propertyId = new URLSearchParams(window.location.search).get('property');
-  const [property, setProperty] = useState(null);
-  const [error, setError] = useState('');
-  const passRef = useRef(null);
-  const permRef = useRef(null);
+- [ ] **Step 1: `GET /admin/sites/{property_id}` — what the sheet needs, and nothing else**
 
-  useEffect(() => {
-    if (!propertyId) { setError('No site selected.'); return; }
-    db.getProperty(propertyId).then(setProperty).catch(e => setError(e.message));
-  }, [propertyId]);
+The page holds the admin's own JWT, so it asks the backend rather than Supabase. Add to `routers/admin.py` (platform-admin gated like the rest of the router):
 
-  useEffect(() => {
-    if (!property?.qr_code_id) return;
-    // 1024px and errorCorrectionLevel 'H': this gets printed, photocopied, and
-    // then rained on. The dashboard's on-screen tiles use 320/'M'.
-    const opts = { width: 1024, margin: 2, errorCorrectionLevel: 'H',
-                   color: { dark: '#000000', light: '#ffffff' } };
-    const origin = window.location.origin;
-    QRCode.toCanvas(passRef.current, `${origin}/temp/${property.qr_code_id}`, opts, () => {});
-    QRCode.toCanvas(permRef.current, `${origin}/perm/${property.qr_code_id}`, opts, () => {});
-  }, [property?.qr_code_id]);
-
-  if (error) return <div className="qr-sheet-error">{error}</div>;
-  if (!property) return <div className="qr-sheet-loading">Loading…</div>;
-
-  return (
-    <div className="qr-sheet">
-      <header>
-        <h1>{property.name}</h1>
-        <p>{property.address}</p>
-      </header>
-      <section>
-        <figure>
-          <canvas ref={passRef} aria-label={`Scan to get a parking pass at ${property.name}`} />
-          <figcaption>Scan to get a parking pass</figcaption>
-        </figure>
-        <figure>
-          <canvas ref={permRef} aria-label={`Scan to register a vehicle at ${property.name}`} />
-          <figcaption>Scan to register a vehicle</figcaption>
-        </figure>
-      </section>
-      <footer>
-        {property.policy_phone ? <p>Questions: {property.policy_phone}</p> : null}
-        <p className="qr-sheet-code">{property.qr_code_id}</p>
-      </footer>
-      <button type="button" className="qr-sheet-print" onClick={() => window.print()}>Print</button>
-    </div>
-  );
-}
+```python
+@router.get("/sites/{property_id}")
+async def get_site(
+    property_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    subject: Subject = Depends(require_platform_admin),
+) -> dict:
+    """The fields the printable QR sheet renders. Deliberately narrow: this
+    response is rendered by a page with no login screen of its own, so it
+    carries nothing that is not already printed on the sheet."""
+    row = (await db.execute(text("""
+        SELECT id, name, address, qr_code_id, policy_phone, property_type
+          FROM public.properties WHERE id = CAST(:pid AS uuid)
+    """), {"pid": str(property_id)})).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return dict(row)
 ```
 
-- [ ] **Step 2: Print CSS**
+- [ ] **Step 2: `frontend/qr-sheet.html`**
+
+Copy `visit.html`'s shell shape: `<!doctype html>`, the brand stylesheet link, one `<div id="sheet">`, and `<script type="module" src="/qr-sheet.js"></script>`. No `error-reporting.js` needed (this page makes one call and shows its failure inline).
+
+- [ ] **Step 3: `frontend/src/qr-sheet.js`**
+
+```js
+// The sheet an operator prints and posts at the entrance. Two codes: one for a
+// parking pass, one to register a vehicle. Deliberately boring -- it is printed
+// in black on white, at a distance, by someone standing in a parking lot.
+//
+// A standalone entry page rather than a dashboard tab: App.jsx takes its tab
+// from localStorage and never from the pathname, so a /app/... link could not
+// open this. Same pattern as visit.html / resident.html / apt.html.
+//
+// Naming rule: the codes are labelled by what a person DOES with them, never by
+// a pass class.
+import QRCode from 'qrcode';
+import { apiFetch } from './lib/api.js';
+
+const root = document.getElementById('sheet');
+const propertyId = new URLSearchParams(window.location.search).get('property');
+
+function fail(message) {
+  root.textContent = message;
+  root.className = 'qr-sheet-error';
+}
+
+async function main() {
+  if (!propertyId) return fail('No site selected.');
+  let property;
+  try {
+    property = await apiFetch(`/admin/sites/${propertyId}`);
+  } catch (err) {
+    // apiFetch clears the session and fires lotlogic:auth-expired on a 401;
+    // this page has no login form, so say where to get one.
+    return fail(err.status === 401
+      ? 'Sign in at /app first, then reopen this link.'
+      : err.message);
+  }
+  if (!property.qr_code_id) {
+    return fail('This site has no QR code id yet. Re-run onboarding.');
+  }
+
+  root.innerHTML = `
+    <header>
+      <h1>${escapeHtml(property.name)}</h1>
+      <p>${escapeHtml(property.address || '')}</p>
+    </header>
+    <section>
+      <figure>
+        <canvas id="qrPass" aria-label="Scan to get a parking pass at ${escapeHtml(property.name)}"></canvas>
+        <figcaption>Scan to get a parking pass</figcaption>
+      </figure>
+      <figure>
+        <canvas id="qrRegister" aria-label="Scan to register a vehicle at ${escapeHtml(property.name)}"></canvas>
+        <figcaption>Scan to register a vehicle</figcaption>
+      </figure>
+    </section>
+    <footer>
+      ${property.policy_phone ? `<p>Questions: ${escapeHtml(property.policy_phone)}</p>` : ''}
+      <p class="qr-sheet-code">${escapeHtml(property.qr_code_id)}</p>
+    </footer>
+    <button type="button" class="qr-sheet-print">Print</button>
+  `;
+  root.querySelector('.qr-sheet-print').addEventListener('click', () => window.print());
+
+  // 1024px at error-correction H: this gets printed, photocopied, and then
+  // rained on. The dashboard's on-screen tiles use 320/'M'.
+  const opts = { width: 1024, margin: 2, errorCorrectionLevel: 'H',
+                 color: { dark: '#000000', light: '#ffffff' } };
+  const origin = window.location.origin;
+  QRCode.toCanvas(document.getElementById('qrPass'),
+                  `${origin}/temp/${property.qr_code_id}`, opts, e => e && fail('QR unavailable'));
+  QRCode.toCanvas(document.getElementById('qrRegister'),
+                  `${origin}/perm/${property.qr_code_id}`, opts, e => e && fail('QR unavailable'));
+}
+
+main();
+```
+
+Reuse `escapeHtml` from wherever `visit.js` gets it rather than writing a second copy — eleven copies of the plate normaliser is the cautionary tale this repo already has.
+
+- [ ] **Step 4: Wire it into the build**
+
+`frontend/scripts/build.mjs`, two edits:
+
+```js
+  entryPoints: [
+    path.join(ROOT, 'src/dashboard.jsx'),
+    path.join(ROOT, 'src/visit.js'),
+    path.join(ROOT, 'src/resident.js'),
+    path.join(ROOT, 'src/apt.js'),
+    path.join(ROOT, 'src/qr-sheet.js'),
+  ],
+```
+
+and add `'qr-sheet.html', 'qr-sheet.js'` to the "assert the deploy is not silently empty" list. Everything at the repo root is copied into `dist/` by default, so `qr-sheet.html` ships with no further change — but the assert is what catches an entry point that silently stopped emitting.
+
+**No `vercel.json` change.** The URL is the file: `/qr-sheet.html?property=<id>`. A prettier `/qr-sheet` rewrite is one line in `vercel.json` if Gabe wants it later; it is not needed for the link to work and this plan does not add rewrites it does not need.
+
+- [ ] **Step 5: Print CSS**
 
 In the stylesheet, one block. Every rule here exists because of paper:
 
 ```css
 @media print {
-  .qr-sheet-print, nav, header.app-nav { display: none !important; }
-  .qr-sheet { color: #000; background: #fff; }
-  .qr-sheet section { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5in; }
-  .qr-sheet canvas { width: 3.25in; height: 3.25in; }
+  .qr-sheet-print { display: none !important; }
+  #sheet { color: #000; background: #fff; }
+  #sheet section { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5in; }
+  #sheet canvas { width: 3.25in; height: 3.25in; }
   /* A sheet that prints its second code on a second page is a sheet someone
      posts half of. */
-  .qr-sheet figure { break-inside: avoid; }
+  #sheet figure { break-inside: avoid; }
   @page { size: letter portrait; margin: 0.5in; }
 }
 ```
 
-- [ ] **Step 3: Route it**
+- [ ] **Step 6: Test**
 
-`qr-sheet` joins the lazy pages in `App.jsx` and the platform-admin/owner tab list. It is reached by URL, not by a nav item — it is a thing you open from the onboarding result, print, and close. Gate it on `isOwner || isPlatformAdmin`; a partner has no reason to print a site's registration codes.
+`tests/e2e/qr-sheet.spec.ts`, self-serving via `fixtures/buildAndServeFrontend.ts` (so it runs in the credential-free `e2e (local dist)` job, like `pay2park-visit.spec.ts` and `hq.spec.ts`). Stub `GET /admin/sites/*` with `page.route`:
 
-- [ ] **Step 4: Test**
+1. **The page is reachable by URL.** `goto('/qr-sheet.html?property=<uuid>')` renders the site name — the assertion that the whole standalone-page decision exists for. *An `/app/qr-sheet` version of this test would have failed, and that is D7.*
+2. Both canvases render with non-zero dimensions. *A blank QR tile is exactly the bug FE-4 was, and it shipped silently because nothing asserted on the canvas.*
+3. The codes encode `/temp/<qr>` and `/perm/<qr>` — assert on the arguments `QRCode.toCanvas` was called with, via a page-level spy installed in an `addInitScript`. No new dependency.
+4. `page.emulateMedia({ media: 'print' })` → the Print button is hidden and both `<figure>`s are in the viewport.
+5. A stubbed 401 renders "Sign in at /app first", not a blank page.
+6. A property with a null `qr_code_id` renders the "re-run onboarding" message rather than two empty boxes.
+7. `npm run check:naming` passes on the new copy.
 
-`tests/e2e/qr-sheet.spec.ts`, self-serving via `fixtures/buildAndServeFrontend.ts` (so it runs in the credential-free `e2e (local dist)` job, like `pay2park-visit.spec.ts` and `hq.spec.ts`):
-1. With a stubbed `db.getProperty`, both canvases render with non-zero dimensions. *A blank QR tile is exactly the bug FE-4 was, and it shipped silently because nothing asserted on the canvas.*
-2. `page.emulateMedia({ media: 'print' })` → the Print button and the nav are hidden and both `<figure>`s are in the viewport.
-3. The decoded contents are `/temp/<qr>` and `/perm/<qr>` — read them back off the canvas with `jsQR`, or assert on the `aria-label` plus the `QRCode.toCanvas` call arguments via a page-level spy. Prefer the spy: no new dependency.
-4. `npm run check:naming` passes on the new copy.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```
-feat(dashboard): a printable QR sheet for a new site
+feat(frontend): a printable QR sheet, as its own entry page
 
-Frontend, not a backend PDF: qrcode@1.5.4 is already bundled (Wave 2.6 moved it
-off the CDN because a CDN 404 blanked the dashboard's QR tiles), and the
-alternative is a new Python dependency in the production image for a page an
-admin prints once per site.
+Standalone, not a dashboard tab: App.jsx takes its current tab from
+localStorage and never reads window.location.pathname, and line 178 coerces
+anything unknown back to 'lots' -- so an /app/qr-sheet link would open on
+whatever tab the admin last used. This page is only ever reached by a link, so
+it follows visit.html / resident.html / apt.html instead: own shell, own
+esbuild entry, no React.
+
+Frontend rather than a backend PDF: qrcode@1.5.4 is already bundled (Wave 2.6
+moved it off the CDN because a CDN 404 blanked the dashboard's QR tiles), and
+the alternative is a new Python dependency in the production image for a page
+an admin prints once per site.
 
 1024px at error-correction H, because this gets printed, photocopied and rained
-on. The e2e spec asserts the canvases actually rendered -- a blank QR tile is
-precisely how FE-4 shipped unnoticed.
+on. The e2e spec asserts the page is reachable by URL and that the canvases
+actually rendered -- a blank QR tile is precisely how FE-4 shipped unnoticed.
 ```
 
 ---
@@ -3371,7 +4125,7 @@ precisely how FE-4 shipped unnoticed.
 - Test: `tests/e2e/site-onboarding.spec.ts` (new, self-serving); `tests/e2e/access-control.spec.ts` green unchanged
 
 **Interfaces:**
-- Consumes: `POST /admin/sites`, `POST /admin/sites/{id}/policy-image`, `/app/qr-sheet`.
+- Consumes: `POST /admin/sites`, `POST /admin/sites/{id}/policy-image`, `/qr-sheet.html`.
 - Produces: no client-side `qr_code_id` minting anywhere in the repo.
 
 - [ ] **Step 1: The Onboard tab becomes the checklist**
@@ -3381,7 +4135,7 @@ precisely how FE-4 shipped unnoticed.
 The result panel replaces today's two setup links with:
 - one setup link per login, each with the existing `AdminSetupLink` copy-button component (reuse it, do not re-style it);
 - the two QR URLs;
-- **Open the printable QR sheet** → `/app/qr-sheet?property=<id>`;
+- **Open the printable QR sheet** → the response's own `qr.sheet_url` (`/qr-sheet.html?property=<id>`), rendered as `<a target="_blank" rel="noopener">`. Use the value the server returned rather than rebuilding the URL in the browser — the server owns that shape, and rebuilding it is how the browser ended up minting `qr_code_id` in the first place;
 - a **policy image** file input that immediately `POST`s to `/admin/sites/{id}/policy-image` and ticks `checklist.policy_image_uploaded`;
 - the remaining `checklist` items as an unticked list.
 
@@ -3399,7 +4153,7 @@ Then delete `db.createProperty` entirely. `db.updateProperty` and `db.deleteProp
 
 `tests/e2e/site-onboarding.spec.ts` (self-serving, credential-free — stub the two API calls with `page.route`):
 1. Submitting with an empty site name does not fire the request (client-side required fields).
-2. A successful response renders one setup link per login, both QR URLs, and a QR-sheet link whose href carries the returned property id.
+2. A successful response renders one setup link per login, both QR URLs, and a QR-sheet link whose href is exactly the `qr.sheet_url` the stubbed response returned (`/qr-sheet.html?property=<id>`), opened in a new tab.
 3. Adding and removing a login row keeps the roles in sync with what is posted.
 4. The policy-image input posts multipart to `/admin/sites/{id}/policy-image` and ticks the checklist item.
 5. A 422 from `extra="forbid"` renders the field-level message rather than a bare "failed".
@@ -3539,7 +4293,7 @@ git diff -- scripts/db/expected_schema.sql scripts/db/expected_census.txt docs/d
 
 Review the diff before committing. It must contain **only** the six migrations' objects: three tables plus `admin_audit_log` and `auth_login_attempts`, their indexes, three new columns, one column-level grant. Anything else in that diff is drift this plan did not cause and needs its own explanation before you commit it.
 
-**If `wave2/schema-baseline` (Wave 2.4) has not merged to `main` yet, this step happens on that branch, not here** — `scripts/db/` and the `schema-rebuild` CI job exist only there today. Merging 2.4 first is the cleaner order; if it has not merged by the time this plan is ready, rebase this branch onto it and say so in the PR.
+**Wave 2.4 merged to backend `main` on 2026-09-14 (`07f111d`, PR #84)**, so `scripts/db/regen_expected.sh` and the `schema-rebuild` CI job are on `main` and this step runs on this branch, as written. Gabe decision D10 is answered by that merge; nothing here is blocked on it.
 
 - [ ] **Step 3: Deploy order**
 
@@ -3658,11 +4412,13 @@ The Lots page has an "add property" form that any owner or partner login can use
 
 ---
 
-**D10 · Which branch this lands on top of**
+**D10 · Non-admin logins in the LotLogic organization**
 
-Wave 2.4 — the rebuildable schema baseline, the one migration runner, and the CI job that fails when a migration file and the live database disagree — is finished on `wave2/schema-baseline` but has **not merged to `main`**. This wave adds six migrations. If 2.4 merges first, they land under the runner and the drift check from day one. If it does not, they land as loose files and get retro-fitted when it merges.
+*(The original D10 — "should Wave 2.4 merge first?" — answered itself: 2.4 merged to backend `main` on 2026-09-14 as PR #84, so this wave's six migrations land under the runner and the drift check from day one. This is the question that replaced it, and it is the one real security consequence of the design.)*
 
-**Should Wave 2.4 merge to `main` before this wave starts?** *(Default if unanswered: yes, merge 2.4 first. If you would rather not, this wave rebases onto that branch instead and the PR says so.)*
+`public.is_platform_admin()` is the database's own answer to "is this session an administrator", and today it works by looking up the JWT's `owner_id` in `lot_owners`. This wave issues the **organization's** legacy id as that claim, so every login in an organization would get the same answer — meaning a `viewer` added to the LotLogic organization would inherit administrator rights **inside the database**, where the API's own role check cannot see it. Task 1 fixes that by making the function read the signed-in person's own flag when the token carries one, falling back to today's behaviour for tokens issued before this wave. It is the only statement in the wave that changes something that already exists.
+
+**Should that function change ship as part of this wave, rather than being deferred?** *(Default if unanswered: yes, ship it in Task 1. Deferring it means a window in which adding a front-desk login to the LotLogic organization silently hands out database-level admin.)*
 
 ---
 
@@ -3679,10 +4435,24 @@ Wave 2.4 — the rebuildable schema baseline, the one migration runner, and the 
 
 **Type consistency.** `assert_property_access(db, subject, property_id, *, allow_partner, need)` has one signature and one 404 message at every call site (Tasks 4, 7, 12, 13). `allowed_property_ids` returns `None`-means-unrestricted, matching `services/scope.allowed_lot_ids` exactly so the two can be read interchangeably. `audit.record(db, subject, action, **kw)` never commits, in all six call sites. `Role` values match the `memberships.role` CHECK. Every money field this plan adds ends in `_cents`.
 
+**What the pre-flight caught, and where it is now closed.** Recorded so a reviewer can check the fix rather than re-derive the defect:
+`violations.gross_revenue` holds **cents**, not dollars — Task 7 Step 1 now copies `partner.{boot,tow}_fee_cents` straight across with no conversion, and its test asserts 35000/8750/26250 (an earlier draft would have re-created DB-7, the 100× under-report, in the same file that exists to fix it).
+An FK from `organizations` to `enforcement_partners` would have let the harness's per-test `TRUNCATE … CASCADE` reach the session-scoped plaza seed — Task 1 drops both legacy FKs for plain uuids plus partial uniques, and `organizations` is barred from `TRUNCATE_TABLES` with the reason inline.
+`upload_bytes` is `(data, key, content_type) -> (key, url)` — Task 12 takes the URL from the return value instead of rebuilding it.
+Executing a migration file through SQLAlchemy cannot work (one prepared statement, no dollar-quoted blocks) — Task 2 goes through the raw asyncpg connection the harness already uses for exactly this.
+`HANDLER_VERIFIED` was dead code because `PUBLIC_PATHS` shadowed it — Task 5 checks it first and adds a test that every public API path carries a written reason.
+`/app/qr-sheet` was unreachable because `App.jsx` routes from `localStorage` and coerces unknown tabs — Task 14 is a standalone `qr-sheet.html` entry page, and its first e2e assertion is that the URL opens it.
+`resolve_violation` did not re-arm the zone the browser re-armed — Task 7 Step 2 moves that logic server-side, into both resolve routes, with the test that proves a dismissal frees the space and a tow does not.
+The OAuth callback has no `Subject` to stamp — Task 11 carries the org id in the single-use state token and writes the audit row from `/oauth/start`, where a named human exists.
+`/auth/me` had no `default` in scope — Task 9 Step 3 resolves the org in that handler, with a regression test on **both** legacy branches.
+And the one the pre-flight surfaced as a note rather than a defect, now scope call 12: issuing the organization's legacy id as `owner_id` would have given every login in a platform-admin org **database-level** admin through `is_platform_admin()`. Task 1 redefines that function. It is the only existing object this wave changes, and it is Gabe decision D10.
+
 **Known sharp edges, flagged rather than smoothed:**
 - **Task 9 is the one task that can lock a customer out.** Its acceptance criterion is three real logins in step 4 of Task 17, in a private window, before the frontend deploys. If the `legacy_id is None` guard ever fires for a real customer, the data is wrong and the 403 is the correct outcome — a token that satisfies no RLS policy renders an empty dashboard with no error, which is much worse.
 - **Task 4 touches QuickBooks.** Its criterion is `tests/test_quickbooks_*.py` **unchanged** and green. If either file needs an edit, the substitution changed invoicing behaviour and is wrong.
 - **Task 7 changes how the dashboard resolves a violation** — from a direct PostgREST write to a backend call. The old path bypassed the backend's invoiced-at guard entirely, so some resolves that "worked" before will now correctly 409. Expect that, and do not add an override.
 - **Task 12's column-level `GRANT` may move CI's object census.** That is not a failure; it is the drift check doing its job, and Task 17 step 2 is where it is resolved — by regenerating from production, never by editing the committed file.
 - **`tests/plaza/schema/live_schema.sql` is already stale against production** (it has no `pay_to_park_enabled`). Task 1 adds `lot_owners` to it; it does not undertake to re-sync the whole file, and a test that depends on a column the subset lacks will fail confusingly. Add the column you need to that file in the task that needs it.
+- **Adding `lot_owners` to the harness schema forces it off `PRODUCTION_CANARY_TABLES`.** That check runs *before* the `DROP SCHEMA`, so a table the harness creates itself would make a persistent `TEST_DATABASE_URL` refuse to start on the second session. CI (a fresh container per run) would never have shown it. `alpr_violations` and `pending_invoices` remain, and both are still production-only. Run `tests/plaza/` twice in a row against a persistent database as the acceptance check for Task 1.
+- **Task 7 now edits two routes, not one.** `resolve_violation` and `record_violation_action` must end up with byte-identical fee arithmetic and byte-identical zone re-arm. If they drift, one tow books two different numbers depending on which route the dashboard called — the same failure mode as four ownership helpers, in the money path.
 - **Two tables hold one password during the rollout** (Task 9 step 4). Deliberate, commented in the code, and it ends when Wave 3 collapses the identity tables. A reset that updates one and not the other is the failure mode; the mirroring is what prevents it, and it needs a test on both directions.
