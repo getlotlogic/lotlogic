@@ -1,0 +1,98 @@
+# Name every production deploy.
+#
+# Vercel deploys this repo from `main` on push. This workflow runs on the same
+# event and leaves an annotated tag plus a GitHub release behind, so "roll back
+# to what was running before" has an answer that is a git ref rather than a
+# timestamp in a dashboard. No provider API token: the rollback itself is
+# Vercel's Instant Rollback, pointed at the deployment built from the commit
+# this tag names. See RECOVERY.md §12.2.
+
+name: Tag production deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # push a tag, create a release
+
+concurrency:
+  group: deploy-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: names
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse --short=7 HEAD)"
+          tag="frontend-$(date -u +%Y%m%d-%H%M)-${sha}"
+          prev="$(git describe --tags --abbrev=0 --match 'frontend-*' HEAD^ 2>/dev/null || true)"
+          {
+            echo "tag=$tag"
+            echo "prev=$prev"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Tag
+        id: tagstep
+        env:
+          TAG:  ${{ steps.names.outputs.tag }}
+          PREV: ${{ steps.names.outputs.prev }}
+        run: |
+          set -uo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # A collision (same minute, same short SHA — practically only a
+          # workflow_dispatch rerun) or a push race is logged, not fatal: this
+          # workflow must never fail the merge it's tagging.
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::warning::tag ${TAG} already exists locally — skipping (collision, not fatal)"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The annotation is the rollback target: the tag that was live before
+          # this one. Written here because it is cheap here and expensive at 2am.
+          if ! git tag -a "$TAG" -m "Production deploy of ${{ github.sha }}
+
+          Previous production tag: ${PREV:-<none — first tagged deploy>}
+          Roll back with: RECOVERY.md §12.2"; then
+            echo "::warning::git tag -a failed for ${TAG} — not failing the build"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git push origin "$TAG"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::tag push failed (collision or race) — not failing the build"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Release notes
+        if: steps.tagstep.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG:  ${{ steps.names.outputs.tag }}
+          PREV: ${{ steps.names.outputs.prev }}
+        run: |
+          set -uo pipefail
+          if [ -n "${PREV}" ]; then
+            body="$(git log --no-merges --pretty='- %s (%h)' "${PREV}..${TAG}")"
+            body="${body}
+
+          Rollback target: \`${PREV}\` — see RECOVERY.md §12.2"
+          else
+            body="First tagged production deploy."
+          fi
+          gh release create "$TAG" --title "$TAG" --notes "$body" --latest || echo "::warning::release create failed — not failing the build"
+
+      - run: |
+          echo "Tagged **${{ steps.names.outputs.tag }}** (previous: ${{ steps.names.outputs.prev || 'none' }})" >> "$GITHUB_STEP_SUMMARY"
