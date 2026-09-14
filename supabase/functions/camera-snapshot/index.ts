@@ -24,12 +24,20 @@ import { extractMmc, mmcColumns, isMmcBlocked, handleMmcFailureStatus, type PrMm
 // authoritative and image_url could never be retired. Hence: both, for one
 // release. image_url is NOT dropped by Wave 2.5.
 //
-// DEPLOY ORDER — this function must be deployed AFTER the migration
-// migrations/20260914143648_plate_events_image_key.sql reaches production.
+// The three sites below are index.ts's own; they are NOT the ones production
+// exercises. Every property_type='truck_plaza' camera is routed at :298 into
+// truck_plaza_exit.ts, which owns 53,445 of the 53,446 photo-bearing
+// plate_events rows written in the last 120 days — see the matching note at
+// the top of truck_plaza_exit.ts and weak_plate_reads.ts. All five writers are
+// gated together by frontend/scripts/plateEventImageKey.test.mjs.
+//
+// DEPLOY ORDER — this function must be deployed AFTER the migrations
+// migrations/20260914143648_plate_events_image_key.sql and
+// migrations/20260914170000_weak_plate_reads_image_key.sql reach production.
 // PostgREST rejects an insert naming a column that is not in its schema cache
-// (PGRST204), so deploying this ahead of the migration fails EVERY ingest.
-// The migration is applied by the Wave 2.4 runner at backend deploy; run
-// `supabase functions deploy camera-snapshot` only once it has.
+// (PGRST204), so deploying this ahead of the migrations fails EVERY ingest.
+// They are applied by the Wave 2.4 runner at backend deploy; run
+// `supabase functions deploy camera-snapshot` only once they have.
 
 const URL_SECRET = Deno.env.get("CAMERA_SNAPSHOT_URL_SECRET") ?? Deno.env.get("PR_INGEST_URL_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? "";

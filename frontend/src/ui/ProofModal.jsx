@@ -90,15 +90,24 @@ function ProofImage({ src, label, detection, timestamp }) {
   );
 }
 
-export function ViolationProofModal({ violation, latestSnapshotUrl, latestDetections, cameraZones, matchedDetection, tunnelSnapshotUrl, onClose, onAutoGone }) {
+// A wrapper, not an early return inside the component. Fourteen hooks live in
+// ViolationProofModalInner; an `if (!violation) return null` inside it sits
+// below two of them, so a first render with a null violation would run those
+// two and skip the rest — and React throws "rendered more hooks than during
+// the previous render" the moment a real violation arrives. Gating the mount
+// keeps the inner hook list identical on every render that actually happens,
+// and lets the inner body dereference `violation` freely.
+export function ViolationProofModal(props) {
+  if (!props.violation) return null;
+  return <ViolationProofModalInner {...props} />;
+}
+
+function ViolationProofModalInner({ violation, latestSnapshotUrl, latestDetections, cameraZones, matchedDetection, tunnelSnapshotUrl, onClose, onAutoGone }) {
   // An ALPR violation's detection photo is a plate read, not a YOLO snapshot:
   // its URL is presigned on demand rather than carried on the row. The two
   // legacy `_*_snapshot_url` fields still win when present, so the "Current"
   // camera-snapshot fallback restored in PR #243 is untouched by this.
-  // `violation` may be null; hooks must run before the early return, so read
-  // the id defensively rather than dereferencing above the guard.
-  const detectionUrl = usePhotoUrl(violation && violation._snapshot_event_id);
-  if (!violation) return null;
+  const detectionUrl = usePhotoUrl(violation._snapshot_event_id);
   const DET_COLORS = { car: '#3b82f6', truck: '#8b5cf6', bus: '#0d9488', motorcycle: '#ea580c', person: '#f59e0b' };
   const det = matchedDetection;
 

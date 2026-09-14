@@ -17,6 +17,20 @@
 // rows in the group before doing any external work. Two simultaneous
 // flushers will see one win the claim and the other no-op.
 
+// ─── plate_events dual-write: image_url AND image_key (Wave 2.5 Task 10) ───
+// The plate_events row this module writes takes its photograph from a
+// weak_plate_reads row, which carries no key of its own — so weak_plate_reads
+// grew an image_key column (migration 20260914170000) that insertWeakRead
+// fills from the same r2Key it uploaded under, claimGroup selects, and the
+// insert below carries through. Without it every burst-flushed read would land
+// with image_key NULL and Task 13 Part C's backfill could never make the
+// column authoritative.
+//
+// DEPLOY ORDER — see truck_plaza_exit.ts: this function must not be deployed
+// before migrations/20260914143648_plate_events_image_key.sql and
+// migrations/20260914170000_weak_plate_reads_image_key.sql are in production,
+// or PostgREST returns PGRST204 on every insert naming these columns.
+
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { plateSimilar } from "./sessions.ts";
@@ -59,6 +73,10 @@ export type WeakReadInsert = {
   normalized_plate: string;
   confidence: number;
   image_url: string | null;
+  // The R2 object key behind image_url. Carried so the plate_events row this
+  // burst eventually produces can write image_key too: a stored URL cannot be
+  // re-signed and the presign endpoint needs the key. See DEPLOY ORDER below.
+  image_key: string | null;
 };
 
 export async function insertWeakRead(
@@ -169,6 +187,7 @@ async function claimGroup(
   normalized_plate: string;
   confidence: number;
   image_url: string | null;
+  image_key: string | null;
   seen_at: string;
 }>> {
   const { data, error } = await db
@@ -177,7 +196,7 @@ async function claimGroup(
     .eq("property_id", propertyId)
     .eq("group_key", groupKey)
     .is("processed_at", null)
-    .select("id,camera_id,raw_plate,normalized_plate,confidence,image_url,seen_at");
+    .select("id,camera_id,raw_plate,normalized_plate,confidence,image_url,image_key,seen_at");
   if (error) throw error;
   return (data ?? []) as Array<{
     id: string;
@@ -186,6 +205,7 @@ async function claimGroup(
     normalized_plate: string;
     confidence: number;
     image_url: string | null;
+    image_key: string | null;
     seen_at: string;
   }>;
 }
@@ -547,6 +567,7 @@ export async function flushGroup(args: FlushArgs): Promise<FlushResult> {
     plate_text: (prUsed && prPlateRaw && !tow ? prPlateRaw : chosenFrame.raw_plate).toUpperCase(),
     normalized_plate: plateForMatch,
     image_url: chosenFrame.image_url,
+    image_key: chosenFrame.image_key,
     vehicle_make:             prMmcData?.make        ?? null,
     vehicle_model:            prMmcData?.model       ?? null,
     vehicle_make_confidence:  prMmcData?.make_score  ?? null,

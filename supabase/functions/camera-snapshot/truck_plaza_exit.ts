@@ -19,6 +19,23 @@
 //      a missed exit (overstay violation against a vehicle that actually
 //      left on time).
 
+// ─── plate_events dual-write: image_url AND image_key (Wave 2.5 Task 10) ───
+// This module — not index.ts — is what the truck-plaza fleet actually writes:
+// index.ts:298 routes every property_type='truck_plaza' camera in here, and
+// over the last 120 days it produced 53,445 of the 53,446 photo-bearing
+// plate_events rows in production. Both frames it uploads therefore store the
+// bare R2 object KEY beside the public r2.dev URL, because a stored URL cannot
+// be re-signed and GET /alpr/plate-events/{id}/photo needs the key. `imageUrl`
+// is args.uploadJpeg's return value and is null exactly when the upload failed,
+// so `imageUrl ? r2Key : null` records a key only for an object that exists.
+//
+// DEPLOY ORDER — deploy this function only AFTER both
+// migrations/20260914143648_plate_events_image_key.sql and
+// migrations/20260914170000_weak_plate_reads_image_key.sql have reached
+// production. PostgREST rejects an insert naming a column that is not in its
+// schema cache (PGRST204), so deploying ahead of them fails EVERY ingest on
+// the truck-plaza path. The Wave 2.4 runner applies both at backend deploy.
+
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { areCharsConfusable } from "./sessions.ts";
@@ -589,6 +606,7 @@ export async function handleTruckPlazaExit(args: {
       normalized_plate: "",
       confidence: 0,
       image_url: imageUrl,
+      image_key: imageUrl ? r2Key : null,
     });
     // Opportunistic flush: if another burst on this same group has gone
     // quiet for >= BURST_WINDOW_MS, process it now. The newly-inserted
@@ -849,6 +867,7 @@ export async function handleTruckPlazaExit(args: {
     plate_text: resolved.raw.toUpperCase(),
     normalized_plate: resolved.normalized,
     image_url: imageUrl,
+    image_key: imageUrl ? r2Key : null,
     vehicle_make:             vehicleMakeInsert,
     vehicle_model:            vehicleModelInsert,
     vehicle_make_confidence:  vehicleMakeConf,
