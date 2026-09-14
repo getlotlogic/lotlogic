@@ -11,15 +11,17 @@
 3. **Endpoint tests.** `tests/plaza/` is a real-Postgres harness (920-line conftest, PostgreSQL 17, live-schema extract + replayed migrations, `app_client` over `main.app`). QuickBooks invoicing (12 endpoints) has 37 lines of test — two unit tests on a pure payload builder. The reservation app (10 endpoints) has 133 lines covering phone normalisation and pricing arithmetic, and **zero endpoint tests**. Both are extended onto the existing harness rather than growing a second one, with QuickBooks and Stripe faked at the **HTTP boundary** (`httpx.MockTransport`, `stripe.default_http_client`) so the real OAuth refresh, retry and error-mapping code runs.
 4. **Docs.** `RECOVERY.md` was last touched 2026-06-05 — it predates the live money path, counts 17 edge functions (there are 16), and has no rollback section at all. The backend `docs/` folder still ships an April plan for the retired camera-zone pipeline. Both `CLAUDE.md` files still describe `puller/`, `monitoring/`, `zone_guardian.py` and YOLO as live.
 
+> **Revision 2 — pre-flight fix pass (2026-09-14).** A read-only pre-flight against current `origin/main` found six blocking defects and six smaller ones in revision 1. All are fixed here, and each fix says in-line what was wrong so an executor does not re-introduce it. The six blocking ones, in short: Task 4 would have killed camera uptime monitoring by putting an `INTERNAL_TOKEN` gate on `camera-watchdog` (it already has its own RUT shared secret); Task 9 would have made the harness refuse to run on its second session, because the safety canary identifies production *by table name* and Task 9 adds two of those names to the test schema; Task 10's Stripe fixture could not import at the pinned SDK version and had the wrong method signatures; Task 14's `CHECK` on `cancelled_by` would have raised `23514` on the next dashboard cancel; Tasks 7 and 8 cited `recovery/pg_cron.sql`, which Wave 2.4 deleted; and Task 14 did not regenerate the three committed schema artifacts Wave 2.4's CI now diffs against production. Wave 2.4 has landed on **both** sides since revision 1 — the "What is already true" section is rewritten around that.
+
 **Tech Stack:** Deno 2.7 (edge functions, `deno check` / `deno test`), Supabase CLI via `supabase/setup-cli@v1`, GitHub Actions (ubuntu-latest, Node 22), Python 3.11 + FastAPI + SQLAlchemy 2 async, pytest + pytest-asyncio, real PostgreSQL 17 via the CI service container, httpx, ruff 0.16.5 pinned, esbuild 0.28.2 (frontend), Railway (backend, deploy from `main`), Vercel (frontend, deploy from `main`).
 
 **Spec:** `/Users/gabe/lotlogic/docs/superpowers/specs/2026-09-03-enterprise-readiness-program.md` — §3 Wave 2 item **2.9**, merging Appendix A findings **PIPE-3, PIPE-18, DEL-9, DEL-11, DEL-13, DEL-6, BACKEND-11, REL-8, REL-16, DB-9, DB-8, DB-10, SEC-3, SEC-14, SEC-15, BACKEND-16, BACKEND-18, BACKEND-20, FE-8, PIPE-11**. Read the 2.9 row and those twenty Appendix A rows before Task 0. The §2 items (Wave 1) and Wave 2.4 / 2.6 / 2.7 / 2.8 are prerequisites or neighbours — see "What is already true" below.
 
 ---
 
-## What is already true (verified against `origin/main` on 2026-09-14)
+## What is already true (re-verified against `origin/main` on 2026-09-14, after the pre-flight)
 
-**Read this before you start. Both local working trees are stale** — `/Users/gabe/lotlogic` is on `feat/apartment-permit-registry`, 131 commits behind `origin/main`; `/Users/gabe/lotlogic-backend` is on a local `main` that is 124 commits behind `origin/main`. This is the AUTO-1 / DEL-5 problem the program doc names in §2 item 10. **Every task below starts by branching from `origin/main`, not from whatever is checked out.**
+**Read this before you start.** Both local working trees are stale — `/Users/gabe/lotlogic` is on a feature branch a hundred-plus commits behind `origin/main`; `/Users/gabe/lotlogic-backend` likewise. This is the AUTO-1 / DEL-5 problem the program doc names in §2 item 10. **Every task below starts by branching from `origin/main`, not from whatever is checked out**, and **re-measures before quoting a number.** The first draft of this plan quoted eight figures from a stale tree and five of them were wrong; every measured claim below now carries the command that produced it.
 
 Landed already — do not redo:
 
@@ -29,29 +31,60 @@ Landed already — do not redo:
 | W1 #4 | `/ready`, restart limit 10 | `railway.toml`: `healthcheckPath = "/ready"`, `restartPolicyMaxRetries = 10` |
 | W1 #16 | lockfile, dev deps split, dependabot, pip-audit | `requirements.lock`, `scripts/gen_requirements_lock.py`, `.github/dependabot.yml`, `pip-audit` step (advisory) |
 | W1 #17 | request ids + Sentry | `services/observability.py`, wired in `main.py` |
+| **W2.4 — BOTH halves** | **rebuildable schema baseline** | frontend half `67cc231` (#233): `supabase-schema.sql` **deleted**, the frontend's duplicate `migrations/` **deleted**, `RECOVERY.md` §7 **already rewritten**. Backend half `07f111d` (#84): `migrations/0000_baseline.sql` + `.prereqs.sql` + `.cron.sql` + `.manifest.txt`, `migrations/_archive/` (176 sealed files), `scripts/db/{migrate,make_baseline,dump_schema,regen_expected,check_concurrently}.sh` + `check_drift.py` + `gen_schema_doc.py` + `inventory.sql` + `expected_schema.sql` + `expected_census.txt`, `docs/db/{schema,schema-drift,schema-inventory,baseline-verification-2026-09-05}.md`, and two new CI jobs (`schema-rebuild`, `schema-drift`). `recovery/pg_cron.sql` is **deleted** — its content is now `migrations/0000_baseline.cron.sql`. `recovery/db-state.md` was rewritten (now 164 lines). |
 | W2.6 | dashboard build + module split | `frontend/src/` (54 modules), `frontend/scripts/build.mjs`, `.github/workflows/frontend-build.yml`, `npm run check:naming` |
 | W2.7 | monitoring spine | `services/alerts.py`, `db_watchdog.py`, `job_registry.py`, `job_locks.py`, `outbound_notices.py`, `routers/ops.py`, `.github/workflows/uptime.yml` |
 | W2.8 | cloud scheduler + findings ledger | `services/findings.py`, `tests/plaza/test_ops_findings*.py`, `ops_job_runs` `'railway'` source |
 | — | CI runs a real Postgres 17 service container | `lotlogic-backend/.github/workflows/ci.yml` sets `TEST_DATABASE_URL` |
 | — | frontend design docs archived | `lotlogic/docs/archive/` (46 documents), `docs/README.md` says what is still true |
 
-**NOT landed — and 2.9 depends on parts of it:**
+**What that means for this plan.** The first draft assumed 2.4 had not shipped. It has, on both sides, and that changes four tasks:
 
-- **Wave 2.4 (schema baseline) has not shipped.** There is no `0000_baseline` migration, no `scripts/migrate.sh`, no drift-check CI job. `migrations/` holds 139 files, one of which (`20260818_visitor_passes_cooldown_indexes.sql`) is not in `YYYYMMDDHHMMSS_` form. 2.4's plan owns a `RECOVERY.md` edit to §1/§7/§10 about schema rebuildability — **that edit is 2.4's, not this plan's.** Task 7 here rewrites §3, §4 and adds a new §12 (rollback); it must not touch §7, and must not claim the schema is rebuildable. If 2.4 lands first, Task 7 merges around it; if 2.9 lands first, 2.4's Task 8 merges around Task 7. Both are additive to different sections, so either order works.
-- **PIPE-11 (frontend design docs describe a dead system) is already mostly closed** by the 2026-09-03 archive move. The backend repo never got the same treatment — that is Task 8.
+- **Task 7 must not rewrite `RECOVERY.md` §7** — #233 already did, and correctly. It must also not cite `recovery/pg_cron.sql`, which no longer exists.
+- **Task 8 must not annotate `supabase-schema.sql` or the frontend `migrations/` tree entry** — both are gone; the `CLAUDE.md` repo-tree listing entries are simply deleted, and programme fat decision 11 no longer applies.
+- **Task 14 must regenerate #84's three derived schema artifacts** in the same commit or the `schema-rebuild` CI job goes red. See Global Constraints.
+- **Scope call 5 is reworded:** #84 renamed `20260818_visitor_passes_cooldown_indexes.sql` to `20260818111839_…`, so "the filename is 8 digits" is no longer true. The underlying point — that only one of the four parts of the August wedge fix is reproducible from git — still stands and Task 7 still records it.
 
-**Measured facts this plan is built on (re-measure if you are reading this weeks later):**
+**PIPE-11 (design documents describe a dead system) is already mostly closed** on the frontend by the 2026-09-03 archive move. The backend repo never got the same treatment — that is Task 8.
 
-- 16 edge-function slugs, 11,014 lines of TypeScript. `deno check` run with CWD **inside each function directory**: **13 pass, 3 fail** — `cron-sessions-sweep` (1 error), `tow-dispatch-email` (3), `walk-around-ocr` (25). Run from the parent directory instead, 10 of 16 fail, because Deno discovers `deno.json` by walking up from the **CWD**, not from the entry file. The gate must `cd` into the slug. Six slugs have no `deno.json` at all (`check-violations`, `notify-expiring-plates`, `simbase-usage`, `tow-confirm`, `tow-dispatch-email`, `tow-dispatch-sms`) — they happen to pass because they import everything by full URL.
-- `deno test` today: `pr-ingest` 22 pass, `cron-sessions-sweep` 11 pass, `cron-no-reg-sweep` 4 pass, `camera-snapshot` **55 pass / 2 fail**. That is PIPE-3's "its suite is red", and the cause is one missing method on a test stub (Task 2).
-- Five edge functions hold `SUPABASE_SERVICE_ROLE_KEY` and gate on nothing: `camera-watchdog`, `cron-no-reg-sweep`, `cron-plate-pair-learn`, `weather-pull`, `weather-risk-eval`. Two more (`simbase-usage`, `walk-around-ocr`) gate only on Supabase's default JWT check, which the **public** anon key satisfies. That is SEC-3.
-- Live camera credentials (`alpr_cameras.api_key`, the MAC the ingest path matches on) are committed in seven places across both repos: `camera-snapshot/extract.ts:210,257`, `config.py:254`, `lotlogic-backend/CLAUDE.md:162`, `tests/test_tow_retention.py:19`, `tests/plaza/conftest.py:111-112`, and four `tests/plaza/test_tow_*.py` files. That is SEC-14, and it is wider than the finding says.
-- Secret scanning is a Claude Code `PreToolUse` hook (`.claude/hooks/pre-commit-secrets-scan.sh`) in both repos. It fires on `Write|Edit|MultiEdit` — a `git commit` typed in a terminal, or made by anyone who is not Claude, bypasses it entirely. That is SEC-15.
-- `.env.example` documents **17** variables. `config.Settings` has **77** fields. That is BACKEND-20.
-- 11 `setInterval` call sites in `frontend/src/`; exactly one file (`ALPRPropertyDetailPage.jsx`) listens for `visibilitychange`. That is FE-8.
-- `set_pass_cooldown_flag` has been rewritten **7 times** across `migrations/`, `enforce_truck_plaza_cooldown` **5 times** — the most-rewritten business logic in the system, and there is no test that asserts the trigger's truth table. That is DB-9.
-- `visitor_passes.cancelled_by` is free text; `routers/visitor_passes.py:276` branches a tow-relevant display on `cancelled_by.startswith("camera_exit")`, and `routers/visitor_passes.py:89` appends a free-text reason as a suffix of the same column. That is DB-8.
-- Zero git tags and zero GitHub releases in either repo. That is DEL-11.
+**Measured facts this plan is built on.** Each carries its command. Re-run before quoting.
+
+- **16 edge-function slugs, 11,014 lines of TypeScript.** `find supabase/functions -name '*.ts' | xargs wc -l | tail -1`
+- **`deno check` per slug is NOT deterministic today, and that is finding D3.** Every `deno.json` asks for `jsr:@supabase/supabase-js@2` — a floating major range with no lockfile. Measured on `deno 2.7.12`:
+
+  ```bash
+  cd supabase/functions
+  for d in */; do n=${d%/}; ( cd "$n" && deno check --quiet index.ts >/dev/null 2>&1     && echo "PASS $n" || echo "FAIL $n" ); done
+  ```
+  | Run | Result |
+  |---|---|
+  | This session, cache resolving `@supabase/supabase-js@2.106.2` | 13 PASS / **3 FAIL** — `cron-sessions-sweep`, `tow-dispatch-email`, `walk-around-ocr` |
+  | Same, after pinning the specifier to `2.116.0` (today's jsr latest) | still fails on `cron-sessions-sweep` |
+  | The 2026-09-14 pre-flight, same deno version | 14 PASS / **2 FAIL** — `cron-sessions-sweep` **passed** |
+
+  Two competent measurements of the same commit disagree. **Do not hard-code a baseline count.** Task 1 pins the dependency and commits a `deno.lock` *first*, then records whatever baseline the lock produces. `tow-dispatch-email` (3 errors) and `walk-around-ocr` (25) fail under every version tried and are certain work; `cron-sessions-sweep` (1 error, `TS2345` at `index.ts:481`) is conditional on the pin.
+- **Deno resolves `deno.json` by walking up from the CWD, not from the entry file.** Run from `supabase/functions/`, ten of sixteen slugs fail on a phantom `Import "@supabase/supabase-js" not a dependency`. The gate must `cd` into the slug. Six slugs have no `deno.json` at all (`check-violations`, `notify-expiring-plates`, `simbase-usage`, `tow-confirm`, `tow-dispatch-email`, `tow-dispatch-sms`) — they import everything by full URL. **Note:** `walk-around-ocr` *does* have one (the first draft's decision D3 said otherwise; corrected).
+- **`deno test`:** `pr-ingest` 22 pass, `cron-sessions-sweep` 11 pass, `cron-no-reg-sweep` 4 pass, `camera-snapshot` **55 pass / 2 fail**. That is PIPE-3's "its suite is red", and the cause is one missing method on a test stub (Task 2).
+- **Four — not five — edge functions hold `SUPABASE_SERVICE_ROLE_KEY` and gate on nothing:** `cron-no-reg-sweep`, `cron-plate-pair-learn`, `weather-pull`, `weather-risk-eval`. All four are driven by pg_cron jobs that `migrations/0000_baseline.cron.sql` sets `active = false`. That is SEC-3.
+  **`camera-watchdog` is NOT one of them** — it is already gated on the shared secret in `public.integration_secrets['rut_watchdog']`, read from the body's `secret` field or the `X-Watchdog-Secret` header (`camera-watchdog/index.ts:33-34`, documented in `config.toml` and in the function's own header). The field RUT routers that POST to it cannot send a Bearer header. Two more (`simbase-usage`, `walk-around-ocr`) gate only on Supabase's default JWT check, which the **public** anon key satisfies — `walk-around-ocr` additionally verifies the backend's own HS256 JWT and scopes on `properties.tow_company_id`, so it is genuinely authenticated; `simbase-usage` reads a third-party billing API and writes nothing.
+- **`verify_jwt`: 15 of 16 are `false`; only `simbase-usage` is `true`.** `grep -c "verify_jwt = false" supabase/config.toml`
+- **Live camera credentials are committed in 8 files, 15 hits** (`alpr_cameras.api_key` — the MAC the ingest path matches on):
+  `grep -rInoE '1cc316[0-9a-f]{6}' . | grep -v docs/archive`
+  FE `supabase/functions/camera-snapshot/extract.ts` **:146, :210, :257**; BE `CLAUDE.md:162`, `config.py:254`, `tests/plaza/conftest.py:111,112`, `tests/plaza/test_tow_digest.py:228`, `tests/plaza/test_tow_sightings_endpoints.py:54,137,142`, `tests/plaza/test_tow_sightings_service.py:77,79`, `tests/test_tow_retention.py:19` (×2). One more in `docs/archive/specs/2026-05-31-end-to-end-error-audit.md:111`, which stays (archive is allowlisted). That is SEC-14 — three `tests/plaza/test_tow_*.py` files plus one outside `tests/plaza/`, and **`extract.ts:146` is easy to miss**.
+- **Secret scanning is a Claude Code `PreToolUse` hook** (`.claude/hooks/pre-commit-secrets-scan.sh`) in both repos, firing on `Write|Edit|MultiEdit`. A `git commit` typed in a terminal, or made by anyone who is not Claude, bypasses it entirely. That is SEC-15.
+- **`.env.example` documents 22 variables; `config.Settings` has 82 fields.** That is BACKEND-20.
+  ```bash
+  grep -cE '^#? *[A-Z][A-Z0-9_]*=' .env.example          # 22
+  python3 -c "import ast;t=ast.parse(open('config.py').read());print(sum(1 for n in ast.walk(t) if isinstance(n,ast.ClassDef) and n.name=='Settings' for s in n.body if isinstance(s,ast.AnnAssign)))"   # 82
+  ```
+- **11 `setInterval` call sites in `frontend/src/`; one file listens for `visibilitychange`.** `ALPRPropertyDetailPage.jsx` (424/452/495) has the three listener pairs and **no `setInterval` at all** — read what they actually gate before converting. `ProofModal.jsx` is line **131**. That is FE-8.
+- **`set_pass_cooldown_flag` has been redefined in 7 migration files and `enforce_truck_plaza_cooldown` in 6** (5 live + 1 in `_archive/`), making them the most-rewritten business logic in the system — and no test asserts either one's truth table. That is DB-9.
+  ```bash
+  grep -rniE "create (or replace )?function +(public\.)?set_pass_cooldown_flag" migrations/*.sql migrations/_archive/*.sql | wc -l
+  ```
+- **`visitor_passes.cancelled_by` is free text carrying an identity AND a reason.** Production values today (SELECT-only, 2026-09-14): `camera_exit` ×375, `standardvendingcompany@gmail.com (operator dismissed via dashboard)` ×98, `superseded_by_reregistration` ×66, `t.edwards@nmldtowingllc.com (operator dismissed via dashboard)` ×16, `… (operator removed via dashboard)` ×15, a bare operator email ×2, two one-off `(Marked … from Parking Log)` strings, `admin:pay2park-transition (superseded by paid pass …)` ×1, `admin:controller-smoke-test` ×1, `camera_exit (backfill)` ×1. `routers/visitor_passes.py:276` branches a tow-relevant display on `cancelled_by.startswith("camera_exit")`; `:142-144` composes `"<email> (<reason>)"`; `frontend/src/pages/TruckParkingLog.jsx:522,1147` parses and displays it. That is DB-8 — **and it is why Task 14 adds a column and adds no constraint.**
+- **Zero git tags and zero GitHub releases in either repo.** `git tag | wc -l`; `gh release list`. That is DEL-11.
+- `routers/violations.py` is **1115** lines, `routers/quickbooks.py` 608, `routers/app_api.py` 681, `tests/test_quickbooks_invoice_builder.py` 37.
 
 ---
 
@@ -61,13 +94,23 @@ Every task's requirements implicitly include this section.
 
 - **Branch from `origin/main`.** `git fetch origin && git switch -c <branch> origin/main`. Never branch from the stale local checkout.
 - **Never edit these files.** `routers/plaza_payments.py`, `services/plaza_settle.py`, `services/square*.py`, `services/stripe_plaza.py`. The Stripe cutover owns them. This is why Square is faked nowhere in this plan (see Scope call 4) and why BACKEND-18's existing in-process rate limiter is not touched (Scope call 6).
-- **Backward compatible.** No endpoint changes shape. No column is dropped. No edge function changes its request or response contract. A migration adds; it does not rewrite. The only behaviour changes a user could notice are (a) an idle dashboard tab stops polling (Task 15) and (b) five internal edge functions start requiring the `INTERNAL_TOKEN` they should always have required (Task 4) — both are called out in their tasks with the rollback.
+- **Backward compatible.** No endpoint changes shape. No column is dropped. No edge function changes its request or response contract. A migration adds; it does not rewrite. The only behaviour changes a user could notice are (a) an idle dashboard tab stops polling (Task 15) and (b) four internal edge functions start requiring the `INTERNAL_TOKEN` they should always have required (Task 4 — and all four of their pg_cron callers are currently inactive) — both are called out in their tasks with the rollback. **Task 14 deliberately produces none**: `cancelled_by` keeps its composed format, so the Parking Log display is untouched.
 - **No new secrets, no new accounts.** Everything here runs on secrets that already exist: `SUPABASE_ACCESS_TOKEN` (GitHub Actions, frontend repo), `INTERNAL_TOKEN` (Supabase edge secrets and GitHub Actions), `GITHUB_TOKEN` (automatic). If a task appears to need a new one, stop and put it in "Decisions for Gabe" instead of inventing it.
 - **No secret VALUES in git, ever** — including in a test fixture, a comment, a doc, or a workflow `env:` default. Task 4 removes the ones that are already there; do not add more. Camera MACs count as secrets: they are the only credential the camera ingest path checks besides the URL secret.
 - **CI must stay green at every commit.** `ruff check .` → `python -m compileall -q -f .` → `pytest -x --tb=short -q` on the backend; `npm ci && npm run build && npm run check:naming && npm test` in `frontend/`; the Playwright `e2e (local dist)` job. A task that cannot make all of those pass is not done.
 - **Tests must be able to fail.** Every new test file gets one deliberate-break check recorded in the task: invert an assertion or break the code under test, watch the test go red, revert. A test that cannot fail is worse than no test — it is a green light wired to nothing. The 2 red `camera-snapshot` tests (Task 2) are the counter-example this whole wave exists to prevent: they were red for months and nothing looked.
 - **Backend test conventions.** pytest-asyncio runs in **strict** mode (no ini file), so every coroutine test outside `tests/plaza/` needs `@pytest.mark.asyncio`. Tests inside `tests/plaza/` get the marker automatically from that package's `pytest_pycollect_makeitem` hook and run against real Postgres 17 — CI service container via `TEST_DATABASE_URL`, locally an `initdb` cluster from `/opt/homebrew/opt/postgresql@17/bin`, **skipped** if neither. Use `tests/plaza/` for anything that touches a table.
-- **Migrations:** `migrations/YYYYMMDDHHMMSS_snake_case_name.sql` (`date -u +%Y%m%d%H%M%S`). Every migration applied to prod exists as a file **and** as a row in `supabase_migrations.schema_migrations` — apply via the Supabase MCP `apply_migration` or the CLI, never the raw SQL editor. Every new table gets `ENABLE ROW LEVEL SECURITY` and `REVOKE ALL … FROM anon, authenticated` in the same file.
+- **Migrations — the Wave 2.4 convention now applies (#84).** `migrations/YYYYMMDDHHMMSS_snake_case_name.sql` (`date -u +%Y%m%d%H%M%S`). Every migration applied to prod exists as a file **and** as a row in the ledger. Every new table gets `ENABLE ROW LEVEL SECURITY` and `REVOKE ALL … FROM anon, authenticated` in the same file. On top of that, #84 added three **derived, committed** schema-of-record artifacts and two CI jobs (`schema-rebuild`, `schema-drift`) that diff them against production. So:
+  - **Any task that adds a migration must, in the same commit, regenerate all three artifacts and commit them**: `scripts/db/expected_schema.sql`, `scripts/db/expected_census.txt`, `docs/db/schema.md`. One command does all three, in order:
+    ```bash
+    # Human-run, by hand, AFTER production has actually been migrated. Never in
+    # CI, never automated, never by an agent against a live Supabase URL.
+    scripts/db/regen_expected.sh "<prod postgres URL>"
+    git diff -- scripts/db/expected_schema.sql scripts/db/expected_census.txt docs/db/schema.md
+    ```
+    Skipping this turns `schema-rebuild` red, so "CI green at every commit" cannot hold. In this plan that is **Task 14 only** — no other task adds a migration.
+  - **`CREATE INDEX CONCURRENTLY` needs an opt-out marker.** `scripts/db/migrate.sh` wraps every post-baseline file in a transaction (`psql -1`), and `CONCURRENTLY` cannot run inside one. A file that uses it must carry `-- migrate:no-transaction` within its **first 5 lines**; `scripts/db/check_concurrently.sh` hard-errors on a file that uses `CONCURRENTLY` without the marker. Run it over any new file before committing.
+  - **`migrations/_archive/` is sealed.** Never edit, never add to it. `tests/plaza/conftest.py` globs with `Path.glob`, which does not descend, so `20260914*.sql` cannot match anything in there.
 - **Edge functions:** before overwriting a deployed function, diff against the deployed copy (`mcp__supabase__get_edge_function` or `supabase functions download <slug>`). The repo has drifted from the runtime before. After Task 3 the workflow is the only thing that should deploy, but the drift check stays mandatory for the first run.
 - **Ruff rule set unchanged.** `select = ["E4","E7","E9","F"]`, `ignore = ["E712","E701"]`. Do not add rules; do not remove the ignores.
 - **The user-facing naming rule applies to anything a customer can read** — "parking pass" only, never Resident / Visitor / Permanent / Temporary / Guest / Driver. Ops surfaces (workflow names, tag names, log lines, `RECOVERY.md`) are exempt, but `frontend/` is not: `npm run check:naming` enforces it and will fail the build.
@@ -91,8 +134,9 @@ Every task's requirements implicitly include this section.
 | `supabase/functions/_shared/internal_auth.ts` **(new)** | One `requireInternalToken(req)` used by the five functions that have no gate today. |
 | `supabase/functions/{cron-sessions-sweep,tow-dispatch-email,walk-around-ocr}/index.ts` *(modify, Task 1)* | The 29 type errors. Six slugs have no `deno.json` and check clean without one — Task 1 deliberately does **not** add config files to live functions for cosmetic symmetry. |
 | `supabase/functions/camera-snapshot/index.test.ts` *(modify, Task 2)* | The `visitor_passes` stub grows the `.in()` the production code has called since 2026-05-29. |
-| `supabase/functions/{camera-watchdog,cron-no-reg-sweep,cron-plate-pair-learn,weather-pull,weather-risk-eval}/index.ts` *(modify, Task 4)* | Gate on `INTERNAL_TOKEN`. |
-| `supabase/functions/camera-snapshot/extract.ts` *(modify, Task 4)* | The live MAC in the doc comment becomes a placeholder. |
+| `supabase/functions/{cron-no-reg-sweep,cron-plate-pair-learn,weather-pull,weather-risk-eval}/index.ts` *(modify, Task 4)* | Gate on `INTERNAL_TOKEN`. **`camera-watchdog` is NOT in this list** — it is already gated on `integration_secrets['rut_watchdog']` and its RUT callers cannot send a Bearer header. |
+| `supabase/functions/*/deno.lock` **(new, Task 1)** | One per slug. What makes `deno check --frozen` in the gate deterministic. |
+| `supabase/functions/camera-snapshot/extract.ts` *(modify, Task 4)* | **Three** live MACs in doc comments (`:146`, `:210`, `:257`) become placeholders. |
 | `.github/workflows/edge-functions.yml` **(new)** | check → test → changed-only deploy. Replaces the two single-function workflows. |
 | `.github/workflows/auto-deploy-camera-snapshot.yml`, `auto-deploy-cron-sessions-sweep.yml` **(deleted, Task 3)** | Superseded. |
 | `.github/workflows/deploy-tag.yml` **(new)** | Tags and releases every production (`main`) deploy as `frontend-<ts>-<sha>`. |
@@ -116,6 +160,7 @@ Every task's requirements implicitly include this section.
 | `tests/plaza/conftest.py` *(modify, Task 9)* | Two new globs in `MIGRATION_GLOBS`, seven new names in `TRUNCATE_TABLES`, three new fixtures, camera MACs read from env. |
 | `tests/plaza/fakes/__init__.py`, `tests/plaza/fakes/http.py` **(new, Task 10)** | `FakeHttp` — a route table plus a call log, exposed as an `httpx.MockTransport` handler and as a `stripe` HTTP client. |
 | `services/quickbooks.py` *(modify, Task 10)* | One `_http_client()` factory; the four `httpx.AsyncClient(...)` call sites route through it. Behaviour identical. |
+| `tests/plaza/test_fake_http.py` **(new, Task 10)** | Proves the fakes sit under the clients, and that the private Stripe seam is still where the fixture expects it. |
 | `tests/plaza/test_quickbooks_endpoints.py` **(new, Task 11)** | 12 endpoints. |
 | `tests/plaza/test_app_api_endpoints.py` **(new, Task 12)** | 10 endpoints. |
 | `tests/plaza/test_cooldown_trigger.py` **(new, Task 13)** | The truth table for `set_pass_cooldown_flag` + `enforce_truck_plaza_cooldown`. |
@@ -139,9 +184,9 @@ The doc merges twenty findings into 2.9. Not all twenty are delivery gaps, and t
 
 3. **BACKEND-18 ("no global rate limiting; what exists lives in one process's memory") — OUT, and half of it is unreachable.** The in-process limiter is `routers/plaza_payments.py:105 _ip_quote_window` — a file this plan may not edit. The other real limiter (`app_otp_codes.attempts`) is already database-backed and already correct. A genuine global limiter needs a shared table and a decision about which surfaces get which budget, and Wave 3.2 (`partner_api_keys`, per-partner scoping) needs the same table — building it twice is the fat this programme exists to stop. Recorded as decision **D10**.
 
-4. **Square is faked nowhere. QuickBooks and Stripe are faked at the HTTP boundary.** The task brief asks for all three; `services/square*.py` is on the never-edit list, and the existing 40-odd pay-to-park tests monkeypatch `square.fetch_payment` at the function boundary and are green. Injecting an `httpx_client` into `services/square._client()` means editing a frozen file to add a test hook, for a path that is already covered. Task 10 builds the HTTP-boundary fake as a general facility and uses it for QuickBooks (raw `httpx.AsyncClient` — a clean seam) and Stripe (`stripe.default_http_client` — the SDK's own documented seam). Converting the Square tests is explicitly out. Recorded as decision **D6**.
+4. **Square is faked nowhere. QuickBooks and Stripe are faked at the HTTP boundary.** The task brief asks for all three; `services/square*.py` is on the never-edit list, and the existing 40-odd pay-to-park tests monkeypatch `square.fetch_payment` at the function boundary and are green. Injecting an `httpx_client` into `services/square._client()` means editing a frozen file to add a test hook, for a path that is already covered. Task 10 builds the HTTP-boundary fake as a general facility and uses it for QuickBooks (raw `httpx.AsyncClient` — a clean seam) and Stripe (`stripe.default_http_client`, overriding `stripe._http_client.HTTPClient` — private, so Task 10 also ships a smoke test that fails readably if a version bump moves it). Converting the Square tests is explicitly out. Recorded as decision **D6**.
 
-5. **REL-8 ("August wedge fix lives only in the live DB; DR path unverified") — IN, as documentation, not as a schema change.** The wedge fix has three parts: the flagged-only expression indexes (which *do* exist as `migrations/20260818_visitor_passes_cooldown_indexes.sql`, though its filename is 8 digits instead of 14 and would be invisible to 2.4's drift check), the Supabase compute and pooler settings (console-only), and the `cron.job_run_details` purge job (a pg_cron row). Only the first is a file, and **renaming a migration file that is already recorded in `schema_migrations` is a 2.4 decision, not a 2.9 one.** Task 7 writes all three down in `recovery/db-state.md` and adds the restore drill to `RECOVERY.md` §12.3. The rename is flagged to 2.4 in a note.
+5. **REL-8 ("August wedge fix lives only in the live DB; DR path unverified") — IN, as documentation, not as a schema change.** The wedge fix has four parts and only two are reproducible from git: the flagged-only expression indexes (`migrations/20260818111839_visitor_passes_cooldown_indexes.sql` — #84 renamed it from the 8-digit form, so the first draft's complaint about the filename is now stale), the `cron.job_run_details` purge job (`migrations/0000_baseline.cron.sql` schedules `purge_cron_job_run_details` daily at 03:45 — confirmed live in prod), the Supabase compute/pooler settings (console-only), and the backend pool variables (Railway env, console-only). Task 7 records which is which in `recovery/db-state.md` and adds the restore drill to `RECOVERY.md` §12. **Re-read `recovery/db-state.md` first** — #84 rewrote it to 164 lines and may already cover part of this; add only what is missing.
 
 6. **DEL-6 ("43 of 72 backend endpoints untested") — IN only for the 22 endpoints 2.9 names.** The 2.9 row scopes it to QuickBooks (12) and the reservation app (10). The remaining ~21 untested endpoints are a Wave 3 problem and, for the route-guard class specifically, Wave 2.2's "walk every route and fail the build if a new endpoint has no guard" retires them wholesale. Do not expand.
 
@@ -156,13 +201,13 @@ The doc merges twenty findings into 2.9. Not all twenty are delivery gaps, and t
 | 1 | Edge functions type-check clean (`deno check` green for all 16) | FE | — |
 | 2 | Edge function tests green (`deno test` green for all 16) | FE | — |
 | 3 | `edge-functions.yml` — one matrix workflow, check → test → changed-only deploy | FE | 1, 2 |
-| 4 | Close the five open service-key functions; de-commit the camera MACs | FE + BE | 1 |
+| 4 | Close the four open service-key functions; de-commit the camera MACs | FE + BE | 1 |
 | 5 | gitleaks in CI on both repos | FE + BE | — |
 | 6 | Production deploy tags + releases on both repos | FE + BE | — |
 | 7 | `RECOVERY.md` refresh + the three rollback procedures + `recovery/db-state.md` | FE + BE | 3, 6 |
 | 8 | Developer-doc refresh: backend `docs/` archive + README; purge the dead pipeline from both `CLAUDE.md`s | FE + BE | — |
 | 9 | Harness schema extension for QuickBooks + the reservation app | BE | — |
-| 10 | HTTP-boundary fakes (`FakeHttp`) for QuickBooks and Stripe | BE | — |
+| 10 | HTTP-boundary fakes (`FakeHttp`) for QuickBooks and Stripe | BE | **9** (both edit `tests/plaza/conftest.py`) |
 | 11 | QuickBooks invoicing — 12 endpoint tests | BE | 9, 10 |
 | 12 | Reservation app — 10 endpoint tests | BE | 9, 10 |
 | 13 | The cooldown trigger truth table (DB-9) | BE | 9 |
@@ -172,13 +217,13 @@ The doc merges twenty findings into 2.9. Not all twenty are delivery gaps, and t
 
 **Parallelism.** Three waves. Each task is sized for one subagent.
 
-- **Wave A — nine in parallel, no dependencies:** 1, 2, 5, 6, 8, 9, 10, 15, 16.
-  Task 1 and Task 2 both touch `supabase/functions/`, but disjoint files (Task 1: three `index.ts` + six new `deno.json`; Task 2: one `index.test.ts`). Tasks 5, 6 and 8 span both repos; they touch only `.github/`, `.gitleaks.toml`, `docs/` and `CLAUDE.md`. Tasks 9, 10 and 16 are backend-only and disjoint (`tests/plaza/schema` + `conftest`, `tests/plaza/fakes` + `services/quickbooks.py`, `scripts/` + `.env.example`).
-- **Wave B — six in parallel:** 3 (needs 1, 2), 4 (needs 1), 11 (needs 9, 10), 12 (needs 9, 10), 13 (needs 9), 14 (needs 9).
-  Tasks 11, 12, 13 and 14 all add files under `tests/plaza/`; only Task 14 adds migrations, and only Task 9 edits `conftest.py`, so there are no write conflicts.
+- **Wave A — eight in parallel, no dependencies:** 1, 2, 5, 6, 8, 9, 15, 16.
+  Task 1 and Task 2 both touch `supabase/functions/`, but disjoint files (Task 1: three `index.ts` + per-slug `deno.json`/`deno.lock`; Task 2: one `index.test.ts`). Tasks 5, 6 and 8 span both repos; they touch only `.github/`, `.gitleaks.toml`, `docs/` and `CLAUDE.md`. Tasks 9 and 16 are backend-only and disjoint (`tests/plaza/schema` + `conftest`, `scripts/` + `.env.example`).
+- **Wave B — seven in parallel:** 3 (needs 1, 2), 4 (needs 1), 10 (needs 9), 13 (needs 9), 14 (needs 9), and then 11, 12 (need 9 **and** 10 — start them when 10 lands).
+  **Task 10 was moved out of Wave A by the pre-flight:** it and Task 9 both edit `tests/plaza/conftest.py` (Task 9 the fixtures and globs, Task 10 the two `FakeHttp` fixtures), and running them concurrently is a guaranteed merge conflict in a 900-line file. Tasks 11, 12, 13 and 14 all add *new* files under `tests/plaza/`; only Task 14 adds migrations. No other write conflicts.
 - **Wave C — one:** 7 (needs 3 and 6, because it documents the workflows and the tag names they produce).
 
-Critical path: **1 → 3 → 7** (three tasks deep). Everything else finishes inside Wave B.
+Critical path: **9 → 10 → 11/12** and **1 → 3 → 7**, both three tasks deep.
 
 ---
 
@@ -190,14 +235,21 @@ Critical path: **1 → 3 → 7** (three tasks deep). Everything else finishes in
 
 **Findings:** DEL-9, PIPE-18 (the gate half). **Repo:** `getlotlogic/lotlogic`. **Depends on:** nothing.
 
-29 type errors across three slugs stand between today and a type-check gate. Fix them first; Task 3 installs the gate that keeps them fixed. Nothing here changes runtime behaviour — every fix is a type annotation, a default parameter, or a `?? ""` that matches what the other fifteen functions already do.
+Two things stand between today and a type-check gate, and **the order matters**: the check is not deterministic yet, and then there are the type errors.
+
+Every `deno.json` in this tree asks for `jsr:@supabase/supabase-js@2` — a floating major range — and none of the sixteen slugs has a lockfile. Two careful measurements of the same commit, on the same `deno 2.7.12`, disagreed about whether `cron-sessions-sweep` passes (see "Measured facts"). A gate whose verdict depends on what a CDN served that morning is not a gate. **So: pin first, then fix whatever the pin reports.**
+
+`tow-dispatch-email` (3 errors) and `walk-around-ocr` (25) fail under every version tried and are certain work. `cron-sessions-sweep` (1 × `TS2345` at `index.ts:481`) is conditional — it may already be clean once pinned.
 
 **Files:**
+- Modify: every `supabase/functions/*/deno.json` that carries a floating specifier (10 files)
+- Modify: `supabase/functions/{camera-watchdog,tow-dispatch-email,tow-dispatch-sms,tow-confirm,check-violations,notify-expiring-plates,simbase-usage}/index.ts` — only where a floating `https://esm.sh/…@2` URL appears
+- Create: `supabase/functions/*/deno.lock` (one per slug)
 - Modify: `supabase/functions/tow-dispatch-email/index.ts` (3 errors)
-- Modify: `supabase/functions/cron-sessions-sweep/index.ts` (1 error)
 - Modify: `supabase/functions/walk-around-ocr/index.ts` (25 errors)
+- Modify: `supabase/functions/cron-sessions-sweep/index.ts` (1 error — **only if the pinned check still reports it**)
 
-**Interfaces:** none change. No exported signature, no request shape, no response shape.
+**Interfaces:** none change. No exported signature, no request shape, no response shape. The dependency pin is a **freeze at the version already being served**, not an upgrade — the same reasoning as Wave 1 item 16 (`requirements.lock`).
 
 **How to run the check** — this is the load-bearing detail. Deno discovers `deno.json` by walking up from the **current working directory**, not from the entry file. Ten of sixteen slugs "fail" if you run `deno check camera-watchdog/index.ts` from `supabase/functions/`, purely because the slug's own `deno.json` import map is never found. Always:
 
@@ -205,18 +257,55 @@ Critical path: **1 → 3 → 7** (three tasks deep). Everything else finishes in
 cd supabase/functions/<slug> && deno check index.ts
 ```
 
-Six slugs (`check-violations`, `notify-expiring-plates`, `simbase-usage`, `tow-confirm`, `tow-dispatch-email`, `tow-dispatch-sms`) have no `deno.json` — they import everything by full URL and check clean without one. **Do not add `deno.json` files to them.** The Supabase CLI reads a per-function `deno.json` at deploy time; adding one to six live functions to satisfy a cosmetic symmetry is a production change for no benefit.
+Six slugs (`check-violations`, `notify-expiring-plates`, `simbase-usage`, `tow-confirm`, `tow-dispatch-email`, `tow-dispatch-sms`) have no `deno.json` — they import everything by full URL. **Do not add `deno.json` files to them**; the Supabase CLI reads a per-function `deno.json` at deploy time, and adding one to six live functions for cosmetic symmetry is a production change for no benefit. They still get a `deno.lock` in Step 1 (a lock needs no config file).
 
-- [ ] **Step 0: Record the baseline**
+- [ ] **Step 0: Record the UNPINNED baseline, and expect it to be unstable**
 
 ```bash
 cd supabase/functions
 for d in */; do n=${d%/}; ( cd "$n" && deno check --quiet index.ts >/dev/null 2>&1 \
   && echo "PASS $n" || echo "FAIL $n" ); done
 ```
-Expect exactly: `FAIL cron-sessions-sweep`, `FAIL tow-dispatch-email`, `FAIL walk-around-ocr`, everything else `PASS`. If the failing set differs, the code has moved since 2026-09-14 — re-read before editing.
+`tow-dispatch-email` and `walk-around-ocr` will fail. `cron-sessions-sweep` may or may not. **Write down what you got and which supabase-js version produced it** (`grep -rho '@supabase/supabase-js@[0-9.]*' "$DENO_DIR" | sort -u`) — that number is the before-picture for Step 1, and it is the evidence for decision D2.
 
-- [ ] **Step 1: `tow-dispatch-email` — `json()` gains a default status**
+- [ ] **Step 1: Pin the dependency, then commit a lock per slug**
+
+Two floating specifiers exist in this tree. Resolve each to the exact version being served **right now** and write that version in — a freeze, not a bump:
+
+```bash
+cd supabase/functions
+# What jsr is serving for the `@2` range today:
+JSR_V=$(curl -s https://jsr.io/@supabase/supabase-js/meta.json | python3 -c 'import json,sys;print(json.load(sys.stdin)["latest"])')
+# What esm.sh is serving for the same range (the URL-import slugs):
+ESM_V=$(curl -sI "https://esm.sh/@supabase/supabase-js@2" | sed -n 's|.*x-esm-path: /@supabase/supabase-js@\([0-9.]*\)/.*|\1|p')
+echo "jsr=$JSR_V esm=$ESM_V"      # measured 2026-09-14: both 2.116.0
+
+# 1. The 10 deno.json import maps.
+grep -rl 'jsr:@supabase/supabase-js@2"' */deno.json \
+  | xargs sed -i '' "s|jsr:@supabase/supabase-js@2\"|jsr:@supabase/supabase-js@${JSR_V}\"|"
+# 2. The full-URL imports in the six config-less slugs (and anywhere else).
+grep -rl 'esm.sh/@supabase/supabase-js@2"' */index.ts \
+  | xargs sed -i '' "s|esm.sh/@supabase/supabase-js@2\"|esm.sh/@supabase/supabase-js@${ESM_V}\"|"
+# 3. A lockfile per slug, so even a transitive dependency cannot drift.
+for d in */; do n=${d%/}; [ -f "$n/index.ts" ] || continue
+  ( cd "$n" && deno cache --lock=deno.lock --frozen=false index.ts ); done
+git status --short supabase/functions
+```
+
+`https://deno.land/std@0.177.0/…` and `@0.224.0/…` are already exact — leave them. `https://esm.sh/aws4fetch@1.0.20` is exact — leave it.
+
+**Two things to confirm before moving on.** First, that the Supabase CLI is content: run `supabase functions deploy <slug> --project-ref nzdkoouoaedbbccraoti --dry-run` (or deploy one low-risk slug, e.g. `simbase-usage`, and diff the deployed copy) — a `deno.lock` the CLI does not understand must not break a deploy. Second, that the pinned version is the one production has actually been running: if `ESM_V` jumped several minors since the function was last deployed, you are shipping an upgrade disguised as a freeze. Say which it is in the commit body.
+
+- [ ] **Step 1b: Re-record the baseline, now deterministic**
+
+```bash
+cd supabase/functions
+for d in */; do n=${d%/}; ( cd "$n" && deno check --quiet --frozen index.ts >/dev/null 2>&1 \
+  && echo "PASS $n" || echo "FAIL $n" ); done
+```
+**This** is the baseline the rest of the task works against, and it is the one Task 3's workflow will reproduce. Two runs on two machines must now agree; check that by clearing `DENO_DIR` and running it again. If `cron-sessions-sweep` now passes, skip Step 3 and say so in the commit body.
+
+- [ ] **Step 2: `tow-dispatch-email` — `json()` gains a default status**
 
 `json(body, status)` declares `status` as required; three callers omit it and all three mean 200 (`skipped: "violation_dismissed"` at :156, `skipped: "pass_exited_or_cancelled"` at :184, `skipped: "vehicle_exiting"` at :229 — all "we deliberately did nothing, and that is a success"). Give the parameter the default the callers assume:
 
@@ -236,7 +325,7 @@ function json(body: unknown, status = 200) {
 }
 ```
 
-- [ ] **Step 2: `cron-sessions-sweep` — name the overstay row type**
+- [ ] **Step 3: `cron-sessions-sweep` — name the overstay row type (only if Step 1b still reports it)**
 
 At `index.ts:465` a ternary builds `row` with two different shapes; TypeScript infers the union, and `supabase-js`'s `RejectExcessProperties` refuses it. Annotate the variable so there is one type:
 
@@ -261,7 +350,7 @@ At `index.ts:465` a ternary builds `row` with two different shapes; TypeScript i
 
 If `deno check` still objects — supabase-js's generic inference is version-sensitive — the fallback is to split into two `.insert()` calls inside the two branches, which is also more readable. Do **not** reach for `as any` or `as Record<string, unknown>`: a cast here would hide exactly the class of error this task exists to surface.
 
-- [ ] **Step 3: `walk-around-ocr` — annotate, and stop passing `undefined` to `createClient`**
+- [ ] **Step 4: `walk-around-ocr` — annotate, and stop passing `undefined` to `createClient`**
 
 Twenty-five errors, all mechanical. Apply in this order:
 
@@ -335,24 +424,24 @@ function extractVehicle(r: PrResult | null | undefined) {
 ```
 then at the call sites: `results` becomes `const results: PrResult[] = Array.isArray(pr.data.results) ? pr.data.results : [];` and the three lambdas take `(r: PrResult)`, `(x: { plate: string })`, `(a: {score: number}, b: {score: number})`, `(c: { plate?: string; score?: number })`. Let `deno check` tell you the exact set — annotate until it is silent, and do not widen anything to `any`.
 
-- [ ] **Step 4: Confirm all sixteen are clean, and that nothing moved**
+- [ ] **Step 5: Confirm all sixteen are clean, and that nothing moved**
 
 ```bash
 cd supabase/functions
-for d in */; do n=${d%/}; ( cd "$n" && deno check --quiet index.ts >/dev/null 2>&1 \
+for d in */; do n=${d%/}; ( cd "$n" && deno check --quiet --frozen index.ts >/dev/null 2>&1 \
   && echo "PASS $n" || echo "FAIL $n" ); done
 ```
-Expect sixteen `PASS`.
+Expect sixteen `PASS`, and expect the same sixteen after `rm -rf "$DENO_DIR"` — determinism is half the deliverable.
 
-- [ ] **Step 5: Prove the gate can fail**
+- [ ] **Step 6: Prove the gate can fail**
 
-In `tow-dispatch-email/index.ts`, temporarily change `status = 200` back to `status: number`. Re-run Step 4 — expect `FAIL tow-dispatch-email`. Revert.
+In `tow-dispatch-email/index.ts`, temporarily change `status = 200` back to `status: number`. Re-run Step 5 — expect `FAIL tow-dispatch-email`. Revert. Then, separately, bump one `deno.json` to `@supabase/supabase-js@2` (floating) and run with `--frozen` — expect Deno to error that the lockfile is out of date. Revert. That second break is the one that proves the pin is load-bearing.
 
-- [ ] **Step 6: Diff against the deployed runtime before committing**
+- [ ] **Step 7: Diff against the deployed runtime before committing**
 
 Three of these are live functions and the repo has drifted from the runtime before. For each of `cron-sessions-sweep`, `tow-dispatch-email`, `walk-around-ocr`, fetch the deployed copy (`mcp__supabase__get_edge_function`) and diff against the pre-edit file. **If the deployed copy differs from `origin/main` in anything but your own edits, stop and report it** — you have found live source that is not in git, which is exactly what the 2026-06-05 recovery pass had to clean up once already.
 
-**Commit:** `fix(edge): type-check clean across all 16 functions`
+**Commit:** `fix(edge): pin supabase-js, lock every function, type-check clean across all 16`
 
 ---
 
@@ -539,9 +628,10 @@ function closure(entry) {
 export function filesFor(slug) {
   const dir = join(FUNCTIONS_DIR, slug);
   const out = new Set([...closure(join(dir, "index.ts"))].map(rel));
-  // Non-TS siblings the runtime reads (deno.json import map,
-  // auto-fuzzy-config.json). They are inputs to the deploy even though no
-  // import statement in a .ts file has to mention them.
+  // Non-TS siblings the runtime or the gate reads (deno.json import map,
+  // deno.lock, auto-fuzzy-config.json). They are inputs to the deploy even
+  // though no import statement in a .ts file has to mention them — a changed
+  // deno.lock IS a changed dependency and must redeploy the slug.
   for (const d of readdirSync(dir, { withFileTypes: true })) {
     if (d.isFile() && !d.name.endsWith(".ts")) out.add(rel(join(dir, d.name)));
   }
@@ -569,7 +659,18 @@ export function assertGuards() {
       }
     }
   }
-  // 2. A deno.json above a slug would change how `deno check` resolves inside
+  // 2. Every slug must carry a committed deno.lock, or `deno check --frozen`
+  //    in the workflow silently degrades to an unpinned resolve and the gate
+  //    stops being deterministic (Task 1, decision D2).
+  for (const slug of slugs()) {
+    if (!existsSync(join(FUNCTIONS_DIR, slug, "deno.lock"))) {
+      throw new Error(
+        `${slug} has no deno.lock. Run: (cd supabase/functions/${slug} && ` +
+        `deno cache --lock=deno.lock --frozen=false index.ts) and commit it.`,
+      );
+    }
+  }
+  // 3. A deno.json above a slug would change how `deno check` resolves inside
   //    it, so the CI gate and a developer's local run would disagree.
   for (const p of ["supabase/functions/deno.json", "deno.json", "deno.jsonc"]) {
     if (existsSync(join(REPO_ROOT, p))) {
@@ -649,12 +750,18 @@ test("config.toml redeploys everything", () => {
   assert.deepEqual(slugsForChanged(["supabase/config.toml"]), slugs());
 });
 
-test("the guards hold today", () => {
+test("every slug carries a deno.lock and the guards hold", () => {
   assert.doesNotThrow(assertGuards);
+});
+
+test("a changed lockfile redeploys its slug", () => {
+  // A dependency bump with no source change still has to reach production.
+  assert.deepEqual(slugsForChanged(["supabase/functions/weather-pull/deno.lock"]),
+                   ["weather-pull"]);
 });
 ```
 
-Run it: `node --test supabase/functions/_ci/slugs.test.mjs` — expect 7 pass.
+Run it: `node --test supabase/functions/_ci/slugs.test.mjs` — expect 8 pass.
 
 **Prove it can fail:** delete the `.in()` edge — i.e. temporarily rename `camera-snapshot/no_reg_violations.ts`'s import in `cron-no-reg-sweep/index.ts` to a remote URL — and watch the third test go red. Revert.
 
@@ -781,16 +888,22 @@ jobs:
       # the working directory, not from the entry file. Running this from
       # supabase/functions/ makes 10 of 16 functions fail on a phantom
       # "Import @supabase/supabase-js not a dependency".
+      #
+      # --frozen: fail if the committed deno.lock is out of date, rather than
+      # silently resolving something newer. Without it this gate is advisory —
+      # two runs of the same commit gave different answers before Task 1 pinned
+      # the dependency (see "Measured facts"). A red lockfile here means someone
+      # changed an import and did not re-run `deno cache --lock=deno.lock`.
       - name: deno check
         working-directory: supabase/functions/${{ matrix.slug }}
-        run: deno check index.ts
+        run: deno check --frozen index.ts
 
       - name: deno test
         working-directory: supabase/functions/${{ matrix.slug }}
         run: |
           set -euo pipefail
           if ls *.test.ts >/dev/null 2>&1; then
-            deno test --allow-all --no-check
+            deno test --allow-all --no-check --frozen
           else
             echo "no tests in ${{ matrix.slug }}"
           fi
@@ -861,16 +974,18 @@ On the PR branch, push a commit that breaks one function's types (`const x: numb
 
 ---
 
-### Task 4: Close the five open service-key functions; take the camera MACs out of git
+### Task 4: Close the four open service-key functions; take the camera MACs out of git
 
 **Findings:** SEC-3, SEC-14. **Repos:** `getlotlogic/lotlogic` + `getlotlogic/lotlogic-backend`. **Depends on:** Task 1.
 
-Five edge functions hold `SUPABASE_SERVICE_ROLE_KEY` — the credential that bypasses every RLS policy for every tenant — and check nothing at all before using it: `camera-watchdog`, `cron-no-reg-sweep`, `cron-plate-pair-learn`, `weather-pull`, `weather-risk-eval`. Two more (`simbase-usage`, `walk-around-ocr`) are protected only by Supabase's default JWT check, which the **publishable anon key** satisfies. Separately, live camera credentials are committed in seven places.
+**Four** edge functions hold `SUPABASE_SERVICE_ROLE_KEY` — the credential that bypasses every RLS policy for every tenant — and check nothing at all before using it: `cron-no-reg-sweep`, `cron-plate-pair-learn`, `weather-pull`, `weather-risk-eval`. Two more (`simbase-usage`, `walk-around-ocr`) are protected only by Supabase's default JWT check, which the **publishable anon key** satisfies. Separately, live camera credentials are committed in 8 files, 15 hits.
+
+> **`camera-watchdog` is NOT in scope and must not be touched.** The first draft of this plan listed it as a fifth unguarded function; the pre-flight caught that, and applying the guard would have silently killed camera uptime monitoring on deploy. It is **already authenticated**: `index.ts:33-34` reads the shared secret from `public.integration_secrets['rut_watchdog']` and compares it against the request body's `secret` field or the `X-Watchdog-Secret` header — documented in its own file header and in `supabase/config.toml` ("RUT pollers POST uptime here with their own shared secret"). The field RUT routers that POST every ~2 minutes **cannot send a Bearer header**, and `ENFORCE_INTERNAL_TOKEN` defaults to `"true"`, so the break would be immediate and silent: the POSTs stop, `heartbeats` stops filling, and `camera-down-check` reads the absence as a site brownout. It gets a comment in Step 3, nothing more.
 
 **Files:**
 - Create: `supabase/functions/_shared/internal_auth.ts`
-- Modify: `supabase/functions/{camera-watchdog,cron-no-reg-sweep,cron-plate-pair-learn,weather-pull,weather-risk-eval}/index.ts`
-- Modify: `supabase/functions/camera-snapshot/extract.ts` (the MAC in a doc comment)
+- Modify: `supabase/functions/{cron-no-reg-sweep,cron-plate-pair-learn,weather-pull,weather-risk-eval}/index.ts`
+- Modify: `supabase/functions/camera-snapshot/extract.ts` — **three** MACs, at `:146`, `:210`, `:257` (`:146` is in a different doc block from the other two and is the one that gets missed; Task 5's working-tree scan goes red on day one if it survives)
 - Modify (backend): `config.py`, `CLAUDE.md`, `tests/test_tow_retention.py`, `tests/plaza/conftest.py`, `tests/plaza/test_tow_sightings_service.py`, `tests/plaza/test_tow_sightings_endpoints.py`, `tests/plaza/test_tow_digest.py`
 
 **Interfaces:**
@@ -918,9 +1033,9 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 ```
 
-- [ ] **Step 2: Apply it to the five, feature-flagged for one deploy**
+- [ ] **Step 2: Apply it to the four, feature-flagged for one deploy**
 
-Each of the five gets, as the first thing inside its handler:
+Each of the four gets, as the first thing inside its handler:
 
 ```ts
 import { requireInternalToken } from "../_shared/internal_auth.ts";
@@ -936,15 +1051,26 @@ import { requireInternalToken } from "../_shared/internal_auth.ts";
   }
 ```
 
-**Before merging, confirm every caller sends the header.** The callers are:
-- `camera-watchdog` — invoked by whom? Check `recovery/pg_cron.sql` and the Supabase `cron.job` table (`mcp__supabase__execute_sql`: `select jobname, schedule, command from cron.job`). A pg_cron caller using `pg_net` must have `Authorization: Bearer <INTERNAL_TOKEN>` added to its `headers` argument in the same change.
-- `cron-no-reg-sweep`, `cron-plate-pair-learn`, `weather-pull`, `weather-risk-eval` — per the program doc §4 decision 13, `plate_pair_learn`, `weather_pull`, `weather_risk_eval` and `no_reg_sweep` are all currently **switched off** in `cron.job`. Verify that before you assume a caller exists; a schedule that is off cannot break, and a schedule that is on must be updated in the same commit.
+**Before merging, confirm every caller sends the header.** All four are driven by pg_cron jobs that `migrations/0000_baseline.cron.sql` explicitly deactivates:
 
-Record what you find in the commit message. If a pg_cron job needs its header updated, that is a migration (`migrations/20260914*_cron_internal_token_headers.sql` in the backend repo) — do not edit `cron.job` by hand.
+```sql
+update cron.job set active = false where jobname = 'plate_pair_learn';
+update cron.job set active = false where jobname = 'weather_pull_6h';
+update cron.job set active = false where jobname = 'weather_risk_eval_6h';
+update cron.job set active = false where jobname = 'no_reg_sweep';
+```
 
-- [ ] **Step 3: `simbase-usage` and `walk-around-ocr` — document, do not change**
+Confirm that is still the live state before you rely on it — `select jobname, schedule, active from cron.job order by jobid;` via `mcp__supabase__execute_sql` (SELECT-only). A schedule that is off cannot break. **If any of the four has been switched back on**, its `pg_net` call needs `Authorization: Bearer <INTERNAL_TOKEN>` added to the `headers` argument in the same change — and that is a migration in the backend repo (`migrations/20260914*_cron_internal_token_headers.sql`), never a hand edit of `cron.job`, and it drags Global-Constraints' `regen_expected.sh` obligation along with it. Record what you found in the commit message either way.
 
-`simbase-usage` reads a third-party billing API and writes nothing; `walk-around-ocr` verifies the backend-issued HS256 JWT itself (`verifyBackendJwt`) and scopes on `properties.tow_company_id`, so it is genuinely authenticated even though `verify_jwt=true` is not what is doing it. Add a one-line comment to each saying so, and leave them alone. Over-fixing `walk-around-ocr` would mean requiring `INTERNAL_TOKEN` from a browser, which would break the feature.
+- [ ] **Step 3: `camera-watchdog`, `simbase-usage` and `walk-around-ocr` — document, do not change**
+
+Three functions look unguarded from the outside and are not. Add a comment to each saying what actually gates it, and change nothing else:
+
+- **`camera-watchdog`** — shared secret in `public.integration_secrets['rut_watchdog']`, sent as the body's `secret` field or `X-Watchdog-Secret`. Its callers are field RUT routers on a private ZeroTier mesh that cannot send a Bearer header. **Adding `INTERNAL_TOKEN` here would stop every uptime heartbeat**, and the absence of heartbeats is precisely what `camera-down-check` reads as a site brownout — so the failure would announce itself as a false camera outage. Leave it.
+- **`walk-around-ocr`** — verifies the backend-issued HS256 JWT itself (`verifyBackendJwt`) and scopes on `properties.tow_company_id`. Genuinely authenticated; `verify_jwt` is just not the thing doing it. Requiring `INTERNAL_TOKEN` from a browser would break the feature.
+- **`simbase-usage`** — anon key only, but it reads a third-party billing API and writes nothing.
+
+While you are in there, correct the stale claim in each file's header if it implies `verify_jwt` is the gate.
 
 - [ ] **Step 4: Take the camera MACs out of source**
 
@@ -952,12 +1078,13 @@ A camera's MAC **is** its `alpr_cameras.api_key` — the value `camera-snapshot`
 
 | File | What to do |
 |---|---|
-| `supabase/functions/camera-snapshot/extract.ts:210` (doc comment) | replace with `"aabbccddeeff"` and add `// (placeholder — a real MAC is a camera credential)` |
+| `supabase/functions/camera-snapshot/extract.ts` **:146, :210, :257** (doc comments showing sample Milesight payloads) | replace each with `"aabbccddeeff"` and add `// (placeholder — a real MAC is a camera credential)` once. **All three**, not two — `:146` sits in a separate payload block and was missed by the first draft |
 | `lotlogic-backend/config.py:254` (doc comment giving a worked example) | replace with `"aabbccddeeff:2"` |
 | `lotlogic-backend/CLAUDE.md:162` | replace with the placeholder |
 | `lotlogic-backend/tests/test_tow_retention.py:19` | replace with `"aabbccddeeff"` — it is a unit test over a parser, the value is arbitrary |
 | `lotlogic-backend/tests/plaza/conftest.py:111-112` | read from env with a non-live default (below) |
-| `tests/plaza/test_tow_sightings_service.py`, `test_tow_sightings_endpoints.py`, `test_tow_digest.py` | import the conftest constants instead of the literals |
+| `tests/plaza/test_tow_sightings_service.py:77,79`, `test_tow_sightings_endpoints.py:54,137,142`, `test_tow_digest.py:228` | import the conftest constants instead of the literals |
+| `docs/archive/specs/2026-05-31-end-to-end-error-audit.md:111` | **leave it** — the archive is allowlisted in Task 5's `.gitleaks.toml` and is frozen history |
 
 In `tests/plaza/conftest.py`:
 
@@ -979,12 +1106,13 @@ PLAZA_CAMERA_API_KEY_2 = os.environ.get("PLAZA_CAMERA_API_KEY_2", "aabbccddee02"
 - [ ] **Step 5: Verify**
 
 ```bash
-# No live MAC left in either working tree.
-grep -rInE '1cc316[0-9a-f]{6}' /Users/gabe/lotlogic /Users/gabe/lotlogic-backend \
-  --include='*.ts' --include='*.py' --include='*.md' --include='*.sql' \
-  | grep -v '/docs/archive/' || echo "clean"
-# All 16 still check, and the five still parse.
-cd supabase/functions; for d in */; do n=${d%/}; ( cd "$n" && deno check --quiet index.ts ) || echo "FAIL $n"; done
+# No live MAC left in either working tree outside the allowlisted archive.
+# Expect: "clean". This is the EXACT scan Task 5's blocking CI step runs, so a
+# survivor here turns that step red on its first run.
+grep -rInoE '1cc316[0-9a-f]{6}' /Users/gabe/lotlogic /Users/gabe/lotlogic-backend \
+  | grep -v '/docs/archive/' | grep -v '/docs/superpowers/' || echo "clean"
+# All 16 still check against the committed locks, and the four still parse.
+cd supabase/functions; for d in */; do n=${d%/}; ( cd "$n" && deno check --quiet --frozen index.ts ) || echo "FAIL $n"; done
 # Backend suite still green (the MAC change touches five test files).
 cd /Users/gabe/lotlogic-backend && pytest -x --tb=short -q
 ```
@@ -995,7 +1123,7 @@ Git history still contains the old values — that is a rewrite, not a fix, and 
 
 Add a temporary test call: `curl -s -o /dev/null -w '%{http_code}' -X POST "$SUPABASE_URL/functions/v1/weather-pull"` against a **local** `supabase functions serve` — expect `401`. With `-H "Authorization: Bearer $INTERNAL_TOKEN"` — expect `200`. Do not run this against production.
 
-**Commits:** two, one per repo — `fix(edge): gate the five open service-key functions on INTERNAL_TOKEN` and `chore: stop committing live camera api_keys`
+**Commits:** two, one per repo — `fix(edge): gate the four open service-key functions on INTERNAL_TOKEN` and `chore: stop committing live camera api_keys`
 
 ---
 
@@ -1228,7 +1356,7 @@ Expect exactly one tag and one release, and the release body to say "First tagge
 - Modify: `lotlogic/RECOVERY.md` — §3 (deploy map), §4 (edge functions), §5 (secrets), §11 (checklist); **add §12 Rollback**
 - Modify: `lotlogic-backend/recovery/db-state.md` — the August wedge state
 
-**Do not touch §7.** Wave 2.4's plan rewrites §7 ("Migrations cannot rebuild the schema") when the baseline lands. Leaving it alone means either order works. If you find §7 already rewritten, 2.4 landed first — good, leave it.
+**Do not touch §7.** Wave 2.4 (#233) **already rewrote it** — §7 now correctly says the schema rebuilds from git. Leave it exactly as it is. Likewise `recovery/pg_cron.sql` **no longer exists**: #84 folded it into `migrations/0000_baseline.cron.sql`. Every reference you write must point at the baseline file, not the deleted one.
 
 - [ ] **Step 1: §3 — the deploy map now has a workflow for everything**
 
@@ -1259,12 +1387,14 @@ All need `SUPABASE_URL` + 🔑`SUPABASE_SERVICE_ROLE_KEY`.
 `verify_jwt` is declared per function in `supabase/config.toml`, which the CLI
 reads at deploy time — that file, not a CLI flag, is the source of truth.
 **`verify_jwt=true` is not authentication**: the key it accepts is the
-publishable anon key, which ships in every page of lotlogicparking.com. What
-actually gates each function:
+publishable anon key, which ships in every page of lotlogicparking.com.
+
+**15 of the 16 are `verify_jwt = false`; only `simbase-usage` is `true`.** What actually gates each:
 
 | Gate | Functions |
 |---|---|
-| 🔑`INTERNAL_TOKEN` bearer | check-violations · cron-sessions-sweep · notify-expiring-plates · tow-confirm · tow-dispatch-email · tow-dispatch-sms · camera-watchdog · cron-no-reg-sweep · cron-plate-pair-learn · weather-pull · weather-risk-eval |
+| 🔑`INTERNAL_TOKEN` bearer | check-violations · cron-sessions-sweep · notify-expiring-plates · tow-confirm · tow-dispatch-email · tow-dispatch-sms · cron-no-reg-sweep · cron-plate-pair-learn · weather-pull · weather-risk-eval |
+| Shared secret row `public.integration_secrets['rut_watchdog']`, sent as the body's `secret` field or `X-Watchdog-Secret` | **camera-watchdog** — its callers are field RUT routers on the private ZeroTier mesh that **cannot send a Bearer header**. Do not "standardise" this onto `INTERNAL_TOKEN`: every camera uptime heartbeat would stop, and `camera-down-check` reads missing heartbeats as a site brownout |
 | Trailing-path URL secret | camera-snapshot (🔑`CAMERA_SNAPSHOT_URL_SECRET`) · pr-ingest (🔑`PR_INGEST_URL_SECRET`) |
 | 🔑`CAMERA_DEBUG_TOKEN` | camera-debug |
 | Backend-issued HS256 JWT, verified in-function, scoped on `properties.tow_company_id` | walk-around-ocr |
@@ -1324,10 +1454,12 @@ Railway builds this repo's `main` with the Dockerfile and serves it at
    disagree — say so in the channel.
 5. **If the bad deploy included a migration**, the rollback is not complete:
    Railway redeploying old code against a new schema is its own outage. Stop,
-   read `recovery/db-state.md`, and roll the schema back first. Wave 2.4's
-   baseline + migration runner is what makes this a procedure rather than an
-   improvisation; until it lands, a migration rollback is a manual,
-   write-it-down-as-you-go operation with a `pg_dump` taken first.
+   read `recovery/db-state.md` and `docs/db/schema-drift.md`, and roll the schema
+   back first. Wave 2.4 (#84) gives you the tools: `migrations/0000_baseline.sql`
+   plus `scripts/db/migrate.sh` rebuild any schema from git, and
+   `scripts/db/check_drift.py` tells you where production and `migrations/`
+   disagree. There is still no automatic *down* migration — take a `pg_dump`
+   first and write down what you undo as you undo it.
 
 ### 12.2 Frontend (Vercel)
 
@@ -1405,18 +1537,18 @@ it. Only one is a file in this repo, which is why this section exists.
 
 | Change | Where it lives | Reproducible from git? |
 |---|---|---|
-| Flagged-only expression indexes behind the `prior_flag_count` subquery | `migrations/20260818_visitor_passes_cooldown_indexes.sql` | Yes — **but the filename is 8 digits, not the `YYYYMMDDHHMMSS_` the rest use.** Wave 2.4's drift check will not see it. Flagged to 2.4; do not rename it here, it is already recorded in `supabase_migrations.schema_migrations` under this name. |
+| Flagged-only expression indexes behind the `prior_flag_count` subquery | `migrations/20260818111839_visitor_passes_cooldown_indexes.sql` | **Yes.** #84 renamed it into the standard `YYYYMMDDHHMMSS_` form and re-recorded it, so the drift check sees it. Nothing to do. |
 | Supabase compute Nano → Small; supavisor pool size 15 → 20 | Supabase dashboard only | **No.** Re-set by hand after any project restore. |
 | Backend pool `DB_POOL_SIZE=8`, `DB_MAX_OVERFLOW=7` | Railway environment variables | **No.** Listed in RECOVERY.md §5; re-set by hand. |
-| `cron.job_run_details` purge (406k rows / 156 MB removed, plus a daily purge job) | pg_cron row → `recovery/pg_cron.sql` | Yes, if `pg_cron.sql` is current — **verify it contains the purge job before trusting this line.** |
+| `cron.job_run_details` purge (406k rows / 156 MB removed, plus a daily purge job) | `migrations/0000_baseline.cron.sql` — `select cron.schedule('purge_cron_job_run_details', '45 3 * * *', …)`. **`recovery/pg_cron.sql` no longer exists**; #84 folded it into the baseline. | **Yes.** Confirmed present in the baseline and live in production. |
 
 Restore drill (do this once, then write the date here): restore the most recent
-Supabase backup into a scratch project, run `recovery/pg_cron.sql`, set the two
-pool variables, and confirm `select count(*) from cron.job where active` matches
-production. Last run: **never**.
+Supabase backup into a scratch project, apply `migrations/0000_baseline.cron.sql`
+(idempotent — it upserts by job name), set the two pool variables, and confirm
+`select count(*) from cron.job where active` matches production. Last run: **never**.
 ```
 
-Then actually check `recovery/pg_cron.sql` for the purge job and fix the line to say what is true.
+**Read `recovery/db-state.md` before writing any of it.** #84 rewrote that file (it is now 164 lines: "The schema rebuilds from git", live object counts, a copy-pasteable full rebuild, the backups TODO). Part of the wedge story may already be there. Add only the table above and only the rows it does not already cover, and put it near the "Backups" section rather than at the top.
 
 - [ ] **Step 6: Verify**
 
@@ -1441,7 +1573,11 @@ for s in $(node supabase/functions/_ci/slugs.mjs list | tr -d '[]"' | tr ',' ' '
 
 The frontend repo solved this on 2026-09-03: 46 finished build plans moved to `docs/archive/`, and `docs/README.md` says in one page which documents are still true. The backend repo never got the treatment, and both `CLAUDE.md` files still narrate the retired camera-zone pipeline as if it were running.
 
-**Scope boundary — read this twice.** `puller/`, `monitoring/`, `openalpr-sidecar/` and `supabase-schema.sql` are all still in the frontend repo and all still deploy. **Deleting them is fat decisions 1, 2 and 11 and needs Gabe's answer.** This task changes what the documents *say*, never what the code *is*. A `CLAUDE.md` that describes a retired service as retired-but-still-running is correct; one that deletes the service is out of scope.
+**Scope boundary — read this twice.** `puller/`, `monitoring/` and `openalpr-sidecar/` are all still in the frontend repo and all still deploy. **Deleting them is fat decisions 1 and 2 and needs Gabe's answer.** This task changes what the documents *say*, never what the code *is*. A `CLAUDE.md` that describes a retired service as retired-but-still-running is correct; one that deletes the service is out of scope.
+
+**`supabase-schema.sql` is a different case: it is already gone.** Wave 2.4's frontend half (#233) deleted it *and* the frontend's duplicate `migrations/` directory. Fat decision 11 is closed. The `CLAUDE.md` repo-tree listing still shows both — those entries are simply **deleted**, not annotated. The first draft of this task told you to annotate them; that instruction is void.
+
+**Line numbers below are as measured on `origin/main` today.** #84 and #233 moved them (`CLAUDE.md` is +69/−37 since the first draft). Re-grep rather than trusting them.
 
 **Files:**
 - Create: `lotlogic-backend/docs/README.md`
@@ -1481,8 +1617,9 @@ works today.
 |---|---|
 | [`../CLAUDE.md`](../CLAUDE.md) | The rulebook for this repo — architecture, the tenant-scoping pattern, what not to touch. Every AI session loads it at startup. |
 | [`pay2park-rollout.md`](./pay2park-rollout.md) | The live pay-to-park money path: rollout state, the sandbox harness, the reconciliation loop. |
-| [`../recovery/db-state.md`](../recovery/db-state.md) | Database state that migrations cannot rebuild, and which parts of the August 2026 wedge fix are reproducible from git. |
-| [`../recovery/pg_cron.sql`](../recovery/pg_cron.sql) | Every scheduled database job, as SQL. Re-run after any restore. |
+| [`db/schema.md`](./db/schema.md) · [`db/schema-drift.md`](./db/schema-drift.md) · [`db/schema-inventory.md`](./db/schema-inventory.md) | The schema of record and how drift is detected (Wave 2.4 / #84). `schema.md` is **generated** — never hand-edit it; run `scripts/db/regen_expected.sh`. |
+| [`../recovery/db-state.md`](../recovery/db-state.md) | Database state that is not reproducible from git, and which parts of the August 2026 wedge fix are. |
+| [`../migrations/0000_baseline.cron.sql`](../migrations/0000_baseline.cron.sql) | Every scheduled database job, as SQL. Idempotent — re-apply after any restore. (Replaces the deleted `recovery/pg_cron.sql`.) |
 | [`claude-code-setup.md`](./claude-code-setup.md) | The project-scoped Claude Code / MCP configuration in `.claude/`. |
 
 Disaster recovery and the secrets inventory live in the **frontend** repo's
@@ -1518,9 +1655,9 @@ Roughly 90 lines describe machinery whose producer stopped in March. Replace, do
     not read `zone_occupancy`, `snapshots.raw_detections` or `camera_zones` as
     live data.**
   ```
-- **Lines 80-146** (the whole "Detection Pipeline Gotchas & Learnings" block — zone IoU, Zone Guardian, detection monitoring, auto-diagnosis, the zone-coordinate gotchas): move verbatim to `docs/archive/2026-03-zone-pipeline-learnings.md` and leave a one-line pointer. That knowledge is real and was hard-won; it is just not current.
-- **Line 69** (`supabase-schema.sql` in the repo tree): annotate — *"describes a database that no longer exists (creates `owners`/`partners`; the real tables are `lot_owners`/`enforcement_partners`). Nothing executes it. Deleting it is fat decision 11."*
-- **Line 231** (`Edge functions deploy out-of-band` under Known Bottlenecks): this is now false. Replace with:
+- **The "Detection Pipeline Gotchas & Learnings" block** (zone IoU, Zone Guardian at ~line **109**, detection monitoring, auto-diagnosis, the zone-coordinate gotchas): move verbatim to `docs/archive/2026-03-zone-pipeline-learnings.md` and leave a one-line pointer. That knowledge is real and was hard-won; it is just not current. Bound the block by re-grepping `zone_guardian` and the surrounding headings — do not trust a line range.
+- **The repo-tree listing:** delete the `supabase-schema.sql` and `migrations/` entries outright — both files are gone from the repo (#233). Do not annotate them; do not mention fat decision 11, which is closed. While you are in the listing, check every remaining entry against `git ls-tree --name-only origin/main`.
+- **Line 229** (`Edge functions deploy out-of-band` under Known Bottlenecks): this is now false. Replace with:
   ```markdown
   - ~~Edge functions deploy out-of-band~~ → **RESOLVED (Wave 2.9, 2026-09).** All
     16 deploy from `.github/workflows/edge-functions.yml` on push to `main`,
@@ -1530,8 +1667,8 @@ Roughly 90 lines describe machinery whose producer stopped in March. Replace, do
     (`pr-ingest/r2.ts`, `camera-snapshot/no_reg_violations.ts`) redeploys every
     slug that reaches it. Rollback: RECOVERY.md §12.3.
   ```
-- **The "Deploying edge functions" section (line 298)**: rewrite as "the workflow deploys; here is how to deploy one by hand in an emergency and how to roll one back". Keep the env-var inventory — it is accurate and useful. Keep the drift-check instruction.
-- **Line 316**: two different values for `TOW_CONFIRM_MIN_CONFIDENCE` appear in this repo's own documents (`0.65` here, `0.85` in an older section). Check the deployed secret (`supabase secrets list`) and write the true one, once.
+- **The "Deploying edge functions" section (line 300)**: rewrite as "the workflow deploys; here is how to deploy one by hand in an emergency, and how to roll one back (RECOVERY.md §12.3)". Keep the env-var inventory — it is accurate and useful. Keep the drift-check instruction. Add Task 1's `deno.lock` rule: changing an import means re-running `deno cache --lock=deno.lock`, or the gate goes red on `--frozen`.
+- **Line 318**: `TOW_CONFIRM_MIN_CONFIDENCE` is documented as `0.65` here and as `0.85` elsewhere in the repo's own documents. The contradiction is real. Check the deployed secret (`supabase secrets list`) and write the true value, once, in one place.
 
 - [ ] **Step 4: `lotlogic-backend/CLAUDE.md` and both `claude-code-setup.md`**
 
@@ -1544,10 +1681,14 @@ Roughly 90 lines describe machinery whose producer stopped in March. Replace, do
 cd /Users/gabe/lotlogic
 # No document claims the zone pipeline is live outside the archive.
 grep -rn "zone_guardian\|runs every 10 minutes" --include='*.md' . | grep -v '/docs/archive/' || echo "clean"
+# No document references the files #233 deleted.
+grep -rn "supabase-schema.sql" --include='*.md' . | grep -vE '/docs/(archive|superpowers)/' || echo "clean"
 # The bottleneck list no longer claims manual edge deploys.
 grep -n "Edge functions deploy out-of-band" CLAUDE.md
-cd /Users/gabe/lotlogic-backend && test -f docs/README.md && ls docs/archive/
-# Markdown links resolve (no tool needed — just check the ones you wrote).
+# Nothing points at the pg_cron file #84 deleted.
+grep -rn "recovery/pg_cron.sql" --include='*.md' . /Users/gabe/lotlogic-backend \
+  | grep -vE '/docs/(archive|superpowers)/' || echo "clean"
+test -f docs/README.md && ls docs/archive/
 ```
 
 Neither repo's tests cover prose, so the honest gate here is a re-read: open `CLAUDE.md` top to bottom and ask of each paragraph "is this true today". That is the whole finding.
@@ -1568,12 +1709,76 @@ This task adds the schema and the fixtures. Tasks 11 and 12 write the tests. Spl
 - Modify: `tests/plaza/schema/live_schema.sql`
 - Modify: `tests/plaza/conftest.py`
 
-**Interfaces (produced for Tasks 11–14):**
+**Blocking prerequisite — the canary has to change first, in this same commit.**
+`tests/plaza/conftest.py:102` reads:
+
+```python
+PRODUCTION_CANARY_TABLES = ("alpr_violations", "lot_owners", "pending_invoices")
+```
+
+It is checked *before* `DROP SCHEMA public`, and it is what stands between a mistyped `TEST_DATABASE_URL` and production. But it identifies "this looks like production" **by table name** — and this task adds `alpr_violations` and `pending_invoices` to `live_schema.sql`. The moment it does, the harness creates its own canary: the **second** session against any persistent `TEST_DATABASE_URL` (CI re-uses one within a job; a local `initdb` cluster across a session) hard-errors with "refusing to run". The first draft made this worse by instructing you to *add* `integrations` and `pending_invoices` to the list.
+
+The canary must stop being a guess about table names and become a **positive marker the harness itself plants**:
+
+```python
+#: The harness stamps this table into `public` immediately after it applies the
+#: schema, and refuses to drop a non-empty `public` that does not carry it.
+#:
+#: Why not a list of production table names (the pre-2.9 design): the extract in
+#: schema/live_schema.sql keeps growing toward production's shape, so any table
+#: named there eventually exists in the harness too, and the guard starts firing
+#: on its own database. A marker the harness plants is true by construction —
+#: production has never had this table and never will.
+HARNESS_MARKER_TABLE = "_lotlogic_test_harness"
+
+
+async def _assert_safe_to_drop(conn) -> None:
+    """Refuse to DROP SCHEMA public unless this is demonstrably our database.
+
+    Two ways to be safe, and only two:
+      * `public` is empty (a fresh cluster / a fresh CI service container), or
+      * `public` carries our marker table (a database this harness prepared).
+
+    Anything else — a schema with tables we did not plant — is somebody's real
+    data. Fail, loudly, naming the table count and the host so the operator can
+    see what they pointed at.
+    """
+    n = (await conn.execute(text(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+    ))).scalar_one()
+    if n == 0:
+        return
+    marked = (await conn.execute(text(
+        "SELECT to_regclass(:t) IS NOT NULL"
+    ), {"t": f"public.{HARNESS_MARKER_TABLE}"})).scalar_one()
+    if not marked:
+        raise RuntimeError(
+            f"tests/plaza refuses to run: TEST_DATABASE_URL points at a database "
+            f"whose `public` schema holds {n} tables and does NOT carry "
+            f"`{HARNESS_MARKER_TABLE}`. This harness DROPs schema public. "
+            f"Point it at a throwaway database."
+        )
+
+
+# ...and, immediately after the schema + migrations are applied:
+await conn.execute(text(
+    f"CREATE TABLE IF NOT EXISTS public.{HARNESS_MARKER_TABLE} ("
+    "  prepared_at timestamptz NOT NULL DEFAULT now(),"
+    "  note text NOT NULL DEFAULT 'created by tests/plaza/conftest.py — "
+    "never create this in production')"
+))
+```
+
+Delete `PRODUCTION_CANARY_TABLES` and its call site in the same edit. **Once the marker is in, `live_schema.sql` may carry `pending_invoices` and `alpr_violations` verbatim** — which is the whole point of this task.
+
+**Interfaces (produced for Tasks 10–14):**
 - `seed_partner` — function fixture: `await seed_partner(quickbooks_customer_id="QB1", lotlogic_tow_fee_cents=10000, **overrides) -> uuid.UUID`
 - `seed_violation` — function fixture: `await seed_violation(partner_id, *, action_taken="tow", tow_confirmed_at=..., plate="ABC1234", **overrides) -> uuid.UUID`, inserting into `alpr_violations` against the seeded plaza property
 - `seed_integration` — function fixture: `await seed_integration(provider="quickbooks", realm_id="9341456900947821") -> uuid.UUID`, writing Fernet-encrypted token columns with `services.crypto.encrypt_str`
 - `seed_booking` — function fixture: `await seed_booking(**overrides) -> uuid.UUID` for `app_bookings`
-- `dbx` gains `count_bookings(**filters)`, `get_pending_invoice(id)`, `get_booking(id)`
+- `dbx` gains `count_bookings(**filters)`, `get_pending_invoice(id)`, `get_booking(id)` and `get_violation(id)`. It **already** has `count_passes(**filters)`, `get_pass(id)` and `get_payment(id)` — Tasks 11 and 12 use `count_passes` and `get_violation`, so both must exist before they start.
+- `HARNESS_MARKER_TABLE` and the marker-based safety check, replacing `PRODUCTION_CANARY_TABLES`
+- **Task 10 also edits this file** (it adds the `qb_http` and `stripe_http` fixtures). Task 10 therefore depends on this task; do not run them concurrently.
 
 - [ ] **Step 1: Pull the DDL from production, verbatim — do not hand-write it**
 
@@ -1582,10 +1787,10 @@ The existing file's header sets the standard: "Every CREATE TABLE column, CHECK 
 | Object | Needed by | Notes |
 |---|---|---|
 | `integrations` | QuickBooks OAuth | Originates in `migrations/20260417213323_quickbooks_integration.sql`; take the **live** shape, which may have drifted. |
-| `pending_invoices` | 8 of the 12 QB endpoints | Same migration. Includes `pending_invoices_partner_week_unique` — several tests depend on that constraint. |
-| `alpr_violations` | `run-weekly-invoicing` | Large. **Omit the AFTER INSERT trigger `trg_alpr_retro_visitor_pass`** and its function, for exactly the reason the existing header gives for omitting it from `visitor_passes`: it reaches into three more tables no test here touches. Record the omission in the header. |
+| `pending_invoices` | 8 of the 12 QB endpoints | Same migration. Includes `pending_invoices_partner_week_unique` — several tests depend on that constraint. Safe to add **only after** the marker guard replaces the name-based canary. |
+| `alpr_violations` | `run-weekly-invoicing` | Large, and likewise gated on the marker guard. **Omit the AFTER INSERT trigger `trg_alpr_retro_visitor_pass`** and its function, for exactly the reason the existing header gives for omitting it from `visitor_passes`: it reaches into three more tables no test here touches. Record the omission in the header. |
 | `v_violation_billing_status` | `run-weekly-invoicing` joins it | A view. `pg_get_viewdef(…, true)`. |
-| `markets`, `lots` | `run-weekly-invoicing` resolves a market timezone through `Lot` → `Market` | Minimal: the columns `models.py` declares. Without them the SQLAlchemy `select(Lot)` errors mid-request and the endpoint 500s for a reason that has nothing to do with invoicing. |
+| `markets`, `lots` | `run-weekly-invoicing` resolves a market timezone through `Lot` → `Market` | Minimal: the columns `models.py` declares — **re-read `models.py` first**, #84 changed it (+11/−2). Without these two tables the SQLAlchemy `select(Lot)` errors mid-request and the endpoint 500s for a reason that has nothing to do with invoicing. |
 | `app_bookings`, `app_otp_codes` | the reservation app | From `migrations/20260728120000_app_bookings_and_rates.sql`. `properties.app_enabled` and `app_rates` are **already** in the extract (lines 110-111) — do not re-add them. |
 
 `enforcement_partners` is already present and already has `quickbooks_customer_id` and `lotlogic_tow_fee_cents`. Confirm, do not re-add.
@@ -1623,7 +1828,7 @@ TRUNCATE_TABLES = (
 )
 ```
 
-Add `"integrations"` and `"pending_invoices"` to `PRODUCTION_CANARY_TABLES` as well — this harness drops schema `public`, and the canary list is the thing standing between a mistyped `TEST_DATABASE_URL` and production.
+**Do not add anything to `PRODUCTION_CANARY_TABLES` — delete it.** It is replaced by `HARNESS_MARKER_TABLE` (see the blocking prerequisite above). Adding table names to it is what breaks the harness.
 
 - [ ] **Step 3: The fixtures**
 
@@ -1714,9 +1919,33 @@ async def test_scratch(db_conn):
 
 If Postgres 17 is not available locally the whole package **skips** — which looks like success. Check the summary line says `passed`, not `skipped`. `pg_ctl --version` or `brew install postgresql@17`.
 
-- [ ] **Step 5: Prove the canary works**
+- [ ] **Step 5: Prove the marker guard works, in both directions**
 
-Point `TEST_DATABASE_URL` at a database containing a table named `pending_invoices` and confirm the harness refuses to run rather than dropping schema `public`. Then unset it.
+This is the most important verification in the task — it is the thing standing between a typo and production.
+
+```bash
+# 1. A database with tables and NO marker must be refused.
+createdb lotlogic_guard_test
+psql lotlogic_guard_test -c "create table lot_owners (id int);"
+TEST_DATABASE_URL=postgresql+asyncpg://localhost/lotlogic_guard_test \
+  pytest tests/plaza/test_harness.py -q     # expect: RuntimeError "refuses to run"
+
+# 2. A database the harness itself prepared must be accepted, TWICE in a row —
+#    this is the case the old name-based canary got wrong.
+createdb lotlogic_harness_test
+for i in 1 2; do
+  TEST_DATABASE_URL=postgresql+asyncpg://localhost/lotlogic_harness_test \
+    pytest tests/plaza -q || echo "RUN $i FAILED"
+done
+
+# 3. An empty database must be accepted.
+createdb lotlogic_empty_test
+TEST_DATABASE_URL=postgresql+asyncpg://localhost/lotlogic_empty_test pytest tests/plaza/test_harness.py -q
+
+dropdb lotlogic_guard_test lotlogic_harness_test lotlogic_empty_test
+```
+
+Case 2 run 2 is the regression this design exists for: with the old canary and the new `live_schema.sql`, it fails. **Never point any of this at a Supabase URL.**
 
 **Commit:** `test(harness): extend the live-schema extract to QuickBooks and the reservation app`
 
@@ -1901,12 +2130,32 @@ def qb_http(monkeypatch):
 def stripe_http(monkeypatch):
     """Stripe faked at the socket, through the SDK's own client seam.
 
-    `stripe.default_http_client` is the documented injection point; setting it
-    means `stripe.PaymentIntent.create(...)` really builds the request, really
-    signs it, and really parses the response — it just never opens a socket.
+    `stripe.default_http_client` is the injection point (it exists and defaults
+    to None at the pinned version). Setting it means
+    `stripe.PaymentIntent.create(...)` really builds the request, really signs
+    it, and really parses the response — it just never opens a socket.
+
+    Two things the first draft of this plan got wrong, both caught in pre-flight
+    against the PINNED version (`requirements.lock`: `stripe==15.6.1`):
+
+      * the module is `stripe._http_client`, NOT `stripe.http_client` —
+        `from stripe import http_client` raises ImportError at 15.6.1;
+      * both methods take a keyword-only `_usage` argument that the SDK passes
+        on every call, so an override without it raises TypeError at runtime.
+
+    Measured signatures at 15.6.1:
+      request(self, method, url, headers, post_data=None, *, _usage=None)
+        -> Tuple[str, int, Mapping[str, str]]
+      request_with_retries(self, method, url, headers, post_data=None,
+                           max_network_retries=None, *, _usage=None)
+        -> Tuple[str, int, Mapping[str, str]]
+
+    Note the body is `str`, not bytes — hence `resp.text`. HTTPClient.__init__
+    takes only optional arguments, so the bare constructor is fine; `name` is
+    not defined on the base class, so set it (the SDK reads it for telemetry).
     """
     import stripe
-    from stripe import http_client as stripe_http_client
+    from stripe import _http_client as stripe_http_client
     from tests.plaza.fakes.http import FakeHttp
 
     fake = FakeHttp()
@@ -1914,31 +2163,64 @@ def stripe_http(monkeypatch):
     class _Client(stripe_http_client.HTTPClient):
         name = "fakehttp"
 
-        def request(self, method, url, headers, post_data=None):
+        def request(self, method, url, headers, post_data=None, *, _usage=None):
             resp = fake._handle(httpx.Request(
-                method.upper(), url, headers=headers,
+                method.upper(), url, headers=dict(headers or {}),
                 content=(post_data.encode() if isinstance(post_data, str) else post_data),
             ))
             return resp.text, resp.status_code, dict(resp.headers)
 
         def request_with_retries(self, method, url, headers, post_data=None,
-                                 max_network_retries=None):
-            return self.request(method, url, headers, post_data)
+                                 max_network_retries=None, *, _usage=None):
+            return self.request(method, url, headers, post_data, _usage=_usage)
 
     monkeypatch.setattr(stripe, "default_http_client", _Client())
     monkeypatch.setattr(get_settings(), "stripe_secret_key", "sk_test_fake", raising=False)
     return fake
 ```
 
-**Verify the Stripe seam against the pinned SDK before you rely on it.** `requirements.txt` says `stripe>=9.0`; check what `requirements.lock` actually pins and confirm `stripe.http_client.HTTPClient` exposes `request_with_retries(method, url, headers, post_data=None, max_network_retries=None)` returning `(body, status, headers)`:
-```bash
-python -c "import stripe,inspect; from stripe import http_client as h; print(stripe.VERSION); print(inspect.signature(h.HTTPClient.request_with_retries))"
+- [ ] **Step 3b: A smoke test that fails the day the SDK moves the seam**
+
+`stripe._http_client` is a **private** module. Pinning `stripe==15.6.1` in `requirements.lock` is what makes reaching into it acceptable — but Dependabot will one day propose a bump, and that failure must be one readable line here rather than twenty confusing ones inside Task 12. Open `tests/plaza/test_fake_http.py` with this:
+
+```python
+def test_the_stripe_http_seam_is_where_we_think_it_is():
+    """The Stripe fixture reaches into a PRIVATE module. If a version bump moves
+    it, fail HERE with a readable message rather than in twenty reservation-app
+    tests with a TypeError about `_usage`."""
+    import inspect
+
+    import stripe
+    from stripe import _http_client  # ImportError here IS the signal
+
+    assert hasattr(stripe, "default_http_client"), (
+        "stripe.default_http_client is gone; the Stripe HTTP-boundary fake needs "
+        "a new injection point (tests/plaza/conftest.py::stripe_http)."
+    )
+    for name in ("request", "request_with_retries"):
+        params = inspect.signature(getattr(_http_client.HTTPClient, name)).parameters
+        assert "_usage" in params and params["_usage"].kind is inspect.Parameter.KEYWORD_ONLY, (
+            f"stripe._http_client.HTTPClient.{name} no longer takes keyword-only "
+            f"`_usage` (pinned {stripe.VERSION}). Update the _Client override in "
+            f"tests/plaza/conftest.py::stripe_http to match the new signature."
+        )
 ```
-If the signature differs, adapt `_Client` — do **not** fall back to patching `stripe.PaymentIntent.create`, which would move the fake back to the function boundary and defeat the task. If the SDK genuinely has no client seam at the pinned version, stop and raise it as a decision.
+
+Confirm the pin and the signatures before you write a line of Task 12:
+
+```bash
+grep -iE '^stripe' requirements.lock          # stripe==15.6.1
+python -c "import inspect, stripe; from stripe import _http_client as h; \
+print(stripe.VERSION); print(inspect.signature(h.HTTPClient.request_with_retries))"
+```
+
+Then prove the smoke test can fail: in a scratch venv `pip install 'stripe==9.0.0'` and run just this test — expect a readable ImportError/assertion naming the fixture, not a TypeError from somewhere else. Reinstall the lock afterwards.
+
+**Do not fall back to patching `stripe.PaymentIntent.create`** if the seam moves — that puts the fake back at the function boundary and defeats the task. Raise it as a decision instead.
 
 - [ ] **Step 4: Prove the fake is at the boundary, not above it**
 
-Add `tests/plaza/test_fake_http.py` — it is the test for the test infrastructure and it is worth having:
+Continue `tests/plaza/test_fake_http.py` (Step 3b opened it) — it is the test for the test infrastructure and it is worth having:
 
 ```python
 async def test_qb_fake_runs_the_real_token_refresh(db_conn, seed_integration, qb_http):
@@ -2253,7 +2535,7 @@ Deliberate breaks: remove the `AND app_enabled = true` from the `/app/lots` quer
 
 **Finding:** DB-9. **Repo:** `getlotlogic/lotlogic-backend`. **Depends on:** Task 9.
 
-`set_pass_cooldown_flag` has been rewritten **seven** times across `migrations/`; `enforce_truck_plaza_cooldown` five; `count_on_cooldown` was changed to use the flag and reverted to a time window inside 32 hours on 2026-06-16. This is the single most-churned piece of business logic in the product, it runs as a `BEFORE INSERT` trigger inside the caller's transaction on every registration, and **no test asserts what it does**. The pay-to-park suite exercises it incidentally — it is in `live_schema.sql` and fires on every seeded pass — but nothing states the rule.
+`set_pass_cooldown_flag` is redefined in **seven** migration files and `enforce_truck_plaza_cooldown` in **six** (five live, one now under `migrations/_archive/` — the grep must cover both directories, #84 moved 176 files); `count_on_cooldown` was changed to use the flag and reverted to a time window inside 32 hours on 2026-06-16. This is the single most-churned piece of business logic in the product, it runs as a `BEFORE INSERT` trigger inside the caller's transaction on every registration, and **no test asserts what it does**. The pay-to-park suite exercises it incidentally — it is in `live_schema.sql` and fires on every seeded pass — but nothing states the rule.
 
 **Files:**
 - Create: `tests/plaza/test_cooldown_trigger.py`
@@ -2319,55 +2601,88 @@ Deliberate break: in the harness only, `CREATE OR REPLACE` the function with the
 
 **Findings:** DB-8, DB-10, REL-8 (the `app_enabled` half). **Repo:** `getlotlogic/lotlogic-backend`. **Depends on:** Task 9.
 
-Three small, additive migrations. None drops a column; none rewrites a row's meaning.
+Three small, additive migrations. None drops a column, none adds a constraint, none rewrites a row's meaning — and **this is the only task in the plan that adds a migration**, so it is the only one carrying the Wave 2.4 obligations from Global Constraints: regenerate the three derived schema artifacts, and mark any `CONCURRENTLY` file.
 
 **Files:**
 - Create: `migrations/20260914HHMMSS_cancel_reason.sql`
 - Create: `migrations/20260914HHMMSS_hot_table_index_hygiene.sql`
 - Create: `migrations/20260914HHMMSS_app_enabled_off_at_plaza.sql`
-- Modify: `routers/visitor_passes.py` (write the new column; keep reading the old one)
+- Modify: `routers/visitor_passes.py` (write the new column; compose and read `cancelled_by` exactly as today)
 - Create: `tests/plaza/test_cancel_reason.py`
+- **Regenerate and commit (Wave 2.4 / #84):** `scripts/db/expected_schema.sql`, `scripts/db/expected_census.txt`, `docs/db/schema.md`
 
-- [ ] **Step 1: DB-8 — `cancelled_by` is a code, `cancel_reason` is prose**
+- [ ] **Step 1: DB-8 — add `cancel_reason`. Add no constraint.**
 
-`visitor_passes.cancelled_by` is free text carrying at least six distinct meanings (`camera_exit`, `exited_early`, `superseded_by_reregistration`, `app_user`, an admin identity string) **and** an operator's free-text reason appended as a suffix (`routers/visitor_passes.py:89`). `routers/visitor_passes.py:276` branches on `cancelled_by.startswith("camera_exit")` — a prefix match against a column an operator can type into.
+`visitor_passes.cancelled_by` is one free-text column carrying two different things: an identity *and* a reason, composed at `routers/visitor_passes.py:142-144` as `"<operator email> (<reason>)"`. `routers/visitor_passes.py:276` then branches a tow-relevant display on `cancelled_by.startswith("camera_exit")` — a prefix match against a field a human types into — and `frontend/src/pages/TruckParkingLog.jsx:522,1147` parses and displays the whole composed string.
 
-Additive fix:
+**The first draft proposed a `CHECK` constraining `cancelled_by` to a code list. That would have broken the live cancel path on day one, and the query it told you to measure with would have hidden why.** Production, measured SELECT-only on 2026-09-14:
+
+| `cancelled_by` | rows |
+|---|---|
+| `camera_exit` | 375 |
+| `standardvendingcompany@gmail.com (operator dismissed via dashboard)` | 98 |
+| `superseded_by_reregistration` | 66 |
+| `t.edwards@nmldtowingllc.com (operator dismissed via dashboard)` | 16 |
+| `standardvendingcompany@gmail.com (operator removed via dashboard)` | 15 |
+| `standardvendingcompany@gmail.com` | 2 |
+| `standardvendingcompany@gmail.com (Marked no-tow (no linked violation): …)` | 1 |
+| `t.edwards@nmldtowingllc.com (Marked towed (no linked violation): …)` | 1 |
+| `admin:pay2park-transition (superseded by paid pass 1de90033)` | 1 |
+| `admin:controller-smoke-test` | 1 |
+| `camera_exit (backfill)` | 1 |
+
+Three things to take from that. **One:** the dominant non-`camera_exit` shape is an operator email plus a parenthetical — the exact shape the router writes today, and nothing in the draft's proposed code list. Every dashboard cancel would have raised `23514` the moment the constraint went in, even `NOT VALID`, because `NOT VALID` still constrains *new* rows. **Two:** `exited_early`, `app_user`, `operator` and `system` — four of the seven codes the draft guessed — appear **zero** times. **Three:** the draft's measurement query, `split_part(cancelled_by,':',1)`, was wrong for this data: only two rows contain a colon, so it returns the whole string and quietly agrees with whatever you already believed. The query that tells the truth is the plain one:
 
 ```sql
--- DB-8. `cancelled_by` carries two things at once: WHO/WHAT cancelled the pass
--- (a code that code branches on) and, appended as a suffix, an operator's
--- free-text reason. routers/visitor_passes.py:276 decides tow-relevant display
--- with `cancelled_by.startswith('camera_exit')` — a prefix match against a
--- field a human types into.
+SELECT cancelled_by, count(*) AS n
+  FROM public.visitor_passes
+ WHERE cancelled_by IS NOT NULL
+ GROUP BY 1 ORDER BY 2 DESC;
+```
+
+So the migration adds a column and nothing else:
+
+```sql
+-- DB-8, part one of two. `visitor_passes.cancelled_by` is free text carrying an
+-- identity AND a reason composed into one string
+-- ("<operator email> (<reason>)"), which routers/visitor_passes.py:276 then
+-- prefix-matches on and the Parking Log displays verbatim.
 --
--- Additive and reversible: the column stays, every existing value stays
--- readable, and the CHECK is NOT VALID so no historical row can block the
--- migration. New writes put prose in cancel_reason.
+-- This migration gives the reason a column of its own. It deliberately adds NO
+-- constraint on cancelled_by: production holds operator emails with
+-- parenthetical suffixes, and any CHECK — NOT VALID included, since NOT VALID
+-- still constrains new rows — would 23514 on the next dashboard cancel.
+-- Splitting cancelled_by into a code is a backfill, and backfilling the pass
+-- tables is Wave 3.6's job, not this one's.
+--
+-- Purely additive: nothing is dropped, no existing value changes, the column is
+-- nullable with no default, and every current read path keeps working
+-- unchanged.
 ALTER TABLE public.visitor_passes
   ADD COLUMN IF NOT EXISTS cancel_reason text;
 
-COMMENT ON COLUMN public.visitor_passes.cancelled_by IS
-  'WHO/WHAT cancelled: a code, not prose. Code branches on it. Free-text goes in cancel_reason.';
 COMMENT ON COLUMN public.visitor_passes.cancel_reason IS
-  'Operator free text. Display only — never branch on it.';
-
--- NOT VALID: constrains new rows, leaves the historical mess alone. Validating
--- it is a follow-up once the backfill is agreed (Wave 3.6 owns the pass tables).
-ALTER TABLE public.visitor_passes
-  ADD CONSTRAINT visitor_passes_cancelled_by_known
-  CHECK (
-    cancelled_by IS NULL
-    OR cancelled_by IN (
-      'camera_exit', 'exited_early', 'superseded_by_reregistration',
-      'app_user', 'operator', 'admin', 'system'
-    )
-  ) NOT VALID;
+  'Operator free text for why a pass was cancelled. Display only — never branch on it. Written alongside cancelled_by from Wave 2.9; cancelled_by keeps its composed "<identity> (<reason>)" format until the Wave 3.6 backfill.';
+COMMENT ON COLUMN public.visitor_passes.cancelled_by IS
+  'WHO/WHAT cancelled, historically composed with the reason. Free text by design — see cancel_reason. Values in production include bare codes (camera_exit, superseded_by_reregistration) and operator emails with a parenthetical reason.';
 ```
 
-**Before writing that list, measure it.** `SELECT split_part(cancelled_by,':',1) AS code, count(*) FROM visitor_passes WHERE cancelled_by IS NOT NULL GROUP BY 1 ORDER BY 2 DESC;` against production. The list above is a guess from grep; the query is the truth. If a code in production is missing from the CHECK, the constraint will reject a legitimate new write on the day someone hits that path.
+Then in `routers/visitor_passes.py`, the cancel endpoint writes **both** columns and **keeps composing `cancelled_by` exactly as it does today**:
 
-Then in `routers/visitor_passes.py`: the cancel endpoint writes `cancelled_by = :who` (a code) and `cancel_reason = :reason` instead of concatenating. **Keep the read path reading `cancelled_by` with its prefix match** — old rows still have suffixes, and this plan is backward compatible. Add a comment saying when the prefix match can go (after the backfill, Wave 3.6).
+```python
+    operator_label = subject.email or (str(subject.id) if subject.id else "service")
+    # cancel_reason gets the reason on its own, from now on (Wave 2.9, DB-8).
+    # cancelled_by keeps its composed "<identity> (<reason>)" shape: the Parking
+    # Log renders it (frontend/src/pages/TruckParkingLog.jsx:1147) and 129 live
+    # rows already carry it, so changing the format here would silently drop the
+    # operator's identity out of the UI for every future cancel — a user-visible
+    # change this wave has not declared. The split happens in Wave 3.6, with a
+    # backfill, once something reads cancel_reason.
+    cancel_reason = payload.reason or None
+    if payload.reason:
+        operator_label = f"{operator_label} ({payload.reason})"
+```
+and the `UPDATE` gains `cancel_reason = :reason`. The read path at `:276` is untouched: old rows still carry suffixes, `camera_exit` still prefixes, and the Parking Log still shows what it shows today. **This task produces no user-visible change at all** — which is why it needs no entry in the Global Constraints' two declared exceptions.
 
 - [ ] **Step 2: DB-10 — index and FK hygiene on the two hottest write tables**
 
@@ -2399,7 +2714,13 @@ Rules for what goes in the migration:
 - **Drop nothing with `idx_scan > 0`**, and nothing younger than 30 days — `idx_scan` since the last stats reset is not the same as "never used", and the August wedge indexes are three weeks old.
 - **Never drop an index backing a unique or exclusion constraint**, and never one named in `ON CONFLICT`. `grep -rn "ON CONFLICT" routers/ services/ ../lotlogic/supabase/functions/` before you drop anything.
 - **Add** a `CREATE INDEX CONCURRENTLY` for each unindexed FK the third query returns.
-- `CONCURRENTLY` cannot run inside a transaction block. Note that in the header; the Supabase MCP `apply_migration` wraps statements — if it does, this migration is applied statement-by-statement by hand and recorded in `schema_migrations` explicitly. **Say so in the file.**
+- **`CONCURRENTLY` needs the Wave 2.4 opt-out marker.** `scripts/db/migrate.sh` wraps every post-baseline file in a transaction (`psql -1`) and `CONCURRENTLY` cannot run inside one. Put `-- migrate:no-transaction` within the file's **first 5 lines**, then prove it is accepted:
+  ```bash
+  bash -c 'source scripts/db/check_concurrently.sh; \
+    needs_no_transaction migrations/20260914*_hot_table_index_hygiene.sql; echo "rc=$?"'
+  # rc=0 → marked and will be applied without -1.  rc=2 → you forgot the marker.
+  ```
+  The Supabase MCP `apply_migration` also wraps statements; for this file apply it by hand, statement by statement, and record the ledger row explicitly.
 
 If the queries come back showing nothing safe to drop, **write the migration as a comment-only file recording the measurement and drop nothing.** A measured "no debt here" is a real result; a speculative `DROP INDEX` on the hottest table in a live enforcement system is not.
 
@@ -2431,16 +2752,33 @@ pytest tests/plaza -q          # the migrations are replayed by the harness
 ruff check . && python -m compileall -q -f .
 ```
 `tests/plaza/test_migrations.py` already asserts the migration set applies cleanly; confirm it picked up the new `20260914*` glob (Task 9). Then `tests/plaza/test_cancel_reason.py`:
-- a cancel writes a bare code to `cancelled_by` and the prose to `cancel_reason`;
-- an unknown code is rejected by the CHECK on a **new** row;
-- a pre-existing row with a suffixed `cancelled_by` still reads correctly through `routers/visitor_passes.py` (insert one directly to simulate history — the CHECK is `NOT VALID`, so it is allowed);
-- `camera_exit` still drives the tow-relevant display.
+- a cancel with a reason writes the prose to `cancel_reason` **and** leaves `cancelled_by` in its existing composed `"<identity> (<reason>)"` form — assert both, because the second half is the backward-compatibility promise;
+- a cancel with no reason leaves `cancel_reason` NULL and `cancelled_by` a bare identity;
+- a row whose `cancelled_by` is an operator email with a parenthetical still round-trips through `routers/visitor_passes.py` unchanged (insert one directly — it is the commonest live shape, 129 rows);
+- `camera_exit` and `camera_exit (backfill)` both still drive the tow-relevant display at `:276`;
+- **no constraint exists on `cancelled_by`** — assert directly that inserting `'anything at all'` succeeds. That is a test for the absence of the thing the first draft would have added, and it will stop the next person re-adding it without a backfill.
 
-**Prove it can fail:** drop the `NOT VALID` so the constraint validates — the historical-row test must fail. Revert.
+**Prove it can fail:** change the router to write a bare `'operator'` into `cancelled_by` instead of composing — the composed-format test must go red. That is the user-visible regression this design avoids. Revert.
 
-- [ ] **Step 5: Apply to production deliberately**
+- [ ] **Step 5: Apply to production deliberately, then regenerate the schema-of-record**
 
-These are applied via the Supabase MCP `apply_migration` (or the CLI), never the SQL editor, so each lands in `supabase_migrations.schema_migrations`. **Apply the `app_enabled` one first** — it is the one that closes a hole. `CONCURRENTLY` statements go last and are watched.
+Apply via the Supabase MCP `apply_migration` or `scripts/db/migrate.sh`, never the raw SQL editor, so each lands in the ledger. **Apply the `app_enabled` one first** — it is the one that closes a hole. The `CONCURRENTLY` file goes last, applied without a transaction wrapper, and is watched.
+
+Then — and this is the step that keeps CI green — regenerate #84's three derived, committed artifacts **from production, after production has been migrated**, and commit all three in this task's commit:
+
+```bash
+unset PGUSER PGPASSWORD PGHOST PGPORT PGDATABASE
+eval "$(cd /Users/gabe/lotlogic && supabase db dump --linked --dry-run 2>/dev/null | grep '^export PG')"
+scripts/db/regen_expected.sh \
+  "postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}?options=-c%20role%3Dpostgres"
+git diff -- scripts/db/expected_schema.sql scripts/db/expected_census.txt docs/db/schema.md
+```
+
+The diff must show exactly what you added — one column, one comment pair, the index changes — and nothing else. **If it shows anything you did not write, stop**: production has drifted from `migrations/`, which is a `schema-drift` finding, not something to commit past. Requires `psql` 17 (`brew install postgresql@17 && export PSQL=/opt/homebrew/opt/postgresql@17/bin/psql`); the script refuses otherwise.
+
+- [ ] **Step 6: Confirm the two schema CI jobs are green**
+
+`schema-rebuild` rebuilds from `migrations/0000_baseline.sql` + every migration and diffs the result against `expected_schema.sql`, checks the object census against `expected_census.txt`, and fails if `docs/db/schema.md` is stale. `schema-drift` compares `migrations/` to the production ledger. Both must pass on the PR. A red `schema-rebuild` here almost always means Step 5 was skipped or run before production was migrated.
 
 **Commit:** `fix(db): cancel_reason, measured index hygiene, and app_enabled as a migration`
 
@@ -2450,7 +2788,7 @@ These are applied via the Supabase MCP `apply_migration` (or the CLI), never the
 
 **Finding:** FE-8. **Repo:** `getlotlogic/lotlogic`. **Depends on:** nothing.
 
-Eleven `setInterval` sites in `frontend/src/`. One file gates on `visibilitychange`. A dashboard left open on a back office monitor polls the roster every 60 s, snapshots every 10 s and the proof modal every 10 s forever, and the load grows with the number of properties an owner has. The database has seized twice.
+Eleven `setInterval` sites in `frontend/src/`. One file listens for `visibilitychange` — and that file (`ALPRPropertyDetailPage.jsx`) has **no `setInterval` at all**, so not one of the eleven timers is gated. A dashboard left open on a back office monitor polls the roster every 60 s, snapshots every 10 s and the proof modal every 10 s forever, and the load grows with the number of properties an owner has. The database has seized twice.
 
 **Files:**
 - Create: `frontend/src/lib/visiblePoll.js`, `frontend/src/lib/visiblePoll.test.mjs`
@@ -2612,9 +2950,9 @@ Then convert, in this order and re-checking the UI after each:
 | `App.jsx:341` training badge | 60 s | |
 | `App.jsx:355` | — | Read it first: if it is a UI timer rather than a fetch, treat it like `useNowTick`. |
 | `App.jsx:433` `pollSnapshots` | 10 s | The heaviest one. |
-| `ui/ProofModal.jsx:130` | 10 s | A modal, so also confirm it stops on close. |
+| `ui/ProofModal.jsx:131` | 10 s | A modal, so also confirm it stops on close. |
 | `pages/TrainingPage.jsx:88`, `TowActivityPage.jsx:329`, `HqPage.jsx:48`, `ALPRPropertiesPage.jsx:109` | 60 s | |
-| `ALPRPropertyDetailPage.jsx:424/452/495` | — | Already hand-rolls `visibilitychange`. Convert to the shared hook and delete the three hand-rolled pairs — same behaviour, sixty fewer lines. |
+| `ALPRPropertyDetailPage.jsx:424/452/495` | — | **Read before converting.** These are `visibilitychange` listener pairs and the file has **no `setInterval` at all**, so they are not polling loops and folding them into `useVisiblePolling` would change behaviour rather than preserve it. Find out what each pair actually does (a refetch on return? a realtime resubscribe?) and convert only the ones `startVisiblePoll` genuinely reproduces. Leaving all three alone is an acceptable outcome — say which you chose and why. |
 
 - [ ] **Step 4: Verify**
 
@@ -2632,11 +2970,13 @@ Then by hand: open `/app`, DevTools → Network, switch to another tab for a min
 
 ---
 
-### Task 16: `.env.example` describes all 77 settings, and a test keeps it that way
+### Task 16: `.env.example` describes all 82 settings, and a test keeps it that way
 
 **Finding:** BACKEND-20. **Repo:** `getlotlogic/lotlogic-backend`. **Depends on:** nothing.
 
-`.env.example` documents 17 variables. `config.Settings` has 77 fields. Four of the seventeen configure the retired YOLO stack. A new deployment — or the rebuild-from-zero in `RECOVERY.md` §10 — starts from a file that is 78% incomplete and partly about software that does not run.
+`.env.example` documents **22** variables. `config.Settings` has **82** fields. Six of the twenty-two configure the retired YOLO stack (`YOLO_MODEL_PATH`, the three `INFERENCE_*`, `VIOLATION_CONFIDENCE_THRESHOLD`) and one (`SNAPSHOT_RETENTION_HOURS`) is the setting the programme doc names as reading like a policy and being read by nothing. A new deployment — or the rebuild-from-zero in `RECOVERY.md` §10 — starts from a file that is 73% incomplete and partly about software that does not run.
+
+(The first draft said 17 and 77. Both were wrong; the commands in "Measured facts" give 22 and 82. Re-run them rather than trusting either number.)
 
 **Files:**
 - Create: `scripts/gen_env_example.py`
@@ -2649,7 +2989,7 @@ Then by hand: open `/app`, DevTools → Network, switch to another tab for a min
 #!/usr/bin/env python3
 """Regenerate .env.example from config.Settings.
 
-The file drifted to 17 of 77 settings — and four of the seventeen configure the
+The file drifted to 22 of 82 settings — and six of the twenty-two configure the
 retired YOLO stack. Generating it means it can only be wrong for as long as it
 takes someone to run this, and tests/test_env_example.py fails the build until
 they do.
@@ -2769,16 +3109,16 @@ def test_no_real_looking_secret_in_the_example():
 
 - [ ] **Step 3: Descriptions where they are missing**
 
-The generator emits a comment only where a field has `description=`. Most of `config.py`'s 77 fields carry a `#` comment above them instead, which pydantic never sees. **Do not mass-rewrite `config.py`** — that is a large diff over a file every module imports. Instead: for the ~20 fields a fresh deployment genuinely cannot boot or operate without (`DATABASE_URL`, `API_KEY`, `ENCRYPTION_KEY`, `JWT_SECRET`, the R2 five, `RECAPTCHA_SECRET_KEY`, the QuickBooks four, `SENDGRID_API_KEY`, `SUPABASE_URL`, `DASHBOARD_URL`), add `Field(..., description="…")` and let the rest generate bare. Cross-check that set against `RECOVERY.md` §5's "required to boot" list — if the two disagree, one of them is wrong and finding that out is worth the task on its own.
+The generator emits a comment only where a field has `description=`. Most of `config.py`'s 82 fields carry a `#` comment above them instead, which pydantic never sees. **Do not mass-rewrite `config.py`** — that is a large diff over a file every module imports. Instead: for the ~20 fields a fresh deployment genuinely cannot boot or operate without (`DATABASE_URL`, `API_KEY`, `ENCRYPTION_KEY`, `JWT_SECRET`, the R2 five, `RECAPTCHA_SECRET_KEY`, the QuickBooks four, `SENDGRID_API_KEY`, `SUPABASE_URL`, `DASHBOARD_URL`), add `Field(..., description="…")` and let the rest generate bare. Cross-check that set against `RECOVERY.md` §5's "required to boot" list — if the two disagree, one of them is wrong and finding that out is worth the task on its own.
 
 - [ ] **Step 4: Wire the check into CI**
 
-In `.github/workflows/ci.yml`, after the ruff step:
+`.github/workflows/ci.yml` now has **three** jobs — `lint-and-test`, plus `schema-rebuild` and `schema-drift` added by #84. This step belongs in `lint-and-test` only, immediately after `Ruff check`:
 ```yaml
       - name: .env.example is current
         run: python scripts/gen_env_example.py --check
 ```
-(The pytest gate covers it too; the explicit step gives a one-line failure message instead of a test traceback.)
+Rebase onto the post-#84 file before editing it; the workflow grew by 152 lines and a blind patch will land in the wrong job. (The pytest gate covers this too; the explicit step gives a one-line failure message instead of a test traceback.)
 
 - [ ] **Step 5: Verify and prove failure**
 
@@ -2787,6 +3127,7 @@ python scripts/gen_env_example.py && git diff --stat .env.example
 pytest tests/test_env_example.py -q          # expect 3 passed
 python scripts/gen_env_example.py --check    # expect "ok"
 ```
+The regenerated file should gain ~60 settings and lose nothing — `test_no_setting_is_documented_that_does_not_exist` is what tells you whether the six YOLO entries are still read by `config.py` (they are: `services/inference.py` imports them at module load). They stay documented until fat decision 3 retires the stack; this generator's job is to stop the file disagreeing with the code, not to make that decision.
 Deliberate break: add `zzz_test_setting: str = "x"` to `Settings`, run `pytest tests/test_env_example.py` — expect `test_every_setting_is_documented` to fail naming `ZZZ_TEST_SETTING`. Remove it.
 
 Then read the generated file once, top to bottom. **If a setting's name does not tell you what it is for, that is the real finding** — add its `description` now, while you are the person who just looked it up.
@@ -2821,12 +3162,12 @@ Eleven. Each is one yes/no. The default is what happens if you say nothing — e
 The new `Edge functions` workflow (frontend repo, `.github/workflows/edge-functions.yml`) deploys all 16 functions straight to the production Supabase project `nzdkoouoaedbbccraoti`, using the `SUPABASE_ACCESS_TOKEN` GitHub Actions secret that already exists and already deploys `camera-snapshot` today. There is no second Supabase project to deploy to, and this adds no new secret.
 ❓ **Deploy to the production Supabase project with the existing `SUPABASE_ACCESS_TOKEN`?** → *Recommended: **yes**.*
 
-**D2 — Whether a type error can still reach production.**
-The workflow type-checks and tests every function before it deploys any of them. Configured as a hard gate: one red function blocks the whole deploy, including the other fifteen.
-❓ **Should a failing check block the deploy outright, rather than warn and ship?** → *Recommended: **yes**. The alternative is the state you are in now.*
+**D2 — Whether a type error can still reach production, and pinning the dependency that decides.**
+The workflow type-checks and tests every function before it deploys any of them, as a hard gate: one red function blocks the whole deploy, including the other fifteen. For that gate to mean anything it has to be deterministic — today every function asks for a floating `@supabase/supabase-js@2` with no lockfile, and two careful runs of the same commit disagreed about whether `cron-sessions-sweep` passes. Task 1 therefore pins each function to the exact version already being served and commits a `deno.lock` per slug. That is a freeze, not an upgrade — the same move as Wave 1's `requirements.lock`.
+❓ **Pin the edge functions' supabase-js version, commit a lockfile per function, and let a failing check block the deploy outright?** → *Recommended: **yes**. The alternative is a gate whose verdict depends on what a CDN served that morning.*
 
 **D3 — `walk-around-ocr`.**
-It is the in-app walk-around plate OCR (operator photographs a truck, gets the plate back). 210 lines, 25 type errors, no `deno.json`. Task 1 spends most of its effort here. It is genuinely authenticated — it verifies the backend's own JWT — so it is not a security item.
+It is the in-app walk-around plate OCR (operator photographs a truck, gets the plate back). 210 lines and 25 type errors — most of Task 1's effort. It is genuinely authenticated: it verifies the backend's own HS256 JWT and scopes on `properties.tow_company_id`, so it is not a security item. (It *does* have a `deno.json`; the first draft of this decision said otherwise.)
 ❓ **Keep `walk-around-ocr` and fix it, rather than delete it?** → *Recommended: **yes** — it is a live operator feature, and 25 mechanical annotations is an hour.*
 
 **D4 — Whether CI gets a token that can redeploy production.**
@@ -2834,7 +3175,7 @@ Deploy tagging (`deploy-tag.yml`, both repos) writes a git tag and a GitHub rele
 ❓ **Tag-only, no Railway or Vercel API token in GitHub Actions?** → *Recommended: **yes**.*
 
 **D5 — The camera MACs that are already in git.**
-A camera's MAC is its `alpr_cameras.api_key` — the credential the ingest path matches frames against — and both plaza cameras' MACs are committed in seven files across both repos, one of them in a public repo. Task 4 removes them from the working tree. It does **not** rotate the keys in the database (that means reconfiguring two solar cameras over ZeroTier) and does **not** rewrite git history (that means a force-push invalidating every clone).
+A camera's MAC is its `alpr_cameras.api_key` — the credential the ingest path matches frames against — and the plaza cameras' MACs are committed in **8 files, 15 hits** across both repos, one of those repos public. Task 4 removes them from the working tree. It does **not** rotate the keys in the database (that means reconfiguring two solar cameras over ZeroTier) and does **not** rewrite git history (that means a force-push invalidating every clone).
 ❓ **De-commit only for now — leave the two camera keys unrotated and the history intact?** → *Recommended: **yes**, and book the rotation for the next time someone is physically at the plaza.*
 
 **D6 — Square.**
@@ -2857,6 +3198,7 @@ BACKEND-16 ("the biggest files hold several products; 38 functions too long to r
 BACKEND-18 is also merged into 2.9. Half of it lives in `routers/plaza_payments.py`, which this plan may not edit; the other half (`app_otp_codes.attempts`) is already database-backed and already correct. A real global limiter needs a shared table — and Wave 3.2's per-partner API keys need the same table.
 ❓ **Defer BACKEND-18 to Wave 3.2, so the table gets built once?** → *Recommended: **yes**.*
 
-**D11 — Constraining `cancelled_by`.**
-`visitor_passes.cancelled_by` carries a code *and* an operator's free text in one column, and `routers/visitor_passes.py` decides tow-relevant display with a string prefix match on it. Task 14 adds `cancel_reason` for the prose and a `NOT VALID` CHECK constraining new writes to a known set of codes — every historical row keeps working, nothing is dropped, nothing is backfilled.
-❓ **Add `cancel_reason` and constrain new `cancelled_by` writes, leaving history untouched?** → *Recommended: **yes**.*
+**D11 — `cancelled_by` (amended after pre-flight).**
+`visitor_passes.cancelled_by` carries an identity *and* a reason composed into one string, and `routers/visitor_passes.py` decides tow-relevant display with a prefix match on it. The first draft of this plan proposed a `CHECK` restricting it to a code list. **Production data says that would have broken the live cancel path on day one**: the commonest non-`camera_exit` value is an operator's email plus a parenthetical (`standardvendingcompany@gmail.com (operator dismissed via dashboard)` ×98, `t.edwards@nmldtowingllc.com (…)` ×16), and four of the seven guessed codes appear zero times. `NOT VALID` would not have saved it — `NOT VALID` still constrains new rows.
+So Task 14 now adds the `cancel_reason` column and **nothing else**: no constraint, no backfill, no format change. `cancelled_by` keeps composing exactly as it does today, so the Parking Log display and the `camera_exit` prefix match are untouched and this task becomes invisible to users. Splitting `cancelled_by` into a code needs a backfill, and the pass tables are Wave 3.6's.
+❓ **Add `cancel_reason` only — no constraint on `cancelled_by`, and leave the split to Wave 3.6?** → *Recommended: **yes**.*
