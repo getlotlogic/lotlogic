@@ -105,14 +105,16 @@ with which pair of keys is set, every call 401s. The redirect URI must match
 byte-for-byte between Intuit's app config and `QUICKBOOKS_REDIRECT_URI`:
 `https://lotlogic-backend-production.up.railway.app/quickbooks/oauth/callback`.
 Required scope: `com.intuit.quickbooks.accounting` (hardcoded in
-`build_authorize_url`). To reconnect: as the owner account, `GET
+`build_authorize_url`). To reconnect: as a platform admin (JWT with
+`is_platform_admin` set, or the service `X-API-Key` — `routers/quickbooks.py`
+gates both routes on `require_platform_admin`, not ordinary owner auth), `GET
 /quickbooks/oauth/start` (dashboard Billing tab → Connect QuickBooks) → sign
 into the Intuit account that owns the real company → pick that company, not
 a sandbox one → Intuit redirects to `.../quickbooks/oauth/callback` → the
 backend exchanges the code, **upserts the `integrations` row keyed on
 `(provider, realm_id)`**, and creates the "Tow Processing Fee" Item if
-missing. Verify with `GET /quickbooks/status` (owner JWT) — expect
-`{"connected": true, "realm_id": ..., "tow_item_id": ...}`. A `Token
+missing. Verify with `GET /quickbooks/status` (same platform-admin auth) —
+expect `{"connected": true, "realm_id": ..., "tow_item_id": ...}`. A `Token
 exchange failed` error means the refresh token expired or OAuth was never
 completed in the target env; re-run the flow.
 
