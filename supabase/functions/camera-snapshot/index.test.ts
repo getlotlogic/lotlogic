@@ -790,3 +790,73 @@ Deno.test("no-reg: unmatched burst <10s span creates brief violation row", async
   assertEquals(capturedInserts.length, 1);
   assertEquals(capturedInserts[0].presence_strength, "brief");
 });
+
+// ---------------------------------------------------------------------------
+// R2 object keys + evidence copy (path.ts) — Wave 2.5 retention, Task 8a
+// ---------------------------------------------------------------------------
+
+import { objectKey, evidenceKey, makeR2Copier } from "./path.ts";
+
+Deno.test("objectKey: reads/ shape — property/day/camera-epoch-plate", () => {
+  const key = objectKey("reads", "prop-1", "2026-09-14", "CAM01-1757844000000-ABC123.jpg");
+  assertEquals(key, "reads/prop-1/2026-09-14/CAM01-1757844000000-ABC123.jpg");
+});
+
+Deno.test("objectKey: diag/ shape — sidecar-rejected frame", () => {
+  const key = objectKey("diag", "prop-1", "2026-09-14", "CAM01-1757844000000-rejected-empty_scene.jpg");
+  assertEquals(key, "diag/prop-1/2026-09-14/CAM01-1757844000000-rejected-empty_scene.jpg");
+});
+
+Deno.test("objectKey: diag/ shape — PR-rejected frame (no plate)", () => {
+  const key = objectKey("diag", "prop-1", "2026-09-14", "CAM01-1757844000000-rejected-pr_no_plate.jpg");
+  assertEquals(key, "diag/prop-1/2026-09-14/CAM01-1757844000000-rejected-pr_no_plate.jpg");
+});
+
+Deno.test("objectKey: debug/ shape — sidecar-empty raw capture (unchanged from before Task 8a)", () => {
+  const key = objectKey("debug", "prop-1", "2026-09-14", "sidecarempty-CAM01-1757844000000.jpg");
+  assertEquals(key, "debug/prop-1/2026-09-14/sidecarempty-CAM01-1757844000000.jpg");
+});
+
+Deno.test("evidenceKey: property/violation shape — no date segment", () => {
+  const key = evidenceKey("prop-1", "viol-abc-123");
+  assertEquals(key, "evidence/prop-1/viol-abc-123.jpg");
+});
+
+Deno.test("makeR2Copier: issues a CopyObject (x-amz-copy-source), not a re-upload", async () => {
+  let captured: Request | undefined;
+  const fakeFetch = async (req: Request) => {
+    captured = req;
+    return new Response("", { status: 200 });
+  };
+  const copy = makeR2Copier({
+    accountId: "acct",
+    bucket: "parking-snapshots",
+    accessKeyId: "AKIA",
+    secretAccessKey: "secret",
+    fetchImpl: fakeFetch as unknown as typeof fetch,
+  });
+  const r = await copy("reads/prop-1/2026-09-14/CAM01-1-ABC123.jpg", "evidence/prop-1/viol-1.jpg");
+  assertEquals(r.ok, true);
+  assertEquals(captured?.method, "PUT");
+  assertEquals(
+    captured?.headers.get("x-amz-copy-source"),
+    "/parking-snapshots/reads/prop-1/2026-09-14/CAM01-1-ABC123.jpg",
+  );
+  // No body is sent — the whole point of CopyObject is that no bytes travel
+  // through this function.
+  assertEquals(captured?.body, null);
+});
+
+Deno.test("makeR2Copier: surfaces error on 4xx without throwing", async () => {
+  const fakeFetch = async () => new Response("not found", { status: 404 });
+  const copy = makeR2Copier({
+    accountId: "acct",
+    bucket: "parking-snapshots",
+    accessKeyId: "AKIA",
+    secretAccessKey: "secret",
+    fetchImpl: fakeFetch as unknown as typeof fetch,
+  });
+  const r = await copy("reads/prop-1/2026-09-14/missing.jpg", "evidence/prop-1/viol-2.jpg");
+  assertEquals(r.ok, false);
+  if (!r.ok) assertEquals(r.error.includes("404"), true);
+});

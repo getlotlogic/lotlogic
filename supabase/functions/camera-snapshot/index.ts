@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { makeR2Uploader } from "../pr-ingest/r2.ts";
 import { normalizePlate } from "../pr-ingest/normalize.ts";
 import { extractFromRequest } from "./extract.ts";
-import { parsePath } from "./path.ts";
+import { parsePath, objectKey, evidenceKey, makeR2Copier } from "./path.ts";
 import { findSimilarOpenSession, findRecentSessionByCamera, findRecentPrCallForCamera, findActiveResident, findActiveVisitorPass, insertSession, decideExitOutcome, applyExitOutcome, findCooldownPriorSession, type CooldownHit } from "./sessions.ts";
 import { handleTruckPlazaExit } from "./truck_plaza_exit.ts";
 import { isPlateHeld } from "./holds.ts";
@@ -183,6 +183,29 @@ const r2 = makeR2Uploader({
   secretAccessKey: R2_SECRET_ACCESS_KEY,
   publicBaseUrl: R2_PUBLIC_BASE_URL,
 });
+const r2Copy = makeR2Copier({
+  accountId: R2_ACCOUNT_ID,
+  bucket: R2_BUCKET_NAME,
+  accessKeyId: R2_ACCESS_KEY_ID,
+  secretAccessKey: R2_SECRET_ACCESS_KEY,
+});
+
+// Fire-and-forget copy of the violation-triggering frame into evidence/.
+// R2 CopyObject is metadata-only (no bytes re-uploaded). A failed copy
+// must never fail the violation insert — this only logs a warning; the
+// read's own object under reads/ (still referenced by plate_events.image_url)
+// is the fallback for as long as its own lifecycle rule keeps it.
+function copyToEvidence(sourceKey: string, destKey: string): void {
+  const task = r2Copy(sourceKey, destKey)
+    .then((res) => {
+      if (!res.ok) console.warn(`[evidence-copy] ${destKey}: ${res.error}`);
+    })
+    .catch((err) => {
+      console.warn(`[evidence-copy] threw for ${destKey}: ${err instanceof Error ? err.message : err}`);
+    });
+  const runtime = (globalThis as unknown as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+  if (runtime?.waitUntil) runtime.waitUntil(task);
+}
 
 // Global kill switch. When SYSTEM_PAUSED=true, the function 200s immediately
 // without processing — cameras keep firing HTTP pushes, but we don't touch
@@ -388,7 +411,7 @@ Deno.serve(async (req: Request) => {
             .gte("at", new Date(Date.now() - 60_000).toISOString());
           if ((recent.count ?? 0) < 5) {
             const dateStr = new Date().toISOString().slice(0, 10);
-            const key = `debug/${camera.property_id}/${dateStr}/sidecarempty-${camera.api_key}-${Date.now()}.jpg`;
+            const key = objectKey("debug", camera.property_id, dateStr, `sidecarempty-${camera.api_key}-${Date.now()}.jpg`);
             const up = await r2(key, extracted.bytes);
             if (up.ok) debugUrl = up.url;
           }
@@ -625,7 +648,7 @@ Deno.serve(async (req: Request) => {
             const epochMs = nowDate.getTime();
             const dateStr = nowDate.toISOString().slice(0, 10);
             const reason = sidecar.reason ?? "no_plate";
-            const key = `${camera.property_id}/${dateStr}/diag-${camera.api_key}-${epochMs}-rejected-${reason}.jpg`;
+            const key = objectKey("diag", camera.property_id, dateStr, `${camera.api_key}-${epochMs}-rejected-${reason}.jpg`);
             let imageUrl: string | null = null;
             let imageError: string | null = null;
             const upRes = await r2(key, extracted.bytes);
@@ -900,7 +923,7 @@ Deno.serve(async (req: Request) => {
         const nowDate = new Date();
         const epochMs = nowDate.getTime();
         const dateStr = nowDate.toISOString().slice(0, 10);
-        const key = `${camera.property_id}/${dateStr}/diag-${camera.api_key}-${epochMs}-rejected-pr_no_plate.jpg`;
+        const key = objectKey("diag", camera.property_id, dateStr, `${camera.api_key}-${epochMs}-rejected-pr_no_plate.jpg`);
         let imageUrl: string | null = null;
         let imageError: string | null = null;
         const upRes = await r2(key, extracted.bytes);
@@ -974,7 +997,7 @@ Deno.serve(async (req: Request) => {
       // property / day / camera / epoch / plate so evidence is easy to find.
       const epochMs = now.getTime();
       const dateStr = now.toISOString().slice(0, 10);
-      const key = `${camera.property_id}/${dateStr}/${camera.api_key}-${epochMs}-${plateUpper}.jpg`;
+      const key = objectKey("reads", camera.property_id, dateStr, `${camera.api_key}-${epochMs}-${plateUpper}.jpg`);
       let imageUrl: string | null = null;
       let imageError: string | null = null;
       const upRes = await r2(key, extracted.bytes);
@@ -1387,6 +1410,17 @@ Deno.serve(async (req: Request) => {
             vehicle_color: mmcData?.color ?? null,
           }).select("id").single();
           if (vIns.error) throw vIns.error;
+
+          // Evidence copy: stamp the deterministic evidence/ key onto the
+          // violation row (cheap, worth awaiting), then copy the actual
+          // bytes fire-and-forget below. `key` is this read's own reads/
+          // object built above — the frame that triggered this violation.
+          const evidenceDestKey = evidenceKey(camera.property_id, vIns.data.id);
+          const evUpd = await db.from("alpr_violations")
+            .update({ evidence_photo_url: evidenceDestKey })
+            .eq("id", vIns.data.id);
+          if (evUpd.error) console.warn(`[evidence-copy] failed to stamp evidence_photo_url for ${vIns.data.id}: ${evUpd.error.message}`);
+          copyToEvidence(key, evidenceDestKey);
 
           const sUpd = await db.from("plate_sessions")
             .update({ violation_id: vIns.data.id, updated_at: now.toISOString() })
