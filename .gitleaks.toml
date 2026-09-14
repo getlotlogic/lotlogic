@@ -1,0 +1,35 @@
+# Secret scanning for CI. The Claude Code PreToolUse hook
+# (.claude/hooks/pre-commit-secrets-scan.sh) stays as it is — it catches things
+# earlier. This catches everything the hook cannot see: a terminal commit, a
+# teammate, another tool. Wave 2.9 Task 5 (SEC-15).
+title = "LotLogic"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "lotlogic-camera-api-key"
+description = "A camera MAC is an alpr_cameras.api_key — a credential, not an identifier"
+# Milesight OUI. Wave 2.9 Task 4 removed the committed ones; this keeps them out.
+regex = '''1cc316[0-9a-f]{6}'''
+tags = ["lotlogic", "camera"]
+
+[allowlist]
+description = "Narrow, justified exceptions. Every entry needs a reason."
+paths = [
+  # Frozen history. Rewriting it is a separate decision (see RECOVERY.md §12.4).
+  '''^docs/archive/''',
+  # The scanner's own rule file necessarily contains the patterns it matches.
+  '''^\.gitleaks\.toml$''',
+]
+regexes = [
+  # Placeholder credentials this repo deliberately publishes as examples.
+  '''aabbccddee[0-9a-f]{2}''',
+  '''your-secret-api-key-here''',
+  '''ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx''',
+  # Playwright fixture token literal, tagged -test- on both ends so it reads
+  # unambiguously as synthetic: tests/e2e/hq.spec.ts, tests/a11y/hq.spec.ts,
+  # tests/visual/hq-dom.mjs seed localStorage with this value; it is never a
+  # real backend-issued JWT and grants nothing outside the mocked page.
+  '''hq-test-token-test-only''',
+]
