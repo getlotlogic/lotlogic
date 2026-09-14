@@ -165,7 +165,7 @@ function showTruckPlazaForm() {
       <label for="plate">Truck License Plate <span class="required">*</span> <span style="opacity:.7;font-weight:normal;">(front-of-tractor)</span></label>
       <input type="text" id="plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off">
       <div style="font-size:12px;opacity:.65;margin-top:4px;">Plate characters only — no state or province</div>
-      <div id="preflightMsg" style="font-size:13px;color:#9A5530;margin-top:-8px;margin-bottom:8px;font-family:'DM Mono',monospace;letter-spacing:.04em;"></div>
+      <div id="preflightMsg" style="font-size:13px;color:var(--terra-deep);margin-top:-8px;margin-bottom:8px;font-family:'DM Mono',monospace;letter-spacing:.04em;"></div>
 
       <label for="backPlate">Trailer / Rear License Plate <span class="required">*</span></label>
       <input type="text" id="backPlate" class="plate-input" placeholder="XYZ 5678" required maxlength="10" autocomplete="off">

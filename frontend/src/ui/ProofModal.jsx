@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../lib/supabase.js';
 import { isVehicleInZone } from '../lib/geometry.js';
 import { colorHex } from '../lib/vehicles.js';
+import { resolveCameraSnapshot } from '../lib/db.js';
 
 // ── Image zoom overlay ──────────────────────────────────────
 export function ImageZoom({ src, alt, onClose }) {
