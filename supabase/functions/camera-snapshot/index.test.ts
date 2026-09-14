@@ -625,6 +625,12 @@ function makeNoRegDb(opts: {
         const builder: any = {
           select(_cols: string) { return builder; },
           eq(_col: string, _val: unknown) { return builder; },
+          // `.in("status", ["active","expired"])` — added to the production
+          // query on 2026-05-29 (C2) and missing here ever since, which threw
+          // `db.from(...).select(...).eq(...).in is not a function` and left
+          // two tests red for eleven weeks with nothing watching. Wave 2.9
+          // Task 3 is the gate that makes that impossible to repeat.
+          in(_col: string, _vals: unknown[]) { return builder; },
           is(_col: string, _val: unknown) { return builder; },
           order(_col: string, _opts: unknown) { return builder; },
           limit(_n: number) {
