@@ -8,8 +8,10 @@
 
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+// Every other function in this tree coalesces; this one did not, so
+// createClient() was typed `string | undefined`.
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const JWT_SECRET = Deno.env.get("JWT_SECRET") ?? "";
 const PR_TOKEN = Deno.env.get("PLATE_RECOGNIZER_TOKEN") ?? Deno.env.get("PLATE_RECOGNIZER_API_KEY") ?? "";
 const PR_MIN_SCORE = Number(Deno.env.get("PR_MIN_SCORE") ?? "0.5");
@@ -21,7 +23,7 @@ const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24;
 
 const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-function json(status, body) {
+function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status, headers: { "Content-Type": "application/json", "Connection": "keep-alive" },
   });
@@ -33,17 +35,17 @@ function corsHeaders() {
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   };
 }
-function normalizePlate(s) {
+function normalizePlate(s: string): string {
   if (!s) return "";
   return s.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
-function yyyymmdd(d) {
+function yyyymmdd(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}${m}${day}`;
 }
-function b64urlToBytes(s) {
+function b64urlToBytes(s: string): Uint8Array {
   s = s.replace(/-/g, "+").replace(/_/g, "/");
   const pad = s.length % 4;
   if (pad) s += "=".repeat(4 - pad);
@@ -52,12 +54,12 @@ function b64urlToBytes(s) {
   for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
   return arr;
 }
-function bytesToB64url(arr) {
+function bytesToB64url(arr: Uint8Array): string {
   let s = "";
   for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
   return btoa(s).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
-async function verifyBackendJwt(token) {
+async function verifyBackendJwt(token: string) {
   if (!JWT_SECRET) return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -76,7 +78,16 @@ async function verifyBackendJwt(token) {
   if (typeof payload.exp === "number" && payload.exp < now) return null;
   return payload;
 }
-async function resolveSubject(req) {
+// Explicit discriminated-union return type: without it TS's inferred return
+// type didn't narrow `status` on the `!subject.ok` branch below (surfaced by
+// the strict check, not by the plan's prescribed fix set — see Wave 2.9
+// Task 1 report).
+async function resolveSubject(
+  req: Request,
+): Promise<
+  | { ok: false; status: number; error: string }
+  | { ok: true; ownerId: string | null; partnerId: string | null; userId: string }
+> {
   const auth = req.headers.get("Authorization") ?? "";
   if (!auth.startsWith("Bearer ")) return { ok: false, status: 401, error: "missing_bearer_token" };
   const token = auth.slice("Bearer ".length).trim();
@@ -87,7 +98,11 @@ async function resolveSubject(req) {
   if (!ownerId && !partnerId) return { ok: false, status: 403, error: "no_property_scope" };
   return { ok: true, ownerId, partnerId, userId: String(claims.sub ?? "") };
 }
-async function canAccessProperty(propertyId, ownerId, partnerId) {
+async function canAccessProperty(
+  propertyId: string,
+  ownerId: string | null,
+  partnerId: string | null,
+): Promise<boolean> {
   if (ownerId) {
     const { data, error } = await adminClient
       .from("properties").select("id").eq("id", propertyId).eq("owner_id", ownerId).maybeSingle();
@@ -100,11 +115,18 @@ async function canAccessProperty(propertyId, ownerId, partnerId) {
   }
   return false;
 }
-async function callPlateRecognizer(imageBytes) {
+// Uint8Array<ArrayBuffer>, not the bare (ArrayBufferLike-backed) Uint8Array:
+// the caller always passes bytes read via file.arrayBuffer(), and Blob's
+// constructor below requires an ArrayBuffer-backed view, not the wider
+// ArrayBufferLike (which also covers SharedArrayBuffer).
+async function callPlateRecognizer(imageBytes: Uint8Array<ArrayBuffer>) {
   if (!PR_TOKEN) return { ok: false, status: 500, bodyText: "PLATE_RECOGNIZER_TOKEN missing" };
   const fd = new FormData();
-  const imagePart = imageBytes.buffer.slice(imageBytes.byteOffset, imageBytes.byteOffset + imageBytes.byteLength);
-  fd.append("upload", new Blob([imagePart], { type: "image/jpeg" }), "walkaround.jpg");
+  // Blob accepts a TypedArray directly (reading exactly its byteOffset/
+  // byteLength view) — the old `.buffer.slice(...)` copy typed as
+  // ArrayBuffer | SharedArrayBuffer, and Blob's constructor doesn't accept
+  // the latter. Same bytes, no copy needed.
+  fd.append("upload", new Blob([imageBytes], { type: "image/jpeg" }), "walkaround.jpg");
   // Ask Plate Recognizer for make/model/color (paid MMC add-on). If the plan
   // doesn't include it, PR still returns the plate; the mmc fields just come
   // back empty. Toggle off via PR_MMC=false.
@@ -118,7 +140,10 @@ async function callPlateRecognizer(imageBytes) {
     });
   } catch (err) {
     clearTimeout(timer);
-    const reason = err?.name === "AbortError" ? "timeout" : (err?.message ?? "fetch_failed");
+    // Deno types a catch binding as `unknown`. Narrow once, here, rather than
+    // at each property access.
+    const e = err as { name?: string; message?: string } | null;
+    const reason = e?.name === "AbortError" ? "timeout" : (e?.message ?? "fetch_failed");
     return { ok: false, status: 0, bodyText: reason };
   }
   clearTimeout(timer);
@@ -126,10 +151,22 @@ async function callPlateRecognizer(imageBytes) {
   return { ok: true, data: await res.json() };
 }
 
+/** One Plate Recognizer `results[]` entry, in the fields this function reads. */
+type PrResult = {
+  plate?: string;
+  score?: number;
+  candidates?: Array<{ plate?: string; score?: number }>;
+  model_make?: Array<{ make?: string; model?: string; score?: number }>;
+  color?: Array<{ color?: string; score?: number }>;
+  orientation?: Array<{ orientation?: string; score?: number }>;
+  vehicle?: { type?: string; score?: number };
+  region?: { code?: string; score?: number };
+};
+
 // Pull the vehicle make/model/color/type/region/orientation out of a single
 // Plate Recognizer result object. All fields optional (depend on MMC plan +
 // what PR could see in the frame).
-function extractVehicle(r) {
+function extractVehicle(r: PrResult | null | undefined) {
   if (!r || typeof r !== "object") return null;
   const mm = Array.isArray(r.model_make) && r.model_make[0] ? r.model_make[0] : null;
   const col = Array.isArray(r.color) && r.color[0] ? r.color[0] : null;
@@ -187,20 +224,20 @@ Deno.serve(async (req) => {
       plate_text: null, plate_confidence: 0, candidates: [], vehicle: null,
     });
   }
-  const results = Array.isArray(pr.data.results) ? pr.data.results : [];
+  const results: PrResult[] = Array.isArray(pr.data.results) ? pr.data.results : [];
   // Keep the full result object for the top read so we can pull its vehicle
   // attributes (make/model/color/type) — they live alongside the plate.
   const scored = results
-    .map((r) => ({ r, plate: normalizePlate(r.plate), score: Number(r.score ?? 0) }))
-    .filter((x) => x.plate.length > 0)
-    .sort((a, b) => b.score - a.score);
+    .map((r: PrResult) => ({ r, plate: normalizePlate(r.plate ?? ""), score: Number(r.score ?? 0) }))
+    .filter((x: { plate: string }) => x.plate.length > 0)
+    .sort((a: { score: number }, b: { score: number }) => b.score - a.score);
   const top = scored[0] ?? null;
   const best = top ? { plate: top.plate, score: top.score } : { plate: "", score: 0 };
   const vehicle = extractVehicle(top?.r);
   const candidates = results
-    .flatMap((r) => r.candidates ?? [])
-    .map((c) => ({ plate: normalizePlate(c.plate), score: Number(c.score ?? 0) }))
-    .filter((c) => c.plate.length > 0).sort((a, b) => b.score - a.score).slice(0, 3);
+    .flatMap((r: PrResult) => r.candidates ?? [])
+    .map((c: { plate?: string; score?: number }) => ({ plate: normalizePlate(c.plate ?? ""), score: Number(c.score ?? 0) }))
+    .filter((c: { plate: string }) => c.plate.length > 0).sort((a: { score: number }, b: { score: number }) => b.score - a.score).slice(0, 3);
   return json(200, {
     ok: true, property_id: propertyId, photo_path: objectPath, photo_signed_url: photoSignedUrl,
     plate_text: best.score >= PR_MIN_SCORE ? best.plate : "",

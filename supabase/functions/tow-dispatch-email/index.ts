@@ -1,9 +1,18 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.116.0";
 
 // Internal-only function — gated by INTERNAL_TOKEN, never called from a
 // browser, so no CORS preflight needed.
-function json(body: unknown, status: number) {
+//
+// `status` defaults to 200: the three "we deliberately did not dispatch"
+// branches (violation_dismissed, pass_exited_or_cancelled, vehicle_exiting)
+// are successful outcomes, and all three called json() with one argument.
+// The signature said otherwise for months and nothing type-checked it.
+// (The deployed function already carried this fix, made out-of-band
+// sometime after its 2026-05-30 deploy without a matching commit — this
+// brings the repo back in sync with what's actually running. See Wave
+// 2.9 Task 1 report.)
+function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },

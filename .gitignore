@@ -21,9 +21,6 @@ venv/
 node_modules/
 package-lock.json
 
-# Deno (supabase edge functions)
-supabase/functions/**/deno.lock
-
 # OS
 .DS_Store
 Thumbs.db

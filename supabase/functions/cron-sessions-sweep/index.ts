@@ -461,7 +461,21 @@ async function sweepUnexitedPassesForOverstay(): Promise<number> {
     // backfill the actual exit camera + event ids onto the pass row.
     // Recent → dispatchable 'pending'. Stale → 'dismissed'/'no_tow', logged
     // only, never dispatched (vehicle presumed gone).
-    const row = stale
+    //
+    // Two shapes, one type. The stale branch carries action_taken/action_channel
+    // (logged, never dispatched); the recent branch does not. Without this
+    // annotation TS infers a union and supabase-js's RejectExcessProperties
+    // rejects the insert — see Wave 2.9 Task 1.
+    type OverstayViolationRow = {
+      property_id: string;
+      plate_text: string;
+      status: string;
+      violation_type: string;
+      notes: string;
+      action_taken?: string;
+      action_channel?: string;
+    };
+    const row: OverstayViolationRow = stale
       ? {
           property_id: p.property_id,
           plate_text: p.plate_text,
