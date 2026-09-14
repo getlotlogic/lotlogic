@@ -1099,7 +1099,7 @@ PLAZA_CAMERA_API_KEY = os.environ.get("PLAZA_CAMERA_API_KEY", "aabbccddee01")
 PLAZA_CAMERA_API_KEY_2 = os.environ.get("PLAZA_CAMERA_API_KEY_2", "aabbccddee02")
 ```
 
-`tests/plaza/test_tow_sightings_endpoints.py:54` asserts the literal `"1cc316536fb5"` with the comment "the archiver keys its camera credentials off this and cannot work without it" — that assertion is still worth making, so change it to compare against `PLAZA_CAMERA_API_KEY` imported from the conftest. The test keeps its meaning ("the endpoint returns the camera's key") and stops publishing the key.
+`tests/plaza/test_tow_sightings_endpoints.py:54` asserts the literal `"<camera-mac>"` with the comment "the archiver keys its camera credentials off this and cannot work without it" — that assertion is still worth making, so change it to compare against `PLAZA_CAMERA_API_KEY` imported from the conftest. The test keeps its meaning ("the endpoint returns the camera's key") and stops publishing the key.
 
 **Do not rotate `alpr_cameras.api_key` in the database.** Rotation means reconfiguring two solar cameras over ZeroTier and is a site-visit risk during enforcement hours. De-committing is this task; rotating is decision **D5**.
 
@@ -1222,7 +1222,7 @@ jobs:
 V=8.18.4  # or brew install gitleaks
 gitleaks detect --source . --no-git --config .gitleaks.toml --redact --exit-code 1 --verbose
 ```
-Expect `no leaks found`. Then: `echo 'const k = "1cc3166600aa";' > /tmp/x.ts && cp /tmp/x.ts ./leaktest.ts`, re-run — expect exit 1 and a redacted finding. `rm leaktest.ts`.
+Expect `no leaks found`. Then: `echo 'const k = "<camera-mac>";' > /tmp/x.ts && cp /tmp/x.ts ./leaktest.ts`, re-run — expect exit 1 and a redacted finding. `rm leaktest.ts`.
 
 If the tree scan is **not** clean, do not widen the allowlist to make it pass. Report what it found; a finding here is the point of the task.
 

@@ -212,7 +212,7 @@ The doc merges seven findings into 2.1. Decisions, made here so no executor re-l
 | # | Constant / value | Where it lives today | Proposed config key |
 |---|---|---|---|
 | 50 | `tow_footage_retention_days = 10` | `config.py:251` | `tow_evidence.footage_retention_days` |
-| 51 | `tow_footage_retention_overrides` — `"api_key:days,api_key:days"`, set to `1cc31653ac72:2` on Railway | `config.py:258`, parsed by `services/tow_retention.py::parse_overrides`, read at `services/tow_digest.py:470` and `routers/ops.py:399-400` | `tow_evidence.cameras.<api_key>.footage_retention_days` |
+| 51 | `tow_footage_retention_overrides` — `"api_key:days,api_key:days"`, set to `<camera-mac>:2` on Railway | `config.py:258`, parsed by `services/tow_retention.py::parse_overrides`, read at `services/tow_digest.py:470` and `routers/ops.py:399-400` | `tow_evidence.cameras.<api_key>.footage_retention_days` |
 | 52 | `tow_clips_bucket` | `config.py:267` | *(stays in env — it is infrastructure, not policy)* |
 
 ### Per-property columns with no user interface (PLATFORM-2)
@@ -1710,7 +1710,7 @@ Precedence, in one place: `notices.dispatch_enabled = false` → `Resolved(to=[]
 - Modify: `services/tow_retention.py`, `services/tow_digest.py:470-471`, `routers/ops.py:399-400`
 - Test: `tests/test_tow_retention.py` (extend), `tests/plaza/test_tow_sightings_service.py` (extend)
 
-**Why this one and not another.** `TOW_FOOTAGE_RETENTION_OVERRIDES` is the per-camera override pattern that *already shipped* — `"1cc31653ac72:2"` typed into a Railway variable box, parsed by a hand-rolled string splitter that silently skips a malformed entry, because the north camera's SD card recycles in ~2.3 days while the south's takes ~32. It is exactly the shape Wave 3.4 needs for `alpr_cameras.config`, and it is the safest possible place to prove that shape: two cameras, one site, and the worst case of getting it wrong is a digest line that says the wrong expiry date rather than a truck that gets towed.
+**Why this one and not another.** `TOW_FOOTAGE_RETENTION_OVERRIDES` is the per-camera override pattern that *already shipped* — `"<camera-mac>:2"` typed into a Railway variable box, parsed by a hand-rolled string splitter that silently skips a malformed entry, because the north camera's SD card recycles in ~2.3 days while the south's takes ~32. It is exactly the shape Wave 3.4 needs for `alpr_cameras.config`, and it is the safest possible place to prove that shape: two cameras, one site, and the worst case of getting it wrong is a digest line that says the wrong expiry date rather than a truck that gets towed.
 
 **Interfaces:** `camera_retention_days(cfg: PropertyConfig, api_key: str, settings) -> int` — prefers `cfg.tow_evidence.cameras[api_key].footage_retention_days`, falls back to `parse_overrides(settings.tow_footage_retention_overrides)`, falls back to `cfg.tow_evidence.footage_retention_days`, falls back to `settings.tow_footage_retention_days`. `parse_overrides` itself is **unchanged** — its `days < 1` rejection and its skip-a-malformed-entry behaviour are load-bearing and already tested.
 
@@ -1857,7 +1857,7 @@ Each one is a thing you can picture, then one yes/no question with the answer I 
 **Q: Standardise on 15 minutes (the number that already governs enforcement) rather than 10?** *Recommended: **yes**. It is the behaviour you already have; making the other copy agree just stops the next reader mis-predicting the system.*
 
 **10. The camera-retention overrides in the Railway box.**
-*What/where:* `TOW_FOOTAGE_RETENTION_OVERRIDES=1cc31653ac72:2` is a string in a Railway variable box saying the north camera's SD card only holds about two days of footage, against a ten-day default. It works. It is also the exact shape every future per-camera setting wants, and it is invisible to anyone who does not know to look in Railway.
+*What/where:* `TOW_FOOTAGE_RETENTION_OVERRIDES=<camera-mac>:2` is a string in a Railway variable box saying the north camera's SD card only holds about two days of footage, against a ten-day default. It works. It is also the exact shape every future per-camera setting wants, and it is invisible to anyone who does not know to look in Railway.
 **Q: Move it into the property's config (keeping the Railway variable working as a fallback for one release) so it shows up in the editor alongside everything else?** *Recommended: **yes**. Low stakes — the worst case of getting it wrong is a wrong expiry date in a digest email — which is exactly why it is the right place to prove the pattern before Wave 3.4 uses it on the tow path.*
 
 **11. The three plaza files this wave has to leave alone.**
