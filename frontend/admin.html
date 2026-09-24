@@ -724,22 +724,48 @@
       const [ownerOn, setOwnerOn] = useState(true);
       const [ownerName, setOwnerName] = useState('');
       const [ownerEmail, setOwnerEmail] = useState('');
-      const [partnerOn, setPartnerOn] = useState(false);
+      // Tow partner: 'none' | 'existing' (link an account that already has a
+      // portal, e.g. a tow company picking up another property) | 'new'.
+      const [partnerMode, setPartnerMode] = useState('none');
+      const [existingPartnerId, setExistingPartnerId] = useState('');
+      const [partners, setPartners] = useState([]);
       const [partnerName, setPartnerName] = useState('');
       const [partnerEmail, setPartnerEmail] = useState('');
       const [busy, setBusy] = useState(false);
       const [error, setError] = useState('');
       const [result, setResult] = useState(null);
 
+      useEffect(() => {
+        let alive = true;
+        (async () => {
+          try {
+            const data = await apiFetch('/admin/clients');
+            const rows = Array.isArray(data) ? data : (data?.clients || []);
+            const seen = new Map();
+            for (const c of rows) {
+              const id = c.partner_id || c.tow_company_id;
+              if (!id || seen.has(id)) continue;
+              seen.set(id, { id, label: c.partner_name || c.partner_email || id, email: c.partner_email || '' });
+            }
+            if (alive) setPartners([...seen.values()].sort((a, b) => a.label.localeCompare(b.label)));
+          } catch (err) {
+            if (err instanceof AuthError) return onAuthExpired();
+            // The dropdown just stays empty; creating a new partner still works.
+          }
+        })();
+        return () => { alive = false; };
+      }, [onAuthExpired]);
+
       async function submit(e) {
         e.preventDefault();
         if (!name.trim() || !address.trim()) { setError('Property name and address are required.'); return; }
+        if (partnerMode === 'existing' && !existingPartnerId) { setError('Pick the partner to link, or choose "No partner yet".'); return; }
         setBusy(true); setError(''); setResult(null);
         const payload = {
           property: { name: name.trim(), address: address.trim(), property_type: propertyType },
           owner: ownerOn ? { name: ownerName.trim(), email: ownerEmail.trim() } : null,
-          partner: partnerOn ? { name: partnerName.trim(), email: partnerEmail.trim() } : null,
-          existing_partner_id: null,
+          partner: partnerMode === 'new' ? { name: partnerName.trim(), email: partnerEmail.trim() } : null,
+          existing_partner_id: partnerMode === 'existing' ? existingPartnerId : null,
         };
         try {
           const res = await apiFetch('/admin/clients', {
@@ -751,7 +777,7 @@
           // Reset the form; the success block carries the setup links.
           setName(''); setAddress('');
           setOwnerName(''); setOwnerEmail('');
-          setPartnerName(''); setPartnerEmail(''); setPartnerOn(false);
+          setPartnerName(''); setPartnerEmail(''); setPartnerMode('none'); setExistingPartnerId('');
         } catch (err) {
           if (err instanceof AuthError) return onAuthExpired();
           setError(err.message);
@@ -820,29 +846,47 @@
             </div>
 
             <div className="fieldset">
-              <div className="group-head">
-                <span className="num-tag">3</span>
-                <label className="toggle-line">
-                  <input type="checkbox" checked={partnerOn} onChange={e => setPartnerOn(e.target.checked)} />
-                  Create a partner account
-                </label>
-              </div>
-              {partnerOn && (
-                <>
-                  <div className="row2">
-                    <div>
-                      <label htmlFor="prname">Partner name</label>
-                      <input id="prname" value={partnerName} onChange={e => setPartnerName(e.target.value)} />
-                    </div>
-                    <div>
-                      <label htmlFor="premail">Partner email</label>
-                      <input id="premail" type="email" value={partnerEmail} onChange={e => setPartnerEmail(e.target.value)} />
-                    </div>
+              <div className="group-head"><span className="num-tag">3</span>Tow partner</div>
+              <div className="row2">
+                <div>
+                  <label htmlFor="pmode">Partner</label>
+                  <select id="pmode" value={partnerMode} onChange={e => setPartnerMode(e.target.value)}>
+                    <option value="none">No partner yet</option>
+                    <option value="existing">Link an existing partner</option>
+                    <option value="new">Create a new partner account</option>
+                  </select>
+                </div>
+                {partnerMode === 'existing' && (
+                  <div>
+                    <label htmlFor="pexisting">Which partner</label>
+                    <select id="pexisting" value={existingPartnerId} onChange={e => setExistingPartnerId(e.target.value)}>
+                      <option value="">Choose…</option>
+                      {partners.map(p => (
+                        <option key={p.id} value={p.id}>{p.label}{p.email && p.label !== p.email ? ` · ${p.email}` : ''}</option>
+                      ))}
+                    </select>
                   </div>
-                  <p className="hint">
-                    For apartments, the partner is also set as the tow company.
-                  </p>
-                </>
+                )}
+              </div>
+              {partnerMode === 'existing' && partners.length === 0 && (
+                <p className="hint">No partner accounts found yet — create one instead.</p>
+              )}
+              {partnerMode === 'new' && (
+                <div className="row2">
+                  <div>
+                    <label htmlFor="prname">Partner name</label>
+                    <input id="prname" value={partnerName} onChange={e => setPartnerName(e.target.value)} />
+                  </div>
+                  <div>
+                    <label htmlFor="premail">Partner email</label>
+                    <input id="premail" type="email" value={partnerEmail} onChange={e => setPartnerEmail(e.target.value)} />
+                  </div>
+                </div>
+              )}
+              {partnerMode !== 'none' && (
+                <p className="hint">
+                  For apartments, the partner is also set as the tow company, so the property shows up in their portal right away.
+                </p>
               )}
             </div>
 
