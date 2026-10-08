@@ -45,9 +45,15 @@ export function UpsellPanel({ feature, propertyName, propertyId }) {
       <button
         onClick={() => setAsking(true)}
         style={{
-          // Spec §5's layout rules: "amber buttons use #1A1206 ink" — `--accent`
-          // is the brand amber, and white text on it fails 4.5:1.
-          marginTop: 16, background: 'var(--accent)', color: '#1A1206', border: 'none',
+          // Spec §5's layout rules: "amber buttons use #1A1206 ink" — the
+          // literal brand amber, NOT `var(--accent)`. `--accent` is
+          // #FBBF24 in dark theme (11.1:1 with #1A1206) but #B85309 in
+          // light theme (3.77:1 with #1A1206 — fails WCAG AA), because
+          // light theme recalibrates `--accent` for use as *text/icon*
+          // color on light surfaces, not as a button fill. The literal
+          // #FBBF24 is the same pairing `AccountPage.jsx`'s Save button and
+          // `dashboard.html`'s `.login-btn` use for exactly this reason.
+          marginTop: 16, background: '#FBBF24', color: '#1A1206', border: 'none',
           borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
         }}
       >Ask LotLogic</button>

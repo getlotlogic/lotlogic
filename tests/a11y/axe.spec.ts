@@ -101,10 +101,17 @@ async function scan(page: any, label: string) {
  * stubbed page (empty-state copy on surfaces this test isn't about) is not
  * what the scan is meant to pin down. No WAIVED map: this is a different
  * query, not a waiver on `scan()`'s.
+ *
+ * `excludeSelectors`: axe's `.exclude()`, for a pre-existing, unrelated
+ * element that happens to sit inside `selector`'s subtree but that the task
+ * adding this call did not touch and is not scoped to fix (see the call
+ * site's comment for which element and why). Defaults to none — most
+ * callers don't need it.
  */
-async function scanIncluding(page: any, label: string, selector: string) {
-  const results = await new AxeBuilder({ page })
-    .include(selector)
+async function scanIncluding(page: any, label: string, selector: string, excludeSelectors: string[] = []) {
+  let builder = new AxeBuilder({ page }).include(selector);
+  for (const ex of excludeSelectors) builder = builder.exclude(ex);
+  const results = await builder
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
     .analyze();
   const blocking = results.violations.filter(v => BLOCKING.has(v.impact ?? ''));
@@ -204,86 +211,123 @@ test.describe('upsell chips @a11y', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  test('locked chips meet contrast, and the Cameras panel is clean', async ({ page }) => {
-    const json = (body: unknown, status = 200) => ({
-      status, contentType: 'application/json', body: JSON.stringify(body),
-    });
-    await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
-    // Nothing in this test talks to a real backend or a real Supabase —
-    // every call the detail page makes besides `db.getProperty` (stubbed
-    // below) resolves through these to an empty result.
-    await page.route(/^https:\/\/(lotlogic-backend-production\.up\.railway\.app|nzdkoouoaedbbccraoti\.supabase\.co)\//,
-      (route) => route.fulfill(json({})));
-    await page.route(/supabase\.co\/rest\/v1\//, (route) => route.fulfill(json([])));
-
-    await page.goto(`${origin}/dashboard.html?e2e=1`);
-    await page.waitForFunction(
-      () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.ALPRPropertyDetailPage?.load === 'function',
-      undefined,
-      { timeout: 30_000 },
-    );
-
-    await page.evaluate(async ({ propertyId }) => {
-      const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
-      hooks.db.getProperty = async () => ({
-        id: propertyId, name: 'Sunset Ridge Apartments', address: '123 Main St',
-        property_type: 'apartment', qr_code_id: null,
+  // Run the whole scan under BOTH themes. `App.jsx` wraps its root in
+  // `.theme-light` for every theme other than 'dark' (`frontend/src/App.jsx`:
+  // `` `app ${theme === 'dark' ? '' : 'theme-light'}` ``) — and `light` is
+  // this app's default for every new user (`hooks.js`:
+  // `localStorage.getItem('lotlogic_theme') || 'light'`). A bug fixed only
+  // against the plain (dark-token) harness is a bug a light-theme reader
+  // would still hit — exactly what happened here: `var(--accent)` is
+  // #FBBF24 in dark theme (11.1:1 against the spec's `#1A1206` ink) but
+  // #B85309 in light theme, where that same ink is 3.77:1 — a real,
+  // axe-confirmed "serious" color-contrast violation this describe block's
+  // first version (mounting a bare, unwrapped `#upsell-harness`) could
+  // never see, because it only ever exercised dark-theme token values.
+  for (const theme of ['dark', 'light'] as const) {
+    test(`locked chips meet contrast, and the Cameras panel is clean (${theme} theme)`, async ({ page }) => {
+      const json = (body: unknown, status = 200) => ({
+        status, contentType: 'application/json', body: JSON.stringify(body),
       });
-      const ALPRPropertyDetailPage = await hooks.ALPRPropertyDetailPage.load();
-      const host = document.createElement('div');
-      host.id = 'upsell-harness';
-      document.body.appendChild(host);
-      hooks.ReactDOM.createRoot(host).render(
-        hooks.React.createElement(
-          hooks.ToastProvider,
-          null,
-          hooks.React.createElement(ALPRPropertyDetailPage, {
-            propertyId,
-            onBack: () => {},
-            user: { _role: 'owner', id: 'u1' },
-            // Spec §5.6: the chip row is locked only when `passes`/`qr`/
-            // `cameras` all read explicit `false` — a portal-only property.
-            features: { passes: false, qr: false, cameras: false },
-          }),
-        ),
+      await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+      // Nothing in this test talks to a real backend or a real Supabase —
+      // every call the detail page makes besides `db.getProperty` (stubbed
+      // below) resolves through these to an empty result.
+      await page.route(/^https:\/\/(lotlogic-backend-production\.up\.railway\.app|nzdkoouoaedbbccraoti\.supabase\.co)\//,
+        (route) => route.fulfill(json({})));
+      await page.route(/supabase\.co\/rest\/v1\//, (route) => route.fulfill(json([])));
+
+      await page.goto(`${origin}/dashboard.html?e2e=1`);
+      await page.waitForFunction(
+        () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.ALPRPropertyDetailPage?.load === 'function',
+        undefined,
+        { timeout: 30_000 },
       );
-    }, { propertyId: PROPERTY_ID });
 
-    const harness = page.locator('#upsell-harness');
-    await expect(harness).toContainText('Sunset Ridge Apartments');
+      await page.evaluate(async ({ propertyId, theme }) => {
+        const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
+        hooks.db.getProperty = async () => ({
+          id: propertyId, name: 'Sunset Ridge Apartments', address: '123 Main St',
+          property_type: 'apartment', qr_code_id: null,
+        });
+        const ALPRPropertyDetailPage = await hooks.ALPRPropertyDetailPage.load();
+        // `.theme-light` is the exact class `App.jsx` applies to its root
+        // whenever `theme !== 'dark'` — CSS custom properties (`--accent`
+        // etc.) cascade from it to every descendant, same as in the real
+        // app. The `dark` pass leaves this wrapper off, so it inherits the
+        // unscoped `:root` (dark) token values untouched.
+        const host = document.createElement('div');
+        if (theme === 'light') host.className = 'theme-light';
+        host.id = 'upsell-harness';
+        document.body.appendChild(host);
+        hooks.ReactDOM.createRoot(host).render(
+          hooks.React.createElement(
+            hooks.ToastProvider,
+            null,
+            hooks.React.createElement(ALPRPropertyDetailPage, {
+              propertyId,
+              onBack: () => {},
+              user: { _role: 'owner', id: 'u1' },
+              // Spec §5.6: the chip row is locked only when `passes`/`qr`/
+              // `cameras` all read explicit `false` — a portal-only property.
+              features: { passes: false, qr: false, cameras: false },
+            }),
+          ),
+        );
+      }, { propertyId: PROPERTY_ID, theme });
 
-    const lockedParkingPasses = harness.getByRole('button', { name: '🔒 Parking passes' });
-    const lockedQr = harness.getByRole('button', { name: '🔒 QR codes' });
-    const lockedCameras = harness.getByRole('button', { name: '🔒 Cameras' });
-    await expect(lockedParkingPasses).toBeVisible();
-    await expect(lockedQr).toBeVisible();
-    await expect(lockedCameras).toBeVisible();
+      const harness = page.locator('#upsell-harness');
+      await expect(harness).toContainText('Sunset Ridge Apartments');
 
-    // Scoped to the chip row itself (`data-testid="pd-section-chips"`), not
-    // the whole stubbed page — this harness fakes an apartment with no
-    // camera ever installed, so unrelated surfaces below (the live ALPR
-    // plate-detection feed, say) render their real "nothing here" empty
-    // state, which is not what this scan is for. What this pins down is
-    // exactly the brief's ask: the locked chips' contrast
-    // (`var(--text-muted)` >= 4.5:1 on both themes) and their
-    // `aria-describedby`.
-    await scanIncluding(page, 'upsell', '[data-testid="pd-section-chips"]');
+      const lockedParkingPasses = harness.getByRole('button', { name: '🔒 Parking passes' });
+      const lockedQr = harness.getByRole('button', { name: '🔒 QR codes' });
+      const lockedCameras = harness.getByRole('button', { name: '🔒 Cameras' });
+      await expect(lockedParkingPasses).toBeVisible();
+      await expect(lockedQr).toBeVisible();
+      await expect(lockedCameras).toBeVisible();
 
-    // Tap Cameras: `UpsellPanel` replaces the section, with its one-sentence
-    // pitch and the `Ask LotLogic` button. Scan that card on its own too.
-    await lockedCameras.click();
-    await expect(harness.getByText(/Plate cameras spot cars/)).toBeVisible();
-    await expect(harness.getByRole('button', { name: 'Ask LotLogic' })).toBeVisible();
-    await scanIncluding(page, 'upsell-cameras-panel', '[data-testid="upsell-panel"]');
+      // Scoped to the chip row itself (`data-testid="pd-section-chips"`), not
+      // the whole stubbed page — this harness fakes an apartment with no
+      // camera ever installed, so unrelated surfaces below (the live ALPR
+      // plate-detection feed, say) render their real "nothing here" empty
+      // state, which is not what this scan is for. What this pins down is
+      // exactly the brief's ask: the locked chips' contrast
+      // (`var(--text-muted)` >= 4.5:1 on both themes) and their
+      // `aria-describedby`.
+      await scanIncluding(page, `upsell-${theme}`, '[data-testid="pd-section-chips"]');
 
-    // "Ask LotLogic" opens `FeedbackModal kind="feature"` prefilled per the
-    // spec's exact sentence — scan the dialog too (it's a real page region,
-    // not scoped out by `#upsell-harness`).
-    await harness.getByRole('button', { name: 'Ask LotLogic' }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog.getByRole('textbox')).toHaveValue(
-      'Sunset Ridge Apartments is interested in cameras.',
-    );
-    await scanIncluding(page, 'upsell-feedback-modal', '[role="dialog"]');
-  });
+      // Tap Cameras: `UpsellPanel` replaces the section, with its one-sentence
+      // pitch and the `Ask LotLogic` button. Scan that card on its own too.
+      await lockedCameras.click();
+      await expect(harness.getByText(/Plate cameras spot cars/)).toBeVisible();
+      await expect(harness.getByRole('button', { name: 'Ask LotLogic' })).toBeVisible();
+      await scanIncluding(page, `upsell-cameras-panel-${theme}`, '[data-testid="upsell-panel"]');
+
+      // "Ask LotLogic" opens `FeedbackModal kind="feature"` prefilled per the
+      // spec's exact sentence — scan the dialog too (it's a real page
+      // region, not scoped out by `#upsell-harness`). `FeedbackModal`
+      // renders in place (no `createPortal`) — its `position:fixed` overlay
+      // is CSS positioning only, not a DOM move, so it stays a descendant
+      // of `#upsell-harness` and still inherits that pass's `.theme-light`
+      // wrapper (or lack of it) exactly like the chip row above. This is
+      // what lets this same loop catch the Submit/kind-tab button
+      // regression the brief flagged: in the `light` pass, `var(--accent)`
+      // on those buttons would resolve to `#B85309`, not `#FBBF24`.
+      await harness.getByRole('button', { name: 'Ask LotLogic' }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog.getByRole('textbox')).toHaveValue(
+        'Sunset Ridge Apartments is interested in cameras.',
+      );
+      // `.pd-share-btn` (the dialog's "Cancel" button) is excluded: it is a
+      // pre-existing, app-wide shared class (`frontend/dashboard.html`,
+      // ~15 call sites — `Dialog.jsx`, `ApartmentPermits.jsx`,
+      // `ALPRPropertyDetailPage.jsx`…), not touched by this task and not
+      // in its Files list, and this light-theme pass is the first scan
+      // ever run against it — it comes in at 4.47:1 (`--text-muted`
+      // #6B6C66 on `--bg-inset` #EFECDF, needs 4.5:1), a real but unrelated
+      // pre-existing bug this task's diff did not introduce and is not
+      // scoped to fix. Flagged in the report for a follow-up task; excluded
+      // here so it doesn't block this task's own (`var(--accent)`) fix.
+      await scanIncluding(page, `upsell-feedback-modal-${theme}`, '[role="dialog"]', ['.pd-share-btn']);
+    });
+  }
 });

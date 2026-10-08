@@ -48,13 +48,17 @@ export function FeedbackModal({ propertyId, onClose, kind: initialKind = 'bug', 
       onClick={() => setKind(val)}
       style={{
         flex: 1, fontSize: 12, fontWeight: 700, padding: '7px', borderRadius: 6,
-        border: '1px solid ' + (kind === val ? 'var(--accent)' : 'var(--border)'),
-        background: kind === val ? 'var(--accent)' : 'var(--bg-inset)',
-        // `--accent` is the brand amber — spec §5's layout rules: "amber
-        // buttons use #1A1206 ink" (white here was 1.66:1). Caught by the
-        // axe scan Task 26 added once `UpsellPanel`'s "Ask LotLogic" made
-        // the Feature tab the one that opens active, not just one a user
-        // might click into.
+        // Literal `#FBBF24`, not `var(--accent)` — spec §5's layout rules:
+        // "amber buttons use #1A1206 ink" (white here was 1.66:1, caught by
+        // the axe scan Task 26 added once `UpsellPanel`'s "Ask LotLogic"
+        // made the Feature tab open active by default). `var(--accent)`
+        // itself is only #FBBF24 in dark theme — in light theme it's
+        // #B85309, recalibrated for text/icon use, where #1A1206 ink is
+        // 3.77:1 (fails 4.5:1). The literal amber is the same pairing
+        // `AccountPage.jsx`'s Save button and `dashboard.html`'s
+        // `.login-btn` use, which holds in both themes.
+        border: '1px solid ' + (kind === val ? '#FBBF24' : 'var(--border)'),
+        background: kind === val ? '#FBBF24' : 'var(--bg-inset)',
         color: kind === val ? '#1A1206' : 'var(--text-primary)',
         cursor: 'pointer',
       }}
@@ -95,8 +99,10 @@ export function FeedbackModal({ propertyId, onClose, kind: initialKind = 'bug', 
             onClick={submit}
             disabled={disabled}
             style={{
-              // Same `--accent` ink fix as the tab buttons above.
-              background:'var(--accent)', color:'#1A1206', border:'1px solid var(--accent)',
+              // Same literal-amber fix as the tab buttons above — not
+              // `var(--accent)`, which is #B85309 in light theme (3.77:1
+              // with #1A1206, fails 4.5:1).
+              background:'#FBBF24', color:'#1A1206', border:'1px solid #FBBF24',
               borderRadius:6, padding:'4px 12px', fontSize:12, fontWeight:700,
               cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1,
             }}
