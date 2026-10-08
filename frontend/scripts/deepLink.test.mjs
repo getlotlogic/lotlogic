@@ -15,6 +15,7 @@ import {
   readPublicRoute,
   readJoinSlug,
   returnToTarget,
+  readJoinReturnTo,
 } from '../src/lib/deepLink.js';
 
 function fakeWin(pathname, search) {
@@ -121,4 +122,31 @@ test('returnToTarget keeps only /app paths and always replays to /app', () => {
   assert.equal(returnToTarget('/join/nstyle?x=1'), null);
   assert.equal(returnToTarget(''), null);
   assert.equal(returnToTarget(null), null);
+});
+
+test('readJoinReturnTo honours only /join and /join/<slug>', () => {
+  assert.deepEqual(readJoinReturnTo('?return_to=%2Fjoin%2Fnstyle'),
+    { present: true, path: '/join/nstyle', slug: 'nstyle', rest: '' });
+  assert.deepEqual(readJoinReturnTo('?return_to=%2Fjoin'),
+    { present: true, path: '/join', slug: null, rest: '' });
+  // Kept: the other keys, in place.
+  assert.equal(readJoinReturnTo('?tab=lots&return_to=%2Fjoin%2Fn-s_1').rest, '?tab=lots');
+  assert.equal(readJoinReturnTo('?tab=lots&return_to=%2Fjoin%2Fn-s_1').slug, 'n-s_1');
+  // Refused, but still `present` so the caller strips the key.
+  for (const bad of [
+    'https://evil.example/join/nstyle', '//evil.example', '/join/', '/join/a/b',
+    '/join/nstyle?x=1', '/join/nstyle#x', '/app', '/joinx', '/join/%2e%2e', 'javascript:alert(1)', '',
+  ]) {
+    const r = readJoinReturnTo(`?return_to=${encodeURIComponent(bad)}`);
+    assert.equal(r.present, true, bad);
+    assert.equal(r.path, null, bad);
+    assert.equal(r.slug, null, bad);
+  }
+  assert.deepEqual(readJoinReturnTo('?tab=lots'), { present: false, path: null, slug: null, rest: '?tab=lots' });
+  assert.equal(readJoinReturnTo(undefined).present, false);
+});
+
+test('returnToTarget leaves a return_to query to App.jsx', () => {
+  assert.equal(returnToTarget('/app?return_to=%2Fjoin%2Fnstyle'), null);
+  assert.equal(returnToTarget('/app?tab=lots&return_to=x'), null);
 });

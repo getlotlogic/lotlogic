@@ -8,7 +8,7 @@ import { useToast } from './ui/Toast.jsx';
 import { SkeletonCards } from './ui/Skeletons.jsx';
 import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview } from './ui/icons.jsx';
 import { lazyPage } from './lib/lazyPage.js';
-import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink } from './lib/deepLink.js';
+import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink, readJoinReturnTo } from './lib/deepLink.js';
 import { navTabsFor, partnerRequestsReady } from './lib/features.js';
 import { verifyState, secondsUntilResend, cooldownRetryAfter, sentAtForRetryAfter } from './lib/verifyState.js';
 import { requestsApi } from './lib/requestsApi.js';
@@ -142,7 +142,7 @@ export function App() {
   // would answer that pathname with the add-property form instead of the
   // dashboard the new account is supposed to land on.
   const [publicRoute, setPublicRoute] = useState(() => readPublicRoute(window.location.pathname));
-  const [publicSlug] = useState(() => readJoinSlug(window.location.pathname));
+  const [publicSlug, setPublicSlug] = useState(() => readJoinSlug(window.location.pathname));
   // `/app?property=…&section=…&request=…&tab=…&firstrun=&verify=&upload=&plate=`
   // — the portal's email and Slack buttons. Captured on mount before anything
   // can rewrite the address bar, applied once the session exists, then cleaned
@@ -449,7 +449,28 @@ export function App() {
     finally { if (!silent) setLoading(false); }
   }, [addToast]);
 
+  // `?return_to=` (spec §3.4a door (c)): the "You already have an account"
+  // card on `/join/<slug>` sends the visitor to `/app?return_to=%2Fjoin%2F…`
+  // to sign in. Once signed in they belong back on that `/join` link, which
+  // the signed-in branch below answers with the add-property form, prefilled
+  // from the sessionStorage draft. Only `/join` or `/join/<slug>` is
+  // honoured (`readJoinReturnTo`); the key is stripped from the address
+  // either way so a refresh cannot replay it.
+  function applyJoinReturnTo() {
+    const r = readJoinReturnTo(window.location.search);
+    if (!r.present) return;
+    const url = r.path || `${window.location.pathname}${r.rest}${window.location.hash || ''}`;
+    try { window.history.replaceState(null, '', url); } catch { /* blocked */ }
+    if (r.path) {
+      setPublicSlug(r.slug);
+      setPublicRoute('join');
+    }
+  }
+  // Already signed in when the link was opened (another tab signed in first).
+  useEffect(() => { if (owner) applyJoinReturnTo(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   function login(o) {
+    applyJoinReturnTo();
     const session = { ...o, _ts: Date.now() };
     setOwner(session);
     try { localStorage.setItem('lotlogic_session', JSON.stringify(session)); } catch {}

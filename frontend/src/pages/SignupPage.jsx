@@ -36,8 +36,8 @@ import {
 //
 // Validation timing (spec §3.2, https://baymard.com/blog/inline-form-validation):
 // on blur; live only after a field's own first error; never on an untouched
-// field. `touched` is what enforces "never on untouched" — a field is only
-// ever measured once it has been blurred or once submit has measured it.
+// field. `live` enforces both: a field goes live only when a blur (or a
+// submit) finds an error in it, and only a live field shows its message.
 //
 // The submit button is always enabled and carries `aria-busy` while in
 // flight (https://adamsilver.io/blog/the-problem-with-disabled-buttons-and-what-to-do-instead/).
@@ -133,12 +133,37 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
   // not submit-time, so the token is ready the moment the button is tapped.
   useEffect(() => { if (!addProperty) loadRecaptcha(); }, [addProperty]);
 
+  // ── Draft read ONCE, before any state exists (spec §3.2 "Draft kept in
+  // sessionStorage") ──
+  // The field state below is seeded from it through lazy initialisers. A
+  // restore *effect* cannot do this: the save effect runs on the same first
+  // commit and would write the empty form over the stored draft before any
+  // restore could read it — which is exactly what a reload, or Back from the
+  // sign-in detour, used to hit. A draft parked for a different partner's
+  // link is not restored into this one.
+  const [draft] = useState(() => {
+    const d = readStoredDraft();
+    if (!d) return null;
+    if (slug && d.slug && d.slug !== slug) return null;
+    return d;
+  });
+  const fromDraft = addProperty ? null : draft;
+
   // ── Partner context (spec §3.1) ────────────────────────────
-  const [chosenSlug, setChosenSlug] = useState(slug);
+  // A bare `/join` that already picked a partner (and then reloaded) goes
+  // back to that partner's form, not to the question.
+  const [chosenSlug, setChosenSlug] = useState(() => slug || fromDraft?.slug || null);
   const [notListed, setNotListed] = useState(false);
   const [ctx, setCtx] = useState(null);           // { partner, partners }
-  const [ctxState, setCtxState] = useState('loading'); // loading | ready | invalid | offline
+  // loading | ready | invalid | throttled | offline
+  const [ctxState, setCtxState] = useState(addProperty ? 'ready' : 'loading');
+  // "Try again" bumps this: re-setting `chosenSlug` to the value it already
+  // holds is a no-op to React, so the effect would never run again.
+  const [ctxReloadKey, setCtxReloadKey] = useState(0);
   useEffect(() => {
+    // Add-property mode renders AddPropertyForm alone and never reads the
+    // context, so it does not pay for (or get throttled by) the call.
+    if (addProperty) return undefined;
     let live = true;
     setCtxState('loading');
     requestsApi.signupContext(chosenSlug || undefined).then((res) => {
@@ -150,28 +175,30 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
     }).catch((e) => {
       if (!live) return;
       if (e.status === 404 || e.code === 'unknown_slug' || e.code === 'signup_disabled') setCtxState('invalid');
-      else if (e.status === 429) setCtxState('invalid');
+      else if (e.status === 429) setCtxState('throttled');
       else setCtxState('offline');
     });
     return () => { live = false; };
-  }, [chosenSlug]);
+  }, [addProperty, chosenSlug, ctxReloadKey]);
 
   const partnerName = ctx?.partner?.name || 'your tow company';
   const partners = Array.isArray(ctx?.partners) ? ctx.partners : [];
 
   // ── The seven fields ───────────────────────────────────────
-  const draft = useMemo(() => (addProperty ? readStoredDraft() : null), [addProperty]);
-  const [name, setName] = useState('');
-  const [manual, setManual] = useState(!GOOGLE_MAPS_KEY);
+  const d0 = fromDraft || {};
+  const [name, setName] = useState(() => d0.name || '');
+  const [manual, setManual] = useState(() => !GOOGLE_MAPS_KEY || d0.manual === true);
   const [placesReady, setPlacesReady] = useState(false);
   const [placesFailed, setPlacesFailed] = useState(false);
-  const [placeFields, setPlaceFields] = useState(null);
-  const [manualFields, setManualFields] = useState({ line1: '', city: '', state: '', zip: '' });
-  const [contactName, setContactName] = useState('');
-  const [role, setRole] = useState(null);
-  const [roleOther, setRoleOther] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
+  const [placeFields, setPlaceFields] = useState(() => d0.placeFields || null);
+  const [manualFields, setManualFields] = useState(() => ({
+    line1: '', city: '', state: '', zip: '', ...(d0.manualFields || {}),
+  }));
+  const [contactName, setContactName] = useState(() => d0.contactName || '');
+  const [role, setRole] = useState(() => d0.role || null);
+  const [roleOther, setRoleOther] = useState(() => d0.roleOther || '');
+  const [email, setEmail] = useState(() => d0.email || '');
+  const [phone, setPhone] = useState(() => d0.phone || '');
   const [password, setPassword] = useState('');
 
   // §3.3 — the duplicate card, and the join branch it can switch the form to.
@@ -180,8 +207,12 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
   const [joinProperty, setJoinProperty] = useState(null); // {id, name, street_line}
   const [possibleDuplicateOf, setPossibleDuplicateOf] = useState(null);
 
-  // Validation bookkeeping: `touched` gates every message.
-  const [touched, setTouched] = useState({});
+  // Validation bookkeeping: `live` gates every message. A field goes live
+  // the first time it is measured with an error in it (on blur, or by a
+  // submit) and stays live from then on, so its message tracks every
+  // keystroke. A field blurred while VALID stays quiet if it is later
+  // edited back into an error — until the next blur says so.
+  const [live, setLive] = useState({});
   const [serverFields, setServerFields] = useState({});
   const [summary, setSummary] = useState([]);       // the 422 summary lines
   const [formError, setFormError] = useState('');   // network / 429 / unexpected
@@ -189,6 +220,13 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
   const [outcome, setOutcome] = useState(null);     // null | 'check_email' | 'verify_email'
   const [resetSent, setResetSent] = useState(false);
   const summaryRef = useRef(null);
+  // Move focus to the summary once it is in the DOM (GOV.UK validation
+  // pattern). An effect on the committed summary, not a requestAnimationFrame
+  // from the submit handler: rAF is paused in a background tab, so the focus
+  // move could silently never happen.
+  useEffect(() => {
+    if (summary.length) summaryRef.current?.focus();
+  }, [summary]);
 
   // ── Draft (spec §3.2 "Draft kept in sessionStorage", §3.4a (c)) ──
   // Property + account fields only; `serializeDraft` is built on an
@@ -203,24 +241,6 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
     try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(payload)); } catch { /* blocked storage */ }
   }, [addProperty, chosenSlug, name, manual, manualFields, placeFields,
     contactName, role, roleOther, email, phone, joinProperty]);
-
-  // Restore a draft the same device parked before an existing-email detour.
-  const restoredRef = useRef(false);
-  useEffect(() => {
-    if (addProperty || restoredRef.current) return;
-    restoredRef.current = true;
-    const d = readStoredDraft();
-    if (!d) return;
-    if (d.name) setName(d.name);
-    if (d.manualFields) setManualFields(d.manualFields);
-    if (d.placeFields) setPlaceFields(d.placeFields);
-    if (typeof d.manual === 'boolean' && (d.manual || !GOOGLE_MAPS_KEY)) setManual(true);
-    if (d.contactName) setContactName(d.contactName);
-    if (d.role) setRole(d.role);
-    if (d.roleOther) setRoleOther(d.roleOther);
-    if (d.email) setEmail(d.email);
-    if (d.phone) setPhone(d.phone);
-  }, [addProperty]);
 
   // ── Google Places (spec §3.2 field 2) ──────────────────────
   const containerRef = useRef(null);
@@ -268,7 +288,6 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
         if (fields) {
           setPlaceFields(fields);
           setPossibleDuplicateOf(null);
-          setTouched(t => ({ ...t, address: true }));
           checkMatch({ place_id: fields.place_id });
         }
       } catch { /* leave the field alone; manual entry is always available */ }
@@ -290,11 +309,11 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
   }), [joining, name, manual, manualFields, placeFields, contactName, role, roleOther, email, phone, password]);
 
   /** The message to render under a field: server message first, then local. */
-  const shown = (key) => serverFields[key] || (touched[key] ? errors[key] : null) || null;
+  const shown = (key) => serverFields[key] || (live[key] ? errors[key] : null) || null;
   const errId = (key) => `signup-${key}-error`;
 
   function blur(key) {
-    setTouched(t => ({ ...t, [key]: true }));
+    if (errors[key]) setLive(l => (l[key] ? l : { ...l, [key]: true }));
     setServerFields(s => (s[key] ? { ...s, [key]: undefined } : s));
   }
 
@@ -312,11 +331,10 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
     setFormError(''); setSummary([]); setServerFields({});
 
     const allKeys = ['propertyName', 'address', 'fullName', 'role', 'email', 'phone', 'password'];
-    setTouched(Object.fromEntries(allKeys.map(k => [k, true])));
+    setLive(Object.fromEntries(allKeys.map(k => [k, true])));
     const local = allKeys.map(k => errors[k]).filter(Boolean);
     if (local.length) {
       setSummary(local);
-      requestAnimationFrame(() => summaryRef.current?.focus());
       return;
     }
 
@@ -394,7 +412,6 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
       if (!messages.length) setSummary([err.message]);
       else setSummary(messages);
       setServerFields(fields);
-      requestAnimationFrame(() => summaryRef.current?.focus());
       return;
     }
     if (err.status === 429) { setFormError(ERR_THROTTLED); return; }
@@ -447,11 +464,11 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
       </Shell>
     );
   }
-  if (ctxState === 'offline') {
+  if (ctxState === 'offline' || ctxState === 'throttled') {
     return (
       <Shell theme={theme} onToggleTheme={onToggleTheme} title="Create your account">
-        <div className="login-error" role="alert">{ERR_NETWORK}</div>
-        <button type="button" className="login-btn" onClick={() => setChosenSlug(s => s)}>Try again</button>
+        <div className="login-error" role="alert">{ctxState === 'throttled' ? ERR_THROTTLED : ERR_NETWORK}</div>
+        <button type="button" className="login-btn" onClick={() => setCtxReloadKey(k => k + 1)}>Try again</button>
       </Shell>
     );
   }
@@ -492,6 +509,7 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
             else window.location.assign('/app');
           }}
           onSignOut={() => window.location.assign('/app')}
+          publicEmail={normalizeEmail(email)}
         />
       </Shell>
     );
@@ -630,9 +648,10 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
         <div className="field-label" id="signup-role-label" style={{ marginTop: 12 }}>Your role</div>
         <RoleChips
           value={role}
-          onChange={(id) => { setRole(id); setTouched(t => ({ ...t, role: true })); }}
+          onChange={setRole}
           otherText={roleOther}
           onOtherText={setRoleOther}
+          onOtherBlur={() => blur('role')}
           error={shown('role')}
           labelId="signup-role-label"
           errorId={errId('role')}
@@ -701,7 +720,7 @@ export function SignupPage({ slug = null, mode = 'signup', onDone, theme, onTogg
               Sign in and we&apos;ll add {name.trim() || 'your property'} to it.
             </div>
             <a className="login-btn signup-btn-link"
-              href={`/app?return_to=${encodeURIComponent(`/join/${chosenSlug || ''}`)}`}>Sign in</a>
+              href={`/app?return_to=${encodeURIComponent(chosenSlug ? `/join/${chosenSlug}` : '/join')}`}>Sign in</a>
             <button type="button" className="signup-link-btn" onClick={sendResetLink}>
               Forgot your password? Email me a reset link
             </button>

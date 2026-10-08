@@ -45,13 +45,23 @@ const CONTEXT = {
   ],
 };
 
-interface MountOpts { slug?: string | null; mode?: string; light?: boolean }
+interface MountOpts {
+  slug?: string | null; mode?: string; light?: boolean;
+  /** Replaces the default 200 CONTEXT answer; `n` counts calls from 1. */
+  context?: (route: import('@playwright/test').Route, n: number) => Promise<void>;
+}
 
 async function mountSignup(page: Page, opts: MountOpts = {}) {
-  const { slug = 'nstyle', mode = 'signup', light = false } = opts;
-  await page.route('**/auth/signup/context**', route => route.fulfill({
-    status: 200, contentType: 'application/json', body: JSON.stringify(CONTEXT),
-  }));
+  const { slug = 'nstyle', mode = 'signup', light = false, context } = opts;
+  let calls = 0;
+  await page.unroute('**/auth/signup/context**');
+  await page.route('**/auth/signup/context**', route => {
+    calls += 1;
+    if (context) return context(route, calls);
+    return route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify(CONTEXT),
+    });
+  });
   await page.goto(`${server.origin}/dashboard.html?e2e=1`);
   await page.waitForFunction(
     () => typeof (window as any).__lotlogicTestHooks?.SignupPage === 'function',
@@ -233,6 +243,115 @@ test.describe('public signup @a11y', () => {
     expect(raw!.toLowerCase()).not.toContain('password');
   });
 
+  test('the draft survives a reload: every answer but the password comes back', async ({ page }) => {
+    await mountSignup(page);
+    await fillValid(page);
+    // Let the save effect commit the last keystroke.
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('lotlogic_signup_draft')))
+      .toContain('7045550123');
+    // A real reload (same tab, so the same sessionStorage), then a fresh mount.
+    await page.reload();
+    await mountSignup(page);
+    await expect(page.locator('#signup-name')).toHaveValue('Sunset Ridge Apartments');
+    await expect(page.locator('#signup-address')).toHaveValue('123 Main St');
+    await expect(page.locator('input[placeholder="City"]')).toHaveValue('Charlotte');
+    await expect(page.locator('.signup-state')).toHaveValue('NC');
+    await expect(page.locator('input[placeholder="ZIP"]')).toHaveValue('28205');
+    await expect(page.locator('#signup-contact')).toHaveValue('Dana Ortiz');
+    await expect(page.getByRole('radio', { name: 'Property manager' })).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('#signup-email')).toHaveValue('dana@sunsetridge.com');
+    await expect(page.locator('#signup-phone')).toHaveValue('(704) 555-0123');
+    await expect(page.locator('#signup-password')).toHaveValue('');
+    // And the stored copy was not clobbered by the remount's first save.
+    expect(await page.evaluate(() => sessionStorage.getItem('lotlogic_signup_draft')))
+      .toContain('Sunset Ridge Apartments');
+  });
+
+  test('a draft parked for another partner is not restored into this link', async ({ page }) => {
+    await mountSignup(page);
+    await page.locator('#signup-name').fill('Sunset Ridge Apartments');
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('lotlogic_signup_draft')))
+      .toContain('Sunset Ridge');
+    await page.reload();
+    await mountSignup(page, { slug: 'frank' });
+    await expect(page.locator('#signup-name')).toHaveValue('');
+  });
+
+  test('Try again after a failed context load really retries', async ({ page }) => {
+    await mountSignup(page, {
+      context: (route, n) => (n === 1
+        ? route.abort('failed')
+        : route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(CONTEXT) })),
+    });
+    await expect(page.getByText("Can't reach LotLogic right now — your answers are saved. Try again.")).toBeVisible();
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await expect(page.getByText('N Style Towing uses LotLogic for parking requests. About a minute.')).toBeVisible();
+    await expect(page.locator('#signup-name')).toBeVisible();
+  });
+
+  test('a throttled context load gets the 429 copy, not the dead-link copy', async ({ page }) => {
+    await mountSignup(page, {
+      context: (route, n) => (n === 1
+        ? route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({ detail: 'rate_limited', retry_after: 60 }) })
+        : route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(CONTEXT) })),
+    });
+    await expect(page.getByText('Too many tries from this network. Wait a few minutes.')).toBeVisible();
+    await expect(page.getByText("This link isn't valid. Ask your tow company for a new one.")).toHaveCount(0);
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await expect(page.locator('#signup-name')).toBeVisible();
+  });
+
+  test('a field blurred while valid stays quiet when edited back into an error, until the next blur', async ({ page }) => {
+    await mountSignup(page);
+    const nameField = page.locator('#signup-name');
+    await nameField.fill('Sunset Ridge Apartments');
+    await nameField.blur();
+    await nameField.fill('S');
+    await expect(page.locator('.signup-error')).toHaveCount(0);
+    await nameField.blur();
+    await expect(page.getByText("Enter the property's name, as it appears on the sign.")).toBeVisible();
+  });
+
+  test('the role chips follow the radio-group keyboard pattern', async ({ page }) => {
+    await mountSignup(page);
+    const chips = page.getByRole('radio');
+    await expect(chips).toHaveCount(6);
+    // One tab stop: the first chip while none is checked.
+    await expect(chips.nth(0)).toHaveAttribute('tabindex', '0');
+    await expect(chips.nth(1)).toHaveAttribute('tabindex', '-1');
+    await chips.nth(0).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.getByRole('radio', { name: 'Assistant manager' })).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByRole('radio', { name: 'Assistant manager' })).toBeFocused();
+    await expect(page.getByRole('radio', { name: 'Assistant manager' })).toHaveAttribute('tabindex', '0');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
+    // Wraps from the first chip to the last.
+    await expect(page.getByRole('radio', { name: 'Other' })).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByRole('radio', { name: 'Other' })).toBeFocused();
+  });
+
+  test('verify-first: the code sheet posts the email (no session yet) and offers no Sign out or Change email', async ({ page }) => {
+    await page.route('**/auth/signup', route => route.fulfill({
+      status: 202, contentType: 'application/json', body: JSON.stringify({ ok: true, next: 'verify_email' }),
+    }));
+    let verifyBody: any = null;
+    await page.route('**/auth/verify-email', route => {
+      verifyBody = JSON.parse(route.request().postData() || '{}');
+      return route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ token: 'fake-token', expires_in: 3600, subject: { id: 'a1', type: 'owner' } }) });
+    });
+    await mountSignup(page);
+    await fillValid(page);
+    await page.getByRole('button', { name: 'Create account' }).click();
+    await expect(page.locator('.verify-code-input')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign out' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Change email' })).toHaveCount(0);
+    await page.locator('.verify-code-input').fill('482190');
+    await expect(page.locator('#signup-done')).toBeVisible();
+    expect(verifyBody).toEqual({ code: '482190', email: 'dana@sunsetridge.com' });
+  });
+
   test('422 renders the field messages and a summary that takes focus', async ({ page }) => {
     await page.route('**/auth/signup', route => route.fulfill({
       status: 422, contentType: 'application/json',
@@ -246,7 +365,10 @@ test.describe('public signup @a11y', () => {
     const summary = page.locator('[role=alert]').filter({ hasText: "There's a problem" });
     await expect(summary).toBeVisible();
     await expect(summary).toContainText('That password showed up in a data breach.');
-    await expect(summary).toBeFocused();
+    // `document.activeElement`, not `toBeFocused()`: WebKit reports a page
+    // whose window is in the background (parallel workers) as "inactive" and
+    // fails `toBeFocused` even when focus did move.
+    await expect.poll(() => summary.evaluate(el => el === document.activeElement)).toBe(true);
     await expect(page.locator('#signup-password-error'))
       .toHaveText('That password showed up in a data breach. Choose a different one.');
   });
@@ -412,5 +534,70 @@ test.describe("FirstRunCard @a11y", () => {
   test('a verified account gets no code line', async ({ page }) => {
     await mountCard(page, true);
     await expect(page.locator('.firstrun-code')).toHaveCount(0);
+  });
+});
+
+// The §3.4a (c) round trip through the real App: signup → "You already have
+// an account" → Sign in → back on /join/<slug> as the add-property form,
+// prefilled from the draft. The static test server has no `/app` rewrite, so
+// `/app…` is answered with dashboard.html exactly as vercel.json does.
+test.describe('return_to round trip', () => {
+  test('signing in from the existing-account card lands on the prefilled add-property form', async ({ page }) => {
+    await page.route(/\/app(\?.*)?$/, async route => {
+      const res = await route.fetch({ url: `${server.origin}/dashboard.html` });
+      await route.fulfill({ response: res });
+    });
+    await page.route('**/auth/signup', route => route.fulfill({
+      status: 201, contentType: 'application/json', body: JSON.stringify({ ok: true, next: 'check_email' }),
+    }));
+    await page.route('**/auth/login', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ token: 'fake-token-test-only', expires_in: 3600,
+        subject: { id: 'o-1', email: 'dana@sunsetridge.com', type: 'owner', display_name: 'Dana' } }),
+    }));
+    await page.route('**/auth/me', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ email: 'dana@sunsetridge.com', email_verified: true, properties: [] }),
+    }));
+
+    await mountSignup(page);
+    await fillValid(page);
+    await page.getByRole('button', { name: 'Create account' }).click();
+    await expect(page.getByText('You already have an account.')).toBeVisible();
+    await page.locator('.signup-btn-link').click();
+    await page.waitForURL(/\/app\?return_to=%2Fjoin%2Fnstyle$/);
+
+    await page.locator('input[type=email]').fill('dana@sunsetridge.com');
+    await page.locator('input[type=password]').fill('a short sentence works');
+    await page.locator('form[aria-label="Sign in"] button[type=submit]').click();
+
+    await expect(page.getByRole('heading', { name: 'Add a property to your account' })).toBeVisible();
+    await expect(page.locator('input[placeholder="Sunset Ridge Apartments"]')).toHaveValue('Sunset Ridge Apartments');
+    await expect(page.locator('input[placeholder="ZIP"]')).toHaveValue('28205');
+    // Address bar moved to the /join link, return_to gone.
+    expect(new URL(page.url()).pathname).toBe('/join/nstyle');
+    expect(new URL(page.url()).search).toBe('');
+  });
+
+  test('a return_to that is not a /join link is dropped and stripped', async ({ page }) => {
+    await page.route(/\/app(\?.*)?$/, async route => {
+      const res = await route.fetch({ url: `${server.origin}/dashboard.html` });
+      await route.fulfill({ response: res });
+    });
+    await page.route('**/auth/login', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ token: 'fake-token-test-only', expires_in: 3600,
+        subject: { id: 'o-1', email: 'dana@sunsetridge.com', type: 'owner' } }),
+    }));
+    await page.route('**/auth/me', route => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({ properties: [] }),
+    }));
+    await page.goto(`${server.origin}/app?return_to=${encodeURIComponent('https://evil.example/join/x')}`);
+    await page.locator('input[type=email]').fill('dana@sunsetridge.com');
+    await page.locator('input[type=password]').fill('a short sentence works');
+    await page.locator('form[aria-label="Sign in"] button[type=submit]').click();
+    await expect.poll(() => new URL(page.url()).search).toBe('');
+    expect(new URL(page.url()).pathname).toBe('/app');
+    await expect(page.getByRole('heading', { name: 'Add a property to your account' })).toHaveCount(0);
   });
 });
