@@ -27,6 +27,7 @@ import {
   truncateNote,
   seenLine,
   refWithLineage,
+  outcomeLabel,
   actionsFor,
   normalizePendingProperty,
 } from '../src/lib/partnerRequests.js';
@@ -266,9 +267,70 @@ test('seenLine reports the acknowledgement and the check count', () => {
   assert.equal(seenLine(hold()), '');
 });
 
-test('refWithLineage shows the replaced number when there is one', () => {
-  assert.equal(refWithLineage(hold({ ref: 'H-1850', reinstated_from_ref: 'H-1842' })), 'H-1850 (replaces H-1842)');
+test('refWithLineage reads §8.3\'s reinstated_from and shows the replaced number', () => {
+  assert.equal(refWithLineage(hold({ ref: 'H-1850', reinstated_from: 'H-1842' })), 'H-1850 (replaces H-1842)');
+  assert.equal(refWithLineage(tow({ ref: 'T-0240', reinstated_from: 'T-0231' })), 'T-0240 (replaces T-0231)');
+  assert.equal(refWithLineage(photo({ ref: 'P-0041', reinstated_from: 'P-0040' })), 'P-0041 (replaces P-0040)');
   assert.equal(refWithLineage(hold({ ref: 'H-1842' })), 'H-1842');
+});
+
+test('refWithLineage never prints a uuid at the crew', () => {
+  // §8.2's DDL makes reinstated_from a uuid FK, so a serializer that has not
+  // resolved it to a reference number must leave the row reading bare.
+  const uuid = '00000000-0000-4000-8000-000000000abc';
+  assert.equal(refWithLineage(hold({ ref: 'H-1850', reinstated_from: uuid })), 'H-1850');
+  assert.equal(refWithLineage(hold({ ref: 'H-1850', reinstated_from: 'H-1842x' })), 'H-1850');
+  assert.equal(refWithLineage(hold({ ref: 'H-1850', reinstated_from: 42 })), 'H-1850');
+});
+
+test('refWithLineage ignores a field the spec does not define', () => {
+  assert.equal(refWithLineage(hold({ ref: 'H-1850', reinstated_from_ref: 'H-1842' })), 'H-1850');
+});
+
+// ── a row that has ended ─────────────────────────────────────
+
+test('outcomeLabel is empty while the row is live', () => {
+  assert.equal(outcomeLabel(hold()), '');
+  assert.equal(outcomeLabel(tow()), '');
+  assert.equal(outcomeLabel({ kind: 'tow' }), '');
+});
+
+test('outcomeLabel names every resolution §8.2 allows', () => {
+  assert.equal(outcomeLabel(tow({ status: 'fulfilled', resolution: 'towed' })), 'Towed');
+  assert.equal(outcomeLabel(photo({ status: 'fulfilled', resolution: 'photographed' })), 'Photo sent');
+  assert.equal(outcomeLabel(tow({ status: 'declined', resolution: 'declined' })), 'Declined');
+  assert.equal(outcomeLabel(hold({ status: 'expired', resolution: 'expired' })), 'Expired');
+  assert.equal(outcomeLabel(hold({ status: 'removed', resolution: 'property_removed' })), 'Property not confirmed');
+});
+
+test('outcomeLabel falls back to the status when there is no resolution', () => {
+  assert.equal(outcomeLabel(hold({ status: 'removed' })), 'Removed by the office');
+  assert.equal(outcomeLabel(hold({ status: 'expired' })), 'Expired');
+  assert.equal(outcomeLabel(tow({ status: 'declined' })), 'Declined');
+  assert.equal(outcomeLabel(tow({ status: 'fulfilled' })), 'Done');
+  assert.equal(outcomeLabel(tow({ status: 'something-new' })), '');
+});
+
+test('timeLeftLabel reads the outcome, never new or seen, once a row has ended', () => {
+  const now = Date.parse('2026-10-08T18:00:00Z');
+  assert.equal(timeLeftLabel(tow({ status: 'fulfilled', resolution: 'towed' }), now), 'Towed');
+  assert.equal(
+    timeLeftLabel(tow({ status: 'fulfilled', resolution: 'towed', partner_ack_at: '2026-10-01T13:40:00Z' }), now),
+    'Towed',
+  );
+  assert.equal(timeLeftLabel(photo({ status: 'declined', resolution: 'declined' }), now), 'Declined');
+  assert.equal(timeLeftLabel(hold({ status: 'removed' }), now), 'Removed by the office');
+  // An expired hold reads the word, not a stale countdown.
+  assert.equal(
+    timeLeftLabel(hold({ status: 'expired', resolution: 'expired', expires_at: '2026-10-02T18:00:00Z' }), now),
+    'Expired',
+  );
+});
+
+test('isEndingSoon never glows amber on a row that has ended', () => {
+  const now = Date.parse('2026-10-08T18:00:00Z');
+  assert.equal(isEndingSoon(hold({ expires_at: '2026-10-08T18:48:00Z' }), now), true);
+  assert.equal(isEndingSoon(hold({ status: 'removed', expires_at: '2026-10-08T18:48:00Z' }), now), false);
 });
 
 // ── which controls a row gets ────────────────────────────────
@@ -288,6 +350,18 @@ test('a photo request asks for the photo instead of a tow', () => {
 test('an acknowledged row drops Got it and keeps the rest', () => {
   assert.deepEqual(actionsFor(tow({ partner_ack_at: '2026-10-07T13:40:00Z' })), { buttons: ['towed', 'decline'], menu: ['history'] });
   assert.deepEqual(actionsFor(hold({ partner_ack_at: '2026-10-07T13:40:00Z' })), { buttons: [], menu: ['towed_anyway', 'decline', 'history'] });
+});
+
+test('a row that has ended offers History and nothing that would 409', () => {
+  // §8.3: /ack is idempotent but /fulfill and /decline answer 409 `not_active`
+  // on a terminal row, so Recent must not render the controls.
+  const ended = { buttons: [], menu: ['history'] };
+  assert.deepEqual(actionsFor(tow({ status: 'fulfilled', resolution: 'towed' })), ended);
+  assert.deepEqual(actionsFor(tow({ status: 'fulfilled', resolution: 'towed', partner_ack_at: null })), ended);
+  assert.deepEqual(actionsFor(photo({ status: 'fulfilled', resolution: 'photographed' })), ended);
+  assert.deepEqual(actionsFor(tow({ status: 'declined', resolution: 'declined' })), ended);
+  assert.deepEqual(actionsFor(hold({ status: 'expired', resolution: 'expired' })), ended);
+  assert.deepEqual(actionsFor(hold({ status: 'removed' })), ended);
 });
 
 // ── the pending-property card ────────────────────────────────

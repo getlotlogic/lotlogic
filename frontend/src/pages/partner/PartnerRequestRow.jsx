@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   actionsFor,
+  isActive,
   isEndingSoon,
   placedByLine,
   refWithLineage,
@@ -23,6 +24,9 @@ import {
 // timezone math decides what the truck sees. Everything else comes out of
 // `lib/partnerRequests.js`, which is where the tests hold this copy.
 
+// The kind is never color alone (spec §5): the glyph and the word carry it,
+// and the colour is the tint and the edge. The ink is --text-primary because
+// a 10 px status colour on its own 15 % tint is 2.2–2.4:1 in .theme-light.
 const KIND_CHIP = {
   hold: { glyph: '✋', label: 'HOLD', color: '#22c55e', tint: 'rgba(34,197,94,.15)' },
   tow: { glyph: '🚨', label: 'TOW', color: '#f87171', tint: 'rgba(248,113,113,.15)' },
@@ -34,7 +38,7 @@ const BTN = {
   fontSize: 13, fontWeight: 700, cursor: 'pointer', minHeight: 44,
   background: 'var(--bg-inset)', color: 'var(--text-primary)', fontFamily: 'inherit',
 };
-const PRIMARY = { ...BTN, background: 'var(--accent)', color: '#1A1206', border: '1px solid var(--accent)' };
+const PRIMARY = { ...BTN, background: 'var(--accent)', color: 'var(--accent-ink)', border: '1px solid var(--accent)' };
 
 const MENU_LABEL = {
   towed_anyway: 'Towed anyway',
@@ -56,6 +60,9 @@ export function PartnerRequestRow({ item, now, busy, onAction }) {
   const { buttons, menu } = actionsFor(item);
   const left = timeLeftLabel(item, now);
   const urgent = isEndingSoon(item, now);
+  // A terminal row reads as an outcome in words, not a countdown — and the
+  // pill keeps full-contrast ink so it clears 4.5:1 in both themes (§5.2).
+  const ended = !isActive(item);
   const vehicle = vehicleText(item);
   const note = truncateNote(item.note);
   const seen = seenLine(item);
@@ -89,12 +96,16 @@ export function PartnerRequestRow({ item, now, busy, onAction }) {
         </span>
         <span style={{
           ...{ fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 3, letterSpacing: '.04em' },
-          background: chip.tint, color: chip.color,
+          background: chip.tint, color: 'var(--text-primary)', border: `1px solid ${chip.color}`,
         }}>
           <span aria-hidden="true">{chip.glyph} </span>{chip.label}
         </span>
         {left && (
-          <span style={{ fontSize: 12, fontWeight: 700, color: urgent ? '#fbbf24' : 'var(--text-muted)' }}>
+          <span style={ended ? {
+            fontSize: 11, fontWeight: 800, padding: '2px 7px', borderRadius: 999,
+            background: 'var(--bg-inset)', color: 'var(--text-primary)',
+            border: '1px solid var(--border)',
+          } : { fontSize: 12, fontWeight: 700, color: urgent ? '#fbbf24' : 'var(--text-muted)' }}>
             {urgent && <span aria-hidden="true">⚠ </span>}{left}
           </span>
         )}

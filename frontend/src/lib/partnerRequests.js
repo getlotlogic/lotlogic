@@ -196,11 +196,42 @@ function msLeft(item, now) {
   return at - (Number.isFinite(now) ? now : Date.now());
 }
 
+// A row that has ended says what happened to it, in words — spec §5.2's
+// Recent treatment ("an outcome pill in words": Expired, Towed, Photo sent,
+// Declined, …), read from the partner's side, so "removed" names the office.
+const OUTCOME_BY_RESOLUTION = {
+  towed: 'Towed',
+  photographed: 'Photo sent',
+  declined: 'Declined',
+  property_removed: 'Property not confirmed',
+  expired: 'Expired',
+};
+const OUTCOME_BY_STATUS = {
+  fulfilled: 'Done',
+  declined: 'Declined',
+  removed: 'Removed by the office',
+  expired: 'Expired',
+};
+
 /**
- * The third column of a row. A hold counts down; a tow or photo request says
- * whether the crew has picked it up yet.
+ * The outcome word for a terminal row, '' while it is still live. `resolution`
+ * is the precise answer (§8.2's CHECK pins the five values); `status` is the
+ * fallback for a row the sweep ended without one.
+ */
+export function outcomeLabel(item) {
+  if (isActive(item)) return '';
+  return OUTCOME_BY_RESOLUTION[item?.resolution]
+    || OUTCOME_BY_STATUS[item?.status]
+    || '';
+}
+
+/**
+ * The third column of a row. A live hold counts down; a live tow or photo
+ * request says whether the crew has picked it up yet; a row that has ended
+ * reads its outcome, because "new" on a tow fulfilled last week is a lie.
  */
 export function timeLeftLabel(item, now) {
+  if (!isActive(item)) return outcomeLabel(item);
   if (item?.kind !== 'hold') return item?.partner_ack_at ? 'seen' : 'new';
   const left = msLeft(item, now);
   if (left === null) return '';
@@ -212,7 +243,7 @@ export function timeLeftLabel(item, now) {
 
 /** Under an hour and still live — the time line turns amber (spec §5.2). */
 export function isEndingSoon(item, now) {
-  if (item?.kind !== 'hold') return false;
+  if (item?.kind !== 'hold' || !isActive(item)) return false;
   const left = msLeft(item, now);
   return left !== null && left > 0 && left < HOUR;
 }
@@ -262,11 +293,24 @@ export function seenLine(item) {
   return parts.join(' · ');
 }
 
-/** Lineage travels with the number everywhere it is shown (spec §4.2). */
+// H-1842 / T-0231 / P-0040 — one global sequence, never zero-padded (§4.2).
+const REF_SHAPE = /^[HTP]-\d+$/;
+
+/**
+ * Lineage travels with the number everywhere it is shown — "H-1850 (replaces
+ * H-1842)" (spec §4.2). §8.3's request shape carries the predecessor as
+ * `reinstated_from`, which §8.2's DDL makes a `uuid REFERENCES
+ * public.tow_requests(id)`, and a uuid must never reach the crew — so the
+ * line renders only once that field holds a reference number. Against a
+ * serializer that still sends the uuid the row shows the bare ref; the gap is
+ * a cross-task concern for the request serializer, not a silent rename here.
+ */
 export function refWithLineage(item) {
   const ref = item?.ref || '';
-  const from = item?.reinstated_from_ref;
-  return from ? `${ref} (replaces ${from})` : ref;
+  const from = item?.reinstated_from === null || item?.reinstated_from === undefined
+    ? ''
+    : String(item.reinstated_from);
+  return REF_SHAPE.test(from) ? `${ref} (replaces ${from})` : ref;
 }
 
 // ── which controls a row gets ────────────────────────────────
@@ -278,6 +322,10 @@ export function refWithLineage(item) {
  * says "Seen 9:40 PM" instead.
  */
 export function actionsFor(item) {
+  // A row that has ended is read-only. Every write route answers 409
+  // `not_active` on a terminal row (§8.3), so a control here would be a
+  // promise of a generic error toast; History is the one thing still true.
+  if (!isActive(item)) return { buttons: [], menu: ['history'] };
   const buttons = [];
   const menu = [];
   if (!item?.partner_ack_at) buttons.push('ack');

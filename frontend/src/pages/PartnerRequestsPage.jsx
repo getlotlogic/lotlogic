@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConfirmActionModal } from '../ui/Dialog.jsx';
+import { useFocusTrap, useUid } from '../ui/focusTrap.js';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { useToast } from '../ui/Toast.jsx';
 import {
@@ -216,7 +217,9 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
               borderRadius: 999, padding: '7px 13px', fontSize: 12, fontWeight: 700,
               minHeight: 36, cursor: 'pointer', fontFamily: 'inherit',
               background: chip === c.id ? 'var(--accent)' : 'var(--bg-inset)',
-              color: chip === c.id ? '#1A1206' : 'var(--text-muted)',
+              // --text-muted on --bg-inset is 4.47:1 in .theme-light; the
+              // chips are a control, so they take the secondary ink.
+              color: chip === c.id ? 'var(--accent-ink)' : 'var(--text-secondary)',
               border: `1px solid ${chip === c.id ? 'var(--accent)' : 'var(--border)'}`,
             }}
           >
@@ -246,7 +249,7 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
         </div>
       )}
 
-      {!loading && groups.length === 0 && pending.length === 0 && (
+      {!loading && !loadError && groups.length === 0 && pending.length === 0 && (
         <div style={{
           background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
           padding: 18, textAlign: 'center',
@@ -322,6 +325,9 @@ function RequestActionModal({ modal, onClose, onDone, onFailed }) {
   const [uploading, setUploading] = useState(false);
   const [photoHint, setPhotoHint] = useState('');
   const fileRef = useRef(null);
+  // The picker needs a real id: a <label> with no htmlFor leaves the file
+  // input nameless, and it is the only control that can finish "Photo sent ✓".
+  const photoInputId = useUid('request-photo');
 
   const wantsPhoto = kind === 'towed' || kind === 'photographed';
   const photoRequired = kind === 'photographed';
@@ -401,10 +407,11 @@ function RequestActionModal({ modal, onClose, onDone, onFailed }) {
       onCancel={onClose}
       extra={wantsPhoto ? (
         <div style={{ marginBottom: 10 }} aria-busy={uploading ? 'true' : undefined}>
-          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', display: 'block', marginBottom: 4 }}>
+          <label htmlFor={photoInputId} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', display: 'block', marginBottom: 4 }}>
             {photoRequired ? 'Add the photo' : 'Add a photo (optional)'}
           </label>
           <input
+            id={photoInputId}
             ref={fileRef}
             type="file"
             accept="image/*"
@@ -422,7 +429,7 @@ function RequestActionModal({ modal, onClose, onDone, onFailed }) {
 
 /** Every string a dialog shows, in one place, taken from spec §5.4. */
 function modalCopy(modal, { photoKey }) {
-  const { kind, item, property } = modal;
+  const { kind, item } = modal;
   if (kind === 'reject_property') {
     return {
       actionLabel: COPY.rejectTitle,
@@ -465,7 +472,7 @@ function modalCopy(modal, { photoKey }) {
   }
   return {
     actionLabel: `Mark ${item.ref} towed`,
-    description: `Plate ${item.plate}. ${property ? '' : ''}The office sees this the moment you confirm.`,
+    description: `Plate ${item.plate}. The office sees this the moment you confirm.`,
     confirmLabel: 'Mark towed',
     confirmColor: null,
     requireReason: false,
@@ -583,6 +590,10 @@ function eventLine(event) {
 function PhotoViewer({ item, onClose }) {
   const [url, setUrl] = useState(null);
   const [error, setError] = useState(false);
+  // role="dialog" aria-modal="true" is a promise: Escape closes it, Tab stays
+  // inside it, and there is a control a keyboard can reach to dismiss it.
+  const dialogRef = useRef(null);
+  useFocusTrap(dialogRef, true, onClose);
   useEffect(() => {
     let revoke = null;
     let cancelled = false;
@@ -600,7 +611,27 @@ function PhotoViewer({ item, onClose }) {
       onClick={onClose}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.8)', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
     >
-      <div role="dialog" aria-modal="true" aria-label={`Photo for ${item.ref}`} onClick={e => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Photo for ${item.ref}`}
+        tabIndex={-1}
+        onClick={e => e.stopPropagation()}
+        style={{ outline: 'none', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close photo"
+          style={{
+            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
+            color: 'var(--text-primary)', fontSize: 16, minHeight: 44, minWidth: 44,
+            cursor: 'pointer', fontFamily: 'inherit',
+          }}
+        >
+          ✕
+        </button>
         {url && <img src={url} alt={`Photo sent with ${item.ref}`} style={{ maxWidth: '100%', maxHeight: '80vh', borderRadius: 10 }} />}
         {!url && !error && <div style={{ color: '#fff', fontSize: 13 }}>Loading…</div>}
         {error && <div role="alert" style={{ color: '#fff', fontSize: 13 }}>Couldn&rsquo;t load that photo.</div>}

@@ -53,13 +53,15 @@ export function PendingPropertyCard({ property, busy, onConfirm, onReject }) {
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <button
           type="button"
+          disabled={busy}
           onClick={() => onConfirm(property)}
-          style={{ ...BTN, background: 'var(--accent)', color: '#1A1206', border: '1px solid var(--accent)' }}
+          style={{ ...BTN, background: 'var(--accent)', color: 'var(--accent-ink)', border: '1px solid var(--accent)' }}
         >
           Confirm
         </button>
         <button
           type="button"
+          disabled={busy}
           onClick={() => onReject(property)}
           style={{
             ...BTN, background: 'var(--bg-inset)', color: 'var(--text-primary)',
