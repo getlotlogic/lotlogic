@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { latestGate } from '../src/lib/latest.js';
+import { latestGate, applyIfCurrent } from '../src/lib/latest.js';
 
 test('only the most recently taken ticket is current', () => {
   const gate = latestGate();
@@ -57,4 +57,41 @@ test('a stale failure is dropped too', async () => {
   rejectOld();
   await old;
   assert.equal(error, '');
+});
+
+test('applyIfCurrent runs only for the newest ticket and reports it', () => {
+  const gate = latestGate();
+  const old = gate.take();
+  const fresh = gate.take();
+  let ran = [];
+  assert.equal(applyIfCurrent(gate, old, () => ran.push('old')), false);
+  assert.equal(applyIfCurrent(gate, fresh, () => ran.push('fresh')), true);
+  assert.deepEqual(ran, ['fresh']);
+});
+
+// remove() takes a ticket: a poll that started before the click carries the
+// removed row and must not bring it back when it lands.
+test('a poll in flight during remove() cannot restore the removed row', async () => {
+  const gate = latestGate();
+  let rows = [{ id: 1 }, { id: 2 }];
+  let release;
+  const slow = new Promise((res) => { release = () => res([{ id: 1 }, { id: 2 }]); });
+  const poll = (async () => {
+    const t = gate.take();
+    const items = await slow;
+    applyIfCurrent(gate, t, () => { rows = items; });
+  })();
+  gate.take(); // remove(): retire in-flight polls
+  rows = rows.filter((r) => r.id !== 1);
+  release();
+  await poll;
+  assert.deepEqual(rows, [{ id: 2 }]);
+});
+
+test('RequestsSection applies list responses through applyIfCurrent and tickets every direct write', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../src/pages/property/RequestsSection.jsx', import.meta.url), 'utf8');
+  assert.match(src, /applyIfCurrent\(gate, ticket,/);
+  const remove = src.slice(src.indexOf('async function remove('), src.indexOf('function showUndo('));
+  assert.match(remove, /loadGateRef\.current\.take\(\)/);
 });

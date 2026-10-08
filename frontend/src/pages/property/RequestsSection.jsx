@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { requestsApi } from '../../lib/requestsApi.js';
-import { latestGate } from '../../lib/latest.js';
+import { latestGate, applyIfCurrent } from '../../lib/latest.js';
 import { requestErrorMessage } from '../../lib/requestErrors.js';
 import { useIntervalFetch } from '../../hooks.js';
 import { SkeletonCards } from '../../ui/Skeletons.jsx';
@@ -118,10 +118,11 @@ export function RequestsSection({
         requestsApi.listRequests({ property_id: propertyId, view: 'active' }),
         requestsApi.listRequests({ property_id: propertyId, view: 'recent' }),
       ]);
-      if (!gate.isCurrent(ticket)) return;
-      setActive(a?.items || []);
-      setRecent(r?.items || []);
-      setError('');
+      applyIfCurrent(gate, ticket, () => {
+        setActive(a?.items || []);
+        setRecent(r?.items || []);
+        setError('');
+      });
     } catch (err) {
       // "Your last list is still shown" is a promise: never blank what is on
       // screen because one poll failed.
@@ -169,6 +170,9 @@ export function RequestsSection({
   );
 
   function onCreated(created) {
+    // Taking a ticket retires any poll already in flight, so it cannot land
+    // after this and drop the row we just added.
+    loadGateRef.current.take();
     if (created) setActive(prev => [created, ...(prev || [])]);
     load();
   }
@@ -183,6 +187,9 @@ export function RequestsSection({
   // Undo. The server holds every `removed` delivery for 10 s, so an Undo
   // inside this window is invisible to N Style (§5.2).
   async function remove(target) {
+    // A poll that started before this click holds a list that still contains
+    // the row; taking a ticket makes its response stale.
+    loadGateRef.current.take();
     setActive(prev => (prev || []).filter(r => r.id !== target.id));
     try {
       await requestsApi.removeRequest(target.id, {});
@@ -208,10 +215,14 @@ export function RequestsSection({
     setUndo(null);
     if (undoRef.current) clearTimeout(undoRef.current);
     if (!target) return;
+    const gate = loadGateRef.current;
+    const ticket = gate.take();
     try {
       const out = await requestsApi.reinstateRequest(target.id, { undo: true });
       const next = out?.request || out;
-      if (next) setActive(prev => [next, ...(prev || [])]);
+      applyIfCurrent(gate, ticket, () => {
+        if (next) setActive(prev => [next, ...(prev || [])]);
+      });
       load();
     } catch (err) {
       addToast?.(requestErrorMessage(err, 'Could not undo that.'), 'error');
