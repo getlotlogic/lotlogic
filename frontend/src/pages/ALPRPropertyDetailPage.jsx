@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase.js';
 import { API, apiFetch } from '../lib/api.js';
 import { db } from '../lib/db.js';
 import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
+import { changedSettings, settingsSaveErrorMessage, NO_CHANGES_TOAST, PROPERTY_TYPE_READONLY_NOTE } from '../lib/propertySettings.js';
 import { useIntervalFetch, useNowTick } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
@@ -35,6 +36,16 @@ const TruckParkingLog = lazyPage(() => import('./TruckParkingLog.jsx'));
 //   startIndex: which thumbnail was tapped
 //   plate: header text
 //   onClose: () => void
+// Draft the Settings form opens with; the diff on save is against this, so an
+// untouched form is a no-op even when the property has no stored policy yet.
+function settingsBaseline(property) {
+  return {
+    property_type: property?.property_type || 'apartment',
+    policy_text: property?.policy_text || DEFAULT_TRUCK_PLAZA_POLICY,
+    policy_phone: property?.policy_phone || '',
+  };
+}
+
 function SnapsLightbox({ snaps, startIndex, plate, onClose }) {
   const [index, setIndex] = useState(startIndex || 0);
   const touchRef = useRef({ x: 0, y: 0, t: 0 });
@@ -659,26 +670,19 @@ export function ALPRPropertyDetailPage({
     if (!settingsDraft) return;
     setSaving(true);
     try {
-      const updates = {};
-      // property_type change only allowed when there are zero passes.
-      if (settingsDraft.property_type !== property.property_type) {
-        if (passTotalCount > 0) {
-          addToast('Cannot change property type after passes have been recorded.', 'error');
-          setSaving(false);
-          return;
-        }
-        updates.property_type = settingsDraft.property_type;
-      }
-      if (settingsDraft.property_type === 'truck_plaza') {
-        updates.policy_text = settingsDraft.policy_text || DEFAULT_TRUCK_PLAZA_POLICY;
-        updates.policy_phone = settingsDraft.policy_phone || null;
+      // Only changed, editable fields go out; property_type never does.
+      const updates = changedSettings(settingsBaseline(property), settingsDraft);
+      if (Object.keys(updates).length === 0) {
+        addToast(NO_CHANGES_TOAST, 'info');
+        setSaving(false);
+        return;
       }
       const updated = await db.updateProperty(propertyId, updates);
       setProperty(updated);
       setShowSettings(false);
       addToast('Settings saved', 'success');
     } catch (err) {
-      addToast('Failed to save settings. ' + (err.message || ''), 'error');
+      addToast(settingsSaveErrorMessage(err), 'error');
     }
     setSaving(false);
   }
@@ -740,11 +744,7 @@ export function ALPRPropertyDetailPage({
           </div>
           <button
             onClick={() => {
-              setSettingsDraft({
-                property_type: property.property_type || 'apartment',
-                policy_text: property.policy_text || DEFAULT_TRUCK_PLAZA_POLICY,
-                policy_phone: property.policy_phone || '',
-              });
+              setSettingsDraft(settingsBaseline(property));
               setShowSettings(!showSettings);
             }}
             className="pd-share-btn"
@@ -836,20 +836,11 @@ export function ALPRPropertyDetailPage({
       {showSettings && settingsDraft && (
         <form onSubmit={handleSaveSettings} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:16,display:'flex',flexDirection:'column',gap:8}}>
           <label style={{fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Property Type</label>
-          <select
-            value={settingsDraft.property_type}
-            disabled={passTotalCount > 0}
-            onChange={e => setSettingsDraft({...settingsDraft, property_type: e.target.value})}
-            style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14,opacity: passTotalCount > 0 ? 0.6 : 1}}
-          >
-            <option value="apartment">Apartment</option>
-            <option value="truck_plaza">Truck Plaza</option>
-          </select>
-          {passTotalCount > 0 && (
-            <div style={{fontSize:11,color:'var(--text-faint)'}}>
-              Property type is locked: {passTotalCount} parking pass{passTotalCount === 1 ? '' : 'es'} on record. Changing type after passes exist would corrupt the log.
-            </div>
-          )}
+          <div style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14,opacity:0.8}}>
+            {settingsDraft.property_type === 'truck_plaza' ? 'Truck Plaza' : 'Apartment'}
+          </div>
+          {/* Not spec copy: wording from the G2b brief. */}
+          <div style={{fontSize:11,color:'var(--text-faint)'}}>{PROPERTY_TYPE_READONLY_NOTE}</div>
           {settingsDraft.property_type === 'truck_plaza' && (
             <>
               <label style={{fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:4}}>Parking Policy Text</label>
