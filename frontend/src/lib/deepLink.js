@@ -115,6 +115,35 @@ export function readJoinSlug(pathname) {
   return slug === '' ? null : slug;
 }
 
+/** The query parameter the §3.4a (c) "You already have an account" card's
+ * Sign in link carries: `/app?return_to=%2Fjoin%2F<slug>`. */
+export const RETURN_TO_PARAM = 'return_to';
+
+// The only places `return_to` may send a freshly signed-in session: bare
+// `/join` or `/join/<slug>`. Anything else — an off-site url, `//evil`, a
+// path with a query or a fragment — is dropped.
+const JOIN_RETURN_RE = /^\/join(\/[A-Za-z0-9_-]+)?$/;
+
+/**
+ * Read `?return_to=` from a `location.search` string.
+ * @param {string|null|undefined} search
+ * @returns {{present: boolean, path: string|null, slug: string|null, rest: string}}
+ *   `present` — the key was in the query at all (so the caller strips it);
+ *   `path`/`slug` — the honoured `/join` target, or null when it is not one;
+ *   `rest` — the query with `return_to` removed (`''` or `?a=b`).
+ */
+export function readJoinReturnTo(search) {
+  const params = new URLSearchParams(typeof search === 'string' ? search.replace(/^\?/, '') : '');
+  const present = params.has(RETURN_TO_PARAM);
+  const raw = present ? (params.get(RETURN_TO_PARAM) || '').trim() : '';
+  params.delete(RETURN_TO_PARAM);
+  const restStr = params.toString();
+  const rest = restStr ? `?${restStr}` : '';
+  const m = raw.match(JOIN_RETURN_RE);
+  if (!m) return { present, path: null, slug: null, rest };
+  return { present, path: raw, slug: m[1] ? m[1].slice(1) : null, rest };
+}
+
 /** sessionStorage key LoginPage parks the pre-sign-in location under. */
 export const RETURN_TO_KEY = 'lotlogic_return_to';
 
@@ -130,5 +159,10 @@ export function returnToTarget(stored) {
   if (typeof stored !== 'string' || !stored.startsWith('/app')) return null;
   const q = stored.indexOf('?');
   const search = q === -1 ? '' : stored.slice(q);
+  // A `?return_to=` is App.jsx's to honour (see `readJoinReturnTo`), and it
+  // does so inside `onLogin`, before this replay runs — replaying the
+  // original query here would put the key back and overwrite the `/join`
+  // address App just moved to.
+  if (new URLSearchParams(search.replace(/^\?/, '')).has(RETURN_TO_PARAM)) return null;
   return search && search !== '?' ? `/app${search}` : '/app';
 }

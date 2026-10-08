@@ -10,6 +10,7 @@ import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
 import { useIntervalFetch, useNowTick } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
+import { FirstRunCard } from './property/FirstRunCard.jsx';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { CrossCameraSightings } from '../ui/CrossCameraSightings.jsx';
 import { ApartmentPermits } from './ApartmentPermits.jsx';
@@ -310,6 +311,9 @@ export function ALPRPropertyDetailPage({
   // Resolved once `property` lands, because the chip list — and therefore
   // which stored or deep-linked value is even legal — depends on its type.
   const [sectionFilter, setSectionFilter] = useState(null);
+  // One-time: the You're-in card closes for good within this mount. Not
+  // persisted — `firstrun` only ever arrives from a url App.jsx then cleans.
+  const [firstRunDismissed, setFirstRunDismissed] = useState(false);
   const sectionResolvedRef = useRef(false);
   useEffect(() => {
     if (sectionResolvedRef.current || !property) return;
@@ -750,6 +754,21 @@ export function ALPRPropertyDetailPage({
           });
         })()}
       </div>
+
+      {/* The You're-in card (spec §3.4 step 5) — the signup landing only
+          (`/app?property=…&section=requests&firstrun=1`), above the Requests
+          section, dismissed on tap or once the email is confirmed. `firstrun`
+          arrives as a prop through ALPRPropertiesPage from App.jsx's deep-link
+          reader and is never persisted, so a refresh (which cleans the query)
+          does not replay it. */}
+      {firstrun && !firstRunDismissed && isOwner && property && (
+        <FirstRunCard
+          property={property}
+          partnerName={property.partner_name || property.tow_company_name}
+          user={user}
+          onDismiss={() => setFirstRunDismissed(true)}
+        />
+      )}
 
       {/* Requests — the portal's home (spec §5.2). Rendered before every
           camera/pass surface because it is the default section. */}

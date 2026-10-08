@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { requestsApi } from '../lib/requestsApi.js';
 import { manualAddressValid, placeToFields, createPropertyBody } from '../lib/addPropertyFields.js';
+import { GOOGLE_MAPS_KEY, loadPlacesScript } from '../lib/places.js';
 
 // ── Add a property (spec §3.4a) ──────────────────────────────
 //
@@ -32,29 +33,6 @@ import { manualAddressValid, placeToFields, createPropertyBody } from '../lib/ad
 // `POST /apartment/properties` is the only write: `{slug | partner_id:null,
 // property, force}` → `201 {property}` or `409 duplicate {candidates}`.
 
-// Read once at module load — the meta tag build.mjs substitutes from
-// VITE_GOOGLE_MAPS_KEY (dashboard.html). Empty when unset, which is exactly
-// when this form must fall back to manual entry only.
-const GOOGLE_MAPS_KEY = (typeof document !== 'undefined'
-  && document.querySelector('meta[name=google-maps-key]')?.content) || '';
-
-let placesScriptPromise = null;
-/** Loads the Places library's `<gmp-place-autocomplete>` custom element exactly once. */
-function loadPlacesScript() {
-  if (!GOOGLE_MAPS_KEY) return Promise.reject(new Error('no Google Maps key configured'));
-  if (placesScriptPromise) return placesScriptPromise;
-  placesScriptPromise = new Promise((resolve, reject) => {
-    if (window.google?.maps?.places) { resolve(); return; }
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GOOGLE_MAPS_KEY)}&libraries=places&v=weekly&loading=async`;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Google Maps script failed to load'));
-    document.head.appendChild(script);
-  });
-  return placesScriptPromise;
-}
-
 const INPUT_STYLE = { padding: '10px 12px', background: 'var(--bg-inset)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 14, width: '100%', boxSizing: 'border-box' };
 const LABEL_STYLE = { display: 'block', fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', marginBottom: 4, marginTop: 10 };
 const LINK_BTN_STYLE = { background: 'transparent', border: 'none', color: 'var(--accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer', padding: '6px 0', textAlign: 'left' };
@@ -79,13 +57,20 @@ function MatchCard({ title, candidates, onJoin, joiningId, extra }) {
   );
 }
 
-export function AddPropertyForm({ slug = null, onSuccess, onJoined, onCancel, submitLabel = 'Add property' }) {
-  const [name, setName] = useState('');
-  const [manual, setManual] = useState(!GOOGLE_MAPS_KEY);
+// `initialDraft` (Task 25, spec §3.4a (c)): the `sessionStorage
+// .lotlogic_signup_draft` object SignupPage parked before sending the
+// existing-email visitor off to sign in. Purely initial state — the draft
+// never carries a password (see `serializeDraft` in lib/signupValidation.js)
+// and an absent / expired draft is simply `null`, which is the empty form.
+export function AddPropertyForm({ slug = null, onSuccess, onJoined, onCancel, submitLabel = 'Add property', initialDraft = null }) {
+  const [name, setName] = useState(() => initialDraft?.name || '');
+  const [manual, setManual] = useState(() => (initialDraft ? !!initialDraft.manual : !GOOGLE_MAPS_KEY) || !GOOGLE_MAPS_KEY);
   const [placesReady, setPlacesReady] = useState(false);
   const [placesFailed, setPlacesFailed] = useState(false);
-  const [placeFields, setPlaceFields] = useState(null);
-  const [manualFields, setManualFields] = useState({ line1: '', city: '', state: '', zip: '' });
+  const [placeFields, setPlaceFields] = useState(() => initialDraft?.placeFields || null);
+  const [manualFields, setManualFields] = useState(() => (
+    initialDraft?.manualFields || { line1: '', city: '', state: '', zip: '' }
+  ));
   const [match, setMatch] = useState(null);
   const [matchDismissed, setMatchDismissed] = useState(false);
   const [possibleDuplicateOf, setPossibleDuplicateOf] = useState(null);

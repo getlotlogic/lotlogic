@@ -8,7 +8,7 @@ import { useToast } from './ui/Toast.jsx';
 import { SkeletonCards } from './ui/Skeletons.jsx';
 import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview } from './ui/icons.jsx';
 import { lazyPage } from './lib/lazyPage.js';
-import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink } from './lib/deepLink.js';
+import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink, readJoinReturnTo } from './lib/deepLink.js';
 import { navTabsFor, partnerRequestsReady } from './lib/features.js';
 import { verifyState, secondsUntilResend, cooldownRetryAfter, sentAtForRetryAfter } from './lib/verifyState.js';
 import { requestsApi } from './lib/requestsApi.js';
@@ -24,6 +24,7 @@ import { OperatorActivityPage } from './pages/OperatorActivityPage.jsx';
 import { OverviewPage } from './pages/OverviewPage.jsx';
 import { AccountPage } from './pages/AccountPage.jsx';
 import { PlateLookupPage } from './pages/PlateLookupPage.jsx';
+import { SignupPage } from './pages/SignupPage.jsx';
 import { PartnerAppPage } from './pages/PartnerAppPage.jsx';
 
 // Heavy tabs — lazy so a phone loads a login form, not a billing console.
@@ -39,16 +40,15 @@ const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';
 const FRANK_APP_TAB_LIVE = true; // live in Frank's partner portal since 2026-08-07
 
 // The public (no-session) routes `vercel.json` rewrites into this bundle, and
-// the page each one renders. Empty on purpose: the pages land with their own
-// tasks — Task 25 registers `join` (`<SignupPage slug onDone={login}/>`) and
-// Task 29 registers `request-action` (the `/r/<token>` page). Until then an
-// unregistered route falls through to the sign-in form, whose "New property?
-// Create your account" link is the door, so no portal link is a dead end.
-const PUBLIC_ROUTE_PAGES = {};
-// Same table for a session that already exists: only `/join…` differs there
-// (spec §3.2 — a signed-in manager opening someone else's link gets the
-// add-property form), and Task 25 registers it.
-const PUBLIC_ROUTE_PAGES_SIGNED_IN = {};
+// the page each one renders. `join` is Task 25's SignupPage; Task 29 registers
+// `request-action` (the `/r/<token>` page). An unregistered route falls
+// through to the sign-in form, whose "New property? Create your account" link
+// is the door, so no portal link is a dead end.
+const PUBLIC_ROUTE_PAGES = { join: SignupPage };
+// Same table for a session that already exists: only `/join…` differs there —
+// spec §3.2, a signed-in manager opening someone else's link gets the
+// add-property form (`mode="add-property"`), never a second sign-up.
+const PUBLIC_ROUTE_PAGES_SIGNED_IN = { join: SignupPage };
 
 // Every tab id the dashboard knows. A `?tab=` deep link is only honoured for
 // one of these; whether this particular account may SEE it is then settled by
@@ -136,8 +136,13 @@ export function App() {
   // The two paths `vercel.json` rewrites into this bundle without a session:
   // `/join…` (Task 25's SignupPage) and `/r/…` (Task 29's request-action
   // page). Read once — this never changes without a navigation.
-  const [publicRoute] = useState(() => readPublicRoute(window.location.pathname));
-  const [publicSlug] = useState(() => readJoinSlug(window.location.pathname));
+  // Settable, not a constant: a signup that completes on `/join/<slug>` turns
+  // this session into a signed-in one while the address bar still says
+  // `/join`. Without clearing the route here, the signed-in branch below
+  // would answer that pathname with the add-property form instead of the
+  // dashboard the new account is supposed to land on.
+  const [publicRoute, setPublicRoute] = useState(() => readPublicRoute(window.location.pathname));
+  const [publicSlug, setPublicSlug] = useState(() => readJoinSlug(window.location.pathname));
   // `/app?property=…&section=…&request=…&tab=…&firstrun=&verify=&upload=&plate=`
   // — the portal's email and Slack buttons. Captured on mount before anything
   // can rewrite the address bar, applied once the session exists, then cleaned
@@ -444,7 +449,28 @@ export function App() {
     finally { if (!silent) setLoading(false); }
   }, [addToast]);
 
+  // `?return_to=` (spec §3.4a door (c)): the "You already have an account"
+  // card on `/join/<slug>` sends the visitor to `/app?return_to=%2Fjoin%2F…`
+  // to sign in. Once signed in they belong back on that `/join` link, which
+  // the signed-in branch below answers with the add-property form, prefilled
+  // from the sessionStorage draft. Only `/join` or `/join/<slug>` is
+  // honoured (`readJoinReturnTo`); the key is stripped from the address
+  // either way so a refresh cannot replay it.
+  function applyJoinReturnTo() {
+    const r = readJoinReturnTo(window.location.search);
+    if (!r.present) return;
+    const url = r.path || `${window.location.pathname}${r.rest}${window.location.hash || ''}`;
+    try { window.history.replaceState(null, '', url); } catch { /* blocked */ }
+    if (r.path) {
+      setPublicSlug(r.slug);
+      setPublicRoute('join');
+    }
+  }
+  // Already signed in when the link was opened (another tab signed in first).
+  useEffect(() => { if (owner) applyJoinReturnTo(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   function login(o) {
+    applyJoinReturnTo();
     const session = { ...o, _ts: Date.now() };
     setOwner(session);
     try { localStorage.setItem('lotlogic_session', JSON.stringify(session)); } catch {}
@@ -469,6 +495,28 @@ export function App() {
           try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
         });
     }
+  }
+
+  // `SignupPage`'s `onDone` (spec §3.4 step 5 / §3.6). Three things the plain
+  // `login` cannot do on its own, and all three have to happen in the same
+  // commit or the new account lands on the wrong screen:
+  //   1. leave `/join` — `publicRoute` was read from the pathname on mount
+  //      and the address bar still says `/join/<slug>`;
+  //   2. replace the address with the url the response names
+  //      (`/app?property=…&section=requests&firstrun=1`, or a bare `/app`
+  //      for the pending-membership path);
+  //   3. re-read the deep link from THAT url, because `deepLink` was parsed
+  //      at mount from a query that did not exist yet — the apply-once effect
+  //      below would otherwise fire against an empty one and `firstrun`,
+  //      `property` and `section` would all be lost.
+  function handleJoinDone(session, nav) {
+    const url = (nav && nav.url) || '/app';
+    try { window.history.replaceState(null, '', url); } catch { /* blocked */ }
+    const q = url.indexOf('?');
+    setDeepLink(readDeepLink(q === -1 ? '' : url.slice(q)));
+    deepLinkAppliedRef.current = false;
+    setPublicRoute(null);
+    login(session);
   }
 
   // Re-pulls `/auth/me.properties` after AddPropertyForm (inside Account)
@@ -708,10 +756,9 @@ export function App() {
   if (!owner) {
     // `publicRoute` is the no-session switch for the two paths `vercel.json`
     // rewrites into this bundle. Both render the sign-in form today:
-    //   'join'           → Task 25 swaps in <SignupPage slug onDone={login}/>;
-    //                      until then the form's "New property? Create your
-    //                      account" link is the door, so /join is never a
-    //                      dead end.
+    //   'join'           → SignupPage (spec §3.1–§3.4): `/join/<slug>` or a
+    //                      bare `/join` that asks who tows the property
+    //                      first.
     //   'request-action' → Task 29 swaps in the /r/<token> page; the spec's
     //                      own fallback copy for a token this page cannot use
     //                      is "Sign in to manage the hold", which is exactly
@@ -720,21 +767,23 @@ export function App() {
     return (
       <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
         {PublicPage
-          ? <PublicPage route={publicRoute} slug={publicSlug} onDone={login} onLogin={login} />
+          ? <PublicPage route={publicRoute} slug={publicSlug} onDone={handleJoinDone} onLogin={login}
+              theme={theme} onToggleTheme={toggleTheme} />
           : <LoginPage onLogin={login} />}
       </div>
     );
   }
 
   // A signed-in manager opening someone else's `/join/<slug>` link gets the
-  // add-property form, not the sign-in form (spec §3.2). Until Task 25
-  // registers that page the dashboard renders as usual, and the Add a property
-  // button on Lots is the door.
+  // add-property form, not a second sign-up (spec §3.2) — the property
+  // section only, header "Add a property to your account", button
+  // **Add property**.
   const SignedInPublicPage = publicRoute === 'join' ? PUBLIC_ROUTE_PAGES_SIGNED_IN[publicRoute] : null;
   if (SignedInPublicPage) {
     return (
       <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
-        <SignedInPublicPage route={publicRoute} slug={publicSlug} mode="add-property" user={owner} />
+        <SignedInPublicPage route={publicRoute} slug={publicSlug} mode="add-property" user={owner}
+          theme={theme} onToggleTheme={toggleTheme} />
       </div>
     );
   }

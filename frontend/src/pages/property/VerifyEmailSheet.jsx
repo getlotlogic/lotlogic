@@ -34,6 +34,10 @@ import { useFocusTrap, useUid } from '../../ui/focusTrap.js';
 //     the new address too (spec §3.5: "the banner then names the new
 //     address"), persisting the same way handleVerifySuccess already does
 //   onSignOut() - the wall variant's Sign out link
+//   publicEmail - SIGNUP_VERIFY_FIRST only (spec §8.3): there is no session
+//     yet, so verify-email / resend-verification are the public routes and
+//     carry this address in the body; Sign out and Change email are hidden,
+//     because there is no account to sign out of or re-address yet
 export function VerifyEmailSheet({
   open,
   email,
@@ -44,6 +48,7 @@ export function VerifyEmailSheet({
   onSuccess,
   onEmailChanged,
   onSignOut,
+  publicEmail = null,
 }) {
   const [code, setCode] = useState('');
   // idle | submitting | wrong | expired | exhausted | offline
@@ -94,7 +99,7 @@ export function VerifyEmailSheet({
     if (code.length !== 6 || status === 'submitting') return;
     setStatus('submitting');
     try {
-      const resp = await requestsApi.verifyEmail({ code });
+      const resp = await requestsApi.verifyEmail(publicEmail ? { code, email: publicEmail } : { code });
       setStatus('idle');
       setCode('');
       onSuccess?.(resp);
@@ -125,7 +130,7 @@ export function VerifyEmailSheet({
       }
       setStatus('offline');
     }
-  }, [code, status, onSuccess]);
+  }, [code, status, onSuccess, publicEmail]);
 
   // Auto-submit at 6 digits.
   useEffect(() => {
@@ -158,7 +163,7 @@ export function VerifyEmailSheet({
     if (secondsLeft > 0 || resendState === 'sending') return;
     setResendState('sending');
     try {
-      await requestsApi.resendVerification({});
+      await requestsApi.resendVerification(publicEmail ? { email: publicEmail } : {});
       setResendState('resent');
       setSecondsLeft(RESEND_COOLDOWN_SECONDS);
     } catch (e) {
@@ -169,7 +174,7 @@ export function VerifyEmailSheet({
       }
       setResendState('error');
     }
-  }, [secondsLeft, resendState]);
+  }, [secondsLeft, resendState, publicEmail]);
 
   const submitChangeEmail = useCallback(async () => {
     const trimmed = newEmail.trim();
@@ -308,15 +313,19 @@ export function VerifyEmailSheet({
               ) : (
                 <span className="verify-resend-countdown">Resend in {secondsLeft} s</span>
               )}
-              <span aria-hidden="true" className="verify-sheet-footer-dot"> · </span>
-              <button type="button" className="verify-link-btn" onClick={() => setChangingEmail(true)}>
-                Change email
-              </button>
+              {!publicEmail && (
+                <>
+                  <span aria-hidden="true" className="verify-sheet-footer-dot"> · </span>
+                  <button type="button" className="verify-link-btn" onClick={() => setChangingEmail(true)}>
+                    Change email
+                  </button>
+                </>
+              )}
             </div>
           </>
         )}
 
-        {fromWall && (
+        {fromWall && !publicEmail && (
           <button type="button" className="verify-signout-link" onClick={onSignOut}>
             Sign out
           </button>
