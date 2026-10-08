@@ -55,12 +55,9 @@ test('slackState: token revoked / app uninstalled wins over feed_channel_set', (
   assert.equal(slackState({ connected: true, feed_channel_set: false, revoked: true }), 'revoked');
 });
 
-test('slackState: revoked is only meaningful once connected', () => {
-  // A row that was never connected has no bot token to revoke — `revoked`
-  // alone, with connected:false, is not a shape the backend sends, but the
-  // state machine still resolves it to not_connected rather than inventing
-  // a fifth state.
-  assert.equal(slackState({ connected: false, revoked: true }), 'not_connected');
+test('slackState: the backend sends connected:false with revoked:true for an uninstalled app', () => {
+  assert.equal(slackState({ connected: false, revoked: true }), 'revoked');
+  assert.equal(slackState({ connected: false, feed_channel_set: true, revoked: true }), 'revoked');
 });
 
 // ── the `?slack=connected|error` redirect App.jsx reads once on mount ──
