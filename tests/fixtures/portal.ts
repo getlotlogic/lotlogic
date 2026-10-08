@@ -34,6 +34,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { routeSupabaseToHarness } from './postgrestShim';
+import { isLoopbackUrl } from './portalGuard';
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
 export const PORTAL_E2E = process.env.PORTAL_E2E === '1';
@@ -51,7 +52,11 @@ export const PRODUCTION_API = 'https://lotlogic-backend-production.up.railway.ap
 export function skipUnlessPortal() {
   test.skip(!PORTAL_E2E, 'portal suite: set PORTAL_E2E=1 with a local backend (tests/README.md, "Portal suite")');
   test.skip(PORTAL_E2E && !PG_URL, 'portal suite: PORTAL_TEST_PG_URL is required (the harness DB from tests.portal.cluster)');
-  test.skip(PORTAL_E2E && PORTAL_API_URL === PRODUCTION_API, 'portal suite never runs against the production backend');
+  // Both the API the browser drives and the DB `sql()` writes must be on
+  // this machine (fixtures/portalGuard.ts) — never production, never a
+  // remote database a mistyped env var points at.
+  test.skip(PORTAL_E2E && !isLoopbackUrl(PORTAL_API_URL), 'portal suite: API_URL must be a loopback backend, never production');
+  test.skip(PORTAL_E2E && !!PG_URL && !isLoopbackUrl(PG_URL), 'portal suite: PORTAL_TEST_PG_URL must be a loopback harness database');
 }
 
 // ── the frontend under test ────────────────────────────────────────────────
@@ -76,7 +81,12 @@ export function frontendOrigin(): string {
  * are aborted — the local backend runs with no reCAPTCHA secret (DEBUG skips
  * verification) and no Maps key is baked into the build.
  */
+const pointed = new WeakSet<BrowserContext | Page>();
 export async function pointAtLocalBackend(target: BrowserContext | Page, apiUrl = PORTAL_API_URL) {
+  // Idempotent per page/context: a describe's beforeEach and `loginAs` may
+  // both call this; a second set of init scripts and routes adds nothing.
+  if (pointed.has(target)) return;
+  pointed.add(target);
   await target.setExtraHTTPHeaders({ 'x-forwarded-for': fakeClientIp() });
   await target.addInitScript((api) => {
     try { localStorage.setItem('lotlogic:e2e', '1'); } catch { /* blocked storage */ }
@@ -119,6 +129,7 @@ export function lit(v: string | number | null | undefined): string {
 /** Run SQL against the harness DB; returns rows as arrays of strings. */
 export function sql(query: string): string[][] {
   if (!PG_URL) throw new Error('PORTAL_TEST_PG_URL is not set');
+  if (!isLoopbackUrl(PG_URL)) throw new Error('PORTAL_TEST_PG_URL is not a loopback database; the portal fixture refuses to write to it');
   const out = execFileSync('psql', [PG_URL, '-X', '-q', '-At', '-F', '\t', '-v', 'ON_ERROR_STOP=1', '-c', query], {
     encoding: 'utf8',
   });
@@ -187,6 +198,21 @@ export function isolatePlate(partnerId: string, plate: string, keepPropertyId?: 
           AND EXISTS (SELECT 1 FROM public.tow_requests r
                        WHERE r.property_id = p.id AND r.status = 'active'
                          AND r.normalized_plate = upper(regexp_replace(${lit(plate)}, '[^A-Za-z0-9]', '', 'g')))`);
+}
+
+/**
+ * Run hygiene for a reused harness DB (called once by the global setup):
+ * archive the properties earlier runs' throwaway signups created
+ * (`pw-signup-*@e2e.lotlogic.dev` owners, created before this run started).
+ * The seeded owner A / B and partner accounts are never touched. A no-op on a
+ * fresh harness such as CI's.
+ */
+export function archiveEarlierRuns() {
+  if (!PG_URL || !isLoopbackUrl(PG_URL)) return;
+  sql(`UPDATE public.properties p SET archived_at = now()
+         FROM public.lot_owners o
+        WHERE o.id = p.owner_id AND o.email LIKE 'pw-signup-%@e2e.lotlogic.dev'
+          AND p.archived_at IS NULL AND p.created_at < now()`);
 }
 
 /** A plate no other spec in the run is using. */

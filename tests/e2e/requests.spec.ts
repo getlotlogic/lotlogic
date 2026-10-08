@@ -69,24 +69,53 @@ test.describe('office Requests section @portal', () => {
     expect(removed.some((d) => d.status === 'sent')).toBe(false);
   });
 
-  test('the T-1 h link: "OK — it ends at" changes nothing about the hold', async ({ page }) => {
+  /** An office with a hold pulled to T-1 h, and its `/r/<token>` ack_end page open. */
+  async function ackEndPage(page: Page) {
     const office = await officeOnRequests(page, frontendOrigin());
     const plate = randomPlate();
     await placeHold(page, plate);
     await expect(holdRow(page, plate)).toBeVisible();
     const req = latestRequest(office.property_id)!;
     sql(`UPDATE public.tow_requests SET expires_at = now() + interval '50 minutes' WHERE id = ${lit(req.id)}`);
-    const before = sql(`SELECT status, expires_at, extension_count FROM public.tow_requests WHERE id = ${lit(req.id)}`)[0];
-
     const token = mintActionToken(req.id, 'ack_end');
     await page.goto(`${frontendOrigin()}/r/${token}`);
     const ok = page.getByRole('button', { name: /^OK — it ends at / });
     await expect(ok).toBeVisible({ timeout: 15_000 });
+    return { req, ok };
+  }
+  const holdState = (id: string) =>
+    sql(`SELECT status, expires_at, extension_count FROM public.tow_requests WHERE id = ${lit(id)}`)[0];
+
+  test('the T-1 h link: "OK — it ends at" changes nothing about the hold', async ({ page }) => {
+    const { req, ok } = await ackEndPage(page);
+    const before = holdState(req.id);
+
+    // The tap reaches the backend and is accepted — a click that never left
+    // the page would also leave the row unchanged.
+    const posted = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/requests/action');
     await ok.click();
+    const res = await posted;
+    expect(res.status(), 'POST /requests/action {action: ack_end}').toBe(200);
+    expect(JSON.parse(res.request().postData() ?? '{}')).toMatchObject({ action: 'ack_end' });
     await expect(ok).toBeHidden();
 
-    const after = sql(`SELECT status, expires_at, extension_count FROM public.tow_requests WHERE id = ${lit(req.id)}`)[0];
-    expect(after, 'ack_end leaves status, end time and extension count alone').toEqual(before);
+    expect(holdState(req.id), 'ack_end leaves status, end time and extension count alone').toEqual(before);
+  });
+
+  // KNOWN BACKEND DEFECT (Task 13, found by this suite; task-30-report.md
+  // "Fix round 1"): spec §6 `POST /requests/action` answers
+  // `{result: 'acknowledged'}`, but `routers/request_actions.py` returns
+  // `{result: 'acked'}`, which `deriveResultView` (spec-correct) renders as
+  // "This link has expired." `test.fail` keeps the assertion live: once the
+  // backend says `acknowledged` this "unexpectedly passes" and the marker
+  // must come off.
+  test('the T-1 h link: after "OK", the page confirms the end time (spec §5.8)', async ({ page }) => {
+    test.fail(true, "backend: POST /requests/action returns result 'acked', the spec says 'acknowledged'");
+    const { req, ok } = await ackEndPage(page);
+    await ok.click();
+    const refNo = req.ref.replace(/^H-/, '');
+    await expect(page.getByText(new RegExp(`Got it\\. H-${refNo} ends at .+ as planned\\.`))).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Extend 24 hours instead' })).toBeVisible();
   });
 
   test('Extend sheet: "0 of 4" before, "1 of 4" after', async ({ page }) => {

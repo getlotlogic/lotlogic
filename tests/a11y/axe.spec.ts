@@ -69,7 +69,23 @@ const BLOCKING = new Set(['serious', 'critical']);
  */
 const WAIVED: Record<string, { rule: string; nodes: number }[]> = {};
 
+/**
+ * Let finite CSS animations/transitions (fade-ins, the theme swap) finish
+ * before axe samples colors: a scan mid-fade measures blended colors (seen as
+ * #74756f for --text-muted on the partner Requests tab) and fails at random.
+ * Infinite ones (spinners) are ignored; capped at 2 s.
+ */
+async function settle(page: any) {
+  await page.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations()
+      .filter((a) => Number.isFinite(a.effect?.getComputedTiming().endTime ?? Infinity))
+      .map((a) => a.finished.catch(() => undefined))),
+    new Promise((r) => setTimeout(r, 2000)),
+  ]));
+}
+
 async function scan(page: any, label: string) {
+  await settle(page);
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
     .analyze();
@@ -115,6 +131,7 @@ async function scan(page: any, label: string) {
  * callers don't need it.
  */
 async function scanIncluding(page: any, label: string, selector: string, excludeSelectors: string[] = []) {
+  await settle(page);
   let builder = new AxeBuilder({ page }).include(selector);
   for (const ex of excludeSelectors) builder = builder.exclude(ex);
   const results = await builder

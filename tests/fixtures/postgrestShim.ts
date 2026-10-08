@@ -28,6 +28,7 @@
  */
 import { execFile } from 'node:child_process';
 import type { BrowserContext, Page, Route } from '@playwright/test';
+import { isLoopbackUrl } from './portalGuard';
 
 const IDENT = /^[a-z_][a-z0-9_]*$/;
 const MARK = 'PGRST-SHIM:';
@@ -86,6 +87,7 @@ export function translateQuery(params: URLSearchParams): { select: string; where
 }
 
 function runAs(pgUrl: string, claims: Record<string, unknown> | null, statement: string, vars: Record<string, string> = {}) {
+  if (!isLoopbackUrl(pgUrl)) throw new Error('postgrestShim: refusing a non-loopback database URL');
   const role = claims && typeof claims.role === 'string' && IDENT.test(claims.role) ? claims.role : 'anon';
   const script = [
     'BEGIN;',

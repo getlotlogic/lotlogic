@@ -9,6 +9,7 @@
     "test:access": "playwright test e2e/access-control",
     "test:smoke": "playwright test e2e/dashboard-smoke",
     "test:a11y": "playwright test a11y",
+    "test:unit": "node --test fixtures/*.test.mjs",
     "install-browsers": "playwright install --with-deps chromium",
     "seed": "node scripts/seed-test-accounts.mjs",
     "report": "playwright show-report",
