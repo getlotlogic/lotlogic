@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { requestsApi } from '../../lib/requestsApi.js';
+import { latestGate } from '../../lib/latest.js';
 import { requestErrorMessage } from '../../lib/requestErrors.js';
 import { useIntervalFetch } from '../../hooks.js';
 import { SkeletonCards } from '../../ui/Skeletons.jsx';
@@ -88,6 +89,10 @@ export function RequestsSection({
   const plateRef = useRef(null);
   const undoRef = useRef(null);
   const deepHandledRef = useRef(false);
+  // Out-of-order guard: a list fetch that started before an Extend must not
+  // land after the post-extend reload and put the old count back on screen.
+  const loadGateRef = useRef(null);
+  if (!loadGateRef.current) loadGateRef.current = latestGate();
 
   const propertyId = property?.id || null;
   const isViewer = role === 'viewer';
@@ -105,18 +110,22 @@ export function RequestsSection({
   const rules = property?.hold_rules;
 
   const load = useCallback(async () => {
+    const gate = loadGateRef.current;
+    const ticket = gate.take();
     if (!propertyId) return;
     try {
       const [a, r] = await Promise.all([
         requestsApi.listRequests({ property_id: propertyId, view: 'active' }),
         requestsApi.listRequests({ property_id: propertyId, view: 'recent' }),
       ]);
+      if (!gate.isCurrent(ticket)) return;
       setActive(a?.items || []);
       setRecent(r?.items || []);
       setError('');
     } catch (err) {
       // "Your last list is still shown" is a promise: never blank what is on
       // screen because one poll failed.
+      if (!gate.isCurrent(ticket)) return;
       if (err?.status !== 401) setError(LOAD_ERROR);
     }
   }, [propertyId]);
