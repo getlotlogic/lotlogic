@@ -102,15 +102,7 @@ test.describe('office Requests section @portal', () => {
     expect(holdState(req.id), 'ack_end leaves status, end time and extension count alone').toEqual(before);
   });
 
-  // KNOWN BACKEND DEFECT (Task 13, found by this suite; task-30-report.md
-  // "Fix round 1"): spec §6 `POST /requests/action` answers
-  // `{result: 'acknowledged'}`, but `routers/request_actions.py` returns
-  // `{result: 'acked'}`, which `deriveResultView` (spec-correct) renders as
-  // "This link has expired." `test.fail` keeps the assertion live: once the
-  // backend says `acknowledged` this "unexpectedly passes" and the marker
-  // must come off.
   test('the T-1 h link: after "OK", the page confirms the end time (spec §5.8)', async ({ page }) => {
-    test.fail(true, "backend: POST /requests/action returns result 'acked', the spec says 'acknowledged'");
     const { req, ok } = await ackEndPage(page);
     await ok.click();
     const refNo = req.ref.replace(/^H-/, '');

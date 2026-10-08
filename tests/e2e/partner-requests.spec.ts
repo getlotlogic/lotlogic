@@ -115,15 +115,8 @@ test.describe('partner Requests tab @portal', () => {
   });
 
   // Spec §3.8: "its next login with no other property renders an
-  // explanation, not an empty list". KNOWN BACKEND DEFECT (found by this
-  // suite, reported in task-30-report.md): Not ours sets `archived_at`, and
-  // `services/auth_me.py`'s `_OWNER_PROPERTIES_SQL` filters
-  // `p.archived_at IS NULL` before `owner_shape` splits out
-  // `rejected_properties` — so that list is always empty and the office gets
-  // "No lots yet". `test.fail` keeps the assertion live: the day the backend
-  // is fixed this test "unexpectedly passes" and the marker must come off.
+  // explanation, not an empty list".
   test("after Not ours, the office's next sign-in explains instead of an empty list", async ({ browser }, testInfo) => {
-    test.fail(true, 'backend: /auth/me.rejected_properties excludes archived (= every rejected) property');
     const office = await verifiedOffice();
     const nstyle = seedNStyle();
     const nstyleToken = await apiToken(nstyle.email, nstyle.password);
