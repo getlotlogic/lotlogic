@@ -758,7 +758,12 @@ export function ALPRPropertyDetailPage({
           <RequestsSection
             property={property}
             user={user}
-            role={property?.role || (user?._role === 'partner' ? 'partner' : 'admin')}
+            /* With no `/auth/me` entry for this property (an older backend,
+               or `db.getProperties`' PostgREST fallback) the member role is
+               unknown. 'viewer' is the safe default: the server 404s a write
+               either way, and showing a composer that cannot post is worse
+               than showing the view-only line. */
+            role={property?.role || (user?._role === 'partner' ? 'partner' : 'viewer')}
             onNeedVerify={onNeedVerify}
             request={request}
             upload={upload}

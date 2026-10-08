@@ -20,6 +20,7 @@ import {
   DEFAULT_HOLD_RULES,
   buttonLabel,
   defaultPresetId,
+  extendChips,
   extendLabel,
   fmtET,
   fmtETClock,
@@ -357,4 +358,80 @@ test('plateNote says what was actually checked, and only when it differs', () =>
   assert.equal(plateNote('ABC1234'), null);
   assert.equal(plateNote('  ABC1234  '), null, 'surrounding whitespace is not a change worth naming');
   assert.equal(plateNote(''), null);
+});
+
+// ── extendChips: the ExtendSheet's chips (§4.3 + §8.3) ───────
+//
+// The per-transition window is "new `expires_at` > old **and** ≤ `now()+7d`",
+// enforced in the service under the row lock with 422 `hold_window` (§4.3,
+// §8.3). A chip is a promise the button then prints verbatim, so a chip that
+// the server would refuse must not exist. Two rules, both asserted here:
+//
+//   * every chip is clamped to `now + max_days`, and
+//   * a chip whose clamped instant is not strictly past the current expiry is
+//     dropped entirely.
+//
+// Every chip also carries an absolute `expiresAt` and `durationHours: null`:
+// the extend payload is the instant the label printed, never a relative
+// duration whose anchor the API contract does not pin down.
+
+test('extendChips measures from the hold’s expiry, not from now', () => {
+  const now = new Date('2026-10-07T13:00:00Z');
+  const request = { expires_at: '2026-10-08T01:14:00Z' };   // 12 h out
+  const chips = extendChips(request, now, null);
+  const h24 = chips.find(c => c.id === 'h24');
+  // §5.2's own example: a hold ending 9:14 PM extends to 9:14 PM the next day.
+  assert.equal(extendLabel(h24.expiresAt), 'Extend to Thu Oct 8, 9:14 PM ET');
+});
+
+test('every extendChips chip is clamped to now + max_days — never past it', () => {
+  const now = new Date('2026-10-07T13:00:00Z');
+  const ceiling = now.getTime() + 7 * 24 * 3600000;
+  // A hold with 6 days left: "24 hours" fits, "3 days" and "7 days" do not.
+  const request = { expires_at: '2026-10-13T13:00:00Z' };
+  const chips = extendChips(request, now, null);
+  assert.ok(chips.length > 0);
+  for (const c of chips) {
+    assert.ok(c.expiresAt.getTime() <= ceiling, `${c.label} is past now + 7 d`);
+  }
+  // The longest chip lands exactly on the ceiling rather than disappearing.
+  assert.equal(chips[chips.length - 1].expiresAt.getTime(), ceiling);
+});
+
+test('extendChips drops any chip that is not strictly past the current expiry', () => {
+  const now = new Date('2026-10-07T13:00:00Z');
+  const request = { expires_at: '2026-10-14T13:00:00Z' };   // already at now + 7 d
+  assert.deepEqual(extendChips(request, now, null), []);
+});
+
+test('extendChips never repeats an instant', () => {
+  const now = new Date('2026-10-07T13:00:00Z');
+  const request = { expires_at: '2026-10-13T20:00:00Z' };
+  const chips = extendChips(request, now, null);
+  const stamps = chips.map(c => c.expiresAt.getTime());
+  assert.equal(new Set(stamps).size, stamps.length);
+});
+
+test('extendChips always sends an absolute time, never a duration', () => {
+  const now = new Date('2026-10-07T13:00:00Z');
+  const chips = extendChips({ expires_at: '2026-10-08T01:14:00Z' }, now, null);
+  for (const c of chips) {
+    assert.equal(c.durationHours, null, c.label);
+    assert.ok(c.expiresAt instanceof Date, c.label);
+  }
+});
+
+test('extendChips honours a tightened max_days', () => {
+  const now = new Date('2026-10-07T13:00:00Z');
+  const ceiling = now.getTime() + 2 * 24 * 3600000;
+  const chips = extendChips({ expires_at: '2026-10-08T13:00:00Z' }, now, { max_days: 2 });
+  for (const c of chips) assert.ok(c.expiresAt.getTime() <= ceiling, c.label);
+  assert.equal(chips[chips.length - 1].expiresAt.getTime(), ceiling);
+});
+
+test('extendChips with no expiry at all still offers the chips from now', () => {
+  const now = new Date('2026-10-07T13:00:00Z');
+  const chips = extendChips({}, now, null);
+  assert.ok(chips.length >= 2);
+  for (const c of chips) assert.ok(c.expiresAt.getTime() > now.getTime(), c.label);
 });

@@ -247,6 +247,51 @@ export function presets(now, rules) {
 }
 
 /**
+ * The ExtendSheet's chips (spec §4.3, §8.3).
+ *
+ * An extension runs from where the hold ENDS, not from now — §5.2's own
+ * example is a hold ending Wed Oct 8, 9:14 PM whose Extend button reads
+ * "Extend to Thu Oct 9, 9:14 PM ET". But the per-transition window the
+ * service enforces under the row lock is "new `expires_at` > old **and** ≤
+ * `now() + 7 d`" (422 `hold_window`), so measuring from the expiry has to be
+ * clamped back to the ceiling measured from *now*. §4.3 makes the button
+ * label the single source of truth, and a label the server will refuse is the
+ * one thing it must never be.
+ *
+ * So: build the presets from `max(now, expires_at)`, clamp every one of them
+ * to `now + max_days`, drop any whose clamped instant is not strictly past
+ * the current expiry, and de-duplicate the instants that collapse onto the
+ * ceiling (keeping the longest label, which is the one that reads true of a
+ * chip sitting exactly `max_days` out).
+ *
+ * Every chip carries `durationHours: null`: the payload is the absolute
+ * instant the label printed, so the label and the body cannot disagree about
+ * which anchor the duration was measured from.
+ *
+ * @returns {{id: string, label: string, expiresAt: Date, durationHours: null}[]}
+ *   empty when the hold already ends at or past the ceiling — the caller says
+ *   so in words rather than offering a chip that cannot work.
+ */
+export function extendChips(request, now, rules) {
+  const r = resolveHoldRules(rules);
+  const from = toDate(now) || new Date();
+  const endsAt = toDate(request?.expires_at);
+  const floor = endsAt ? endsAt.getTime() : from.getTime();
+  const ceiling = from.getTime() + r.max_days * 24 * HOUR_MS;
+  const baseline = new Date(Math.max(from.getTime(), floor));
+
+  // A Map keyed on the instant: a later chip overwrites an earlier one with
+  // the same clamped time, which is what keeps the longest label.
+  const byInstant = new Map();
+  for (const chip of presets(baseline, r)) {
+    const at = Math.min(chip.expiresAt.getTime(), ceiling);
+    if (at <= floor) continue;
+    byInstant.set(at, { id: chip.id, label: chip.label, expiresAt: new Date(at), durationHours: null });
+  }
+  return [...byInstant.values()].sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
+}
+
+/**
  * The chip that starts selected — 24 hours (spec §5.2's wireframe). Derived
  * from `hold_rules.default_hours` so a tightened default still preselects a
  * chip that exists.

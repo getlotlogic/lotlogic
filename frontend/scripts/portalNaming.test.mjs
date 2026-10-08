@@ -36,6 +36,8 @@ const TARGET_FILES = [
   'src/pages/property/UpsellPanel.jsx',
   'src/lib/verdicts.js',
   'src/lib/holdTime.js',
+  // The code → sentence map: every error a manager is shown comes from here.
+  'src/lib/requestErrors.js',
   // The bottom-sheet shell every portal sheet renders inside.
   'src/ui/Sheet.jsx',
 ];
@@ -45,19 +47,30 @@ function exists(abs) {
   try { statSync(abs); return true; } catch { return false; }
 }
 
+/**
+ * Every .js/.jsx/.mjs under `absDir`, **recursively**, as paths relative to
+ * `frontend/`.
+ *
+ * The brief's scope is `frontend/src/pages/property/**`, so the walk descends:
+ * a non-recursive `readdirSync` would let a future `property/sheets/` escape
+ * the gate silently, which is the one failure mode a naming guard cannot have.
+ */
+export function jsxFilesUnder(absDir, rel) {
+  const out = [];
+  if (!exists(absDir)) return out;
+  for (const entry of readdirSync(absDir, { withFileTypes: true })) {
+    const here = path.posix.join(rel, entry.name);
+    if (entry.isDirectory()) out.push(...jsxFilesUnder(path.join(absDir, entry.name), here));
+    else if (entry.isFile() && /\.(jsx?|mjs)$/.test(entry.name)) out.push(here);
+  }
+  return out;
+}
+
 /** Every existing target, relative to `frontend/`, de-duplicated and sorted. */
 export function targets() {
   const rel = new Set();
   for (const f of TARGET_FILES) if (exists(path.join(ROOT, f))) rel.add(f);
-  for (const d of TARGET_DIRS) {
-    const abs = path.join(ROOT, d);
-    if (!exists(abs)) continue;
-    for (const entry of readdirSync(abs, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      if (!/\.(jsx?|mjs)$/.test(entry.name)) continue;
-      rel.add(path.posix.join(d, entry.name));
-    }
-  }
+  for (const d of TARGET_DIRS) for (const f of jsxFilesUnder(path.join(ROOT, d), d)) rel.add(f);
   return [...rel].sort();
 }
 
@@ -307,6 +320,15 @@ test('no portal copy string uses a banned word', () => {
     'Visitor / Permanent / Temporary / Guest / Driver (the Slack roles read ' +
     '"Office" and "Truck"). Offending copy:\n  ' + failures.join('\n  '),
   );
+});
+
+test('the directory walk descends into subdirectories', () => {
+  // The brief's scope is `src/pages/property/**`. `src/` is used as the
+  // fixture because it is guaranteed to have nested .jsx today, so this fails
+  // the moment the walk stops recursing — without planting a file.
+  const found = jsxFilesUnder(path.join(ROOT, 'src'), 'src');
+  assert.ok(found.includes('src/pages/property/RequestRow.jsx'), 'the walk did not descend two levels');
+  assert.ok(found.includes('src/lib/holdTime.js'), 'the walk did not descend one level');
 });
 
 test('the scanner is looking at files that exist', () => {

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Sheet } from '../../ui/Sheet.jsx';
 import { SkeletonCards } from '../../ui/Skeletons.jsx';
 import { requestsApi } from '../../lib/requestsApi.js';
+import { requestErrorMessage } from '../../lib/requestErrors.js';
 import { fmtET, fmtETStamp } from '../../lib/holdTime.js';
 import { outcomeWords, refWithLineage, vehicleLine } from './RequestRow.jsx';
 
@@ -71,13 +72,24 @@ export function deliverySentence(dv) {
   }
 }
 
-/** Events and deliveries interleaved oldest-first, each already a sentence. */
+/**
+ * Events and deliveries interleaved oldest-first, each already a sentence.
+ *
+ * The `notified` event and the `tow_request_deliveries` rows it produced are
+ * the same fact recorded twice, so when any delivery is present the event is
+ * dropped: the delivery rows say which channel and whether it landed, which
+ * is strictly more than "Sent to N Style" and is what a manager chasing a
+ * request came to read.
+ */
 export function timeline(events, deliveries) {
   const rows = [];
+  const deliveryRows = Array.isArray(deliveries) ? deliveries : [];
+  const haveDeliveries = deliveryRows.length > 0;
   for (const ev of Array.isArray(events) ? events : []) {
+    if (haveDeliveries && ev?.event === 'notified') continue;
     rows.push({ at: ev?.created_at, text: eventSentence(ev), key: `e-${ev?.id ?? rows.length}` });
   }
-  for (const dv of Array.isArray(deliveries) ? deliveries : []) {
+  for (const dv of deliveryRows) {
     rows.push({
       at: dv?.sent_at || dv?.created_at,
       text: deliverySentence(dv),
@@ -93,7 +105,7 @@ export function timeline(events, deliveries) {
     });
 }
 
-export function RequestHistorySheet({ requestId, onClose, canAct, onExtend, onRemove, addToast }) {
+export function RequestHistorySheet({ requestId, onClose, canAct, viewerName, onExtend, onRemove, addToast }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [photoUrl, setPhotoUrl] = useState(null);
@@ -105,7 +117,7 @@ export function RequestHistorySheet({ requestId, onClose, canAct, onExtend, onRe
     setError('');
     requestsApi.getRequest(requestId)
       .then(out => { if (alive) setData(out); })
-      .catch(err => { if (alive) setError(err?.message || 'Could not load this request.'); });
+      .catch(err => { if (alive) setError(requestErrorMessage(err, 'Could not load this request.')); });
     return () => { alive = false; };
   }, [requestId]);
 
@@ -147,7 +159,7 @@ export function RequestHistorySheet({ requestId, onClose, canAct, onExtend, onRe
               alt={`${PHOTO_ALT_PREFIX}${request.plate}`} />
           )}
           {request.note && <div className="req-meta">"{request.note}"</div>}
-          {request.status !== 'active' && <div className="req-pill">{outcomeWords(request)}</div>}
+          {request.status !== 'active' && <div className="req-pill">{outcomeWords(request, viewerName)}</div>}
 
           <div className="req-section-title">History</div>
           <ul className="req-events">

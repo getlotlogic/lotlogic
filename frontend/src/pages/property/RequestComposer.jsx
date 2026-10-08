@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { requestsApi } from '../../lib/requestsApi.js';
+import { requestErrorMessage } from '../../lib/requestErrors.js';
 import { useNowTick } from '../../hooks.js';
 import {
   buttonLabel,
@@ -35,6 +36,9 @@ import {
 //   onCreated(req)  a 201 landed
 //   onNeedVerify(resume)  open the 6-digit code sheet; `resume` re-submits
 //   onConflict({requestId, plate, expiresLocal, kind})  the 409
+//   expiryFor(requestId)  the `expires_local` of a row in the section's active
+//                   list — the 409 body carries only `request_id` (§8.3), so
+//                   the time in the conflict sentence is resolved client-side
 //   addToast(msg, type)
 
 const KINDS = [
@@ -66,6 +70,7 @@ export function RequestComposer({
   onCreated,
   onNeedVerify,
   onConflict,
+  expiryFor,
   addToast,
   plateInputRef,
 }) {
@@ -93,7 +98,7 @@ export function RequestComposer({
   const now = useMemo(() => new Date(nowTick), [nowTick]);
 
   const resolved = resolveHoldRules(rules);
-  const chips = useMemo(() => presets(now, resolved), [nowTick, resolved.overnight_hour, resolved.max_days]);
+  const chips = useMemo(() => presets(now, resolved), [now, resolved.overnight_hour, resolved.max_days]);
   const isPending = property?.verification_status === 'pending';
 
   // What the button promises. The picker wins when it has a value, otherwise
@@ -146,7 +151,9 @@ export function RequestComposer({
       // thumbnail (it is what the manager picked) and say the hold still works;
       // submit carries no `photo_key`.
       setPhoto({ key: null, name: file.name, previewUrl });
-      setPhotoError(err?.status === 413 ? PHOTO_TOO_BIG : PHOTO_FAILED);
+      setPhotoError(err?.status === 413 || err?.code === 'request_entity_too_large'
+        ? PHOTO_TOO_BIG
+        : requestErrorMessage(err, PHOTO_FAILED));
     } finally {
       setPhotoBusy(false);
     }
@@ -216,9 +223,16 @@ export function RequestComposer({
     }
   }
 
+  // §5.2 writes this sentence for a tow; §5.9 lists "tow/photo inline
+  // message" as one opener; and §3.8's "first hold on a pending property" path
+  // lands here too, where neither "request a tow" nor "request a photo" is
+  // true — a manager who tapped "Put on hold until …" is placing a hold.
   function askToVerify() {
-    const what = kind === 'tow' ? 'tow' : 'photo';
-    setVerifyCopy(`Confirm your email to request a ${what} — enter the 6-digit code we sent.`);
+    setVerifyCopy(kind === 'tow'
+      ? 'Confirm your email to request a tow — enter the 6-digit code we sent.'
+      : kind === 'photo'
+        ? 'Confirm your email to request a photo — enter the 6-digit code we sent.'
+        : 'Confirm your email to place this hold — enter the 6-digit code we sent.');
     // Until Task 23 lands, `onNeedVerify` defaults to a no-op upstream and the
     // inline copy above is the whole answer.
     onNeedVerify?.(() => submit());
@@ -239,8 +253,12 @@ export function RequestComposer({
   function handleFailure(err) {
     const code = err?.code;
     if (code === 'active_hold_exists') {
+      // §8.3's 409 body is `{request_id}` and nothing else. The expiry comes
+      // from the row the section is already holding; with no match (the row
+      // is outside this page's list) the sentence drops the "until …" clause
+      // rather than printing a hole where a time should be.
       const requestId = err.body?.request_id || null;
-      const expiresLocal = err.body?.expires_local || '';
+      const expiresLocal = (requestId && expiryFor?.(requestId)) || '';
       const shown = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
       setConflictCopy({ requestId, plate: shown, expiresLocal });
       onConflict?.({ requestId, plate: shown, expiresLocal, kind });
@@ -248,11 +266,10 @@ export function RequestComposer({
     }
     if (code === 'email_unverified') { askToVerify(); return; }
     if (code === 'note_required') { setNoteError(TOW_NOTE_ERROR); return; }
-    if (code === 'pending_hold_limit') {
-      addToast?.(`${holdCount} of ${resolved.pending_hold_cap} holds while N Style confirms`, 'error');
-      return;
-    }
-    addToast?.(err?.message || 'Could not send that request. Try again.', 'error');
+    // Every other code becomes a sentence through the map — the error's own
+    // text is the route's `detail` code (`hold_window`,
+    // `attestation_required`, …), which is an identifier, not copy.
+    addToast?.(requestErrorMessage(err, 'Could not send that request. Try again.'), 'error');
   }
 
   const primaryLabel = kind === 'tow' ? 'Request tow'
@@ -439,8 +456,12 @@ export function RequestComposer({
       {conflictCopy && (
         <div className="req-error" role="status">
           {kind === 'tow'
-            ? `${conflictCopy.plate} is on hold until ${conflictCopy.expiresLocal}. Remove the hold first. `
-            : `${conflictCopy.plate} is already on hold until ${conflictCopy.expiresLocal}. `}
+            ? (conflictCopy.expiresLocal
+              ? `${conflictCopy.plate} is on hold until ${conflictCopy.expiresLocal}. Remove the hold first. `
+              : `${conflictCopy.plate} is on hold. Remove the hold first. `)
+            : (conflictCopy.expiresLocal
+              ? `${conflictCopy.plate} is already on hold until ${conflictCopy.expiresLocal}. `
+              : `${conflictCopy.plate} is already on hold. `)}
           <button type="button" className="req-link" onClick={() => onConflict?.({ ...conflictCopy, kind })}>
             {kind === 'tow' ? 'Go to hold' : 'Extend it instead'}
           </button>

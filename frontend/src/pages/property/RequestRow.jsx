@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { requestsApi } from '../../lib/requestsApi.js';
+import { requestErrorMessage } from '../../lib/requestErrors.js';
 import { useNowTick } from '../../hooks.js';
 import { fmtETClock, fmtETShort, holdRowTime } from '../../lib/holdTime.js';
 
@@ -34,12 +35,33 @@ export function vehicleLine(request) {
   return [vehicle, request?.color].filter(Boolean).join(' · ');
 }
 
-/** The outcome, in words, for a finished request (§5.2's Recent pills). */
-export function outcomeWords(request) {
+/** `"Marcus Webb"` → `"Marcus"`; §5.2's pills name the actor's first name. */
+function firstName(display) {
+  return String(display || '').trim().split(/\s+/)[0] || '';
+}
+
+/**
+ * The outcome, in words, for a finished request (§5.2's Recent pills).
+ *
+ * `property_rejected` is tested **first**: it is a `resolution_note`, and the
+ * backend may well set it alongside `resolution='declined'`, in which case
+ * falling through to the `declined` case would render the raw code §3.8
+ * forbids — `Declined — "property_rejected"`.
+ *
+ * @param {object} request
+ * @param {string} [viewerName] the signed-in account's display name, so
+ *   "Removed by you" is said only when the caller is in fact the actor.
+ */
+export function outcomeWords(request, viewerName) {
   const who = request?.resolved_by_display || '';
+  if (request?.resolution_note === 'property_rejected') return 'Property not confirmed by N Style';
   switch (request?.resolution) {
     case 'expired': return 'Expired';
-    case 'property_removed': return who ? `Removed by ${who}` : 'Removed by you';
+    case 'property_removed': {
+      if (!who) return 'Removed';
+      const mine = viewerName && who.trim().toLowerCase() === String(viewerName).trim().toLowerCase();
+      return mine ? 'Removed by you' : `Removed by ${firstName(who)}`;
+    }
     case 'towed': return 'Towed';
     case 'photographed': return 'Photo sent';
     case 'declined':
@@ -47,7 +69,6 @@ export function outcomeWords(request) {
         ? `Declined — "${request.resolution_note}"`
         : 'Declined';
     default:
-      if (request?.resolution_note === 'property_rejected') return 'Property not confirmed by N Style';
       if (request?.status === 'declined') {
         return request.resolution_note ? `Declined — "${request.resolution_note}"` : 'Declined';
       }
@@ -65,6 +86,8 @@ export function refWithLineage(request) {
 export function RequestRow({
   request,
   canAct = false,
+  canFulfill = false,
+  viewerName = '',
   flagged = false,
   openUpload = false,
   onExtend,
@@ -146,7 +169,9 @@ export function RequestRow({
       onPhotoSent?.(request.id);
       setUploadOpen(false);
     } catch (err) {
-      setUploadError(err?.message || "Couldn't add the photo — the hold still works.");
+      // §5.2's "the hold still works" belongs to the composer's optional
+      // photo; a photo request has no hold to still work.
+      setUploadError(requestErrorMessage(err, "Couldn't send the photo. Try again."));
     } finally {
       setUploading(false);
     }
@@ -208,11 +233,13 @@ export function RequestRow({
         </div>
       )}
 
-      {!active && <div className="req-pill">{outcomeWords(request)}</div>}
+      {!active && <div className="req-pill">{outcomeWords(request, viewerName)}</div>}
 
       {/* The §6.5 [Photo sent] surface: upload a photo against this request.
-          Only on an open photo request — a hold has nothing to fulfil. */}
-      {active && kind === 'photo' && (
+          Only on an open photo request — a hold has nothing to fulfil — and
+          only for the partner, because §8.3 scopes `/fulfill` to
+          "partner / Slack" and the office would be shown a 404. */}
+      {canFulfill && active && kind === 'photo' && (
         <div style={{ marginTop: 8 }}>
           <button type="button" className="req-link" aria-expanded={uploadOpen}
             aria-controls={`req-upload-${request.id}`} onClick={() => setUploadOpen(v => !v)}>
@@ -238,7 +265,10 @@ export function RequestRow({
 
       <div className="req-btn-row">
         {canAct && active && isHold && (
-          <button type="button" className="req-btn" onClick={() => onExtend?.(request)}>Extend</button>
+          /* §4.3: the 409 scrolls this row in "with Extend highlighted" —
+             the button itself, not just the card. */
+          <button type="button" className={`req-btn${flagged ? ' req-btn-flag' : ''}`}
+            onClick={() => onExtend?.(request)}>Extend</button>
         )}
         {canAct && active && (
           <button type="button" className="req-btn" onClick={() => onRemove?.(request)}>Remove</button>

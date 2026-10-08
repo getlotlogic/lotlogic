@@ -2421,6 +2421,14 @@
       cursor: pointer;
     }
     .req-btn:hover { border-color: var(--text-faint); }
+    /* §4.3: a 409 scrolls the existing row in "with Extend highlighted". The
+       border and the ring are the highlight — the label keeps its own colour,
+       so the cue is not carried by colour alone. */
+    .req-btn-flag {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent);
+      background: var(--bg-card);
+    }
     .req-btn[disabled] { opacity: .6; cursor: not-allowed; }
     .req-btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
     /* A text link, not a button — History is the third, quieter action. */

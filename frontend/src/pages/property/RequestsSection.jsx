@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { requestsApi } from '../../lib/requestsApi.js';
+import { requestErrorMessage } from '../../lib/requestErrors.js';
 import { useIntervalFetch } from '../../hooks.js';
 import { SkeletonCards } from '../../ui/Skeletons.jsx';
 import { RequestComposer } from './RequestComposer.jsx';
@@ -91,6 +92,15 @@ export function RequestsSection({
   const propertyId = property?.id || null;
   const isViewer = role === 'viewer';
   const canAct = role === 'admin' || role === 'manager';
+  // §8.3 scopes `POST …/{id}/fulfill` to "partner / Slack", and §6.5's
+  // [Photo sent] button — the one surface that deep-links into the row's
+  // upload — is in the partner's Slack feed. The office would get a 404, so
+  // the control is not rendered for the office at all (§5's "no dead
+  // controls"), and never for a viewer.
+  const canFulfill = role === 'partner';
+  // §5.2's Recent pills say "Removed by you" for the caller and the actor's
+  // first name for a teammate; only this component knows who the caller is.
+  const viewerName = user?.name || user?.contact_name || '';
   const isPending = property?.verification_status === 'pending';
   const rules = property?.hold_rules;
 
@@ -134,6 +144,16 @@ export function RequestsSection({
   }
 
   const { holds, others } = useMemo(() => groupActive(active || []), [active]);
+
+  /**
+   * The server's `expires_local` for one of the rows on screen. §8.3's 409
+   * `active_hold_exists` body is `{request_id}` only, so the composer's
+   * conflict sentence gets its time from here.
+   */
+  const expiryFor = useCallback((requestId) => {
+    const row = (active || []).find(r => String(r.id) === String(requestId));
+    return row?.expires_local || '';
+  }, [active]);
   const banner = useMemo(
     () => unreachedBanner(active || [], property?.partner_phone),
     [active, property?.partner_phone],
@@ -158,7 +178,7 @@ export function RequestsSection({
     try {
       await requestsApi.removeRequest(target.id, {});
     } catch (err) {
-      addToast?.(err?.message || 'Could not remove that hold.', 'error');
+      addToast?.(requestErrorMessage(err, 'Could not remove that hold.'), 'error');
       load();
       return;
     }
@@ -185,7 +205,7 @@ export function RequestsSection({
       if (next) setActive(prev => [next, ...(prev || [])]);
       load();
     } catch (err) {
-      addToast?.(err?.message || 'Could not undo that.', 'error');
+      addToast?.(requestErrorMessage(err, 'Could not undo that.'), 'error');
       load();
     }
   }
@@ -206,12 +226,14 @@ export function RequestsSection({
         onConflict({ requestId: err.body?.request_id });
         return;
       }
-      addToast?.(err?.message || 'Could not place that hold again.', 'error');
+      addToast?.(requestErrorMessage(err, 'Could not place that hold again.'), 'error');
     }
   }
 
   const rowProps = {
     canAct,
+    canFulfill,
+    viewerName,
     onExtend: setExtending,
     onRemove: remove,
     onHistory: (r) => setHistoryId(r.id),
@@ -241,6 +263,7 @@ export function RequestsSection({
           onCreated={onCreated}
           onNeedVerify={onNeedVerify}
           onConflict={onConflict}
+          expiryFor={expiryFor}
           addToast={addToast}
           plateInputRef={plateRef}
         />
@@ -291,6 +314,8 @@ export function RequestsSection({
           <RecentList
             items={recent}
             canAct={canAct}
+            canFulfill={canFulfill}
+            viewerName={viewerName}
             onHistory={(r) => setHistoryId(r.id)}
             onReinstate={reinstate}
             addToast={addToast}
@@ -309,6 +334,7 @@ export function RequestsSection({
           requestId={historyId}
           onClose={() => setHistoryId(null)}
           canAct={canAct}
+          viewerName={viewerName}
           onExtend={setExtending}
           onRemove={remove}
           addToast={addToast}
