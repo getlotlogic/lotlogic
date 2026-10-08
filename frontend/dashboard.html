@@ -2624,6 +2624,94 @@
       color: var(--text-faint); font-size: 10px; line-height: 1.9;
     }
     .req-events .req-event-when { color: var(--text-muted); font-weight: 700; }
+    /* ── Confirm-your-email: banner, wall, VerifyEmailSheet (Task 23, spec §3.5/§5.9) ── */
+    .verify-banner, .verify-wall {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border);
+    }
+    .verify-banner { background: rgba(251,191,36,.12); }
+    .verify-wall { background: rgba(239,68,68,.1); border-bottom-color: rgba(239,68,68,.3); }
+    .verify-banner-copy { flex: 1 1 260px; min-width: 0; }
+    .verify-banner-line { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+    .verify-wall-title { font-size: 14px; font-weight: 800; color: var(--text-primary); }
+    .verify-wall-line { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
+    .verify-banner-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .verify-banner-btn {
+      font-size: 12px; font-weight: 700; padding: 7px 12px; border-radius: 8px;
+      border: 1px solid var(--accent); background: transparent; color: var(--accent);
+      cursor: pointer; white-space: nowrap; font-family: inherit;
+    }
+    .verify-banner-btn:hover:not(:disabled) { background: var(--accent); color: var(--bg-primary); }
+    .verify-banner-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    .verify-sheet-overlay {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,.7); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      display: flex; align-items: flex-end; justify-content: center;
+      animation: fadeIn .2s ease;
+    }
+    .verify-sheet {
+      background: var(--bg-card); border-radius: 20px 20px 0 0; width: 100%; max-width: 440px;
+      max-height: 90vh; overflow-y: auto; animation: slideUp .3s ease;
+      border: 1px solid var(--border); border-bottom: none;
+      padding: 0 20px calc(20px + env(safe-area-inset-bottom));
+      overscroll-behavior: contain; outline: none;
+    }
+    .verify-sheet-handle { width: 36px; height: 4px; background: var(--text-ghost); border-radius: 2px; margin: 10px auto 6px; }
+    .verify-sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .verify-sheet-title { font-size: 17px; font-weight: 800; color: var(--text-primary); }
+    .verify-sheet-close {
+      background: transparent; border: none; color: var(--text-muted); font-size: 18px;
+      line-height: 1; padding: 4px; cursor: pointer;
+    }
+    .verify-sheet-close:hover { color: var(--text-primary); }
+    .verify-sheet-sub { font-size: 13px; color: var(--text-muted); margin: 2px 0 16px; }
+    .verify-code-input {
+      display: block; width: 100%; box-sizing: border-box; text-align: center;
+      font-family: 'DM Mono', 'Courier New', monospace; font-size: 26px; font-weight: 600;
+      letter-spacing: .3em; padding: 14px 10px; border-radius: 12px;
+      border: 1.5px solid var(--border); background: var(--bg-inset); color: var(--text-primary);
+    }
+    .verify-code-input:focus { outline: none; border-color: var(--accent); }
+    .verify-code-input:disabled { opacity: .6; }
+    .verify-confirm-btn {
+      display: block; width: 100%; min-height: 56px; margin-top: 14px; border-radius: 12px;
+      border: none; background: var(--accent); color: var(--bg-primary);
+      font-size: 16px; font-weight: 800; cursor: pointer; font-family: inherit;
+    }
+    .verify-confirm-btn:disabled { opacity: .45; cursor: not-allowed; }
+    .verify-sheet-msg-slot { min-height: 20px; margin-top: 10px; }
+    .verify-sheet-msg { font-size: 13px; line-height: 1.4; }
+    .verify-sheet-msg.error { color: var(--red); }
+    .verify-sheet-msg.success { color: var(--green-text); }
+    .verify-sheet-footer {
+      display: flex; align-items: center; justify-content: center; gap: 4px;
+      margin: 14px 0 18px; font-size: 13px; color: var(--text-muted);
+    }
+    .verify-resend-countdown { font-variant-numeric: tabular-nums; }
+    .verify-sheet-footer-dot { color: var(--text-ghost); }
+    .verify-link-btn {
+      background: transparent; border: none; color: var(--accent); font-weight: 700;
+      font-size: 13px; cursor: pointer; padding: 0; font-family: inherit;
+    }
+    .verify-link-btn:hover:not(:disabled) { text-decoration: underline; }
+    .verify-link-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .verify-change-email { padding-top: 4px; padding-bottom: 8px; }
+    .verify-change-label { display: block; font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+    .verify-change-input {
+      display: block; width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 10px;
+      border: 1.5px solid var(--border); background: var(--bg-inset); color: var(--text-primary);
+      font-size: 15px; font-family: inherit;
+    }
+    .verify-change-input:focus { outline: none; border-color: var(--accent); }
+    .verify-change-back { display: block; margin: 10px auto 4px; }
+    .verify-signout-link {
+      display: block; width: 100%; text-align: center; background: transparent; border: none;
+      color: var(--text-muted); font-size: 13px; font-weight: 700; text-decoration: underline;
+      cursor: pointer; padding: 4px 0 18px; font-family: inherit;
+    }
+    .theme-light .verify-banner { background: rgba(184,83,9,.08); }
+    .theme-light .verify-wall { background: rgba(220,38,38,.08); }
   </style>
 </head>
 <body>
