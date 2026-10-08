@@ -17,6 +17,7 @@ import { VerifyBanner } from './ui/VerifyBanner.jsx';
 import { VerifyEmailSheet } from './pages/property/VerifyEmailSheet.jsx';
 import { pendingMembershipState } from './lib/membership.js';
 import { badgeCount, countActionable } from './lib/partnerRequests.js';
+import { parseSlackRedirect, cleanSlackRedirectUrl } from './pages/account/slackSection.js';
 import { EarningsPage } from './pages/EarningsPage.jsx';
 import { InvoicesPage } from './pages/InvoicesPage.jsx';
 import { ALPRPropertiesPage } from './pages/ALPRPropertiesPage.jsx';
@@ -404,6 +405,27 @@ export function App() {
     if (deepLink.verify) openVerifySheet({ mode: 'code', fromWall: false });
     cleanDeepLink();
   }, [owner, deepLink, openVerifySheet]);
+
+  // `/slack/oauth_redirect` lands the partner back on
+  // `/app?tab=account&slack=connected` (or `…&slack=error`) — a key
+  // deepLink.js deliberately leaves alone ("for whoever owns it"). Read it
+  // once on mount, toast the spec's verbatim copy, then strip just that key
+  // so a refresh of the Account tab does not replay the toast.
+  const slackRedirectHandledRef = useRef(false);
+  useEffect(() => {
+    if (slackRedirectHandledRef.current) return;
+    slackRedirectHandledRef.current = true;
+    const outcome = parseSlackRedirect(window.location.search);
+    if (!outcome) return;
+    if (outcome === 'connected') {
+      addToast("Connected to N Style Towing's Slack. Now invite @LotLogic to the channel your crew uses.", 'success');
+    } else {
+      addToast("Slack didn't connect — try again from Account.", 'error');
+    }
+    try {
+      window.history.replaceState(null, '', cleanSlackRedirectUrl(window.location.pathname, window.location.search));
+    } catch { /* non-browser / blocked */ }
+  }, [addToast]);
   const viewAsLotIds = viewAsLotIdsEarly;
   const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
   const effectiveViolations = viewAsLotIds ? violations.filter(v => viewAsLotIds.includes(v.lot_id)) : violations;

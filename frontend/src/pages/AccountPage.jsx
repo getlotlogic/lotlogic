@@ -6,6 +6,7 @@ import { useToast } from '../ui/Toast.jsx';
 import { TowTruckPlatesEditor } from './account/TowTruckPlatesEditor.jsx';
 import { TeamSection } from './property/TeamSection.jsx';
 import { AddPropertyForm } from '../ui/AddPropertyForm.jsx';
+import { SlackSection } from './account/SlackSection.jsx';
 
 // ── Account / Settings page ────────────────────────────────────
 function PartnerFeeEditor({ user, isPlatformAdmin = false }) {
@@ -334,6 +335,10 @@ export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setA
       {/* Tow-truck plates — enforcement partners only. Used by the tow-confirm
           edge function to match camera sightings against partner trucks. */}
       {!isOwner && <TowTruckPlatesEditor user={user} />}
+
+      {/* Slack: Connect Slack + Slack people (spec §5.7, §6.1). Hides itself
+          entirely when the backend hasn't shipped the Slack routes yet. */}
+      {!isOwner && <SlackSection user={user} />}
 
       {/* App settings */}
       <div className="settings-section">
