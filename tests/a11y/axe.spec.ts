@@ -110,6 +110,15 @@ test.describe('accessibility @a11y', () => {
     await scan(page, 'dashboard-owner');
   });
 
+  // `/r/<token>` (spec §5.8). A stub token 404s/400s against the real API
+  // (or fails to resolve at all when run offline), so the preview fetch
+  // always rejects and the page settles on its invalid-link state — exactly
+  // the stable, no-session DOM this scan needs.
+  test('request-action page has no serious a11y violations', async ({ page }) => {
+    await page.goto('/r/stub-token-for-a11y-scan');
+    await scan(page, 'request-action');
+  });
+
   test('marketing pitch pages are accessible', async ({ page }) => {
     for (const path of ['/pitch-apartments.html', '/pitch-tow.html']) {
       await page.goto(path);

@@ -9,11 +9,13 @@ import { SkeletonCards } from './ui/Skeletons.jsx';
 import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview } from './ui/icons.jsx';
 import { lazyPage } from './lib/lazyPage.js';
 import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink } from './lib/deepLink.js';
+import { readActionToken } from './lib/requestAction.js';
 import { navTabsFor, partnerRequestsReady } from './lib/features.js';
 import { EarningsPage } from './pages/EarningsPage.jsx';
 import { InvoicesPage } from './pages/InvoicesPage.jsx';
 import { ALPRPropertiesPage } from './pages/ALPRPropertiesPage.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
+import { RequestActionPage } from './pages/RequestActionPage.jsx';
 import { OperatorActivityPage } from './pages/OperatorActivityPage.jsx';
 import { OverviewPage } from './pages/OverviewPage.jsx';
 import { AccountPage } from './pages/AccountPage.jsx';
@@ -33,16 +35,20 @@ const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';
 const FRANK_APP_TAB_LIVE = true; // live in Frank's partner portal since 2026-08-07
 
 // The public (no-session) routes `vercel.json` rewrites into this bundle, and
-// the page each one renders. Empty on purpose: the pages land with their own
-// tasks — Task 25 registers `join` (`<SignupPage slug onDone={login}/>`) and
-// Task 29 registers `request-action` (the `/r/<token>` page). Until then an
-// unregistered route falls through to the sign-in form, whose "New property?
-// Create your account" link is the door, so no portal link is a dead end.
-const PUBLIC_ROUTE_PAGES = {};
-// Same table for a session that already exists: only `/join…` differs there
-// (spec §3.2 — a signed-in manager opening someone else's link gets the
-// add-property form), and Task 25 registers it.
-const PUBLIC_ROUTE_PAGES_SIGNED_IN = {};
+// the page each one renders. `join` is empty on purpose — it lands with its
+// own task (Task 25 registers `<SignupPage slug onDone={login}/>`); until
+// then it falls through to the sign-in form, whose "New property? Create
+// your account" link is the door, so no portal link is a dead end.
+// `request-action` is Task 29's `/r/<token>` page (spec §5.8) — it works
+// signed out *and* signed in (the token carries its own authority, not a
+// property-member login), so the same component is registered in both
+// tables below.
+const PUBLIC_ROUTE_PAGES = { 'request-action': RequestActionPage };
+// Same table for a session that already exists: `join` differs there (spec
+// §3.2 — a signed-in manager opening someone else's link gets the
+// add-property form, and Task 25 registers it); `request-action` renders
+// identically whether or not the tapper is signed in.
+const PUBLIC_ROUTE_PAGES_SIGNED_IN = { 'request-action': RequestActionPage };
 
 // Every tab id the dashboard knows. A `?tab=` deep link is only honoured for
 // one of these; whether this particular account may SEE it is then settled by
@@ -120,6 +126,9 @@ export function App() {
   // page). Read once — this never changes without a navigation.
   const [publicRoute] = useState(() => readPublicRoute(window.location.pathname));
   const [publicSlug] = useState(() => readJoinSlug(window.location.pathname));
+  // The token in a `/r/<token>` link (spec §5.8) — path only, query ignored
+  // (the two email buttons are two different tokens at the same exact path).
+  const [requestActionToken] = useState(() => readActionToken(window.location.pathname));
   // `/app?property=…&section=…&request=…&tab=…&firstrun=&verify=&upload=&plate=`
   // — the portal's email and Slack buttons. Captured on mount before anything
   // can rewrite the address bar, applied once the session exists, then cleaned
@@ -593,7 +602,7 @@ export function App() {
     return (
       <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
         {PublicPage
-          ? <PublicPage route={publicRoute} slug={publicSlug} onDone={login} onLogin={login} />
+          ? <PublicPage route={publicRoute} slug={publicSlug} token={requestActionToken} onDone={login} onLogin={login} />
           : <LoginPage onLogin={login} />}
       </div>
     );
@@ -602,12 +611,15 @@ export function App() {
   // A signed-in manager opening someone else's `/join/<slug>` link gets the
   // add-property form, not the sign-in form (spec §3.2). Until Task 25
   // registers that page the dashboard renders as usual, and the Add a property
-  // button on Lots is the door.
-  const SignedInPublicPage = publicRoute === 'join' ? PUBLIC_ROUTE_PAGES_SIGNED_IN[publicRoute] : null;
+  // button on Lots is the door. `request-action` (spec §5.8) renders the same
+  // way signed in as signed out — the token is its own authority.
+  const SignedInPublicPage = (publicRoute === 'join' || publicRoute === 'request-action')
+    ? PUBLIC_ROUTE_PAGES_SIGNED_IN[publicRoute]
+    : null;
   if (SignedInPublicPage) {
     return (
       <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
-        <SignedInPublicPage route={publicRoute} slug={publicSlug} mode="add-property" user={owner} />
+        <SignedInPublicPage route={publicRoute} slug={publicSlug} token={requestActionToken} mode="add-property" user={owner} />
       </div>
     );
   }
