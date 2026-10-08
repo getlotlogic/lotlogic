@@ -5,9 +5,10 @@
 // Deliberately one file with no config language: the whole build should be
 // readable in one sitting by whoever is on call.
 import { build } from 'esbuild';
-import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { injectMetaContent } from './htmlMetaSubst.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 // LOTLOGIC_BUILD_OUT lets a caller point the build at a private output
@@ -108,6 +109,23 @@ await writeFile(path.join(DIST, 'metafile.json'), JSON.stringify(result.metafile
 for (const entry of await readdir(ROOT, { withFileTypes: true })) {
   if (NOT_OUTPUT.has(entry.name) || entry.name.startsWith('.test-dist-')) continue;
   await cp(path.join(ROOT, entry.name), path.join(DIST, entry.name), { recursive: true });
+}
+
+// ── 2b. dashboard.html's build-time substitutions ───────────────────────────
+// Everything else in step 2 is a byte-for-byte copy; dashboard.html alone
+// carries a `{{GOOGLE_MAPS_KEY}}` placeholder in its `<meta
+// name="google-maps-key">` tag (AddPropertyForm.jsx's Google Places loader
+// reads it, spec §3.4a) that has to become VITE_GOOGLE_MAPS_KEY's value at
+// build time — there is no existing precedent for this (`define` above only
+// ever sets NODE_ENV, and visit.html's `recaptcha-site-key` meta is
+// hardcoded, never substituted) — so this is the first one, scoped to this
+// one file, deliberately not a generic templating pass over every staged
+// page. Unset the env var and this substitutes an empty string, which is
+// exactly what AddPropertyForm's manual-entry fallback is for.
+{
+  const dashboardPath = path.join(DIST, 'dashboard.html');
+  const html = await readFile(dashboardPath, 'utf8');
+  await writeFile(dashboardPath, injectMetaContent(html, 'GOOGLE_MAPS_KEY', process.env.VITE_GOOGLE_MAPS_KEY));
 }
 
 // ── 3. assert the deploy is not silently empty ─────────────────────────────

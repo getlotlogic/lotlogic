@@ -7,6 +7,9 @@ import { db } from './lib/db.js';
 import { lotDayBound } from './lib/lotdate.js';
 import { VerifyEmailSheet } from './pages/property/VerifyEmailSheet.jsx';
 import { VerifyBanner } from './ui/VerifyBanner.jsx';
+import { requestsApi } from './lib/requestsApi.js';
+import { TeamSection } from './pages/property/TeamSection.jsx';
+import { PendingMembershipPage } from './pages/PendingMembershipPage.jsx';
 
 createRoot(document.getElementById('root')).render(
   <ErrorBoundary label="the dashboard"><ToastProvider><App /></ToastProvider></ErrorBoundary>
@@ -55,6 +58,10 @@ if (isE2E()) {
     // stub individual methods on it (e.g. `db.getProperty`) to hand a
     // mounted page fixture data without a real backend or Supabase session.
     db,
+    // requestsApi: the portal's typed HTTP wrappers (Task 21). TeamSection
+    // calls these directly, not through `db` — specs stub methods on this
+    // object the same way (`requestsApi.listMembers = async () => […]`).
+    requestsApi,
     ToastProvider,
     lotDayBound,
     // VerifyEmailSheet (Task 23, spec §5.9) — not a lazy page, so it's handed
@@ -66,6 +73,14 @@ if (isE2E()) {
     // prove the Resend button actually respects `resendDisabled` without
     // dragging in the whole App.jsx session/property-fetch machinery.
     VerifyBanner,
+    // TeamSection and PendingMembershipPage (Task 24, spec §5.7/§3.7 (b))
+    // are plain components, not lazy pages — handed out directly, same as
+    // ToastProvider, rather than wrapped in `{load()}` like the two chunks
+    // below. This is what tests/a11y/axe.spec.ts's `team-owner` and
+    // `pending-membership` scans mount in isolation, with no login and no
+    // backend.
+    TeamSection,
+    PendingMembershipPage,
     ALPRPropertyDetailPage: {
       load: () => import('./pages/ALPRPropertyDetailPage.jsx').then((m) => m.default),
     },

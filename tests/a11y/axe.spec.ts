@@ -14,6 +14,9 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect, accounts, loginAs } from '../fixtures/accounts';
+import { test as baseTest } from '@playwright/test';
+import { buildAndServeFrontend, type BuiltFrontendServer } from '../fixtures/buildAndServeFrontend';
+import path from 'node:path';
 
 const BLOCKING = new Set(['serious', 'critical']);
 
@@ -127,5 +130,78 @@ test.describe('accessibility @a11y', () => {
       await page.goto(path);
       await scan(page, `marketing:${path}`);
     }
+  });
+});
+
+// ── team-owner / pending-membership (Task 24, spec §5.7 / §3.7 (b)) ────────
+//
+// Neither page needs a login or a backend to render meaningfully — Team is
+// one property's membership list, PendingMembershipPage is a static copy
+// screen — so both mount in isolation via `window.__lotlogicTestHooks`
+// (`frontend/src/main.jsx`'s `?e2e=1` surface), the same mechanism
+// `dashboard-qr.spec.ts` uses for ALPRPropertyDetailPage. This runs against
+// a locally built `frontend/dist/`, not BASE_URL, so it needs no env vars
+// and no `@auth` credentials.
+let portalServer: BuiltFrontendServer;
+
+baseTest.beforeAll(async () => {
+  portalServer = await buildAndServeFrontend(path.resolve(__dirname, '../../frontend'));
+});
+
+baseTest.afterAll(async () => {
+  await portalServer.close();
+});
+
+baseTest.describe('accessibility — isolated mounts @a11y', () => {
+  baseTest('Team (owner) has no serious a11y violations', async ({ page }) => {
+    await page.goto(`${portalServer.origin}/dashboard.html?e2e=1`);
+    await page.waitForFunction(
+      () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.TeamSection === 'function',
+    );
+    await page.evaluate(() => {
+      const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
+      hooks.requestsApi.listMembers = async () => ([
+        { account_id: 'a1', name: 'Dana Ortiz', position: 'Property manager', email: 'dana@sunsetridge.com', role: 'admin', status: 'active', last_signed_in_at: '2026-10-07T20:10:00Z' },
+        { account_id: 'a2', name: 'Marcus Lee', position: 'Assistant manager', role: 'manager', status: 'pending' },
+      ]);
+      const host = document.createElement('div');
+      host.id = 'a11y-team-harness';
+      document.body.appendChild(host);
+      hooks.ReactDOM.createRoot(host).render(
+        hooks.React.createElement(
+          hooks.ToastProvider,
+          null,
+          hooks.React.createElement(hooks.TeamSection, {
+            property: { id: 'p1', name: 'Sunset Ridge Apartments', role: 'admin' },
+            user: { id: 'a1', _role: 'owner' },
+          }),
+        ),
+      );
+    });
+    await expect(page.locator('#a11y-team-harness')).toContainText('Dana Ortiz');
+    await scan(page, 'team-owner');
+  });
+
+  baseTest('PendingMembershipPage has no serious a11y violations', async ({ page }) => {
+    await page.goto(`${portalServer.origin}/dashboard.html?e2e=1`);
+    await page.waitForFunction(
+      () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.PendingMembershipPage === 'function',
+    );
+    await page.evaluate(() => {
+      const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
+      const host = document.createElement('div');
+      host.id = 'a11y-pending-harness';
+      document.body.appendChild(host);
+      hooks.ReactDOM.createRoot(host).render(
+        hooks.React.createElement(hooks.PendingMembershipPage, {
+          me: { properties: [{ id: 'p1', name: 'Sunset Ridge Apartments', member_status: 'pending' }] },
+          user: { email: 'dana@sunsetridge.com' },
+          onLogout: () => {},
+          onAddProperty: () => {},
+        }),
+      );
+    });
+    await expect(page.locator('#a11y-pending-harness')).toContainText('Request sent.');
+    await scan(page, 'pending-membership');
   });
 });
