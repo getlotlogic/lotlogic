@@ -193,6 +193,9 @@ export const rejectPartnerProperty = (id, body) => post(`/partner/properties/${s
 
 // ── /partner/slack/* ─────────────────────────────────────────
 
+/** GET /partner/slack/status → `{connected, team_name, feed_channel_set, revoked}` */
+export const getSlackStatus = () => get('/partner/slack/status');
+
 /** POST /partner/slack/install-link */
 export const slackInstallLink = () => post('/partner/slack/install-link', {});
 
@@ -225,6 +228,6 @@ export const requestsApi = {
   inviteMember, updateMember, removeMember, approveMember, declineMember,
   joinProperty, resendJoinRequest, createApartmentProperty, updateApartmentProperty,
   archiveApartmentProperty, listPartnerProperties, verifyPartnerProperty,
-  rejectPartnerProperty, slackInstallLink, listSlackIdentities, updateSlackIdentity,
+  rejectPartnerProperty, getSlackStatus, slackInstallLink, listSlackIdentities, updateSlackIdentity,
   deleteSlackIdentity, setSlackFeedChannel, getRequestAction, postRequestAction,
 };
