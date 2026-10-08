@@ -93,6 +93,11 @@ jobs:
         working-directory: tests
         run: npm ci
 
+      # Node unit tests for the test fixtures (the portal suite's loopback guard).
+      - name: Fixture unit tests
+        working-directory: tests
+        run: npm run test:unit
+
       - name: Install browsers
         working-directory: tests
         run: npx playwright install --with-deps chromium webkit
@@ -379,6 +384,12 @@ jobs:
       - name: Frontend deps
         working-directory: frontend
         run: npm ci
+
+      # The a11y sweep's `upsell chips @a11y` block serves frontend/dist,
+      # so it must exist before `npm run test:a11y` (same as the e2e job).
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
 
       - name: Test deps + browsers
         working-directory: tests

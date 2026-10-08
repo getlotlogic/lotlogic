@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { requestsApi } from '../../lib/requestsApi.js';
 import { requestErrorMessage } from '../../lib/requestErrors.js';
+import { mustVerifyFirst, verifyResume } from '../../lib/requestGate.js';
 import { useNowTick } from '../../hooks.js';
 import {
   buttonLabel,
@@ -188,10 +189,8 @@ export function RequestComposer({
     return out;
   }
 
-  // `afterVerify`: the resume a VerifyEmailSheet fires on success. It runs in
-  // the same tick as that success, from the closure of the render that asked
-  // — where `emailVerified` is still false — so it must skip the client-side
-  // gate below or it would only ask again. The server's 422 stays the gate.
+  // `afterVerify`: the resume a VerifyEmailSheet fires on success skips the
+  // client-side gate (lib/requestGate.js says why). The server's 422 stays.
   async function submit(e, { afterVerify = false } = {}) {
     e?.preventDefault?.();
     setConflictCopy(null);
@@ -207,8 +206,7 @@ export function RequestComposer({
     // need a verified email (§3.5). When /auth/me has already told us the
     // email is unverified, say so without a round trip; otherwise the server's
     // 422 below is the gate.
-    const gated = kind !== 'hold' || isPending;
-    if (gated && emailVerified === false && !afterVerify) {
+    if (mustVerifyFirst({ kind, isPending, emailVerified, afterVerify })) {
       askToVerify();
       return;
     }
@@ -239,7 +237,7 @@ export function RequestComposer({
         : 'Confirm your email to place this hold — enter the 6-digit code we sent.');
     // Until Task 23 lands, `onNeedVerify` defaults to a no-op upstream and the
     // inline copy above is the whole answer.
-    onNeedVerify?.(() => submit(null, { afterVerify: true }));
+    onNeedVerify?.(verifyResume(submit));
   }
 
   function announce(request) {

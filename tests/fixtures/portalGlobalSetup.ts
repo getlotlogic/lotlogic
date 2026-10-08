@@ -10,9 +10,14 @@
  */
 import path from 'node:path';
 import { buildAndServeFrontend } from './buildAndServeFrontend';
+import { archiveEarlierRuns } from './portal';
 
 export default async function portalGlobalSetup() {
   if (process.env.PORTAL_E2E !== '1') return undefined;
+  // A long-lived local harness DB keeps every earlier run's signups under N
+  // Style; partner A's dashboard loads per-property counts for each of them,
+  // which slows (and times out) the partner-side specs run after run.
+  archiveEarlierRuns();
   const port = Number(process.env.PORTAL_FRONTEND_PORT ?? 4173);
   const server = await buildAndServeFrontend(path.resolve(__dirname, '../../frontend'), { port });
   process.env.PORTAL_FRONTEND_ORIGIN = server.origin;
