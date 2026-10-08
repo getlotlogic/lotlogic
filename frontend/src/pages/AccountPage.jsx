@@ -7,6 +7,7 @@ import { TowTruckPlatesEditor } from './account/TowTruckPlatesEditor.jsx';
 import { TeamSection } from './property/TeamSection.jsx';
 import { AddPropertyForm } from '../ui/AddPropertyForm.jsx';
 import { SlackSection } from './account/SlackSection.jsx';
+import { passwordError, PASSWORD_MIN } from '../lib/signupValidation.js';
 
 // ── Account / Settings page ────────────────────────────────────
 function PartnerFeeEditor({ user, isPlatformAdmin = false }) {
@@ -175,7 +176,7 @@ function ChangePasswordSection() {
   async function submit(e) {
     e.preventDefault();
     setErr('');
-    if (next.length < 8) { setErr('New password must be at least 8 characters.'); return; }
+    { const pwErr = passwordError(next); if (pwErr) { setErr(pwErr); return; } }
     if (next !== confirm) { setErr('New passwords do not match.'); return; }
     setBusy(true);
     try {
@@ -197,7 +198,7 @@ function ChangePasswordSection() {
       ) : (
         <form onSubmit={submit}>
           <input type="password" autoComplete="current-password" placeholder="Current password" value={cur} onChange={e => setCur(e.target.value)} style={input} />
-          <input type="password" autoComplete="new-password" placeholder="New password (8+ characters)" value={next} onChange={e => setNext(e.target.value)} style={input} />
+          <input type="password" autoComplete="new-password" placeholder={`New password (${PASSWORD_MIN}+ characters)`} value={next} onChange={e => setNext(e.target.value)} style={input} />
           <input type="password" autoComplete="new-password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} style={input} />
           {err && <div style={{ color: '#f87171', fontSize: 13, marginTop: 10 }}>{err}</div>}
           {done && <div style={{ color: '#4ade80', fontSize: 13, marginTop: 10 }}>Password changed.</div>}
