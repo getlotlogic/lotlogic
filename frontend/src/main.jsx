@@ -5,6 +5,7 @@ import { ToastProvider } from './ui/Toast.jsx';
 import { App } from './App.jsx';
 import { db } from './lib/db.js';
 import { lotDayBound } from './lib/lotdate.js';
+import { isE2E } from './lib/e2e.js';
 import { VerifyEmailSheet } from './pages/property/VerifyEmailSheet.jsx';
 import { VerifyBanner } from './ui/VerifyBanner.jsx';
 import { requestsApi } from './lib/requestsApi.js';
@@ -35,18 +36,6 @@ createRoot(document.getElementById('root')).render(
 // via the same dynamic import the app already uses to fetch that chunk.
 // Never on the production origin, even with the right query string or
 // localStorage flag — previews (`*.vercel.app`) and localhost still work.
-const PROD_HOSTNAMES = new Set(['lotlogicparking.com', 'www.lotlogicparking.com']);
-
-function isE2E() {
-  try {
-    if (PROD_HOSTNAMES.has(location.hostname)) return false;
-    return new URLSearchParams(location.search).get('e2e') === '1'
-      || localStorage.getItem('lotlogic:e2e') === '1';
-  } catch {
-    return false;
-  }
-}
-
 if (isE2E()) {
   window.__lotlogicTestHooks = {
     // React + ReactDOM: specs mount a component on a second root, alongside

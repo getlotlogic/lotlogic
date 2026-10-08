@@ -1,5 +1,11 @@
+import { e2eApiOverride } from './e2e.js';
+
 // ── Rails API fallback ───────────────────────────────────────
-export const API = 'https://lotlogic-backend-production.up.railway.app';
+export const PRODUCTION_API = 'https://lotlogic-backend-production.up.railway.app';
+// `window.__LOTLOGIC_API__` replaces the origin only under the `?e2e=1` test
+// surface and never on the production hostnames (lib/e2e.js) — the portal
+// Playwright suite's local-backend switch.
+export const API = e2eApiOverride() || PRODUCTION_API;
 
 // The backend scopes every response to the account whose JWT is presented.
 // We stopped shipping the shared service key from the browser as part of the
