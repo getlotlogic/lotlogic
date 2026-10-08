@@ -30,6 +30,11 @@ export function ALPRPropertiesPage({
   upload = false,
   firstrun = false,
   verify = false,
+  // App.jsx's VerifyEmailSheet opener (Task 23) — threaded through to the
+  // detail page's RequestsSection, whose composer calls it when a hold on a
+  // pending property needs the 6-digit code first. Without it the default
+  // no-op leaves the composer's "Confirm your email" line with nothing to open.
+  onNeedVerify,
 }) {
   const { addToast } = useToast();
   // Property deletion cascades to plates, cameras and passes. Partners enforce
@@ -208,6 +213,7 @@ export function ALPRPropertiesPage({
     upload={selectedId === initialSelectedId ? upload : false}
     firstrun={selectedId === initialSelectedId ? firstrun : false}
     verify={selectedId === initialSelectedId ? verify : false}
+    onNeedVerify={onNeedVerify}
   /></React.Suspense></ErrorBoundary>;
 
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading properties...</div></div>;

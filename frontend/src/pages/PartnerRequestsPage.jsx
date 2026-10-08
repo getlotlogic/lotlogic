@@ -23,7 +23,7 @@ import {
   filterItems,
   fmtTimeET,
   groupAndSort,
-  normalizePendingProperty,
+  pendingPropertiesFrom,
 } from '../lib/partnerRequests.js';
 import { PartnerRequestRow } from './partner/PartnerRequestRow.jsx';
 import { PendingPropertyCard } from './partner/PendingPropertyCard.jsx';
@@ -107,11 +107,7 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
       ]);
       if (!mounted.current) return;
       setItems(Array.isArray(active?.items) ? active.items : []);
-      setPending(
-        (Array.isArray(pendingProps?.items) ? pendingProps.items : (Array.isArray(pendingProps) ? pendingProps : []))
-          .map(normalizePendingProperty)
-          .filter(Boolean),
-      );
+      setPending(pendingPropertiesFrom(pendingProps));
       setLoadError(null);
     } catch (err) {
       if (mounted.current) setLoadError(err);

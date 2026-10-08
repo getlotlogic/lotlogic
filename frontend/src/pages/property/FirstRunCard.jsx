@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { requestsApi } from '../../lib/requestsApi.js';
 import { useToast } from '../../ui/Toast.jsx';
 import { VerifyEmailSheet } from './VerifyEmailSheet.jsx';
@@ -44,6 +44,26 @@ export function FirstRunCard({ property, partnerName, user, onDismiss }) {
   const [sheet, setSheet] = useState(null); // null | 'code' | 'changeEmail'
   const [currentEmail, setCurrentEmail] = useState(email);
   const resendDisabled = secondsUntilResend(sentAt) > 0;
+
+  // Spec §3.4 step 5: the signup landing opens "with the composer at the top
+  // of the viewport and the plate field as the first tap target" — the layout,
+  // not `autofocus`, is what reaches a thumb on iOS. This card, the header,
+  // the confirm-your-email banner and the chip row together are taller than
+  // a phone's viewport, so without a scroll the plate field lands below the
+  // fold. Once, on mount: bring `#req-plate` into view (RequestsSection mounts
+  // a render or two after this card, once the section chip resolves — hence
+  // the short poll). No focus here; [Put a plate on hold] still does that.
+  useEffect(() => {
+    let tries = 0;
+    const t = setInterval(() => {
+      const field = document.getElementById('req-plate');
+      if (field || ++tries > 40) {
+        clearInterval(t);
+        if (field) { try { field.scrollIntoView({ block: 'center' }); } catch { /* old engines */ } }
+      }
+    }, 50);
+    return () => clearInterval(t);
+  }, []);
 
   const putOnHold = useCallback(() => {
     const field = document.getElementById('req-plate');

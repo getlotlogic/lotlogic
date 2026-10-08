@@ -359,6 +359,20 @@ const first = (...values) => {
  * several plausible key names because the card must still render a name and an
  * address against a backend that spells one of them differently.
  */
+/**
+ * The confirm-card rows out of `GET /partner/properties?verification_status=pending`.
+ * The backend (Task 15, `routers/partner_properties.py`) answers
+ * `{properties: [...]}`; `{items}` and a bare array are accepted too, and
+ * anything else — a 404 from an older backend, `null` — is no cards.
+ */
+export function pendingPropertiesFrom(response) {
+  const rows = Array.isArray(response?.properties) ? response.properties
+    : Array.isArray(response?.items) ? response.items
+      : Array.isArray(response) ? response
+        : [];
+  return rows.map(normalizePendingProperty).filter(Boolean);
+}
+
 export function normalizePendingProperty(row) {
   if (!row) return null;
   const manager = row.manager || {};

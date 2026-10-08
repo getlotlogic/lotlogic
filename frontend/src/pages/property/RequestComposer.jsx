@@ -188,8 +188,12 @@ export function RequestComposer({
     return out;
   }
 
-  async function submit(e) {
-    e?.preventDefault();
+  // `afterVerify`: the resume a VerifyEmailSheet fires on success. It runs in
+  // the same tick as that success, from the closure of the render that asked
+  // — where `emailVerified` is still false — so it must skip the client-side
+  // gate below or it would only ask again. The server's 422 stays the gate.
+  async function submit(e, { afterVerify = false } = {}) {
+    e?.preventDefault?.();
     setConflictCopy(null);
     setVerifyCopy('');
 
@@ -204,7 +208,7 @@ export function RequestComposer({
     // email is unverified, say so without a round trip; otherwise the server's
     // 422 below is the gate.
     const gated = kind !== 'hold' || isPending;
-    if (gated && emailVerified === false) {
+    if (gated && emailVerified === false && !afterVerify) {
       askToVerify();
       return;
     }
@@ -235,7 +239,7 @@ export function RequestComposer({
         : 'Confirm your email to place this hold — enter the 6-digit code we sent.');
     // Until Task 23 lands, `onNeedVerify` defaults to a no-op upstream and the
     // inline copy above is the whole answer.
-    onNeedVerify?.(() => submit());
+    onNeedVerify?.(() => submit(null, { afterVerify: true }));
   }
 
   function announce(request) {
@@ -471,7 +475,7 @@ export function RequestComposer({
       {verifyCopy && (
         <div className="req-error" role="status">
           {verifyCopy}{' '}
-          <button type="button" className="req-link" onClick={() => onNeedVerify?.(() => submit())}>
+          <button type="button" className="req-link" onClick={() => onNeedVerify?.(() => submit(null, { afterVerify: true }))}>
             Enter code
           </button>
         </div>

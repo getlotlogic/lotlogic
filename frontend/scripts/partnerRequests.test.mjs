@@ -31,6 +31,7 @@ import {
   emptyStateKind,
   actionsFor,
   normalizePendingProperty,
+  pendingPropertiesFrom,
 } from '../src/lib/partnerRequests.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -623,4 +624,24 @@ test('the photo viewer gets a stable onClose, so its focus trap does not re-arm 
     /const closePhoto = useCallback\(\(\) => setPhoto\(null\), \[\]\)/.test(src),
     'closePhoto must be a useCallback with no deps',
   );
+});
+
+// Task 30: the end-to-end run against Task 15's real router found the page
+// reading `.items` while `GET /partner/properties` answers `{properties}` —
+// so no confirm card ever rendered.
+test('pendingPropertiesFrom reads the backend {properties} envelope', () => {
+  const cards = pendingPropertiesFrom({
+    properties: [{ id: 'prop-1', name: 'Sunset Ridge Apartments', manager: { name: 'Dana Ortiz' }, active_holds: 1 }],
+  });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].id, 'prop-1');
+  assert.equal(cards[0].managerName, 'Dana Ortiz');
+  assert.equal(cards[0].holds, 1);
+});
+
+test('pendingPropertiesFrom tolerates {items}, a bare array, and nothing', () => {
+  assert.equal(pendingPropertiesFrom({ items: [{ id: 'a', name: 'A' }] }).length, 1);
+  assert.equal(pendingPropertiesFrom([{ id: 'b', name: 'B' }, null]).length, 1);
+  assert.deepEqual(pendingPropertiesFrom(null), []);
+  assert.deepEqual(pendingPropertiesFrom({ detail: 'not_found' }), []);
 });
