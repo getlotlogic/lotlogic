@@ -37,10 +37,13 @@ export function ALPRPropertiesPage({
   const canDelete = user?._role === 'owner';
   const [properties, setProperties] = useState([]);
   const [loading, setLoading] = useState(true);
-  // Door (a) — "Add a property" opens AddPropertyForm as a modal; the old
-  // inline "Create Lot" form (PostgREST insert, both property types) is
-  // gone for owners (spec §3.4a — self-serve is apartment-only now; a new
-  // truck plaza still goes through POST /admin/clients, unchanged).
+  // Door (a) — "Add a property" opens AddPropertyForm as a modal, with no
+  // `slug` prop (no `/join/<slug>` context here) so it posts
+  // `partner_id: null` rather than a client-supplied partner id — see
+  // AddPropertyForm.jsx's header comment. The old inline "Create Lot" form
+  // (PostgREST insert, both property types) is gone for owners (spec
+  // §3.4a — self-serve is apartment-only now; a new truck plaza still goes
+  // through POST /admin/clients, unchanged).
   const [showAddProperty, setShowAddProperty] = useState(false);
   // "Not ours" (spec §3.8) — Task 14c's owner shape lists an archived,
   // rejected property here (excluded from `properties` outright) so the
@@ -140,11 +143,6 @@ export function ALPRPropertiesPage({
     return () => clearInterval(t);
   }, [properties]);
 
-  // Door (a)'s partner context — the dashboard has no `/join/<slug>` here,
-  // only the account's own existing partner relationship (see
-  // AddPropertyForm.jsx's header comment on the slug-vs-partner_id split).
-  const existingPartnerId = properties.map(p => p.partner_id || p.tow_company_id).find(Boolean) || null;
-
   function handlePropertyAdded(property) {
     setShowAddProperty(false);
     addToast('Property added', 'success');
@@ -203,7 +201,6 @@ export function ALPRPropertiesPage({
             <div className="viol-modal-body">
               <div className="viol-modal-title">Add a property</div>
               <AddPropertyForm
-                partnerId={existingPartnerId}
                 onCancel={() => setShowAddProperty(false)}
                 onSuccess={handlePropertyAdded}
                 onJoined={handleJoinedPending}

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { requestsApi } from '../lib/requestsApi.js';
-import { manualAddressValid, placeToFields } from '../lib/addPropertyFields.js';
+import { manualAddressValid, placeToFields, createPropertyBody } from '../lib/addPropertyFields.js';
 
 // ── Add a property (spec §3.4a) ──────────────────────────────
 //
@@ -9,20 +9,27 @@ import { manualAddressValid, placeToFields } from '../lib/addPropertyFields.js';
 // Task 25's SignupPage, which embeds this same component for the property
 // section of full account creation.
 //
-// Callers identify the tow partner one of two ways:
-//   `slug`      — a `/join/<slug>` link (Task 25); also what unlocks the
-//                 live `/auth/signup/match` duplicate check on place-pick /
-//                 ZIP blur (§3.3 — that endpoint resolves the partner from
-//                 `slug`, server-side).
-//   `partnerId` — the in-app "Add a property" button (doors (a) in Account
-//                 and Lots, this task), where the dashboard has no slug to
-//                 hand the form, only the account's own `partner_id` from an
-//                 existing property. Posted as `partner_id` on submit; the
-//                 live duplicate check is skipped (it needs a slug) and the
-//                 only duplicate signal is the 409 on submit — see the
-//                 report's concern on this split.
+// The only partner-scoping input this form takes from a caller is `slug` —
+// a `/join/<slug>` link (Task 25); it's also what unlocks the live
+// `/auth/signup/match` duplicate check on place-pick / ZIP blur (§3.3 —
+// that endpoint resolves the partner from `slug`, server-side). There is
+// deliberately no prop through which a caller can hand this form a partner
+// id: spec §8.3 types the create body as `{slug | partner_id:null, …}` —
+// `partner_id` can only ever be `null` (the bare-`/join` "Not listed"
+// case) — so a client-supplied, non-null `partner_id` is exactly the
+// trust-column input the backend design and the global "no route accepts
+// partner_id/tenant_id from the client" constraint exist to keep out.
 //
-// `POST /apartment/properties` is the only write: `{slug|partner_id,
+// The in-app "Add a property" button (doors (a) in Account and Lots, this
+// task) has no `/join/<slug>` context, so it renders this form with no
+// `slug` at all — see `createPropertyBody` in `../lib/addPropertyFields.js`,
+// which falls back to `partner_id: null` in that case. That's functionally
+// the same bare-`/join` "Not listed" flow (the inline duplicate check is
+// skipped too, since it also needs a slug — the 409 on submit is the only
+// duplicate signal for this door) until a real slug source lands on
+// `/auth/me` for door (a) to use instead (see this task's report).
+//
+// `POST /apartment/properties` is the only write: `{slug | partner_id:null,
 // property, force}` → `201 {property}` or `409 duplicate {candidates}`.
 
 // Read once at module load — the meta tag build.mjs substitutes from
@@ -72,7 +79,7 @@ function MatchCard({ title, candidates, onJoin, joiningId, extra }) {
   );
 }
 
-export function AddPropertyForm({ slug = null, partnerId = null, onSuccess, onJoined, onCancel, submitLabel = 'Add property' }) {
+export function AddPropertyForm({ slug = null, onSuccess, onJoined, onCancel, submitLabel = 'Add property' }) {
   const [name, setName] = useState('');
   const [manual, setManual] = useState(!GOOGLE_MAPS_KEY);
   const [placesReady, setPlacesReady] = useState(false);
@@ -146,7 +153,7 @@ export function AddPropertyForm({ slug = null, partnerId = null, onSuccess, onJo
   // §3.3: inline duplicate check on place pick and on manual-ZIP blur.
   // Best-effort — a failure here never blocks the form; the 409 on submit
   // is the backstop. Needs `slug` (the endpoint resolves the partner from
-  // it); the in-app `partnerId` door skips this and relies on that backstop.
+  // it); the in-app door (no slug) skips this and relies on that backstop.
   const checkMatch = useCallback(async ({ place_id = null, address_line1 = null, postal_code = null }) => {
     if (!slug) return;
     try {
@@ -192,8 +199,7 @@ export function AddPropertyForm({ slug = null, partnerId = null, onSuccess, onJo
     setSubmitting(true);
     setError('');
     try {
-      const body = { property: buildPropertyBody(), force: !!force };
-      if (slug) body.slug = slug; else body.partner_id = partnerId ?? null;
+      const body = createPropertyBody({ slug, property: buildPropertyBody(), force });
       const res = await requestsApi.createApartmentProperty(body);
       setDuplicateCandidates(null);
       onSuccess && onSuccess(res?.property || res);

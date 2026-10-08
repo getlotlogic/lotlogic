@@ -220,14 +220,6 @@ export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setA
   // manage here. `/auth/me.properties` carries `role` per the owner shape.
   const teamProperties = (Array.isArray(properties) ? properties : [])
     .filter(p => p.role === 'admin' || p.role === 'manager');
-  // Door (a): the in-app "Add a property" button has no `/join/<slug>`
-  // context, only the account's own existing partner relationship — used
-  // here as `partnerId`, not `slug` (see AddPropertyForm.jsx's header comment
-  // and this task's report for the spec-vs-plan ambiguity this resolves).
-  const existingPartnerId = (Array.isArray(properties) ? properties : [])
-    .map(p => p.partner_id || p.tow_company_id)
-    .find(Boolean) || null;
-
   function updateNotify(patch) {
     const next = NotifyManager.updatePrefs(patch);
     setNotifyPrefs(next);
@@ -297,7 +289,11 @@ export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setA
       ))}
 
       {/* Add a property (spec §3.4a, door (a)). Lots carries the same button
-          in its header; this is the other door. */}
+          in its header; this is the other door. Neither door has a
+          `/join/<slug>` context, so AddPropertyForm renders with no `slug`
+          prop — it posts `partner_id: null` (the bare-`/join` "Not listed"
+          fallback) rather than a client-supplied partner id; see
+          AddPropertyForm.jsx's header comment. */}
       {isOwner && (
         <div className="settings-section">
           <button
@@ -314,7 +310,6 @@ export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setA
             <div className="viol-modal-body">
               <div className="viol-modal-title">Add a property</div>
               <AddPropertyForm
-                partnerId={existingPartnerId}
                 onCancel={() => setShowAddProperty(false)}
                 onSuccess={(property) => {
                   setShowAddProperty(false);

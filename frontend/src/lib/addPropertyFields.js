@@ -48,3 +48,28 @@ export function placeToFields(place) {
     lng: coord('lng', 'lng'),
   };
 }
+
+/**
+ * The `POST /apartment/properties` request body (spec §3.4a, §8.3):
+ * `{slug | partner_id:null, property, force}`. `partner_id` can only ever
+ * be `null` — the bare-`/join` "Not listed" case — because every property
+ * is scoped to a partner server-side, resolved from `slug`; the client is
+ * never trusted to name one (this is exactly the trust-column input
+ * `tests/test_no_client_tenant_id.py` and migration 3's dropped
+ * owner-writable property policies exist to keep out of this request).
+ * There is deliberately no parameter here through which a caller could
+ * supply a client-side partner id — a slug is the only way to scope the
+ * new property to a partner. The in-app "Add a property" door (Account
+ * and Lots) has no `/join/<slug>` context, so it always falls into the
+ * `partner_id:null` branch — functionally the same bare-`/join` "Not
+ * listed" flow — until a real slug source lands on `/auth/me` (see this
+ * task's report).
+ * @param {{slug?: string|null, property: object, force?: boolean}} args
+ * @returns {{slug: string, property: object, force: boolean}|{partner_id: null, property: object, force: boolean}}
+ */
+export function createPropertyBody({ slug = null, property, force = false }) {
+  const body = { property, force: !!force };
+  if (slug) body.slug = slug;
+  else body.partner_id = null;
+  return body;
+}
