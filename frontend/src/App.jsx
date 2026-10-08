@@ -1119,7 +1119,7 @@ export function App() {
             propertyNames={propertyNames}
             onBadgeChange={bumpRequestsBadge}
           />}
-          {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} />}
+          {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} plate={deepLink.plate} property={deepLink.property} />}
           {tab === 'app' && (isPlatformAdmin || (FRANK_APP_TAB_LIVE && isOperator && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID)) && <PartnerAppPage />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} isPlatformAdmin={isPlatformAdmin} properties={isOwner ? properties : []} onPropertyAdded={refreshProperties} />}

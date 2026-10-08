@@ -150,3 +150,20 @@ test('returnToTarget leaves a return_to query to App.jsx', () => {
   assert.equal(returnToTarget('/app?return_to=%2Fjoin%2Fnstyle'), null);
   assert.equal(returnToTarget('/app?tab=lots&return_to=x'), null);
 });
+
+test('readDeepLink: the lookup link carries plate and property together', () => {
+  const dl = readDeepLink('?tab=lookup&plate=ABC1234&property=p7');
+  assert.equal(dl.tab, 'lookup');
+  assert.equal(dl.plate, 'ABC1234');
+  assert.equal(dl.property, 'p7');
+});
+
+// App.jsx strips the query (cleanDeepLink) before the lazily mounted lookup
+// page runs its effect, so the page must get plate/property as props.
+test('the lookup page takes plate/property from props, not location.search', async () => {
+  const { readFileSync } = await import('node:fs');
+  const page = readFileSync(new URL('../src/pages/PlateLookupPage.jsx', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /window\.location\.search/);
+  assert.match(app, /<PlateLookupPage[^>]*plate=\{deepLink\.plate\}[^>]*property=\{deepLink\.property\}/);
+});

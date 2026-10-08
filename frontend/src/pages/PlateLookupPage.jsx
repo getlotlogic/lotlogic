@@ -125,7 +125,7 @@ function PlateLookupVerdict({ out, scope, propertyName, history, typedPlate, onP
   );
 }
 
-export function PlateLookupPage({ user }) {
+export function PlateLookupPage({ user, plate: deepPlate = null, property: deepProperty = null }) {
   // Load the partner's OWN properties (RLS-scoped by tow_company_id via
   // db.getProperties) — same source ALPRPropertiesPage uses. The App-level
   // `lots` state comes from the `lots` table, which has no property_type and
@@ -177,18 +177,17 @@ export function PlateLookupPage({ user }) {
     return () => { alive = false; };
   }, [user.id, user._role]);
 
-  // Deep link `/app?tab=lookup&plate=ABC1234&property=<id>` (Task 20 reads
-  // `plate`/`property` off location.search itself, so it works even before
-  // Task 21 wires the `tab` query into the shell).
+  // Deep link `/app?tab=lookup&plate=ABC1234&property=<id>`. App.jsx parses it
+  // and strips the query from the address bar before this page mounts, so the
+  // values arrive as props; they are captured once, at mount.
+  const deepRef = React.useRef({ plate: deepPlate, property: deepProperty });
   const deepLinkRanRef = React.useRef(false);
   useEffect(() => {
     if (deepLinkRanRef.current) return;
     if (properties === null) return; // wait for the property list to resolve
     deepLinkRanRef.current = true;
-    let qs;
-    try { qs = new URLSearchParams(window.location.search); } catch { return; }
-    const qPlate = qs.get('plate');
-    const qProperty = qs.get('property');
+    const qPlate = deepRef.current.plate;
+    const qProperty = deepRef.current.property;
     if (!qPlate) return;
     const nextScope = qProperty === ALL_SCOPE && partnerLookupAvailable
       ? ALL_SCOPE
