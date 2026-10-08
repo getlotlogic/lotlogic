@@ -5,6 +5,7 @@ import { ToastProvider } from './ui/Toast.jsx';
 import { App } from './App.jsx';
 import { db } from './lib/db.js';
 import { lotDayBound } from './lib/lotdate.js';
+import { VerifyEmailSheet } from './pages/property/VerifyEmailSheet.jsx';
 
 createRoot(document.getElementById('root')).render(
   <ErrorBoundary label="the dashboard"><ToastProvider><App /></ToastProvider></ErrorBoundary>
@@ -55,6 +56,11 @@ if (isE2E()) {
     db,
     ToastProvider,
     lotDayBound,
+    // VerifyEmailSheet (Task 23, spec §5.9) — not a lazy page, so it's handed
+    // out directly rather than behind a `.load()`, the same way ToastProvider
+    // is. tests/a11y/axe.spec.ts mounts it standalone (wrong / exhausted /
+    // success states) for `scan(page, 'verify-sheet')`.
+    VerifyEmailSheet,
     ALPRPropertyDetailPage: {
       load: () => import('./pages/ALPRPropertyDetailPage.jsx').then((m) => m.default),
     },

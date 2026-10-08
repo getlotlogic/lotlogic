@@ -10,6 +10,10 @@ import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActiv
 import { lazyPage } from './lib/lazyPage.js';
 import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink } from './lib/deepLink.js';
 import { navTabsFor, partnerRequestsReady } from './lib/features.js';
+import { verifyState } from './lib/verifyState.js';
+import { requestsApi } from './lib/requestsApi.js';
+import { VerifyBanner } from './ui/VerifyBanner.jsx';
+import { VerifyEmailSheet } from './pages/property/VerifyEmailSheet.jsx';
 import { EarningsPage } from './pages/EarningsPage.jsx';
 import { InvoicesPage } from './pages/InvoicesPage.jsx';
 import { ALPRPropertiesPage } from './pages/ALPRPropertiesPage.jsx';
@@ -100,10 +104,22 @@ export function App() {
       if (Array.isArray(me.properties)) setProperties(me.properties);
       setOwner(prev => {
         if (!prev) return prev;
-        if (prev.is_admin === !!me.is_admin && prev.is_platform_admin === !!me.is_platform_admin) {
-          return prev; // no change — avoid state churn / re-renders
-        }
-        const merged = { ...prev, is_admin: !!me.is_admin, is_platform_admin: !!me.is_platform_admin };
+        // email_verified / signup_source / created_at / email_verify_sent_at
+        // drive verifyState() (Task 23, spec §3.5) — the banner/wall above
+        // the page content and the "Resend in Ns" countdown in
+        // VerifyEmailSheet. Compared explicitly (not just is_admin) so the
+        // banner unmounts the moment this self-heal re-runs after a verify.
+        const next = {
+          is_admin: !!me.is_admin,
+          is_platform_admin: !!me.is_platform_admin,
+          email_verified: !!me.email_verified,
+          signup_source: me.signup_source,
+          created_at: me.created_at,
+          email_verify_sent_at: me.email_verify_sent_at ?? null,
+        };
+        const unchanged = Object.keys(next).every(k => prev[k] === next[k]);
+        if (unchanged) return prev; // no change — avoid state churn / re-renders
+        const merged = { ...prev, ...next };
         try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
         return merged;
       });
@@ -126,6 +142,58 @@ export function App() {
   // out of the url so a refresh does not replay `firstrun`.
   const [deepLink, setDeepLink] = useState(() => readDeepLink(window.location.search));
   const clearDeepLink = useCallback(() => setDeepLink(emptyDeepLink()), []);
+
+  // ── VerifyEmailSheet (Task 23, spec §5.9) ──────────────────
+  // Owned here, not by whichever page happens to open it, because the sheet
+  // is reached from three independent places: the banner/wall below, the
+  // `?verify=1` deep link, and (once Task 22 lands) a tow/photo/pending-hold
+  // gate via `onNeedVerify(resume)`. `verifySheetMode` picks the sub-view
+  // ('code' default, 'changeEmail' when opened via "Change email");
+  // `verifyFromWall` is the no-✕/Sign-out variant; `verifyResumeRef` holds
+  // the submit a gate was waiting on, fired once on success and then forgotten.
+  const [verifySheetOpen, setVerifySheetOpen] = useState(false);
+  const [verifySheetMode, setVerifySheetMode] = useState('code');
+  const [verifyFromWall, setVerifyFromWall] = useState(false);
+  const verifyResumeRef = useRef(null);
+  const openVerifySheet = useCallback((opts) => {
+    const { mode = 'code', fromWall = false, resume = null } = opts || {};
+    verifyResumeRef.current = typeof resume === 'function' ? resume : null;
+    setVerifySheetMode(mode);
+    setVerifyFromWall(fromWall);
+    setVerifySheetOpen(true);
+  }, []);
+  const closeVerifySheet = useCallback(() => {
+    setVerifySheetOpen(false);
+    verifyResumeRef.current = null;
+  }, []);
+  // The shape Task 22's composer expects: `onNeedVerify(resume)`, one arg.
+  const onNeedVerify = useCallback((resume) => openVerifySheet({ mode: 'code', fromWall: false, resume }), [openVerifySheet]);
+  const handleVerifySuccess = useCallback((resp) => {
+    setOwner(prev => {
+      if (!prev) return prev;
+      const merged = { ...prev, email_verified: true };
+      // SIGNUP_VERIFY_FIRST's verify-email response carries the login shape
+      // (spec §5.9 success row) — pick up the fresh token so the session
+      // that landed signed-in-via-code keeps working.
+      if (resp && typeof resp.token === 'string') { merged._token = resp.token; merged._ts = Date.now(); }
+      try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
+      return merged;
+    });
+    setVerifySheetOpen(false);
+    addToast('Email confirmed', 'success');
+    const resume = verifyResumeRef.current;
+    verifyResumeRef.current = null;
+    if (resume) resume();
+  }, [addToast]);
+  // A bare "Resend" tap from the banner/wall (not through the sheet) — the
+  // cooldown gate is enforced by disabling the button; a 429 raced from
+  // another tab is swallowed here (nothing to show without the sheet open).
+  const handleBannerResend = useCallback(() => {
+    requestsApi.resendVerification({}).then(() => {
+      setOwner(prev => (prev ? { ...prev, email_verify_sent_at: new Date().toISOString() } : prev));
+      addToast('Sent. Check your email — and the spam folder.', 'success');
+    }).catch(() => { addToast("Can't reach LotLogic — try again.", 'error'); });
+  }, [addToast]);
   // `/auth/me.properties` — the per-property `features` flags behind the
   // bottom-nav rule (spec §5) and the §5.6 upsell chips.
   const [properties, setProperties] = useState([]);
@@ -169,6 +237,10 @@ export function App() {
 
   const isOwner = owner?._role === 'owner' && !viewAs;
   const isOperator = owner?._role === 'partner' || !!viewAs;
+  // Who is gated (spec §3.5): only a self-serve owner account that hasn't
+  // confirmed. `viewAs` / partner sessions never carry signup_source, so
+  // verifyState() falls through to 'verified' for them on its own.
+  const emailVerifyState = isOwner ? verifyState(owner) : 'verified';
   // Platform-admin (Gabe / Victor / Standard Vending) — gets admin-only surfaces.
   // Sourced from the JWT claim issued by /auth/login. Never set this from
   // partner-controlled state.
@@ -254,8 +326,9 @@ export function App() {
   // while signed out: the query has to survive the sign-in (LoginPage replays
   // it), and cleaning it then would throw away the request the email named.
   // `tab` wins when it names a real tab; otherwise a `property` link means
-  // Lots, because that is where the property page lives. The rest
-  // (`section`, `request`, `firstrun`, `verify`, `upload`) travel down to the
+  // Lots, because that is where the property page lives. `verify` (the code
+  // email's `/app?verify=1`, spec §5.9) opens VerifyEmailSheet directly — the
+  // rest (`section`, `request`, `firstrun`, `upload`) travel down to the
   // Lots page as props.
   const deepLinkAppliedRef = useRef(false);
   useEffect(() => {
@@ -263,8 +336,9 @@ export function App() {
     deepLinkAppliedRef.current = true;
     if (deepLink.tab && KNOWN_TAB_IDS.includes(deepLink.tab)) setTab(deepLink.tab);
     else if (deepLink.property) setTab('lots');
+    if (deepLink.verify) openVerifySheet({ mode: 'code', fromWall: false });
     cleanDeepLink();
-  }, [owner, deepLink]);
+  }, [owner, deepLink, openVerifySheet]);
   const viewAsLotIds = viewAsLotIdsEarly;
   const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
   const effectiveViolations = viewAsLotIds ? violations.filter(v => viewAsLotIds.includes(v.lot_id)) : violations;
@@ -752,6 +826,21 @@ export function App() {
         </div>
       </header>
 
+      {/* Confirm-your-email banner/wall (spec §3.5) — mounted above the page
+          content, not inside it, so it stays put across tab switches and
+          never scrolls away with the page it's gating. 'unverified' is the
+          banner; 'walled' (day 7) is the wall — same three actions, heavier
+          copy, no implicit dismiss either way. */}
+      {emailVerifyState !== 'verified' && (
+        <VerifyBanner
+          variant={emailVerifyState === 'walled' ? 'wall' : 'banner'}
+          email={owner.email}
+          onEnterCode={() => openVerifySheet({ mode: 'code', fromWall: emailVerifyState === 'walled' })}
+          onChangeEmail={() => openVerifySheet({ mode: 'changeEmail', fromWall: emailVerifyState === 'walled' })}
+          onResend={handleBannerResend}
+        />
+      )}
+
       <main id="main-content" className="page-content" role="main">
         {/* "Viewing as Partner" banner */}
         {viewAs && (
@@ -797,6 +886,7 @@ export function App() {
             upload={deepLink.upload}
             firstrun={deepLink.firstrun}
             verify={deepLink.verify}
+            onNeedVerify={onNeedVerify}
           />}
           {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
           {tab === 'towactivity' && isOwner && <TowActivityPage user={effectiveUser} />}
@@ -842,6 +932,17 @@ export function App() {
           })}
         </div>
       </nav>
+
+      <VerifyEmailSheet
+        open={verifySheetOpen}
+        email={owner.email}
+        sentAt={owner.email_verify_sent_at}
+        mode={verifySheetMode}
+        fromWall={verifyFromWall}
+        onClose={closeVerifySheet}
+        onSuccess={handleVerifySuccess}
+        onSignOut={logout}
+      />
     </div>
   );
 }
