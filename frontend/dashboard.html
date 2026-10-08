@@ -77,6 +77,11 @@
          the light override below flips to white, which is 4.91:1 (the same
          figure Task 15 solved --accent for). One token, measured in both. */
       --on-accent: #1A1206;
+      /* Ink on an --accent fill. No single value passes 4.5:1 on both themes'
+         accent (#fff is 1.7:1 on the amber, #1A1206 is 3.8:1 on
+         .theme-light's #B85309), so the ink is a token — same reason
+         --green-text exists below. */
+      --accent-ink: #1A1206;
       /* Status — traffic-light, calibrated for outdoor visibility */
       --green: #22C55E;
       --red: #EF4444;
@@ -138,6 +143,7 @@
       --accent: #B85309;
       --accent-dark: #9A4408;
       --on-accent: #FFFFFF; /* 4.91:1 on #B85309 */
+      --accent-ink: #FFFFFF; /* 4.9:1 on --accent (#B85309); #1A1206 is 3.8:1 */
       --green: #16A34A;
       --red: #DC2626;
       --yellow: #B85309;

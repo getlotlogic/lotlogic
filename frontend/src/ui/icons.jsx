@@ -15,6 +15,11 @@ export function NavIconAccount() {
 export function NavIconActivity() {
   return <div className="nav-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>;
 }
+// Partner Requests tab (spec §5.4) — a clipboard with a tick, the office's
+// instruction the crew has to read before it tows.
+export function NavIconRequests() {
+  return <div className="nav-icon"><svg viewBox="0 0 24 24"><path d="M9 4H7a2 2 0 00-2 2v13a2 2 0 002 2h10a2 2 0 002-2V6a2 2 0 00-2-2h-2"/><rect x="9" y="2" width="6" height="4" rx="1"/><path d="M9 13l2 2 4-4"/></svg></div>;
+}
 export function NavIconOverview() {
   return <div className="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></div>;
 }

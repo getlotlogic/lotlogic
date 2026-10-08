@@ -12,9 +12,10 @@
 // tabs show. Analytics / Training / Tow truck are never shown locked — the
 // upsell lives inside the property page (§5.6), once.
 
-// Flipped to true by Task 27, when the partner Requests page exists. Until
-// then the tab is not listed, because it would render nothing.
-export const partnerRequestsReady = false;
+// Task 27 shipped `pages/PartnerRequestsPage.jsx`, so the partner nav lists
+// the tab. The page itself degrades to its empty state against a backend that
+// has not deployed `/apartment/requests` yet.
+export const partnerRequestsReady = true;
 
 /**
  * A property that runs the portal only — no plate cameras.

@@ -33,6 +33,11 @@ export function ConfirmDialog({ title, body, confirmLabel, confirmColor, onConfi
 //   requireReason     - when true, Confirm stays disabled until the reason has
 //                       at least 2 non-whitespace chars
 //   reasonPlaceholder - placeholder text for the textarea
+//   extra             - optional node between the description and the
+//                       textarea, for a field this modal does not own (the
+//                       partner Requests tab puts its photo picker here so
+//                       "Towed ✓" and "Photo sent ✓" reuse this modal rather
+//                       than forking it)
 //   submitting        - disables buttons while a POST is in flight
 //   onConfirm(reason) - called with trimmed reason (may be empty string)
 //   onCancel()
@@ -44,6 +49,7 @@ export function ConfirmActionModal({
   confirmColor,
   requireReason = false,
   reasonPlaceholder = 'Reason (optional)',
+  extra = null,
   submitting = false,
   onConfirm,
   onCancel,
@@ -77,6 +83,7 @@ export function ConfirmActionModal({
         <div id={descId} style={{fontSize:12,color:'var(--text-muted)',marginBottom:10}}>
           {description || <>Applies to plate <strong style={{color:'var(--text-primary)'}}>{plate || '—'}</strong>.</>}
         </div>
+        {extra}
         <textarea
           value={reason}
           onChange={e => setReason(e.target.value)}
@@ -92,7 +99,10 @@ export function ConfirmActionModal({
             disabled={disabled}
             style={{
               background: confirmColor || 'var(--accent)',
-              color: '#fff',
+              // Amber buttons take dark ink (spec §5): #fff on var(--accent)
+              // is 1.66:1 in the dark theme. A caller-supplied colour is a
+              // destructive red and keeps white.
+              color: confirmColor ? '#fff' : 'var(--accent-ink)',
               border: '1px solid ' + (confirmColor || 'var(--accent)'),
               borderRadius: 6,
               padding: '4px 12px',
