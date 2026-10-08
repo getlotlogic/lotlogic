@@ -9,6 +9,7 @@ import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { RegisterPassModal } from '../ui/RegisterPassModal.jsx';
 import { RegisteredDrill } from './RegisteredDrill.jsx';
 import { lazyPage } from '../lib/lazyPage.js';
+import { listRequests } from '../lib/requestsApi.js';
 
 // Heavy — lazy-loaded so opening the Lots list doesn't pull in the full
 // property-detail bundle (which itself pulls in TruckParkingLog).
@@ -46,6 +47,10 @@ export function ALPRPropertiesPage({
   const [drillState, setDrillState] = useState(null); // { propId, drill }
   // Partner "Register a parking pass" modal — the property being registered at.
   const [registerProp, setRegisterProp] = useState(null);
+  // ON HOLD / TOW counts for portal-only cards (spec §5.4/§5.6,
+  // `features.passes=false`) — { [propId]: { hold, tow } }. Only fetched for
+  // those properties; a normal card never shows this row.
+  const [requestCounts, setRequestCounts] = useState({});
 
   useEffect(() => {
     if (!user) return;
@@ -124,6 +129,37 @@ export function ALPRPropertiesPage({
     return () => clearInterval(t);
   }, [properties]);
 
+  // ON HOLD / TOW counts for portal-only cards only — `features.passes=false`
+  // (spec §5.6). Every other card's status pill comes from the ALPR KPI
+  // effect above; this is the one request this list makes for a property
+  // that has no cameras, no passes, nothing else to poll.
+  useEffect(() => {
+    const portalOnly = properties.filter(p => p?.features?.passes === false);
+    if (!portalOnly.length) return;
+    const load = () => Promise.all(
+      portalOnly.map(p =>
+        listRequests({ property_id: p.id, view: 'active' })
+          .then(r => {
+            const items = Array.isArray(r?.items) ? r.items : [];
+            return [p.id, {
+              hold: items.filter(i => i.kind === 'hold').length,
+              tow: items.filter(i => i.kind === 'tow').length,
+            }];
+          })
+          .catch(() => [p.id, { hold: 0, tow: 0 }])
+      )
+    ).then(pairs => {
+      setRequestCounts(prev => {
+        const next = { ...prev };
+        pairs.forEach(([id, counts]) => { next[id] = counts; });
+        return next;
+      });
+    });
+    load();
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, [properties]);
+
   async function handleAdd(e) {
     e.preventDefault();
     setSaving(true);
@@ -147,6 +183,11 @@ export function ALPRPropertiesPage({
     propertyId={selectedId}
     onBack={() => setSelectedId(null)}
     user={user}
+    // This list's own `/auth/me` row for the open property — the detail
+    // page's `db.getProperty` read is a raw table row with no computed
+    // `features` key, so this is the only way it learns which upsell chips
+    // (spec §5.6) are locked.
+    features={properties.find(p => p.id === selectedId)?.features}
     // Only the property the deep link named gets the deep link's props; once
     // the operator navigates to a different property they are back to normal.
     initialSection={selectedId === initialSelectedId ? initialSection : null}
@@ -220,6 +261,45 @@ export function ALPRPropertiesPage({
             const score = (k) => (k.registered || 0) + (k.openJobs || 0) + (k.overstays || 0) + (k.noReg || 0);
             return score(kb) - score(ka);
           }).map(p => {
+            // Portal-only (spec §5.4/§5.6): a property with no pass flow
+            // switched on gets the stripped card — name, address, the
+            // verification pill, ON HOLD/TOW counts from the portal's own
+            // requests, and a single View property button. No Registered
+            // KPI (there's nothing registered to count) and no "Register a
+            // parking pass" action (today's partner card shows both — they
+            // are hidden here for both roles).
+            if (p?.features?.passes === false) {
+              const counts = requestCounts[p.id] || { hold: 0, tow: 0 };
+              const verified = p.verification_status === 'verified';
+              return (
+                <article key={p.id} className="lot-card-paper">
+                  <div className="lot-head-paper">
+                    <div style={{minWidth:0,flex:1}}>
+                      <div className="lot-name-paper">{p.name}</div>
+                      <div className="lot-addr-paper">{p.address || 'No address'}</div>
+                    </div>
+                    <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}}>
+                      <span className={`lot-pill-paper ${verified ? 'green' : 'amber'}`}>
+                        <span className="dot"></span>{verified ? 'Confirmed' : 'Waiting for N Style'}
+                      </span>
+                      {canDelete && (
+                      <button
+                        aria-label={`Delete property ${p.name}`}
+                        onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete "' + p.name + '"? This removes all its plates, cameras, and passes.')) return; try { await db.deleteProperty(p.id); setProperties(prev => prev.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to delete. ' + (err.message || ''), 'error'); } }}
+                        style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'6px 10px',marginTop:2,fontSize:11,fontWeight:700,cursor:'pointer'}}
+                      >Delete</button>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)',letterSpacing:'.02em',padding:'10px 0'}}>
+                    ON HOLD · {counts.hold} · TOW · {counts.tow}
+                  </div>
+                  <div className="lot-foot-paper">
+                    <button onClick={() => setSelectedId(p.id)}>View property <span className="arr">›</span></button>
+                  </div>
+                </article>
+              );
+            }
             const kpi = kpiCounts[p.id] || {};
             const openJobs = kpi.openJobs || 0;
             const noReg = kpi.noReg || 0;

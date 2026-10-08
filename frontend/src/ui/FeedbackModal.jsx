@@ -7,10 +7,16 @@ import { useFocusTrap, useUid } from './focusTrap.js';
 // Available to leasing (owner) and N Style (partner) from any property view.
 // Posts to the scoped backend intake; stored only (no email). Kind toggle +
 // free-text body. Reuses the focus-trap + overlay pattern from the other modals.
-export function FeedbackModal({ propertyId, onClose }) {
+//
+// `kind` and `prefill` (spec §5.6) let a caller open this straight onto the
+// Feature tab with the body already written — `UpsellPanel`'s "Ask
+// LotLogic" button is `kind="feature"` with
+// "<Property> is interested in <feature>." pre-filled. Both are optional and
+// default to today's blank Bug tab, so every other call site is unchanged.
+export function FeedbackModal({ propertyId, onClose, kind: initialKind = 'bug', prefill = '' }) {
   const { addToast } = useToast();
-  const [kind, setKind] = useState('bug');
-  const [body, setBody] = useState('');
+  const [kind, setKind] = useState(initialKind);
+  const [body, setBody] = useState(prefill);
   const [submitting, setSubmitting] = useState(false);
   const dialogRef = useRef(null);
   const titleId = useUid('fb-title');
@@ -44,7 +50,12 @@ export function FeedbackModal({ propertyId, onClose }) {
         flex: 1, fontSize: 12, fontWeight: 700, padding: '7px', borderRadius: 6,
         border: '1px solid ' + (kind === val ? 'var(--accent)' : 'var(--border)'),
         background: kind === val ? 'var(--accent)' : 'var(--bg-inset)',
-        color: kind === val ? '#fff' : 'var(--text-primary)',
+        // `--accent` is the brand amber — spec §5's layout rules: "amber
+        // buttons use #1A1206 ink" (white here was 1.66:1). Caught by the
+        // axe scan Task 26 added once `UpsellPanel`'s "Ask LotLogic" made
+        // the Feature tab the one that opens active, not just one a user
+        // might click into.
+        color: kind === val ? '#1A1206' : 'var(--text-primary)',
         cursor: 'pointer',
       }}
     >{label}</button>
@@ -84,7 +95,8 @@ export function FeedbackModal({ propertyId, onClose }) {
             onClick={submit}
             disabled={disabled}
             style={{
-              background:'var(--accent)', color:'#fff', border:'1px solid var(--accent)',
+              // Same `--accent` ink fix as the tab buttons above.
+              background:'var(--accent)', color:'#1A1206', border:'1px solid var(--accent)',
               borderRadius:6, padding:'4px 12px', fontSize:12, fontWeight:700,
               cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1,
             }}

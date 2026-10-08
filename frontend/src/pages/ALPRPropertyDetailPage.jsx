@@ -10,10 +10,13 @@ import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
 import { useIntervalFetch, useNowTick } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
+import { useUid } from '../ui/focusTrap.js';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { CrossCameraSightings } from '../ui/CrossCameraSightings.jsx';
 import { ApartmentPermits } from './ApartmentPermits.jsx';
 import { lazyPage } from '../lib/lazyPage.js';
+import { lockedChips } from '../lib/upsell.js';
+import { UpsellPanel } from './property/UpsellPanel.jsx';
 
 // Heavy — lazy-loaded so opening a property doesn't pull in the full
 // parking-log bundle before the operator ever scrolls to it.
@@ -191,19 +194,35 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // the render maps over this and the section resolver below validates against
 // it, so a stored or deep-linked section that this property has no chip for
 // can never be selected.
-export function sectionChipsFor(propertyType) {
+//
+// `features` (spec §5.6, `/auth/me.properties[].features {passes, qr,
+// cameras}`) locks the Parking Passes chip — relabelled "🔒 Parking passes"
+// — when this property has never had a pass flow switched on, and adds two
+// chips that otherwise don't exist on this row at all: "🔒 QR codes" and
+// "🔒 Cameras". `lockedChips` (UpsellPanel.jsx) is the single source for
+// which of the three are locked; truck plazas never show them — every
+// truck-plaza property registers passes, by definition.
+export function sectionChipsFor(propertyType, features) {
   const isTruckPlaza = propertyType === 'truck_plaza';
+  if (isTruckPlaza) {
+    return [
+      { id: 'all', label: 'All' },
+      // No-registration evidence is a camera-enforcement concept — truck
+      // plaza only. Apartments are registration-based and don't get it.
+      { id: 'noreg', label: 'No Registration Evidence Package' },
+      // ActivePassTracker chip removed entirely — the component was
+      // deleted in the parking-pass consolidation. The Parking Log
+      // is the single source of truth now.
+      { id: 'log', label: 'Parking Log' },
+      { id: 'history', label: 'History' },
+    ];
+  }
+  const locked = lockedChips(features);
+  const lockedById = new Map(locked.map(c => [c.id, c]));
   return [
     { id: 'all', label: 'All' },
-    // No-registration evidence is a camera-enforcement concept — truck
-    // plaza only. Apartments are registration-based and don't get it.
-    ...(isTruckPlaza ? [{ id: 'noreg', label: 'No Registration Evidence Package' }] : []),
-    // ActivePassTracker chip removed entirely — the component was
-    // deleted in the parking-pass consolidation. The Parking Log
-    // is the single source of truth now.
-    ...(isTruckPlaza
-      ? [{ id: 'log', label: 'Parking Log' }, { id: 'history', label: 'History' }]
-      : [{ id: 'log', label: 'Parking Passes' }]),
+    lockedById.get('log') || { id: 'log', label: 'Parking Passes' },
+    ...locked.filter(c => c.id !== 'log'),
   ];
 }
 
@@ -220,8 +239,8 @@ export function sectionStorageKey(propertyType) {
 // the portal's whole point — and fall back to the Parking Log until Task 22
 // adds that chip; truck plazas stay on the Parking Log, the surface their
 // operators actually use.
-export function resolveSectionFilter({ propertyType, initialSection, stored }) {
-  const ids = sectionChipsFor(propertyType).map(c => c.id);
+export function resolveSectionFilter({ propertyType, features, initialSection, stored }) {
+  const ids = sectionChipsFor(propertyType, features).map(c => c.id);
   if (initialSection && ids.includes(initialSection)) return initialSection;
   if (stored && ids.includes(stored)) return stored;
   if (propertyType !== 'truck_plaza' && ids.includes('requests')) return 'requests';
@@ -232,6 +251,14 @@ export function ALPRPropertyDetailPage({
   propertyId,
   onBack,
   user,
+  // `/auth/me.properties[].features {passes, qr, cameras}` for exactly this
+  // property — ALPRPropertiesPage already holds it (that's where the list
+  // came from) and passes it down, because this page's own `db.getProperty`
+  // read is a raw table row with no computed `features` key (spec §5.6: "no
+  // new column"). `null`/`undefined` (a page opened before the list prop
+  // threading, or a legacy caller) locks nothing — same "explicit false
+  // only" rule as `isPortalOnly` in `lib/features.js`.
+  features = null,
   // Deep link, forwarded by ALPRPropertiesPage. `initialSection` overrides the
   // remembered chip; `request` / `upload` / `firstrun` / `verify` name
   // surfaces that land with Tasks 22, 23 and 25.
@@ -292,6 +319,9 @@ export function ALPRPropertyDetailPage({
   // the tiles used to render an empty white box with nothing in the console —
   // say so instead, and point at the Copy link button that still works.
   const [qrLibFailed, setQrLibFailed] = useState(false);
+  // Shared `aria-describedby` target for every locked upsell chip (spec
+  // §5.6) — one hidden node, not a copy per chip.
+  const lockedChipDescId = useUid('pd-chip-locked');
 
   const isTruckPlaza = property?.property_type === 'truck_plaza';
 
@@ -308,10 +338,11 @@ export function ALPRPropertyDetailPage({
     try { stored = localStorage.getItem(sectionStorageKey(property.property_type)); } catch { /* blocked storage */ }
     setSectionFilter(resolveSectionFilter({
       propertyType: property.property_type,
+      features,
       initialSection,
       stored,
     }));
-  }, [property, initialSection]);
+  }, [property, features, initialSection]);
   useEffect(() => {
     if (!sectionFilter || !property) return;
     try { localStorage.setItem(sectionStorageKey(property.property_type), sectionFilter); } catch { /* blocked storage */ }
@@ -698,7 +729,7 @@ export function ALPRPropertyDetailPage({
 
       {/* Top section filter — pick what's visible below. Sticks to the top of
           the property page; default "All" shows everything. */}
-      <div style={{
+      <div data-testid="pd-section-chips" style={{
         position: 'sticky', top: 'calc(58px + env(safe-area-inset-top))', zIndex: 30,
         display: 'flex', gap: 6, flexWrap: 'wrap',
         padding: '10px 4px',
@@ -707,27 +738,36 @@ export function ALPRPropertyDetailPage({
         borderBottom: '1px solid var(--border-subtle, transparent)',
       }}>
         {(() => {
-          const chips = sectionChipsFor(property?.property_type);
+          const chips = sectionChipsFor(property?.property_type, features);
           return chips.map(c => {
             const active = sectionFilter === c.id;
+            const locked = c.locked === true;
             return (
               <button key={c.id}
                 onClick={() => setSectionFilter(c.id)}
+                aria-describedby={locked ? lockedChipDescId : undefined}
                 style={{
                   fontSize: 12, fontWeight: 800,
                   padding: '6px 12px', borderRadius: 999,
-                  border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-                  background: active ? 'var(--accent)' : 'var(--bg-card)',
-                  color: active ? '#fff' : 'var(--text-primary)',
+                  // Locked chips never take the active fill — `--accent` is
+                  // the brand amber, and amber-on-muted-grey is nowhere
+                  // near 4.5:1 (an axe scan on this exact chip caught it).
+                  // They stay visually "just open", never "selected".
+                  border: `1px solid ${(active && !locked) ? 'var(--accent)' : 'var(--border)'}`,
+                  background: (active && !locked) ? 'var(--accent)' : 'var(--bg-card)',
+                  color: locked ? 'var(--text-muted)' : (active ? '#fff' : 'var(--text-primary)'),
                   cursor: 'pointer',
                   letterSpacing: '.02em',
                   whiteSpace: 'nowrap',
                   transition: 'background .12s ease, border-color .12s ease',
                 }}
-              >{c.label}</button>
+              >{locked ? `🔒 ${c.label}` : c.label}</button>
             );
           });
         })()}
+        {/* Visually hidden — the text every locked chip's aria-describedby
+            points at (spec §5.6). One node, not one per chip. */}
+        <span id={lockedChipDescId} style={{position:'absolute',width:1,height:1,padding:0,margin:-1,overflow:'hidden',clip:'rect(0,0,0,0)',whiteSpace:'nowrap'}}>Not included yet</span>
       </div>
 
       {showSettings && settingsDraft && (
@@ -888,6 +928,12 @@ export function ALPRPropertyDetailPage({
           </div>
           <ErrorBoundary label="truck parking log"><React.Suspense fallback={<SkeletonCards />}><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} /></React.Suspense></ErrorBoundary>
         </>
+      ) : features?.passes === false ? (
+        // Portal-only (spec §5.6): this property has never had a pass flow
+        // switched on, so there is no roster to show — the chip itself
+        // read "🔒 Parking passes" above. Same upsell card the locked "QR
+        // codes" and "Cameras" chips render.
+        <UpsellPanel feature="passes" propertyName={property.name} propertyId={propertyId} />
       ) : (
         // Apartment permit registry (M3): pending approval queue + resident /
         // guest rosters with doc viewing, approve/reject, extend, void.
@@ -908,8 +954,18 @@ export function ALPRPropertyDetailPage({
         </>
       )}
 
-      {/* Cameras — owner-only. Partners don't manage hardware. */}
-      {showSection('cameras') && isOwner && (
+      {/* QR codes — locked (spec §5.6) when this property has no QR code on
+          file yet. Not role-gated: a partner may want to ask for this too. */}
+      {showSection('qr') && features?.qr === false && (
+        <UpsellPanel feature="qr" propertyName={property.name} propertyId={propertyId} />
+      )}
+
+      {/* Cameras — owner-only. Partners don't manage hardware. Locked (spec
+          §5.6) renders the upsell instead; there is nothing to register. */}
+      {showSection('cameras') && features?.cameras === false && (
+        <UpsellPanel feature="cameras" propertyName={property.name} propertyId={propertyId} />
+      )}
+      {showSection('cameras') && isOwner && features?.cameras !== false && (
         <>
           <div className="pd-section-head">
             <div style={{display:'flex',alignItems:'baseline',gap:8}}>
