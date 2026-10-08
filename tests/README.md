@@ -65,7 +65,7 @@ production. Every portal spec calls `skipUnlessPortal()`, so without
 | `e2e/portal-end-to-end.spec.ts` | The acceptance path on `mobile-safari`: `/join/nstyle` → seven fields → `/app` with the You're-in card and the plate field in the viewport → first hold opens the code sheet → `482190` → "Email confirmed" → `H-` row → "Sent to N Style ✓" → N Style's Lookup: green on the property, amber partner-wide, Confirm, green partner-wide. Records the wall-clock time from `/join` to the hold as the `acceptance-path-ms` annotation. |
 | `e2e/signup.spec.ts` | Places autocomplete (skipped without `VITE_GOOGLE_MAPS_KEY`), the ZIP-blur twin match, existing email → sign in → prefilled add-property form, password reset, and the code sheet's wrong / expired / exhausted / cooldown states. |
 | `e2e/requests.spec.ts` | "sending" toast, Undo leaves the `removed` notice `cancelled`, the T-1 h `ack_end` link changes nothing, Extend "1 of 4", the 409 that flags the row and its Extend. |
-| `e2e/partner-requests.spec.ts` | Got it → Seen, Decline needs a reason, Not ours archives + declines + mails. One test is `test.fail` — see the comment on it (a known backend defect). |
+| `e2e/partner-requests.spec.ts` | Got it → Seen, Decline needs a reason, Not ours archives + declines + mails. |
 | `e2e/access-control.spec.ts` (`@portal` block) | Office A gets 404 on office B's requests and invite route; a session JWT cannot insert a `verified` property through PostgREST (`42501`). |
 | `a11y/*` | Under `PORTAL_E2E` the `requests-owner`, `requests-partner` and `request-action-preview` scans get real rows and a real token. `WAIVED` stays empty. |
 
