@@ -178,7 +178,7 @@ test('resolveAllScopeResult: grouped with the remembered property among the matc
   assert.equal(r.detail.matches.length, 2);
 });
 
-test('resolveAllScopeResult: grouped matches none at the remembered property -> on_file_elsewhere, not grouped', () => {
+test('resolveAllScopeResult: grouped stays grouped even when the remembered property has no match', () => {
   const r = resolveAllScopeResult({
     verdict: 'grouped',
     matches: [
@@ -186,7 +186,8 @@ test('resolveAllScopeResult: grouped matches none at the remembered property -> 
       { property_id: 'p3', property_name: 'Stevensons', verdict: 'resident', detail: {} },
     ],
   }, 'p1');
-  assert.equal(r.verdict, 'on_file_elsewhere');
+  assert.equal(r.verdict, 'grouped');
+  assert.equal(r.detail.matches.length, 2);
 });
 
 // ── scopeOptions ──────────────────────────────────────────────────────

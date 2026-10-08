@@ -120,16 +120,25 @@ export function verdictPresentation(verdict, detail, scope) {
 // page renders the amber "on file elsewhere" card instead. With no
 // remembered property to compare against, there's no "this lot" to protect
 // — render the backend's own answer unchanged.
+//
+// §5.5's general rendering rule (lines 909-912) is unconditional: a single
+// signal word only when exactly one property matches or every match
+// agrees, otherwise the grouped card. So `grouped` is checked FIRST here,
+// before the remembered-property comparison — a disagreeing multi-property
+// result always stays grouped, even when the remembered property has no
+// match among them. The `on_file_elsewhere` override only ever applies to
+// the single-match (or all-agree) case, where there's exactly one verdict
+// to compare against the remembered property in the first place.
 export function resolveAllScopeResult(result, rememberedPropertyId) {
   const matches = Array.isArray(result?.matches) ? result.matches : [];
   if (matches.length === 0) return { verdict: 'not_registered', detail: {} };
+
+  if (result?.verdict === 'grouped') return { verdict: 'grouped', detail: { matches } };
 
   if (rememberedPropertyId && !matches.some(m => m.property_id === rememberedPropertyId)) {
     const top = matches[0]; // backend orders verified-first, then by VERDICT_ORDER
     return { verdict: 'on_file_elsewhere', detail: { property_id: top.property_id, property_name: top.property_name } };
   }
-
-  if (result?.verdict === 'grouped') return { verdict: 'grouped', detail: { matches } };
 
   const m = matches.find(x => x.property_id === rememberedPropertyId) || matches[0];
   return { verdict: result?.verdict, detail: m?.detail || {} };
