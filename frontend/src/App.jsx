@@ -9,7 +9,7 @@ import { SkeletonCards } from './ui/Skeletons.jsx';
 import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview, NavIconRequests } from './ui/icons.jsx';
 import { lazyPage } from './lib/lazyPage.js';
 import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink, readJoinReturnTo } from './lib/deepLink.js';
-import { readActionToken } from './lib/requestAction.js';
+import { readActionToken, hideActionToken } from './lib/requestAction.js';
 import { navTabsFor, partnerRequestsReady } from './lib/features.js';
 import { verifyState, secondsUntilResend, cooldownRetryAfter, sentAtForRetryAfter } from './lib/verifyState.js';
 import { requestsApi } from './lib/requestsApi.js';
@@ -154,6 +154,10 @@ export function App() {
   // The token in a `/r/<token>` link (spec §5.8) — path only, query ignored
   // (the two email buttons are two different tokens at the same exact path).
   const [requestActionToken] = useState(() => readActionToken(window.location.pathname));
+  // Then take that 48 h bearer token out of the address bar (`/r/<token>` →
+  // `/r`) so it is not left in history, screenshots or error reports; the
+  // page POSTs from this state, never from the url.
+  useEffect(() => { if (requestActionToken) hideActionToken(window); }, [requestActionToken]);
   // `/app?property=…&section=…&request=…&tab=…&firstrun=&verify=&upload=&plate=`
   // — the portal's email and Slack buttons. Captured on mount before anything
   // can rewrite the address bar, applied once the session exists, then cleaned

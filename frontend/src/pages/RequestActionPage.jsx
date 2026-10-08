@@ -9,10 +9,14 @@ import {
 // ── `/r/<token>` one-tap email action page (spec §5.8) ───────
 //
 // Reached from the T-1h "ends soon" email's two buttons (Extend 24 hours /
-// OK — it ends at …) and, once a hold has already ended, from a Reinstate
-// offer the preview derives itself. Works whether or not the tapper has a
+// OK — it ends at …). The preview echoes the token's own action; when the
+// hold has already ended the POST answers 409 `not_active` and the page
+// turns that into the §5.8 ended state with "[Hold again for 24 hours]",
+// which re-POSTs the same token with `action:'reinstate'`. Works whether or not the tapper has a
 // LotLogic session — `App.jsx` renders this from both the signed-out and
-// signed-in branches — because the token carries its own authority; no
+// signed-in branches, and has already moved the address bar from
+// `/r/<token>` to `/r` (`hideActionToken`); the token lives on only in
+// App's state and this component's `token` prop — because the token carries its own authority; no
 // property-member login is required to extend, acknowledge, or reinstate
 // one specific hold.
 //
@@ -48,7 +52,7 @@ export function RequestActionPage({ token }) {
     setBusy(true);
     setOffline(false);
     postRequestAction({ token, action })
-      .then(body => setView(deriveResultView(body)))
+      .then(body => setView(deriveResultView(body, fallbackRequest)))
       .catch(err => {
         // No `.status` at all means the fetch itself failed (offline, DNS,
         // CORS) rather than the server answering with an error — that is
