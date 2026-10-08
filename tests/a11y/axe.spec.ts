@@ -17,6 +17,10 @@ import { test, expect, accounts, loginAs } from '../fixtures/accounts';
 import { test as baseTest } from '@playwright/test';
 import { buildAndServeFrontend, type BuiltFrontendServer } from '../fixtures/buildAndServeFrontend';
 import path from 'node:path';
+import {
+  PORTAL_E2E, pointAtLocalBackend, seedNStyle, frontendOrigin, randomPlate, uiLogin,
+  apiSignup, apiVerify, apiCreateRequest, apiConfirmProperty, apiToken, api, mintActionToken,
+} from '../fixtures/portal';
 import http from 'node:http';
 import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
@@ -127,6 +131,13 @@ async function scanIncluding(page: any, label: string, selector: string, exclude
 }
 
 test.describe('accessibility @a11y', () => {
+  // Under the portal suite (PORTAL_E2E=1, tests/README.md) BASE_URL is this
+  // branch's local build: point every page at the local backend first, so no
+  // scan — not even the stub-token one — ever calls production.
+  test.beforeEach(async ({ page }) => {
+    if (PORTAL_E2E) await pointAtLocalBackend(page);
+  });
+
   test('landing page has no serious a11y violations', async ({ page }) => {
     await page.goto('/');
     await scan(page, 'landing');
@@ -165,6 +176,29 @@ test.describe('accessibility @a11y', () => {
   // and still runs axe over it, because an empty Requests section is a real
   // screen a brand-new signup sees first.
   test('requests section (owner) has no serious a11y violations @auth', async ({ page }) => {
+    if (PORTAL_E2E) {
+      // Against the local backend the scan gets the real thing: a confirmed
+      // office with an active hold (row, pill, Extend / Remove / History) and
+      // an ended one in Recent — not just the empty state.
+      const nstyle = seedNStyle();
+      const office = await apiSignup();
+      await apiVerify(office.token);
+      await apiConfirmProperty(await apiToken(nstyle.email, nstyle.password), office.property_id);
+      const live = randomPlate();
+      const ended = randomPlate();
+      await apiCreateRequest(office.token, { property_id: office.property_id, kind: 'hold', plate_text: live, duration_hours: 24 });
+      const gone = await apiCreateRequest(office.token, { property_id: office.property_id, kind: 'hold', plate_text: ended, duration_hours: 24 });
+      await api('POST', `/apartment/requests/${gone.id}/remove`, office.token, {});
+      await uiLogin(page, frontendOrigin(), office.signup.email, office.signup.password,
+        `/app?property=${office.property_id}&section=requests`);
+      await expect(page.locator('.req-card', { hasText: live })).toBeVisible({ timeout: 15_000 });
+      // Recent is a collapsed <details>; open it so the dimmed rows and their
+      // outcome pill are inside the scan.
+      await page.getByText(/^Recent \(7 days\) · \d+$/).click();
+      await expect(page.getByText(ended)).toBeVisible();
+      await scan(page, 'requests-owner');
+      return;
+    }
     await loginAs(page, accounts.ownerA());
     await page.goto('/app?tab=lots');
     // Open the first apartment property, if the account has one.
@@ -189,6 +223,17 @@ test.describe('accessibility @a11y', () => {
   // backend's portal routers are deployed: against a backend without them the
   // page renders its empty state, which is exactly what this scan wants.
   test('partner Requests tab has no serious a11y violations @auth @portal', async ({ page }) => {
+    // `--grep @portal` with PORTAL_E2E unset must report the portal suite as
+    // skipped, not failed — and without credentials loginAs would throw.
+    test.skip(!PORTAL_E2E && !process.env.TEST_PARTNER_A_EMAIL,
+      'needs TEST_PARTNER_A_* (preview run) or PORTAL_E2E=1 (local backend)');
+    if (PORTAL_E2E) {
+      // A pending property card and an active hold row on the tab.
+      seedNStyle();
+      const office = await apiSignup();
+      await apiVerify(office.token);
+      await apiCreateRequest(office.token, { property_id: office.property_id, kind: 'hold', plate_text: randomPlate(), duration_hours: 24 });
+    }
     await loginAs(page, accounts.partnerA());
     // The nav button's accessible name gains ", N pending" when the badge is
     // non-zero, so this anchors on the start of the label only.
@@ -204,6 +249,19 @@ test.describe('accessibility @a11y', () => {
   test('request-action page has no serious a11y violations', async ({ page }) => {
     await page.goto('/r/stub-token-for-a11y-scan');
     await scan(page, 'request-action');
+  });
+
+  // The same page in its preview state — the one an "ends soon" mail lands
+  // on — needs a real token, so only against the local backend.
+  test('request-action preview has no serious a11y violations @portal', async ({ page }) => {
+    test.skip(!PORTAL_E2E, 'needs a token minted by the local backend (PORTAL_E2E=1)');
+    seedNStyle();
+    const office = await apiSignup();
+    await apiVerify(office.token);
+    const hold = await apiCreateRequest(office.token, { property_id: office.property_id, kind: 'hold', plate_text: randomPlate(), duration_hours: 24 });
+    await page.goto(`/r/${mintActionToken(hold.id, 'extend24')}`);
+    await expect(page.getByRole('button', { name: /^Extend/ })).toBeVisible({ timeout: 15_000 });
+    await scan(page, 'request-action-preview');
   });
 
   test('marketing pitch pages are accessible', async ({ page }) => {
@@ -453,17 +511,10 @@ test.describe('upsell chips @a11y', () => {
       await expect(dialog.getByRole('textbox')).toHaveValue(
         'Sunset Ridge Apartments is interested in cameras.',
       );
-      // `.pd-share-btn` (the dialog's "Cancel" button) is excluded: it is a
-      // pre-existing, app-wide shared class (`frontend/dashboard.html`,
-      // ~15 call sites — `Dialog.jsx`, `ApartmentPermits.jsx`,
-      // `ALPRPropertyDetailPage.jsx`…), not touched by this task and not
-      // in its Files list, and this light-theme pass is the first scan
-      // ever run against it — it comes in at 4.47:1 (`--text-muted`
-      // #6B6C66 on `--bg-inset` #EFECDF, needs 4.5:1), a real but unrelated
-      // pre-existing bug this task's diff did not introduce and is not
-      // scoped to fix. Flagged in the report for a follow-up task; excluded
-      // here so it doesn't block this task's own (`var(--accent)`) fix.
-      await scanIncluding(page, `upsell-feedback-modal-${theme}`, '[role="dialog"]', ['.pd-share-btn']);
+      // `.pd-share-btn` (the dialog's "Cancel" button) used to be excluded
+      // here at 4.47:1 in the light theme; Task 30 fixed the class
+      // (`.theme-light .pd-share-btn`), so the whole dialog is scanned.
+      await scanIncluding(page, `upsell-feedback-modal-${theme}`, '[role="dialog"]');
     });
   }
 });

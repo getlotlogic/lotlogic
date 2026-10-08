@@ -9,6 +9,10 @@
  *      returns 403/404, never 200 with foreign data
  */
 import { test, expect, accounts, apiLogin, loginAs, API_URL } from '../fixtures/accounts';
+import {
+  skipUnlessPortal, seedNStyle, apiSignup, apiVerify, apiCreateRequest, api, sql, lit,
+  randomPlate, pointAtLocalBackend, frontendOrigin,
+} from '../fixtures/portal';
 
 test.describe('property access control @access', () => {
   test('owner A sees only their own lots in the dashboard', async ({ page }) => {
@@ -154,5 +158,76 @@ test.describe('property access control @access', () => {
     // Page must not render the foreign lot's name. We allow an empty state or an error banner.
     const victimName = bItems[0].name;
     await expect(page.getByText(victimName, { exact: false })).toHaveCount(0);
+  });
+});
+
+/**
+ * Portal cross-tenant checks (Task 30 Step 4; spec §8.3, §3.4a). Two
+ * self-serve offices, A and B, each signed up from N Style's link against the
+ * LOCAL backend — `@portal`, skipped unless PORTAL_E2E=1 (tests/README.md).
+ * Misses are 404, never 403: a foreign property id must look exactly like a
+ * nonexistent one.
+ */
+test.describe('portal access control @access @portal', () => {
+  test.beforeEach(() => {
+    skipUnlessPortal();
+    seedNStyle();
+  });
+
+  test("office A cannot list office B's requests (404)", async () => {
+    const a = await apiSignup();
+    const b = await apiSignup();
+    await apiVerify(b.token);
+    await apiCreateRequest(b.token, { property_id: b.property_id, kind: 'hold', plate_text: randomPlate(), duration_hours: 24 });
+
+    const mine = await api('GET', `/apartment/requests?property_id=${a.property_id}&view=active`, a.token);
+    expect(mine.status, 'control: A can list its own property').toBe(200);
+    for (const view of ['active', 'recent']) {
+      const foreign = await api('GET', `/apartment/requests?property_id=${b.property_id}&view=${view}`, a.token);
+      expect(foreign.status, `A → B's ${view} requests`).toBe(404);
+      expect(JSON.stringify(foreign.body)).not.toContain(b.signup.name);
+    }
+  });
+
+  test("office A cannot invite into office B's property (404)", async () => {
+    const a = await apiSignup();
+    const b = await apiSignup();
+    await apiVerify(a.token);
+    const body = { name: 'Pat Doe', email: `pw-invite-${Date.now()}@e2e.lotlogic.dev`, role: 'manager' };
+    const foreign = await api('POST', `/properties/${b.property_id}/members/invite`, a.token, body);
+    expect(foreign.status).toBe(404);
+    expect(sql(`SELECT count(*) FROM public.lot_owners WHERE email = ${lit(body.email)}`)[0][0],
+      'no account was created for the invitee').toBe('0');
+    const own = await api('POST', `/properties/${a.property_id}/members/invite`, a.token, body);
+    expect([200, 201], 'control: A can invite into its own property').toContain(own.status);
+  });
+
+  test('a self-serve session cannot write a verified property through PostgREST (42501)', async ({ page }) => {
+    // The browser's Supabase client, holding A's session JWT, against the
+    // harness DB under that JWT's own role and RLS (fixtures/postgrestShim.ts —
+    // the local stand-in for the project's PostgREST). Migration 3 dropped
+    // the owner write policies and the trust trigger guards
+    // `verification_status`, so the insert must be refused by the database.
+    const a = await apiSignup();
+    await apiVerify(a.token);
+    await pointAtLocalBackend(page);
+    await page.goto(`${frontendOrigin()}/dashboard.html`);
+    const owner = sql(`SELECT id FROM public.lot_owners WHERE email = ${lit(a.signup.email)}`)[0][0];
+    const partner = seedNStyle().partnerId;
+    const name = `Forged Verified ${Date.now()}`;
+    const res = await page.evaluate(async ({ token, owner, partner, name }) => {
+      const r = await fetch('https://nzdkoouoaedbbccraoti.supabase.co/rest/v1/properties', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json', Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          name, owner_id: owner, tow_company_id: partner, property_type: 'apartment',
+          verification_status: 'verified',
+        }),
+      });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    }, { token: a.token, owner, partner, name });
+    expect([401, 403], JSON.stringify(res)).toContain(res.status);
+    expect(res.body?.code).toBe('42501');
+    expect(sql(`SELECT count(*) FROM public.properties WHERE name = ${lit(name)}`)[0][0]).toBe('0');
   });
 });

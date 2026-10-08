@@ -1,7 +1,17 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const BASE_URL = process.env.BASE_URL ?? 'https://lotlogic-beta.vercel.app';
-const API_URL = process.env.API_URL ?? 'https://lotlogic-backend-production.up.railway.app';
+// The portal suite (Task 30, tests/README.md "Portal suite") runs only with
+// PORTAL_E2E=1, against a LOCAL backend and this branch's build, which
+// `fixtures/portalGlobalSetup.ts` serves on a fixed origin the backend's CORS
+// allow-list names. Under PORTAL_E2E the defaults follow that: BASE_URL is the
+// served build and API_URL the local backend — never production.
+const PORTAL_E2E = process.env.PORTAL_E2E === '1';
+const PORTAL_FRONTEND_ORIGIN = `http://127.0.0.1:${process.env.PORTAL_FRONTEND_PORT ?? 4173}`;
+const BASE_URL = process.env.BASE_URL
+  ?? (PORTAL_E2E ? PORTAL_FRONTEND_ORIGIN : 'https://lotlogic-beta.vercel.app');
+const API_URL = process.env.API_URL
+  ?? (PORTAL_E2E ? 'http://localhost:8010' : 'https://lotlogic-backend-production.up.railway.app');
+if (PORTAL_E2E) process.env.API_URL = API_URL;
 
 // Vercel Preview deployments sit behind Deployment Protection (confirmed:
 // `curl <preview>/dashboard.html` 302s to vercel.com/sso-api). Vercel's
@@ -18,6 +28,11 @@ const bypassHeaders: Record<string, string> = BYPASS_SECRET
 export default defineConfig({
   testDir: './',
   testMatch: ['e2e/**/*.spec.ts', 'a11y/**/*.spec.ts'],
+  globalSetup: './fixtures/portalGlobalSetup.ts',
+  // `@portal` specs need the local backend; without PORTAL_E2E they are
+  // skipped inside the spec (`skipUnlessPortal()`), so a plain `npx
+  // playwright test` reports them as skipped, never failed. `--grep @portal`
+  // selects exactly the portal suite.
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: true,
