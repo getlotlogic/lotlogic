@@ -843,7 +843,8 @@ export const db = {
   },
   // name / address fields / notes only — trust columns are never in this body.
   async updateProperty(id, updates) {
-    return requestsApi.updateApartmentProperty(id, updates);
+    const res = await requestsApi.updateApartmentProperty(id, updates);
+    return res?.property || res;
   },
   async getResidentPlates(propertyId) {
     if (supabase) {
