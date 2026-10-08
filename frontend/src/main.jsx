@@ -61,5 +61,11 @@ if (isE2E()) {
     TruckParkingLog: {
       load: () => import('./pages/TruckParkingLog.jsx').then((m) => m.default),
     },
+    // The partner Requests tab (spec §5.4) — a lazy page too, so it is handed
+    // over the same way. Mounted in isolation it needs no session: every read
+    // it makes goes through `apiFetch`, which a spec stubs at `window.fetch`.
+    PartnerRequestsPage: {
+      load: () => import('./pages/PartnerRequestsPage.jsx').then((m) => m.default),
+    },
   };
 }

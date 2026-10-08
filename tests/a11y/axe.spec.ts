@@ -110,6 +110,19 @@ test.describe('accessibility @a11y', () => {
     await scan(page, 'dashboard-owner');
   });
 
+  // Task 27 — the partner Requests tab (spec §5.4). Tagged @auth because it
+  // needs TEST_PARTNER_A_*, and @portal because the tab only has data once the
+  // backend's portal routers are deployed: against a backend without them the
+  // page renders its empty state, which is exactly what this scan wants.
+  test('partner Requests tab has no serious a11y violations @auth @portal', async ({ page }) => {
+    await loginAs(page, accounts.partnerA());
+    // The nav button's accessible name gains ", N pending" when the badge is
+    // non-zero, so this anchors on the start of the label only.
+    await page.getByRole('tab', { name: /^requests\b/i }).first().click();
+    await expect(page.getByRole('tablist', { name: /filter requests/i })).toBeVisible({ timeout: 15_000 });
+    await scan(page, 'requests-partner');
+  });
+
   test('marketing pitch pages are accessible', async ({ page }) => {
     for (const path of ['/pitch-apartments.html', '/pitch-tow.html']) {
       await page.goto(path);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase, applySupabaseAuth } from './lib/supabase.js';
 import { apiFetch } from './lib/api.js';
 import { db } from './lib/db.js';
@@ -6,10 +6,11 @@ import { useTheme, useOnlineStatus } from './hooks.js';
 import { haptic, NotifyManager } from './lib/notify.js';
 import { useToast } from './ui/Toast.jsx';
 import { SkeletonCards } from './ui/Skeletons.jsx';
-import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview } from './ui/icons.jsx';
+import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview, NavIconRequests } from './ui/icons.jsx';
 import { lazyPage } from './lib/lazyPage.js';
 import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink } from './lib/deepLink.js';
 import { navTabsFor, partnerRequestsReady } from './lib/features.js';
+import { badgeCount, countActionable } from './lib/partnerRequests.js';
 import { EarningsPage } from './pages/EarningsPage.jsx';
 import { InvoicesPage } from './pages/InvoicesPage.jsx';
 import { ALPRPropertiesPage } from './pages/ALPRPropertiesPage.jsx';
@@ -28,6 +29,7 @@ const TowActivityPage  = lazyPage(() => import('./pages/TowActivityPage.jsx'));
 const TrainingPage     = lazyPage(() => import('./pages/TrainingPage.jsx'));
 const AdminConsolePage = lazyPage(() => import('./pages/AdminConsolePage.jsx'));
 const HqPage           = lazyPage(() => import('./pages/HqPage.jsx'));
+const PartnerRequestsPage = lazyPage(() => import('./pages/PartnerRequestsPage.jsx'));
 
 const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';
 const FRANK_APP_TAB_LIVE = true; // live in Frank's partner portal since 2026-08-07
@@ -129,6 +131,13 @@ export function App() {
   // `/auth/me.properties` — the per-property `features` flags behind the
   // bottom-nav rule (spec §5) and the §5.6 upsell chips.
   const [properties, setProperties] = useState([]);
+  // id → name, for the partner Requests tab's property group headers: the
+  // request shape carries `property_id`, not the name.
+  const propertyNames = useMemo(() => {
+    const map = {};
+    for (const p of (Array.isArray(properties) ? properties : [])) if (p?.id) map[p.id] = p.name || p.id;
+    return map;
+  }, [properties]);
   const [tab, setTab] = useState(() => {
     // Jobs tab is hidden (camera-driven; unreliable until cameras read 100% of
     // cars). Land on Lots and coerce any persisted 'jobs' so nobody opens it.
@@ -406,6 +415,11 @@ export function App() {
   // Refreshed every 60s so it tracks the cron-plate-pair-learn output.
   // Owner-only; partners never see this tab.
   const [trainingBadge, setTrainingBadge] = useState(0);
+  // Bumped by the Requests page after any write, so the badge drops the moment
+  // Austin clears something instead of up to a minute later. The callback is
+  // stable so the page's own effects do not re-run on every App render.
+  const [badgeNonce, setBadgeNonce] = useState(0);
+  const bumpRequestsBadge = useCallback(() => setBadgeNonce(n => n + 1), []);
   useEffect(() => {
     if (!owner) return;
     let cancelled = false;
@@ -428,6 +442,46 @@ export function App() {
     const t = setInterval(refreshTrainingBadge, 60_000);
     return () => { cancelled = true; clearInterval(t); };
   }, [owner]);
+
+  // Partner Requests badge (spec §5.4). **Active tows + active photo requests
+  // + unconfirmed properties + pending join requests** — what N Style must act
+  // on. Holds are deliberately NOT counted: they are the steady-state volume,
+  // and "a badge of 14 that never clears is a badge he stops reading".
+  //
+  // Three reads, polled on the same 60 s beat as the Training badge:
+  //   `/apartment/requests?view=active`  — the tows and photos (the route
+  //        already excludes archived and rejected properties, so the badge and
+  //        the list agree by construction);
+  //   `/partner/properties?verification_status=pending` — the confirm cards;
+  //   `/auth/me.pending_joins`           — the membership requests, taken from
+  //        the count the server emits, never derived from a members listing.
+  // Every one of them tolerates a 404 so the tab survives a backend that has
+  // not deployed the portal routers yet.
+  const [requestsBadge, setRequestsBadge] = useState(0);
+  const [pendingJoins, setPendingJoins] = useState(0);
+  useEffect(() => {
+    if (!owner || !isOperator) { setRequestsBadge(0); setPendingJoins(0); return; }
+    let cancelled = false;
+    async function refreshRequestsBadge() {
+      const [active, pendingProps, me] = await Promise.all([
+        apiFetch('/apartment/requests?view=active&limit=200').catch(() => null),
+        apiFetch('/partner/properties?verification_status=pending').catch(() => null),
+        apiFetch('/auth/me').catch(() => null),
+      ]);
+      if (cancelled) return;
+      const items = Array.isArray(active?.items) ? active.items : [];
+      const { tows, photos } = countActionable(items);
+      const pendingList = Array.isArray(pendingProps?.items)
+        ? pendingProps.items
+        : (Array.isArray(pendingProps) ? pendingProps : []);
+      const joins = Number(me?.pending_joins) || 0;
+      setPendingJoins(joins);
+      setRequestsBadge(badgeCount({ tows, photos, pendingProps: pendingList.length, pendingJoins: joins }));
+    }
+    refreshRequestsBadge();
+    const t = setInterval(refreshRequestsBadge, 60_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [owner, isOperator, badgeNonce]);
 
   // Load data on mount if session was restored
   useEffect(() => { if (owner) loadData(owner); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -644,15 +698,18 @@ export function App() {
   const NavIconLookup = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('circle', {cx:'11',cy:'11',r:'7'}), React.createElement('line', {x1:'21',y1:'21',x2:'16.65',y2:'16.65'}));
   const NavIconApp = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('rect', {x:'6.5',y:'2.5',width:'11',height:'19',rx:'2.5'}), React.createElement('line', {x1:'10.5',y1:'18.5',x2:'13.5',y2:'18.5'}));
   const NavIconHq = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('rect', {x:'4',y:'10',width:'7',height:'11'}), React.createElement('rect', {x:'13',y:'4',width:'7',height:'17'}), React.createElement('line', {x1:'4',y1:'21',x2:'20',y2:'21'}));
-  const navIcons = { app: NavIconApp, overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, training: NavIconAnalytics, towactivity: NavIconTow, admin: NavIconAdmin, lookup: NavIconLookup, hq: NavIconHq };
+  const navIcons = { app: NavIconApp, overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, training: NavIconAnalytics, towactivity: NavIconTow, admin: NavIconAdmin, lookup: NavIconLookup, hq: NavIconHq, requests: NavIconRequests };
   // Tab roles (kept intentionally narrow so each surface has one meaning):
   //   Jobs     → every violation needing action (enforcement + ALPR unified)
   //   Lots     → register + manage properties (plates, passes, cameras, plate detections)
   //   Analytics/Activity → summaries
   //   Earnings → $$
-  // Badges hang off the base nav computed above (the Training badge is the
-  // only live one today).
-  const navTabsWithBadges = navTabs.map(t => ({ ...t, badge: t.id === 'training' ? trainingBadge : 0 }));
+  // Badges hang off the base nav computed above: Training for owners,
+  // Requests for partners (spec §5.4).
+  const navTabsWithBadges = navTabs.map(t => ({
+    ...t,
+    badge: t.id === 'training' ? trainingBadge : (t.id === 'requests' ? requestsBadge : 0),
+  }));
 
   const lastRefreshLabel = lastRefresh ? (
     Math.floor((Date.now() - lastRefresh) / 1000) < 10 ? 'Just now' :
@@ -805,6 +862,11 @@ export function App() {
           {tab === 'invoices' && isOwner && showMoney && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} isPlatformAdmin={isPlatformAdmin} />}
           {tab === 'admin' && isPlatformAdmin && <AdminConsolePage user={owner} />}
           {tab === 'hq' && isPlatformAdmin && <HqPage />}
+          {tab === 'requests' && isOperator && <PartnerRequestsPage
+            pendingJoins={pendingJoins}
+            propertyNames={propertyNames}
+            onBadgeChange={bumpRequestsBadge}
+          />}
           {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} />}
           {tab === 'app' && (isPlatformAdmin || (FRANK_APP_TAB_LIVE && isOperator && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID)) && <PartnerAppPage />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
