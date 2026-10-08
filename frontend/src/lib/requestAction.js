@@ -5,30 +5,35 @@
 // §5.8). The page itself just wires these to `GET /requests/action?token=`
 // and `POST /requests/action {token, action}` (`src/lib/requestsApi.js`).
 //
-// State machine: GET returns `{action, request}` where `action` is baked
-// into the token the email button carried (`extend24` | `ack_end`) or
-// recomputed as `reinstate` when the hold already ended but is still inside
-// the 7-day reinstate window (spec §5.8 "A hold that has already expired...
-// offers Reinstate"). `deriveInitialView` turns that into a `view`:
-//   - `{kind:'preview', action, request}`           — show the action button
-//   - `{kind:'limit', request}`                      — extend24 with none left
-//   - `{kind:'expired_reinstate', request}`           — offer Reinstate
-// Pressing the button POSTs `{token, action}` (the brief's exact body shape
-// — not `{token}` alone, because the acknowledged view's "[Extend 24 hours
-// instead]" and the expired view's "[Hold again for 24 hours]" both re-POST
-// the *same* token with a different `action`, and only `ack_end` is
-// documented as repeatable without consuming the token's `jti`).
-// `deriveResultView` turns a 200 into a terminal view (`extended` /
-// `clamped` / `acknowledged` / `reinstated`); `deriveErrorView` turns a
-// failed POST into `limit` (409 while extending) or `invalid` (anything
-// else, including the documented 400 used/expired).
+// State machine — matched to the backend's real contract
+// (lotlogic-backend `routers/request_actions.py`):
+//   * GET returns `{action, request}`; `action` is ALWAYS the action baked
+//     into the token the email button carried (`extend24` | `ack_end`, or
+//     `reinstate` for a reinstate token). The preview never recomputes
+//     `reinstate` for a hold that has already ended. `deriveInitialView`:
+//       - `{kind:'preview', action, request}`   — show the action button
+//       - `{kind:'limit', request}`              — extend24 with none left
+//       - `{kind:'expired_reinstate', request}`  — a reinstate token
+//   * Pressing the button POSTs `{token, action}`. The acknowledged view's
+//     "[Extend 24 hours instead]" and the ended view's "[Hold again for 24
+//     hours]" re-POST the *same* token with a different `action`; the
+//     backend takes `body.action` over the token's own, so an extend24 or
+//     ack_end token may reinstate (its single-use `jti` / `iat` checks
+//     still apply).
+//   * `deriveResultView` turns a 200 into `extended` / `clamped` /
+//     `acknowledged` / `reinstated`, or `limit` — a refused extension
+//     (`extension_limit` / `hold_window`) is a 200 `{result:'limit', request,
+//     expires_local, extension_count}`, not an error.
+//   * `deriveErrorView` turns a failed POST into `expired_reinstate` for the
+//     409 `not_active` the backend answers when the hold has already ended
+//     (the only 409 on the extend24 / ack_end path), and `invalid` for
+//     everything else (400 `link_used` / `link_invalid`, a refused reinstate).
 //
-// Assumption called out in the report: the spec's POST success shape is
-// `{result, request}` with no field distinguishing a plain extension from
-// one the server clamped to the 7-day cap. This reads an optional `clamped`
-// boolean carried alongside `result`/`request` — if the deployed backend
-// omits it, every successful extension renders as `extended` (never wrongly
-// as `clamped`; the copy stays correct, just not the clamp-specific line).
+// The extended body carries `clamped: true` when the server cut the
+// extension to the 7-day cap; that renders the clamp-specific line.
+
+/** Most extensions a hold may have (spec §5.8 "All 4 extensions"). */
+const MAX_EXTENSIONS = 4;
 
 /**
  * The token in a `/r/<token>` path. Query strings are never consulted — the
@@ -46,6 +51,23 @@ export function readActionToken(pathname) {
   try { token = decodeURIComponent(token); } catch { /* keep the raw segment */ }
   token = token.trim();
   return token === '' ? null : token;
+}
+
+/**
+ * Take the 48 h bearer token out of the address bar once it has been read:
+ * `/r/<token>` becomes `/r` (no query, no hash), so it does not sit in the
+ * history, a screenshot, or an error report's url. The caller keeps the
+ * token in state for the POST. Returns whether it rewrote the url.
+ * @param {{location?: {pathname?: string}, history?: {replaceState: Function}}} w
+ */
+export function hideActionToken(w) {
+  try {
+    if (!w || !w.location || !readActionToken(w.location.pathname)) return false;
+    w.history.replaceState(null, '', '/r');
+    return true;
+  } catch {
+    return false; // a blocked history API must never break the page
+  }
 }
 
 /** The trailing "9:14 PM ET" out of a full "Wed Oct 8, 9:14 PM ET". */
@@ -87,27 +109,57 @@ export function deriveInitialView(preview) {
   return { kind: 'invalid', request: null };
 }
 
-/** A successful `POST /requests/action` → the terminal view to render. */
-export function deriveResultView(body) {
+/**
+ * A successful `POST /requests/action` → the terminal view to render.
+ * `fallbackRequest` (the request already on screen) is only used when a
+ * `limit` body arrives without its own `request`.
+ */
+export function deriveResultView(body, fallbackRequest) {
   const request = body && body.request ? body.request : null;
   const result = body && body.result;
   if (result === 'extended') return { kind: body.clamped ? 'clamped' : 'extended', request };
   if (result === 'acknowledged') return { kind: 'acknowledged', request };
   if (result === 'reinstated') return { kind: 'reinstated', request };
+  if (result === 'limit') {
+    // Refused extension: the body's own `expires_local` / `extension_count`
+    // are the post-rollback truth; the request supplies `ref` and the ids.
+    const base = request || fallbackRequest || {};
+    const merged = { ...base };
+    if (body.expires_local) merged.expires_local = body.expires_local;
+    if (body.extension_count != null) merged.extension_count = body.extension_count;
+    return { kind: 'limit', request: merged };
+  }
   return { kind: 'invalid', request };
 }
 
 /**
  * A failed `POST /requests/action` → the terminal view to render.
- * `fallbackRequest` is the request from the page's last known preview — the
- * 409 extension-limit body carries no `request`, so the "H-1842 ends at…"
- * line needs the one already on screen.
+ * The backend's only 409 on the extend24 / ack_end path is `not_active`: the
+ * hold has already ended. That is the §5.8 ended state with "[Hold again for
+ * 24 hours]" (which re-POSTs this token with `action:'reinstate'`). The
+ * 409 body carries no `request`, so `fallbackRequest` — the one already on
+ * screen — supplies the "H-1842 ended at …" line. Everything else (400
+ * `link_used` / `link_invalid`, a refused reinstate) is `invalid`.
  */
 export function deriveErrorView(action, err, fallbackRequest) {
-  if (err && err.status === 409 && action === 'extend24') {
-    return { kind: 'limit', request: fallbackRequest || null };
+  const code = err && (typeof err.code === 'string' ? err.code
+    : err.body && typeof err.body.detail === 'string' ? err.body.detail : undefined);
+  if (err && err.status === 409 && code === 'not_active'
+      && (action === 'extend24' || action === 'ack_end') && fallbackRequest) {
+    return { kind: 'expired_reinstate', request: fallbackRequest };
   }
   return { kind: 'invalid', request: null };
+}
+
+/**
+ * Extensions this hold still has: `extensions_left` when the backend sent
+ * it (holds only), else `4 - extension_count`, else null (unknown).
+ */
+export function extensionsLeft(request) {
+  if (!request) return null;
+  if (typeof request.extensions_left === 'number') return request.extensions_left;
+  if (typeof request.extension_count === 'number') return MAX_EXTENSIONS - request.extension_count;
+  return null;
 }
 
 /** The result copy verbatim (spec §5.8) for every terminal / edge view. */
@@ -119,8 +171,13 @@ export function resultCopy(view) {
       return `Extended to ${r.expires_local} · ${r.ref} · extension ${r.extension_count} of 4`;
     case 'clamped':
       return `Extended as far as allowed — to ${r.expires_local}`;
-    case 'acknowledged':
-      return `Got it. ${r.ref} ends at ${r.expires_local} as planned. [Extend 24 hours instead]`;
+    case 'acknowledged': {
+      // No "[Extend 24 hours instead]" once all 4 are used — it could only
+      // come back as the limit page.
+      const left = extensionsLeft(v.request);
+      const offer = left === null || left > 0 ? ' [Extend 24 hours instead]' : '';
+      return `Got it. ${r.ref} ends at ${r.expires_local} as planned.${offer}`;
+    }
     case 'limit':
       return `All 4 extensions are used. ${r.ref} ends at ${r.expires_local}. Sign in to place a new hold after it ends.`;
     case 'expired_reinstate':
@@ -152,6 +209,7 @@ export function ctaLabel(view) {
 
 /** The action a view's bracketed button (if any) re-POSTs. */
 export function ctaAction(view) {
+  if (!ctaLabel(view)) return null;
   switch (view && view.kind) {
     case 'acknowledged': return 'extend24';
     case 'expired_reinstate': return 'reinstate';

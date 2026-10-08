@@ -1,12 +1,27 @@
 // Unit tests for the `/r/<token>` action page's pure logic
-// (src/lib/requestAction.js — spec §5.8). The six result strings are taken
+// (src/lib/requestAction.js — spec §5.8). The result strings are taken
 // verbatim from the spec file so a wording slip here is a real bug, not a
 // style nit.
+//
+// The response fixtures below are copied from the backend's real contract
+// (lotlogic-backend `routers/request_actions.py` + its
+// `tests/portal/test_request_actions_db.py`), not from what the page wishes
+// it got:
+//   * GET  /requests/action → `{action, request}`; `action` is ALWAYS the
+//     token's own baked-in action (`claims['a']`). The preview never
+//     recomputes `reinstate` for an ended hold.
+//   * POST, refused extension (`extension_limit` / `hold_window`) → HTTP 200
+//     `{result:'limit', request, expires_local, extension_count}`.
+//   * POST on a hold that already ended → 409 `{detail:'not_active'}` (the
+//     only 409 on the extend24 / ack_end path; no `request` in the body).
+//   * POST `{token, action:'reinstate'}` is accepted for an extend24 or
+//     ack_end token (`test_an_extend_link_can_reinstate_via_the_action_override`).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
   readActionToken,
+  hideActionToken,
   shortTime,
   previewCopy,
   actionButtonLabel,
@@ -59,6 +74,42 @@ test('readActionToken: percent-encoding is decoded', () => {
   assert.equal(readActionToken('/r/abc%2Edef'), 'abc.def');
 });
 
+// ── hideActionToken — the 48 h bearer token leaves the address bar ──
+function fakeWindow(pathname, search = '', hash = '') {
+  const calls = [];
+  return {
+    calls,
+    location: { pathname, search, hash },
+    history: { replaceState: (state, title, url) => { calls.push(url); } },
+  };
+}
+
+test('hideActionToken: /r/<token> is replaced with a bare /r', () => {
+  const w = fakeWindow('/r/eyJhbGciOi.secret.sig');
+  assert.equal(hideActionToken(w), true);
+  assert.deepEqual(w.calls, ['/r']);
+});
+
+test('hideActionToken: a query or hash on the link goes too — nothing of the link survives', () => {
+  const w = fakeWindow('/r/tok', '?utm=mail', '#x');
+  hideActionToken(w);
+  assert.deepEqual(w.calls, ['/r']);
+});
+
+test('hideActionToken: a path with no token is left alone', () => {
+  for (const p of ['/r', '/r/', '/app', '/join/n-style']) {
+    const w = fakeWindow(p);
+    assert.equal(hideActionToken(w), false);
+    assert.deepEqual(w.calls, [], p);
+  }
+});
+
+test('hideActionToken: a history that throws (sandboxed frame) never breaks the page', () => {
+  const w = { location: { pathname: '/r/tok' }, history: { replaceState() { throw new Error('blocked'); } } };
+  assert.equal(hideActionToken(w), false);
+  assert.equal(hideActionToken(undefined), false);
+});
+
 // ── shortTime ────────────────────────────────────────────────
 test('shortTime: pulls the trailing clock-time off a full local string', () => {
   assert.equal(shortTime('Wed Oct 8, 9:14 PM ET'), '9:14 PM ET');
@@ -106,28 +157,55 @@ test('actionButtonLabel: reinstate', () => {
   assert.equal(actionButtonLabel('reinstate', {}), 'Hold again for 24 hours');
 });
 
+// ── Backend-shaped fixtures ─────────────────────────────────
+// `services.tow_requests._fetch` — trimmed to the fields the page reads.
+function hold(over = {}) {
+  return {
+    id: 'req-1', ref: 'H-1842', property_id: 'prop-1', kind: 'hold', status: 'active',
+    plate: 'ABC1234', expires_local: 'Wed Oct 8, 9:14 PM ET', hours_left: 1,
+    extension_count: 1, extensions_left: 3, ...over,
+  };
+}
+// The `ApiError` `api.js` throws: `.status`, `.body`, `.code = body.detail`.
+function apiError(status, body) {
+  const err = new Error(String(body && body.detail));
+  err.status = status;
+  err.body = body;
+  err.code = typeof body?.detail === 'string' ? body.detail : undefined;
+  return err;
+}
+// 200 for a refused extension (`_extend`'s `extension_limit` / `hold_window` branch).
+const LIMIT_200 = {
+  result: 'limit',
+  request: hold({ extension_count: 4, extensions_left: 0 }),
+  expires_local: 'Wed Oct 8, 9:14 PM ET',
+  extension_count: 4,
+};
+// 409 for a hold that has already ended (`svc.extend` → `not_active`).
+const NOT_ACTIVE_409 = apiError(409, { detail: 'not_active' });
+
 // ── deriveInitialView ────────────────────────────────────────
 test('deriveInitialView: extend24 with extensions left is an ordinary preview', () => {
-  const request = { ref: 'H-1842', extensions_left: 2 };
+  const request = hold();
   assert.deepEqual(deriveInitialView({ action: 'extend24', request }), {
     kind: 'preview', action: 'extend24', request,
   });
 });
 
 test('deriveInitialView: ack_end is an ordinary preview too', () => {
-  const request = { ref: 'H-1842' };
+  const request = hold();
   assert.deepEqual(deriveInitialView({ action: 'ack_end', request }), {
     kind: 'preview', action: 'ack_end', request,
   });
 });
 
 test('deriveInitialView: extend24 with zero extensions left is the limit edge copy', () => {
-  const request = { ref: 'H-1842', extensions_left: 0, extension_count: 4 };
+  const request = hold({ extension_count: 4, extensions_left: 0 });
   assert.deepEqual(deriveInitialView({ action: 'extend24', request }), { kind: 'limit', request });
 });
 
-test('deriveInitialView: action=reinstate is the expired-with-reinstate view', () => {
-  const request = { ref: 'H-1842' };
+test('deriveInitialView: a reinstate token (action echoed as-is) is the ended view', () => {
+  const request = hold({ status: 'expired' });
   assert.deepEqual(deriveInitialView({ action: 'reinstate', request }), { kind: 'expired_reinstate', request });
 });
 
@@ -138,23 +216,49 @@ test('deriveInitialView: no request (bad token) is invalid', () => {
 
 // ── deriveResultView ─────────────────────────────────────────
 test('deriveResultView: extended', () => {
-  const request = { ref: 'H-1842', expires_local: 'Thu Oct 9, 9:14 PM ET', extension_count: 2 };
-  assert.deepEqual(deriveResultView({ result: 'extended', request }), { kind: 'extended', request });
+  const request = hold({ expires_local: 'Thu Oct 9, 9:14 PM ET', extension_count: 2, extensions_left: 2 });
+  const body = { result: 'extended', request, clamped: false, expires_local: request.expires_local };
+  assert.deepEqual(deriveResultView(body), { kind: 'extended', request });
 });
 
 test('deriveResultView: extended + clamped flag renders the clamped kind', () => {
-  const request = { ref: 'H-1842', expires_local: 'Tue Oct 14, 3:00 PM ET' };
-  assert.deepEqual(deriveResultView({ result: 'extended', request, clamped: true }), { kind: 'clamped', request });
+  const request = hold({ expires_local: 'Tue Oct 14, 3:00 PM ET' });
+  const body = { result: 'extended', request, clamped: true, expires_local: request.expires_local };
+  assert.deepEqual(deriveResultView(body), { kind: 'clamped', request });
 });
 
 test('deriveResultView: acknowledged', () => {
-  const request = { ref: 'H-1842', expires_local: 'Wed Oct 8, 9:14 PM ET' };
-  assert.deepEqual(deriveResultView({ result: 'acknowledged', request }), { kind: 'acknowledged', request });
+  const request = hold();
+  assert.deepEqual(deriveResultView({ result: 'acknowledged', request, expires_local: request.expires_local }),
+    { kind: 'acknowledged', request });
 });
 
 test('deriveResultView: reinstated', () => {
-  const request = { ref: 'H-1850' };
-  assert.deepEqual(deriveResultView({ result: 'reinstated', request }), { kind: 'reinstated', request });
+  const request = hold({ ref: 'H-1850', extension_count: 0, extensions_left: 4 });
+  assert.deepEqual(deriveResultView({ result: 'reinstated', request, expires_local: request.expires_local }),
+    { kind: 'reinstated', request });
+});
+
+test('deriveResultView: the backend\'s 200 `limit` is the limit view, not "link expired"', () => {
+  const view = deriveResultView(LIMIT_200);
+  assert.equal(view.kind, 'limit');
+  assert.equal(view.request.ref, 'H-1842');
+  assert.equal(
+    resultCopy(view),
+    'All 4 extensions are used. H-1842 ends at Wed Oct 8, 9:14 PM ET. Sign in to place a new hold after it ends.'
+  );
+  assert.equal(needsSignIn(view), true);
+  assert.equal(ctaLabel(view), null);
+});
+
+test('deriveResultView: a `limit` body without `request` still renders its ref from the page\'s request', () => {
+  const body = { result: 'limit', expires_local: 'Wed Oct 8, 9:14 PM ET', extension_count: 4 };
+  const view = deriveResultView(body, hold({ expires_local: 'stale' }));
+  assert.equal(view.kind, 'limit');
+  assert.equal(
+    resultCopy(view),
+    'All 4 extensions are used. H-1842 ends at Wed Oct 8, 9:14 PM ET. Sign in to place a new hold after it ends.'
+  );
 });
 
 test('deriveResultView: an unrecognized result falls back to invalid', () => {
@@ -162,18 +266,63 @@ test('deriveResultView: an unrecognized result falls back to invalid', () => {
 });
 
 // ── deriveErrorView ──────────────────────────────────────────
-test('deriveErrorView: 409 while extending is the limit edge copy, using the request already on screen', () => {
-  const fallback = { ref: 'H-1842', expires_local: 'Wed Oct 8, 9:14 PM ET' };
-  const err = { status: 409 };
-  assert.deepEqual(deriveErrorView('extend24', err, fallback), { kind: 'limit', request: fallback });
+test('deriveErrorView: 409 not_active on extend24 is the ended state with Hold again', () => {
+  const onScreen = hold();
+  const view = deriveErrorView('extend24', NOT_ACTIVE_409, onScreen);
+  assert.deepEqual(view, { kind: 'expired_reinstate', request: onScreen });
+  assert.equal(bodyText(view), 'H-1842 ended at Wed Oct 8, 9:14 PM ET.');
+  assert.equal(ctaLabel(view), 'Hold again for 24 hours');
+  assert.equal(ctaAction(view), 'reinstate');
 });
 
-test('deriveErrorView: 400 used/expired is invalid regardless of action', () => {
-  assert.deepEqual(deriveErrorView('ack_end', { status: 400 }, { ref: 'H-1842' }), { kind: 'invalid', request: null });
+test('deriveErrorView: 409 not_active on ack_end is the same ended state', () => {
+  const onScreen = hold();
+  assert.deepEqual(deriveErrorView('ack_end', NOT_ACTIVE_409, onScreen), { kind: 'expired_reinstate', request: onScreen });
 });
 
-test('deriveErrorView: 409 on an action other than extend24 is still invalid', () => {
-  assert.deepEqual(deriveErrorView('reinstate', { status: 409 }, { ref: 'H-1842' }), { kind: 'invalid', request: null });
+test('deriveErrorView: 409 not_active never claims the extensions are used up', () => {
+  const view = deriveErrorView('extend24', NOT_ACTIVE_409, hold());
+  assert.notEqual(view.kind, 'limit');
+  assert.ok(!resultCopy(view).includes('All 4 extensions'));
+});
+
+test('deriveErrorView: a 409 with any other code on extend24 is invalid, not limit', () => {
+  assert.deepEqual(deriveErrorView('extend24', apiError(409, { detail: 'something_else' }), hold()),
+    { kind: 'invalid', request: null });
+});
+
+test('deriveErrorView: 409 from a reinstate attempt (not_reinstatable / reinstate_window) is invalid', () => {
+  assert.deepEqual(deriveErrorView('reinstate', apiError(409, { detail: 'reinstate_window' }), hold()),
+    { kind: 'invalid', request: null });
+  assert.deepEqual(deriveErrorView('reinstate', NOT_ACTIVE_409, hold()), { kind: 'invalid', request: null });
+});
+
+test('deriveErrorView: 400 link_used / link_invalid is invalid regardless of action', () => {
+  assert.deepEqual(deriveErrorView('ack_end', apiError(400, { detail: 'link_used' }), hold()), { kind: 'invalid', request: null });
+  assert.deepEqual(deriveErrorView('extend24', apiError(400, { detail: 'link_invalid' }), hold()), { kind: 'invalid', request: null });
+});
+
+// ── acknowledged with no extensions left ─────────────────────
+test('acknowledged with 0 extensions left offers no "[Extend 24 hours instead]"', () => {
+  const request = hold({ extension_count: 4, extensions_left: 0 });
+  const view = deriveResultView({ result: 'acknowledged', request, expires_local: request.expires_local });
+  assert.equal(view.kind, 'acknowledged');
+  assert.equal(ctaLabel(view), null);
+  assert.equal(ctaAction(view), null);
+  assert.equal(bodyText(view), 'Got it. H-1842 ends at Wed Oct 8, 9:14 PM ET as planned.');
+  assert.ok(!resultCopy(view).includes('Extend 24 hours instead'));
+});
+
+test('acknowledged falls back to extension_count >= 4 when extensions_left is absent', () => {
+  const request = hold({ extension_count: 4 });
+  delete request.extensions_left;
+  assert.equal(ctaLabel({ kind: 'acknowledged', request }), null);
+});
+
+test('acknowledged with extensions left still offers "[Extend 24 hours instead]"', () => {
+  const view = { kind: 'acknowledged', request: hold({ extension_count: 3, extensions_left: 1 }) };
+  assert.equal(ctaLabel(view), 'Extend 24 hours instead');
+  assert.equal(ctaAction(view), 'extend24');
 });
 
 // ── resultCopy — the six spec-verbatim outcomes ─────────────
