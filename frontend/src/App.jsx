@@ -10,10 +10,12 @@ import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActiv
 import { lazyPage } from './lib/lazyPage.js';
 import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink } from './lib/deepLink.js';
 import { navTabsFor, partnerRequestsReady } from './lib/features.js';
+import { pendingMembershipState } from './lib/membership.js';
 import { EarningsPage } from './pages/EarningsPage.jsx';
 import { InvoicesPage } from './pages/InvoicesPage.jsx';
 import { ALPRPropertiesPage } from './pages/ALPRPropertiesPage.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
+import { PendingMembershipPage } from './pages/PendingMembershipPage.jsx';
 import { OperatorActivityPage } from './pages/OperatorActivityPage.jsx';
 import { OverviewPage } from './pages/OverviewPage.jsx';
 import { AccountPage } from './pages/AccountPage.jsx';
@@ -354,6 +356,16 @@ export function App() {
     }
   }
 
+  // Re-pulls `/auth/me.properties` after AddPropertyForm (inside Account)
+  // adds a property or sends a join request — the nav, the pending-
+  // membership gate above and AccountPage's Team list all key off this
+  // state, and none of them refetch it on their own.
+  function refreshProperties() {
+    apiFetch('/auth/me').then(me => {
+      if (me && Array.isArray(me.properties)) setProperties(me.properties);
+    }).catch(() => {});
+  }
+
   function logout() {
     loadIdRef.current++; // Invalidate any in-flight loadData calls
     clearInterval(timerRef.current);
@@ -612,6 +624,31 @@ export function App() {
     );
   }
 
+  // The "ask to join" outcome (spec §3.7 (b)): a signed-in owner with no
+  // active membership anywhere and >= 1 pending one has nothing to do on
+  // Lots/Earnings/etc. — PendingMembershipPage (sign out, resend, add a
+  // different property) is the whole app for this account until someone
+  // approves or declines. Rendered as its own full-screen gate, the same
+  // shape as the `!owner` branch above, rather than threading a one-tab nav
+  // through every tab/validTabs computation below — "nav = Account only"
+  // the brief asks for is this: there is no other destination that does
+  // anything until the membership resolves, and the page carries its own
+  // Sign out. Never for a partner session or View-as-Partner — `properties`
+  // here is always the signed-in owner's own list (never a partner's).
+  const isPendingMembership = isOwner && pendingMembershipState({ properties });
+  if (isPendingMembership) {
+    return (
+      <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
+        <PendingMembershipPage
+          me={{ properties }}
+          user={owner}
+          onLogout={logout}
+          onAddProperty={() => { window.location.assign('/join'); }}
+        />
+      </div>
+    );
+  }
+
   const pending = effectiveViolations.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status)).length;
   const alprPending = alprViolations.filter(v => v.status === 'pending').length;
 
@@ -808,7 +845,7 @@ export function App() {
           {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} />}
           {tab === 'app' && (isPlatformAdmin || (FRANK_APP_TAB_LIVE && isOperator && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID)) && <PartnerAppPage />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
-          {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} isPlatformAdmin={isPlatformAdmin} />}
+          {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} isPlatformAdmin={isPlatformAdmin} properties={isOwner ? properties : []} onPropertyAdded={refreshProperties} />}
           </React.Suspense>
         </div>
       </main>
