@@ -110,6 +110,15 @@ test.describe('accessibility @a11y', () => {
     await scan(page, 'dashboard-owner');
   });
 
+  // @auth — needs TEST_PARTNER_A_* credentials. Task 20: the Lookup tab's
+  // verdict card went from a 12%-tint box to a solid-fill card with
+  // role="status", so this is the first scan to ever touch it.
+  test('lookup tab (partner) has no serious a11y violations @auth', async ({ page }) => {
+    await loginAs(page, accounts.partnerA());
+    await page.getByRole('tab', { name: /^lookup$/i }).click();
+    await scan(page, 'lookup-partner');
+  });
+
   test('marketing pitch pages are accessible', async ({ page }) => {
     for (const path of ['/pitch-apartments.html', '/pitch-tow.html']) {
       await page.goto(path);

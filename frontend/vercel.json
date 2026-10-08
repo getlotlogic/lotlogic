@@ -2,13 +2,15 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "redirects": [
+    { "source": "/lookup", "destination": "/app?tab=lookup", "permanent": true }
+  ],
   "rewrites": [
     { "source": "/temp/:path*", "destination": "/visit.html" },
     { "source": "/perm/:path*", "destination": "/resident.html" },
     { "source": "/visit/:path*", "destination": "/visit.html" },
     { "source": "/register/:path*", "destination": "/resident.html" },
     { "source": "/apt/:path*", "destination": "/apt.html" },
-    { "source": "/lookup", "destination": "/lookup.html" },
     { "source": "/set-password", "destination": "/set-password.html" },
     { "source": "/admin", "destination": "/admin.html" },
     { "source": "/app", "destination": "/dashboard.html" },

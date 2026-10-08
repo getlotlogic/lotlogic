@@ -88,6 +88,12 @@
       --green-bg-paper: #DEE9D7;
       --terra-paper: #C97A4A;
       --shadow-paper: 0 1px 0 rgba(31,27,20,.04), 0 1px 3px rgba(31,27,20,.06);
+      /* Plate-lookup verdict fills (spec §5.5) — ANSI Z535 signal colors,
+         deliberately NOT theme-swapped: a solid DO-NOT-TOW card reads the
+         same color in sun or shade regardless of the app's own theme. */
+      --verdict-go: #3FA45B;
+      --verdict-stop: #C0392B;
+      --verdict-amber-ink: #1A1206;
     }
     .theme-light {
       --bg-primary: #F6F4EE;
@@ -116,6 +122,9 @@
       --earnings-border: #EBDFB8;
       --revenue-bg: #F0F8EE;
       --grain-overlay: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.04 0'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
+      --verdict-go: #3FA45B;
+      --verdict-stop: #C0392B;
+      --verdict-amber-ink: #1A1206;
     }
     body {
       font-family: 'Manrope', system-ui, -apple-system, sans-serif;
