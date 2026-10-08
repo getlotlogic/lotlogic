@@ -8,6 +8,8 @@ import { useToast } from './ui/Toast.jsx';
 import { SkeletonCards } from './ui/Skeletons.jsx';
 import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview } from './ui/icons.jsx';
 import { lazyPage } from './lib/lazyPage.js';
+import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink } from './lib/deepLink.js';
+import { navTabsFor, partnerRequestsReady } from './lib/features.js';
 import { EarningsPage } from './pages/EarningsPage.jsx';
 import { InvoicesPage } from './pages/InvoicesPage.jsx';
 import { ALPRPropertiesPage } from './pages/ALPRPropertiesPage.jsx';
@@ -29,6 +31,26 @@ const HqPage           = lazyPage(() => import('./pages/HqPage.jsx'));
 
 const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';
 const FRANK_APP_TAB_LIVE = true; // live in Frank's partner portal since 2026-08-07
+
+// The public (no-session) routes `vercel.json` rewrites into this bundle, and
+// the page each one renders. Empty on purpose: the pages land with their own
+// tasks — Task 25 registers `join` (`<SignupPage slug onDone={login}/>`) and
+// Task 29 registers `request-action` (the `/r/<token>` page). Until then an
+// unregistered route falls through to the sign-in form, whose "New property?
+// Create your account" link is the door, so no portal link is a dead end.
+const PUBLIC_ROUTE_PAGES = {};
+// Same table for a session that already exists: only `/join…` differs there
+// (spec §3.2 — a signed-in manager opening someone else's link gets the
+// add-property form), and Task 25 registers it.
+const PUBLIC_ROUTE_PAGES_SIGNED_IN = {};
+
+// Every tab id the dashboard knows. A `?tab=` deep link is only honoured for
+// one of these; whether this particular account may SEE it is then settled by
+// the coercion effect below against the nav it actually gets.
+const KNOWN_TAB_IDS = [
+  'overview', 'lots', 'requests', 'analytics', 'training', 'towactivity',
+  'earnings', 'invoices', 'admin', 'app', 'hq', 'lookup', 'activity', 'account',
+];
 
 
 
@@ -72,6 +94,10 @@ export function App() {
     if (!owner?._token) return;
     apiFetch('/auth/me').then(me => {
       if (!me || !me.email) return;
+      // The property list with its `features` flags. Absent on a backend that
+      // has not deployed the portal shape yet — leave the state alone then, so
+      // the nav keeps every tab rather than collapsing on a missing key.
+      if (Array.isArray(me.properties)) setProperties(me.properties);
       setOwner(prev => {
         if (!prev) return prev;
         if (prev.is_admin === !!me.is_admin && prev.is_platform_admin === !!me.is_platform_admin) {
@@ -89,6 +115,20 @@ export function App() {
     const match = path.match(/\/violations\/([0-9a-f-]{36})/i);
     return match ? match[1] : null;
   });
+  // The two paths `vercel.json` rewrites into this bundle without a session:
+  // `/join…` (Task 25's SignupPage) and `/r/…` (Task 29's request-action
+  // page). Read once — this never changes without a navigation.
+  const [publicRoute] = useState(() => readPublicRoute(window.location.pathname));
+  const [publicSlug] = useState(() => readJoinSlug(window.location.pathname));
+  // `/app?property=…&section=…&request=…&tab=…&firstrun=&verify=&upload=&plate=`
+  // — the portal's email and Slack buttons. Captured on mount before anything
+  // can rewrite the address bar, applied once the session exists, then cleaned
+  // out of the url so a refresh does not replay `firstrun`.
+  const [deepLink, setDeepLink] = useState(() => readDeepLink(window.location.search));
+  const clearDeepLink = useCallback(() => setDeepLink(emptyDeepLink()), []);
+  // `/auth/me.properties` — the per-property `features` flags behind the
+  // bottom-nav rule (spec §5) and the §5.6 upsell chips.
+  const [properties, setProperties] = useState([]);
   const [tab, setTab] = useState(() => {
     // Jobs tab is hidden (camera-driven; unreliable until cameras read 100% of
     // cars). Land on Lots and coerce any persisted 'jobs' so nobody opens it.
@@ -160,6 +200,43 @@ export function App() {
   const showMoney = (isPlatformAdmin && !viewAs)
     || (viewAsLotIdsEarly ? viewAsLotIdsEarly.length > 0 : (lots || []).length > 0);
 
+  // ── Bottom nav ─────────────────────────────────────────────
+  // Base nav from the role + `/auth/me.properties` (spec §5: an account whose
+  // every property has `features.cameras=false` gets Properties · Account,
+  // tab id `lots`; any camera brings back the five). The account-specific
+  // extras — money surfaces, the platform-admin consoles, Frank's app preview
+  // — splice in ahead of Account, which stays last.
+  const navExtras = isOwner
+    ? [
+      // SaaS (all-apartment) owners have no per-tow money flow — see showMoney.
+      ...(showMoney ? [
+        { id: 'earnings', label: 'Earnings' },
+        { id: 'invoices', label: 'Billing' },
+      ] : []),
+      // Platform-admin only: the internal console (clients / onboard /
+      // feedback) folded in from admin.html, Frank's app-preview tab for QA
+      // before the partner-side entry (below) is switched on, and the fleet
+      // status board (Task 23). Each is gated again at render.
+      ...(isPlatformAdmin ? [
+        { id: 'admin', label: 'Admin' },
+        { id: 'app', label: 'App' },
+        { id: 'hq', label: 'HQ' },
+      ] : []),
+    ]
+    : [
+      // NMLD only: live preview of Frank's NMLD Parking app. Held behind
+      // FRANK_APP_TAB_LIVE until Gabe signs off on the admin-side QA pass.
+      ...((FRANK_APP_TAB_LIVE && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? [{ id: 'app', label: 'App' }] : []),
+    ];
+  const navTabs = (() => {
+    const base = navTabsFor(isOwner ? 'owner' : 'partner', properties, { partnerRequestsReady });
+    const account = base.filter(t => t.id === 'account');
+    return [...base.filter(t => t.id !== 'account'), ...navExtras, ...account];
+  })();
+  // Overview has no nav button (it is reached from the cards) but is a real
+  // owner tab, so it stays valid.
+  const validTabs = isOwner ? ['overview', ...navTabs.map(t => t.id)] : navTabs.map(t => t.id);
+
   useEffect(() => {
     if (!owner) return;
     // Don't coerce until lots have actually loaded once — showMoney is false
@@ -169,15 +246,25 @@ export function App() {
     // The transient `loading` flag is NOT a safe guard here: on mount this
     // effect fires before the loadData effect ever sets loading=true.
     if (!lotsLoaded) return;
-    const valid = isOwner
-      ? ['overview', 'lots', 'analytics', 'training', 'towactivity', 'account',
-         ...(showMoney ? ['earnings', 'invoices'] : []),
-         ...(isPlatformAdmin ? ['admin', 'app', 'hq'] : [])]
-      : ['lots', 'lookup', 'activity', 'account',
-         ...(((viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? ['app'] : [])];
-    if (!valid.includes(tab)) setTab('lots');
+    if (!validTabs.includes(tab)) setTab('lots');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [owner, viewAs, isOwner, isPlatformAdmin, tab, showMoney, lotsLoaded]);
+  }, [owner, viewAs, isOwner, isPlatformAdmin, tab, showMoney, lotsLoaded, validTabs.join(',')]);
+
+  // Apply the deep link, once, as soon as there is a session. Deliberately not
+  // while signed out: the query has to survive the sign-in (LoginPage replays
+  // it), and cleaning it then would throw away the request the email named.
+  // `tab` wins when it names a real tab; otherwise a `property` link means
+  // Lots, because that is where the property page lives. The rest
+  // (`section`, `request`, `firstrun`, `verify`, `upload`) travel down to the
+  // Lots page as props.
+  const deepLinkAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!owner || deepLinkAppliedRef.current) return;
+    deepLinkAppliedRef.current = true;
+    if (deepLink.tab && KNOWN_TAB_IDS.includes(deepLink.tab)) setTab(deepLink.tab);
+    else if (deepLink.property) setTab('lots');
+    cleanDeepLink();
+  }, [owner, deepLink]);
   const viewAsLotIds = viewAsLotIdsEarly;
   const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
   const effectiveViolations = viewAsLotIds ? violations.filter(v => viewAsLotIds.includes(v.lot_id)) : violations;
@@ -492,9 +579,35 @@ export function App() {
   // below) — without it, `.theme-light .login-page` etc. never match and
   // the login page ignores the operator's theme choice.
   if (!owner) {
+    // `publicRoute` is the no-session switch for the two paths `vercel.json`
+    // rewrites into this bundle. Both render the sign-in form today:
+    //   'join'           → Task 25 swaps in <SignupPage slug onDone={login}/>;
+    //                      until then the form's "New property? Create your
+    //                      account" link is the door, so /join is never a
+    //                      dead end.
+    //   'request-action' → Task 29 swaps in the /r/<token> page; the spec's
+    //                      own fallback copy for a token this page cannot use
+    //                      is "Sign in to manage the hold", which is exactly
+    //                      what the form offers.
+    const PublicPage = publicRoute ? PUBLIC_ROUTE_PAGES[publicRoute] : null;
     return (
       <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
-        <LoginPage onLogin={login} />
+        {PublicPage
+          ? <PublicPage route={publicRoute} slug={publicSlug} onDone={login} onLogin={login} />
+          : <LoginPage onLogin={login} />}
+      </div>
+    );
+  }
+
+  // A signed-in manager opening someone else's `/join/<slug>` link gets the
+  // add-property form, not the sign-in form (spec §3.2). Until Task 25
+  // registers that page the dashboard renders as usual, and the Add a property
+  // button on Lots is the door.
+  const SignedInPublicPage = publicRoute === 'join' ? PUBLIC_ROUTE_PAGES_SIGNED_IN[publicRoute] : null;
+  if (SignedInPublicPage) {
+    return (
+      <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
+        <SignedInPublicPage route={publicRoute} slug={publicSlug} mode="add-property" user={owner} />
       </div>
     );
   }
@@ -537,41 +650,9 @@ export function App() {
   //   Lots     → register + manage properties (plates, passes, cameras, plate detections)
   //   Analytics/Activity → summaries
   //   Earnings → $$
-  const navTabs = isOwner ? [
-    // Jobs tab hidden until cameras read 100% — everything surfaces on the pass.
-    { id: 'lots',        label: 'Lots',        badge: 0 },
-    { id: 'analytics',   label: 'Analytics',   badge: 0 },
-    { id: 'training',    label: 'Training',    badge: trainingBadge },
-    { id: 'towactivity', label: 'Tow truck',   badge: 0 },
-    // SaaS (all-apartment) owners have no per-tow money flow — see showMoney.
-    ...(showMoney ? [
-      { id: 'earnings',    label: 'Earnings',    badge: 0 },
-      { id: 'invoices',    label: 'Billing',     badge: 0 },
-    ] : []),
-    // Platform-admin only: the internal console (clients / onboard / feedback),
-    // folded in from admin.html. Gated again at render on isPlatformAdmin.
-    ...(isPlatformAdmin ? [{ id: 'admin', label: 'Admin', badge: 0 }] : []),
-    // Soft launch of Frank's app-preview tab: platform admins only, for QA
-    // before the partner-side entry (below) is switched on.
-    ...(isPlatformAdmin ? [{ id: 'app', label: 'App', badge: 0 }] : []),
-    // Platform-admin only: the fleet status board (businesses, red
-    // findings, questions waiting on Gabe, fleet health). Task 23.
-    ...(isPlatformAdmin ? [{ id: 'hq', label: 'HQ', badge: 0 }] : []),
-    { id: 'account',     label: 'Account',     badge: 0 },
-  ] : [
-    // Partner navigation. Earnings + Billing/Invoices are owner-only
-    // surfaces — partners must NEVER see revenue_share, fee schedules,
-    // or QuickBooks state. Removed 2026-04-28 per Gabe.
-    { id: 'lots',     label: 'Lots',     badge: 0 },
-    // In-lot plate lookup, folded in from lookup.html — the tow partner's
-    // field tool. Shows for a partner login and when an admin views-as-partner.
-    { id: 'lookup',   label: 'Lookup',   badge: 0 },
-    { id: 'activity', label: 'Activity', badge: 0 },
-    // NMLD only: live preview of Frank's NMLD Parking app. Held behind
-    // FRANK_APP_TAB_LIVE until Gabe signs off on the admin-side QA pass.
-    ...((FRANK_APP_TAB_LIVE && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? [{ id: 'app', label: 'App', badge: 0 }] : []),
-    { id: 'account',  label: 'Account',  badge: 0 },
-  ];
+  // Badges hang off the base nav computed above (the Training badge is the
+  // only live one today).
+  const navTabsWithBadges = navTabs.map(t => ({ ...t, badge: t.id === 'training' ? trainingBadge : 0 }));
 
   const lastRefreshLabel = lastRefresh ? (
     Math.floor((Date.now() - lastRefresh) / 1000) < 10 ? 'Just now' :
@@ -707,7 +788,16 @@ export function App() {
           <React.Suspense fallback={<SkeletonCards />}>
           {tab === 'overview' && isOwner && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
-          {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} impersonating={!!viewAs} />}
+          {tab === 'lots' && <ALPRPropertiesPage
+            user={effectiveUser}
+            impersonating={!!viewAs}
+            initialSelectedId={deepLink.property}
+            initialSection={deepLink.section}
+            request={deepLink.request}
+            upload={deepLink.upload}
+            firstrun={deepLink.firstrun}
+            verify={deepLink.verify}
+          />}
           {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
           {tab === 'towactivity' && isOwner && <TowActivityPage user={effectiveUser} />}
           {tab === 'earnings' && isOwner && showMoney && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
@@ -730,12 +820,15 @@ export function App() {
             display:contents keeps it out of the flex layout .bottom-nav relies
             on for its direct children. */}
         <div role="tablist" aria-label="Main navigation" style={{display: 'contents'}}>
-          {navTabs.map(t => {
+          {navTabsWithBadges.map(t => {
             const Icon = navIcons[t.id];
             return (
               <button key={t.id}
                 className={`nav-item ${tab === t.id ? 'active' : ''}`}
-                onClick={() => { setTab(t.id); haptic('light'); }}
+                // Tapping a tab by hand retires the deep link: coming back to
+                // Lots should show the list, not re-open the property the
+                // email named half an hour ago.
+                onClick={() => { clearDeepLink(); setTab(t.id); haptic('light'); }}
                 aria-label={`${t.label}${t.badge > 0 ? `, ${t.badge} pending` : ''}`}
                 aria-current={tab === t.id ? 'page' : undefined}
                 role="tab"

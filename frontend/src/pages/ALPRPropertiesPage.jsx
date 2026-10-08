@@ -14,7 +14,21 @@ import { lazyPage } from '../lib/lazyPage.js';
 // property-detail bundle (which itself pulls in TruckParkingLog).
 const ALPRPropertyDetailPage = lazyPage(() => import('./ALPRPropertyDetailPage.jsx'));
 
-export function ALPRPropertiesPage({ user, impersonating = false }) {
+// `initialSelectedId` / `initialSection` / `request` / `upload` / `firstrun` /
+// `verify` are the deep link App.jsx read out of `/app?…` — the portal's email
+// and Slack buttons land here (spec §3.4 step 5). `initialSelectedId` opens
+// that property straight away instead of the list; the rest travel on to the
+// property page, which owns the surfaces they name.
+export function ALPRPropertiesPage({
+  user,
+  impersonating = false,
+  initialSelectedId = null,
+  initialSection = null,
+  request = null,
+  upload = false,
+  firstrun = false,
+  verify = false,
+}) {
   const { addToast } = useToast();
   // Property deletion cascades to plates, cameras and passes. Partners enforce
   // lots, they don't own them — and an admin impersonating a partner arrives
@@ -25,7 +39,7 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
   const [showAdd, setShowAdd] = useState(false);
   const [newProp, setNewProp] = useState({ name: '', address: '', property_type: 'apartment' });
   const [saving, setSaving] = useState(false);
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedId] = useState(initialSelectedId);
   // KPI counts per property_id — { [propId]: { openJobs, noReg, overstays, registered } }
   const [kpiCounts, setKpiCounts] = useState({});
   // Drill-down state: { propId, drill: 'noreg' | 'registered' }
@@ -129,7 +143,18 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
     setSaving(false);
   }
 
-  if (selectedId) return <ErrorBoundary label="this property"><React.Suspense fallback={<SkeletonCards />}><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} user={user} /></React.Suspense></ErrorBoundary>;
+  if (selectedId) return <ErrorBoundary label="this property"><React.Suspense fallback={<SkeletonCards />}><ALPRPropertyDetailPage
+    propertyId={selectedId}
+    onBack={() => setSelectedId(null)}
+    user={user}
+    // Only the property the deep link named gets the deep link's props; once
+    // the operator navigates to a different property they are back to normal.
+    initialSection={selectedId === initialSelectedId ? initialSection : null}
+    request={selectedId === initialSelectedId ? request : null}
+    upload={selectedId === initialSelectedId ? upload : false}
+    firstrun={selectedId === initialSelectedId ? firstrun : false}
+    verify={selectedId === initialSelectedId ? verify : false}
+  /></React.Suspense></ErrorBoundary>;
 
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading properties...</div></div>;
 

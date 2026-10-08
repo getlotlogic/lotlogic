@@ -187,7 +187,60 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 }
 
 
-export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
+// The top-of-page section chips, per property type. Single source of truth:
+// the render maps over this and the section resolver below validates against
+// it, so a stored or deep-linked section that this property has no chip for
+// can never be selected.
+export function sectionChipsFor(propertyType) {
+  const isTruckPlaza = propertyType === 'truck_plaza';
+  return [
+    { id: 'all', label: 'All' },
+    // No-registration evidence is a camera-enforcement concept — truck
+    // plaza only. Apartments are registration-based and don't get it.
+    ...(isTruckPlaza ? [{ id: 'noreg', label: 'No Registration Evidence Package' }] : []),
+    // ActivePassTracker chip removed entirely — the component was
+    // deleted in the parking-pass consolidation. The Parking Log
+    // is the single source of truth now.
+    ...(isTruckPlaza
+      ? [{ id: 'log', label: 'Parking Log' }, { id: 'history', label: 'History' }]
+      : [{ id: 'log', label: 'Parking Passes' }]),
+  ];
+}
+
+// Namespaced per property type: an apartment and a truck plaza have different
+// chips, and one global key meant opening an apartment after a truck plaza
+// landed on a section that does not exist there.
+export function sectionStorageKey(propertyType) {
+  return `lotlogic_pd_section:${propertyType || 'unknown'}`;
+}
+
+// Precedence: the deep link (`/app?property=…&section=requests`) beats the
+// remembered section, which beats the default. Anything not in this
+// property's chip list is ignored outright. Apartments default to Requests —
+// the portal's whole point — and fall back to the Parking Log until Task 22
+// adds that chip; truck plazas stay on the Parking Log, the surface their
+// operators actually use.
+export function resolveSectionFilter({ propertyType, initialSection, stored }) {
+  const ids = sectionChipsFor(propertyType).map(c => c.id);
+  if (initialSection && ids.includes(initialSection)) return initialSection;
+  if (stored && ids.includes(stored)) return stored;
+  if (propertyType !== 'truck_plaza' && ids.includes('requests')) return 'requests';
+  return 'log';
+}
+
+export function ALPRPropertyDetailPage({
+  propertyId,
+  onBack,
+  user,
+  // Deep link, forwarded by ALPRPropertiesPage. `initialSection` overrides the
+  // remembered chip; `request` / `upload` / `firstrun` / `verify` name
+  // surfaces that land with Tasks 22, 23 and 25.
+  initialSection = null,
+  request = null,
+  upload = false,
+  firstrun = false,
+  verify = false,
+}) {
   // QR codes + camera registration are owner-only surfaces. Partners see
   // the property + plates + parking log but not the operational chrome.
   const isOwner = user?._role === 'owner';
@@ -243,23 +296,26 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   const isTruckPlaza = property?.property_type === 'truck_plaza';
 
   // Top-of-page section filter. Lets the operator focus on one surface
-  // (tracker, log, plates, cameras) instead of scrolling past everything.
-  // Persists across reloads.
-  const [sectionFilter, setSectionFilter] = useState(() => {
-    try {
-      // Default to 'log' so opening any property page lands directly on
-      // the Parking Log — the surface everyone actually uses. Previously
-      // defaulted to 'all' which dumped every section.
-      const saved = localStorage.getItem('lotlogic_pd_section') || 'log';
-      // Migration: 'tracker' no longer exists. Anyone with it cached
-      // gets bumped to 'log' (the same content area, just renamed).
-      if (saved === 'tracker') return 'log';
-      return saved;
-    } catch { return 'log'; }
-  });
+  // instead of scrolling past everything, and persists across reloads.
+  // Resolved once `property` lands, because the chip list — and therefore
+  // which stored or deep-linked value is even legal — depends on its type.
+  const [sectionFilter, setSectionFilter] = useState(null);
+  const sectionResolvedRef = useRef(false);
   useEffect(() => {
-    try { localStorage.setItem('lotlogic_pd_section', sectionFilter); } catch {}
-  }, [sectionFilter]);
+    if (sectionResolvedRef.current || !property) return;
+    sectionResolvedRef.current = true;
+    let stored = null;
+    try { stored = localStorage.getItem(sectionStorageKey(property.property_type)); } catch { /* blocked storage */ }
+    setSectionFilter(resolveSectionFilter({
+      propertyType: property.property_type,
+      initialSection,
+      stored,
+    }));
+  }, [property, initialSection]);
+  useEffect(() => {
+    if (!sectionFilter || !property) return;
+    try { localStorage.setItem(sectionStorageKey(property.property_type), sectionFilter); } catch { /* blocked storage */ }
+  }, [sectionFilter, property]);
   const showSection = (key) => sectionFilter === 'all' || sectionFilter === key;
 
   const loadAll = useCallback(async () => {
@@ -651,16 +707,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         borderBottom: '1px solid var(--border-subtle, transparent)',
       }}>
         {(() => {
-          const chips = [
-            { id: 'all',     label: 'All' },
-            // No-registration evidence is a camera-enforcement concept — truck
-            // plaza only. Apartments are registration-based and don't get it.
-            ...(isTruckPlaza ? [{ id: 'noreg', label: 'No Registration Evidence Package' }] : []),
-            // ActivePassTracker chip removed entirely — the component was
-            // deleted in the parking-pass consolidation. The Parking Log
-            // is the single source of truth now.
-            ...(isTruckPlaza ? [{ id: 'log', label: 'Parking Log' }, { id: 'history', label: 'History' }] : [{ id: 'log', label: 'Parking Passes' }]),
-          ];
+          const chips = sectionChipsFor(property?.property_type);
           return chips.map(c => {
             const active = sectionFilter === c.id;
             return (
