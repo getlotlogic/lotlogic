@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase.js';
 import { NotifyManager } from '../lib/notify.js';
 import { useToast } from '../ui/Toast.jsx';
 import { TowTruckPlatesEditor } from './account/TowTruckPlatesEditor.jsx';
+import { TeamSection } from './property/TeamSection.jsx';
+import { AddPropertyForm } from '../ui/AddPropertyForm.jsx';
 
 // ── Account / Settings page ────────────────────────────────────
 function PartnerFeeEditor({ user, isPlatformAdmin = false }) {
@@ -208,11 +210,16 @@ function ChangePasswordSection() {
   );
 }
 
-export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval, showFees = true, isPlatformAdmin = false }) {
+export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval, showFees = true, isPlatformAdmin = false, properties = [], onPropertyAdded }) {
   const isOwner = user._role === 'owner';
   const [notifyPrefs, setNotifyPrefs] = useState(() => NotifyManager.getPrefs());
   const [notifyPerm, setNotifyPerm] = useState(() => NotifyManager.getPermission());
-
+  const [showAddProperty, setShowAddProperty] = useState(false);
+  // Team per property (spec §5.7) only for memberships with write access —
+  // a plain `viewer` can't authorize anyone, so there's nothing for them to
+  // manage here. `/auth/me.properties` carries `role` per the owner shape.
+  const teamProperties = (Array.isArray(properties) ? properties : [])
+    .filter(p => p.role === 'admin' || p.role === 'manager');
   function updateNotify(patch) {
     const next = NotifyManager.updatePrefs(patch);
     setNotifyPrefs(next);
@@ -274,6 +281,46 @@ export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setA
           </div>
         )}
       </div>
+
+      {/* Team, per property (spec §5.7) — owners only; a partner manages
+          people through Slack (§6.1), not here. */}
+      {isOwner && teamProperties.map(p => (
+        <TeamSection key={p.id} property={p} user={user} />
+      ))}
+
+      {/* Add a property (spec §3.4a, door (a)). Lots carries the same button
+          in its header; this is the other door. Neither door has a
+          `/join/<slug>` context, so AddPropertyForm renders with no `slug`
+          prop — it posts `partner_id: null` (the bare-`/join` "Not listed"
+          fallback) rather than a client-supplied partner id; see
+          AddPropertyForm.jsx's header comment. */}
+      {isOwner && (
+        <div className="settings-section">
+          <button
+            onClick={() => setShowAddProperty(true)}
+            style={{ width: '100%', padding: '13px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text-primary)', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}
+          >+ Add a property</button>
+        </div>
+      )}
+
+      {showAddProperty && (
+        <div className="viol-modal-overlay" onClick={() => setShowAddProperty(false)}>
+          <div className="viol-modal" onClick={e => e.stopPropagation()}>
+            <div className="viol-modal-handle"></div>
+            <div className="viol-modal-body">
+              <div className="viol-modal-title">Add a property</div>
+              <AddPropertyForm
+                onCancel={() => setShowAddProperty(false)}
+                onSuccess={(property) => {
+                  setShowAddProperty(false);
+                  onPropertyAdded && onPropertyAdded(property);
+                }}
+                onJoined={() => setShowAddProperty(false)}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Partner self-service fee schedule — editable Tow Fee + Boot Fee
           (their own rates, what they bill the vehicle owner per action).
