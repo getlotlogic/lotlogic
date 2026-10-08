@@ -27,10 +27,15 @@ import {
 // The kind is never color alone (spec §5): the glyph and the word carry it,
 // and the colour is the tint and the edge. The ink is --text-primary because
 // a 10 px status colour on its own 15 % tint is 2.2–2.4:1 in .theme-light.
+//
+// `edge` and `tint` are a 1 px border and a 15 % wash — never an ink, so
+// nothing here is read by a contrast check, and §5's "tokens only" rule has
+// no token to offer for the photo blue. They are deliberately literals;
+// every ink below is a `var(--…)`, which is what the light theme needs.
 const KIND_CHIP = {
-  hold: { glyph: '✋', label: 'HOLD', color: '#22c55e', tint: 'rgba(34,197,94,.15)' },
-  tow: { glyph: '🚨', label: 'TOW', color: '#f87171', tint: 'rgba(248,113,113,.15)' },
-  photo: { glyph: '📷', label: 'PHOTO', color: '#60a5fa', tint: 'rgba(96,165,250,.15)' },
+  hold: { glyph: '✋', label: 'HOLD', edge: '#22c55e', tint: 'rgba(34,197,94,.15)' },
+  tow: { glyph: '🚨', label: 'TOW', edge: '#f87171', tint: 'rgba(248,113,113,.15)' },
+  photo: { glyph: '📷', label: 'PHOTO', edge: '#60a5fa', tint: 'rgba(96,165,250,.15)' },
 };
 
 const BTN = {
@@ -96,7 +101,7 @@ export function PartnerRequestRow({ item, now, busy, onAction }) {
         </span>
         <span style={{
           ...{ fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 3, letterSpacing: '.04em' },
-          background: chip.tint, color: 'var(--text-primary)', border: `1px solid ${chip.color}`,
+          background: chip.tint, color: 'var(--text-primary)', border: `1px solid ${chip.edge}`,
         }}>
           <span aria-hidden="true">{chip.glyph} </span>{chip.label}
         </span>
@@ -105,7 +110,7 @@ export function PartnerRequestRow({ item, now, busy, onAction }) {
             fontSize: 11, fontWeight: 800, padding: '2px 7px', borderRadius: 999,
             background: 'var(--bg-inset)', color: 'var(--text-primary)',
             border: '1px solid var(--border)',
-          } : { fontSize: 12, fontWeight: 700, color: urgent ? '#fbbf24' : 'var(--text-muted)' }}>
+          } : { fontSize: 12, fontWeight: 700, color: urgent ? 'var(--yellow)' : 'var(--text-muted)' }}>
             {urgent && <span aria-hidden="true">⚠ </span>}{left}
           </span>
         )}
@@ -117,7 +122,7 @@ export function PartnerRequestRow({ item, now, busy, onAction }) {
       {/* line 2 — the deadline, exactly as the server rendered it */}
       {item.kind === 'hold'
         ? item.expires_local && (
-          <div style={{ fontSize: 12, color: urgent ? '#fbbf24' : 'var(--text-muted)', marginTop: 3 }}>
+          <div style={{ fontSize: 12, color: urgent ? 'var(--yellow)' : 'var(--text-muted)', marginTop: 3 }}>
             until {item.expires_local}
           </div>
         )
@@ -145,7 +150,7 @@ export function PartnerRequestRow({ item, now, busy, onAction }) {
       )}
 
       {/* line 5 — picked up, and how many times the plate has been checked */}
-      {seen && <div style={{ fontSize: 12, color: '#22c55e', marginTop: 3 }}>{seen}</div>}
+      {seen && <div style={{ fontSize: 12, color: 'var(--green-text)', marginTop: 3 }}>{seen}</div>}
 
       {/* controls */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>

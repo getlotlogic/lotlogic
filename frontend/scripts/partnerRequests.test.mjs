@@ -28,6 +28,7 @@ import {
   seenLine,
   refWithLineage,
   outcomeLabel,
+  emptyStateKind,
   actionsFor,
   normalizePendingProperty,
 } from '../src/lib/partnerRequests.js';
@@ -475,5 +476,151 @@ test('the Not ours modal copy is the spec copy', () => {
   assert.ok(
     src.includes("Their requests will stop showing to your crew and we'll let the person who signed up know."),
     'missing the reject body'
+  );
+});
+
+// ── "Tokens only": every ink on the partner surfaces is a token ──
+//
+// Spec §5 is explicit — "Tokens only" and "`.theme-light` must still pass
+// 4.5:1 on the hold row". A hardcoded status colour satisfies the dark theme
+// and silently fails the light one, which is the theme N Style's crew uses
+// outdoors: `#fbbf24` is 1.66:1 on `.theme-light`'s `--bg-card` (#FFFFFE) and
+// `#22c55e` is 2.27:1. The token pairs `--yellow` and `--green-text` exist in
+// `dashboard.html` for exactly this (the latter's comment says so), so the
+// rule this test enforces is: anything that lands in a CSS `color` on these
+// three files is a `var(--…)` reference.
+//
+// The one documented exception is the photo viewer's own ink. It sits on a
+// fixed `rgba(0,0,0,.8)` scrim that does not change with the theme, so a
+// theme token would invert to near-black on black in `.theme-light`.
+const INK_ALLOWLIST = {
+  'PartnerRequestRow.jsx': [],
+  'PendingPropertyCard.jsx': [],
+  // PhotoViewer's "Loading…" and its error line, on the fixed dark scrim.
+  'PartnerRequestsPage.jsx': ['#fff'],
+};
+
+function inkLiterals(src) {
+  const out = [];
+  // Every `color:` value in a style object, minus `borderColor:` /
+  // `backgroundColor:` (capitalised, so case-sensitivity excludes them) and
+  // minus `--…-color:` inside a CSS string.
+  const re = /(?<![A-Za-z-])color:\s*([^,\n}]*)/g;
+  for (const m of src.matchAll(re)) {
+    for (const lit of m[1].matchAll(/'([^']*)'|"([^"]*)"/g)) {
+      const value = lit[1] ?? lit[2] ?? '';
+      if (!value.startsWith('var(--')) out.push(value);
+    }
+  }
+  return out;
+}
+
+test('every ink on the three partner Requests surfaces comes from a token', () => {
+  for (const [name, allowed] of Object.entries(INK_ALLOWLIST)) {
+    const file = name === 'PartnerRequestsPage.jsx'
+      ? path.join(ROOT, 'src/pages/PartnerRequestsPage.jsx')
+      : path.join(ROOT, 'src/pages/partner', name);
+    const stray = inkLiterals(stripComments(readFileSync(file, 'utf8')))
+      .filter(v => !allowed.includes(v));
+    assert.deepEqual(
+      stray, [],
+      `${name} sets an ink from a literal (${stray.join(', ')}) — spec §5 says tokens only, `
+      + 'so .theme-light gets a contrast-safe value',
+    );
+  }
+});
+
+// ── the two token pairs actually clear 4.5:1 in .theme-light ──
+
+const DASHBOARD = path.resolve(ROOT, 'dashboard.html');
+
+/** The `--name: value;` declarations inside one CSS rule of dashboard.html. */
+function tokenBlock(selector) {
+  const src = readFileSync(DASHBOARD, 'utf8');
+  const start = src.indexOf(`${selector} {`);
+  assert.ok(start >= 0, `${selector} not found in dashboard.html`);
+  const body = src.slice(start, src.indexOf('\n    }', start));
+  const out = {};
+  for (const m of body.matchAll(/(--[a-z-]+):\s*([^;]+);/g)) out[m[1]] = m[2].trim();
+  return out;
+}
+
+function luminance(hex) {
+  const h = hex.replace('#', '');
+  const full = h.length === 3 ? [...h].map(c => c + c).join('') : h;
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(full.slice(i, i + 2), 16) / 255)
+    .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrast(a, b) {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+test('the contrast maths agrees with the numbers in the token comments', () => {
+  // Sanity check on the helper itself, against two known pairs.
+  assert.equal(Math.round(contrast('#000000', '#FFFFFF')), 21);
+  assert.ok(contrast('#FBBF24', '#FFFFFE') < 2, 'raw amber is the failure this test exists for');
+});
+
+test('every token these rows switched to clears 4.5:1 on --bg-card in BOTH themes', () => {
+  // --yellow: the urgent countdown, the urgent deadline, the pending-property
+  // card header and warning, the "not yet confirmed" heading.
+  // --green-text: the "Seen … · checked N×" line.
+  // --red: the photo-upload failure hint, which renders on the modal's
+  // --bg-card surface.
+  for (const selector of [':root', '.theme-light']) {
+    const tokens = tokenBlock(selector);
+    for (const token of ['--yellow', '--green-text', '--red']) {
+      const ratio = contrast(tokens[token], tokens['--bg-card']);
+      assert.ok(
+        ratio >= 4.5,
+        `${selector} ${token} (${tokens[token]}) is ${ratio.toFixed(2)}:1 on --bg-card `
+        + `(${tokens['--bg-card']}) — the hold row needs 4.5:1`,
+      );
+    }
+  }
+});
+
+test('the dark theme keeps the exact status colours the rows used to hardcode', () => {
+  // The token swap must be invisible in the dark theme: --yellow and
+  // --green-text are the same literals the rows carried before.
+  const dark = tokenBlock(':root');
+  assert.equal(dark['--yellow'].toLowerCase(), '#fbbf24');
+  assert.equal(dark['--green-text'].toLowerCase(), '#22c55e');
+});
+
+// ── the Recent view does not borrow the active view's empty state ──
+
+test('emptyStateKind sends Recent to its own copy and every other chip to the spec sentence', () => {
+  for (const chip of ['all', 'holds', 'tows', 'photos', undefined]) {
+    assert.equal(emptyStateKind(chip), 'active', `chip ${chip} should read the active empty state`);
+  }
+  assert.equal(emptyStateKind('recent'), 'recent');
+});
+
+test('the page carries a Recent empty state that is not the active one', () => {
+  const src = readFileSync(path.join(ROOT, 'src/pages/PartnerRequestsPage.jsx'), 'utf8');
+  assert.ok(src.includes('emptyRecent'), 'the page has no separate Recent empty-state copy');
+  assert.ok(
+    src.includes('Nothing in the last 7 days.'),
+    'the Recent view still shows "Nothing active.", which is wrong for that view',
+  );
+});
+
+test('the photo viewer gets a stable onClose, so its focus trap does not re-arm each minute', () => {
+  // useFocusTrap lists `onClose` in its deps and this page re-renders every
+  // 60 s on the `now` tick: an inline arrow tears the trap down and re-arms
+  // it while the viewer is open, re-focusing the ✕ and losing the element
+  // focus should return to.
+  const src = readFileSync(path.join(ROOT, 'src/pages/PartnerRequestsPage.jsx'), 'utf8');
+  assert.ok(
+    /<PhotoViewer[^>]*onClose=\{closePhoto\}/.test(src),
+    'PhotoViewer must be handed a memoised onClose, not an inline arrow',
+  );
+  assert.ok(
+    /const closePhoto = useCallback\(\(\) => setPhoto\(null\), \[\]\)/.test(src),
+    'closePhoto must be a useCallback with no deps',
   );
 });

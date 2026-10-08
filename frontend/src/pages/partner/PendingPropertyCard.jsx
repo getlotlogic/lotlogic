@@ -38,7 +38,7 @@ export function PendingPropertyCard({ property, busy, onConfirm, onReject }) {
     >
       <div style={{
         fontSize: 10, fontWeight: 800, letterSpacing: '.08em',
-        color: '#fbbf24', marginBottom: 6,
+        color: 'var(--yellow)', marginBottom: 6,
       }}>
         NEW PROPERTY TO CONFIRM
       </div>
@@ -46,7 +46,7 @@ export function PendingPropertyCard({ property, busy, onConfirm, onReject }) {
       {who && <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 3 }}>{who}</div>}
       {reach && <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 3 }}>{reach}</div>}
       {property.similarAddress && (
-        <div style={{ fontSize: 12, color: '#fbbf24', marginTop: 6 }}>
+        <div style={{ fontSize: 12, color: 'var(--yellow)', marginTop: 6 }}>
           <span aria-hidden="true">⚠ </span>Similar address: {property.similarAddress}
         </div>
       )}

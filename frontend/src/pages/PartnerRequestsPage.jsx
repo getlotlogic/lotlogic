@@ -19,6 +19,7 @@ import {
   badgeCount,
   chipsFor,
   countActionable,
+  emptyStateKind,
   filterItems,
   fmtTimeET,
   groupAndSort,
@@ -55,6 +56,12 @@ const PAGE_PAD = { padding: '0 2px 24px' };
 const COPY = {
   emptyTitle: 'Nothing active.',
   emptyBody: "Holds and tow requests from your properties show up here the moment an office posts them — and in Slack if you've connected it.",
+  // §5.4 gives no empty-state copy for the Recent chip, and its sentence
+  // above is about the active list — "Nothing active." under a 7-day history
+  // reads as "nothing is live", which is a different claim. These two lines
+  // are this task's own words; the report says so.
+  emptyRecentTitle: 'Nothing in the last 7 days.',
+  emptyRecentBody: 'Requests your crew has finished, declined or let expire show up here for a week.',
   loadFailed: "Couldn't load requests. Your last list is still shown.",
   declineTitle: 'Decline this request',
   declineBody: 'The office will see your reason. The plate becomes eligible to tow.',
@@ -129,6 +136,11 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
   const shown = chip === 'recent' ? recent : filterItems(items, chip);
   const groups = useMemo(() => groupAndSort(shown, propertyNames), [shown, propertyNames]);
   const toDo = badgeCount({ ...countActionable(items), pendingProps: pending.length, pendingJoins });
+  // The Recent chip is a second view, so it gets its own empty state — the
+  // spec's "Nothing active." sentence is a claim about the active list.
+  const empty = emptyStateKind(chip) === 'recent'
+    ? { title: COPY.emptyRecentTitle, body: COPY.emptyRecentBody }
+    : { title: COPY.emptyTitle, body: COPY.emptyBody };
 
   // Every write ends the same way: tell App the badge moved, then re-read the
   // list rather than patching a row by hand — the server owns the state
@@ -164,6 +176,12 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
     if (action === 'history') { setHistory({ item, detail: null, error: null }); return; }
     setModal({ kind: action, item });
   }, [runAction]);
+
+  // Stable identity on purpose: `useFocusTrap`'s effect lists `onClose` in its
+  // deps, and this page re-renders every 60 s on the `now` tick. An inline
+  // arrow would tear the trap down and re-arm it each minute, which re-focuses
+  // the ✕ and loses the element focus should return to on close.
+  const closePhoto = useCallback(() => setPhoto(null), []);
 
   const onConfirmProperty = useCallback((property) => {
     runAction(property.id, () => verifyPartnerProperty(property.id), `Confirmed — ${property.name} is yours.`);
@@ -254,9 +272,9 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
           background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
           padding: 18, textAlign: 'center',
         }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>{COPY.emptyTitle}</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>{empty.title}</div>
           <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.5 }}>
-            {COPY.emptyBody}
+            {empty.body}
           </div>
         </div>
       )}
@@ -265,7 +283,7 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
         <section key={group.propertyId || group.propertyName} style={{ marginBottom: 14 }}>
           <h3 style={{
             fontSize: 11, fontWeight: 800, letterSpacing: '.08em', margin: '0 0 6px',
-            color: group.propertyVerified ? 'var(--text-muted)' : '#fbbf24',
+            color: group.propertyVerified ? 'var(--text-muted)' : 'var(--yellow)',
             textTransform: 'uppercase',
           }}>
             {group.propertyName}
@@ -307,7 +325,7 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
         />
       )}
 
-      {photo && <PhotoViewer item={photo} onClose={() => setPhoto(null)} />}
+      {photo && <PhotoViewer item={photo} onClose={closePhoto} />}
     </div>
   );
 }
@@ -418,7 +436,7 @@ function RequestActionModal({ modal, onClose, onDone, onFailed }) {
             onChange={e => pick(e.target.files?.[0])}
             style={{ fontSize: 12, color: 'var(--text-muted)' }}
           />
-          <div aria-live="polite" style={{ fontSize: 12, marginTop: 4, color: photoHint ? '#f87171' : 'var(--text-muted)' }}>
+          <div aria-live="polite" style={{ fontSize: 12, marginTop: 4, color: photoHint ? 'var(--red)' : 'var(--text-muted)' }}>
             {uploading ? 'Adding the photo…' : (photoHint || (photoKey ? `${photoName} added.` : ''))}
           </div>
         </div>

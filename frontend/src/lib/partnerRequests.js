@@ -86,6 +86,15 @@ export function chipsFor(items) {
   ];
 }
 
+/**
+ * Which empty state a chip reads. §5.4's "Nothing active." sentence is about
+ * the active list; the Recent chip is a different view (`view=recent`), so
+ * showing that sentence under it promises the wrong thing.
+ */
+export function emptyStateKind(chip) {
+  return chip === 'recent' ? 'recent' : 'active';
+}
+
 const CHIP_KIND = { holds: 'hold', tows: 'tow', photos: 'photo' };
 
 export function filterItems(items, chip) {
