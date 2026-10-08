@@ -33,8 +33,11 @@ export function roleLabel(role) {
  * @returns {'not_connected'|'connected_no_feed'|'connected'|'revoked'}
  */
 export function slackState(status) {
-  if (!status || !status.connected) return 'not_connected';
+  if (!status) return 'not_connected';
+  // The backend sends `{connected:false, revoked:true}` for an uninstalled app,
+  // so `revoked` must be checked before `connected`.
   if (status.revoked) return 'revoked';
+  if (!status.connected) return 'not_connected';
   if (!status.feed_channel_set) return 'connected_no_feed';
   return 'connected';
 }
