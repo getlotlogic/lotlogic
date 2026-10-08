@@ -65,6 +65,17 @@ export async function resolveCameraSnapshot(cameraId, tunnelSnapshotUrl, maxAgeS
 // getActiveRoster, which warns if it ever does.
 export const ACTIVE_ROSTER_CAP = 500;
 
+// True when the caller is asking about an account that is NOT the signed-in
+// one — i.e. an admin inside "View as Partner". `/auth/me` only ever answers
+// for the subject holding the token, so anything that asks about another
+// account has to go to the tables instead.
+function isImpersonating(userId) {
+  try {
+    const session = JSON.parse(localStorage.getItem('lotlogic_session') || '{}');
+    return !!(session && session.id && userId && session.id !== userId);
+  } catch { return false; }
+}
+
 export const db = {
   async getOwners(email) {
     if (!supabase) throw new Error('Data service unavailable');
@@ -729,7 +740,36 @@ export const db = {
   },
 
   // ── ALPR Parking Pass System ─────────────────────────────────
+  // Every role's property list now comes from `GET /auth/me` (spec §8.3):
+  // `{id, name, address, role, member_status, verification_status,
+  //   property_type, features{passes, qr, cameras}}` per non-archived
+  // property — owners get what they own or are a member of (pending
+  // memberships included), partners get their assigned properties, platform
+  // admins get all of them. The `features` flags are what drive the bottom-nav
+  // rule and the §5.6 upsell chips, and nothing else can derive them.
+  //
+  // Two paths still read PostgREST:
+  //   1. a backend that has not deployed the new shape yet — the response has
+  //      no `properties` key, so fall through (frontend ships first);
+  //   2. "View as Partner" — `/auth/me` only ever answers for the signed-in
+  //      subject, and an impersonating admin is asking about a DIFFERENT
+  //      account, so that path keeps the owner-column read.
   async getProperties(userId, role) {
+    if (!userId) return [];
+    if (!isImpersonating(userId)) {
+      try {
+        const me = await apiFetch('/auth/me');
+        if (me && Array.isArray(me.properties)) return me.properties;
+      } catch { /* offline / old backend — fall through to the column read */ }
+    }
+    return db.getPropertiesByOwnerColumn(userId, role);
+  },
+  // The legacy read, by `properties.owner_id` / `properties.tow_company_id`.
+  // Kept separate because those columns are the only way to tell WHOSE a
+  // property is: `/auth/me`'s shape deliberately omits them, so the surfaces
+  // that scope by owner (TowActivityPage for a platform admin, "View as
+  // Partner") have to ask for the columns explicitly.
+  async getPropertiesByOwnerColumn(userId, role) {
     if (!userId) return [];
     if (supabase) {
       let q = supabase.from('properties').select('*');

@@ -119,6 +119,36 @@ test.describe('accessibility @a11y', () => {
     await scan(page, 'lookup-partner');
   });
 
+  // The Requests section (portal spec §5.2) — the portal's default surface for
+  // an apartment property, and the one place `.theme-light` has to hold 4.5:1
+  // on the hold row AND on the outcome pill inside the .55-dimmed Recent rows
+  // (which is why the dimming is applied to text colours, never as an
+  // `opacity` on the row).
+  //
+  // @auth — needs TEST_OWNER_A_*. The seed account may own no apartment
+  // property at all; in that case the scan asserts the empty state rendered
+  // and still runs axe over it, because an empty Requests section is a real
+  // screen a brand-new signup sees first.
+  test('requests section (owner) has no serious a11y violations @auth', async ({ page }) => {
+    await loginAs(page, accounts.ownerA());
+    await page.goto('/app?tab=lots');
+    // Open the first apartment property, if the account has one.
+    const card = page.locator('[data-testid="property-card"], .lot-card').first();
+    if (await card.count()) {
+      await card.click();
+      // The chip row resolves once the property row lands.
+      const chip = page.getByRole('button', { name: 'Requests', exact: true });
+      if (await chip.count()) await chip.first().click();
+    }
+    // Either the composer or the empty state must be on screen before the
+    // scan — an in-flight skeleton is not the surface under test.
+    await Promise.race([
+      page.getByLabel('Plate').waitFor({ state: 'visible', timeout: 15000 }).catch(() => null),
+      page.getByText('No requests yet.').waitFor({ state: 'visible', timeout: 15000 }).catch(() => null),
+    ]);
+    await scan(page, 'requests-owner');
+  });
+
   test('marketing pitch pages are accessible', async ({ page }) => {
     for (const path of ['/pitch-apartments.html', '/pitch-tow.html']) {
       await page.goto(path);

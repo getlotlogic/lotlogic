@@ -223,7 +223,12 @@ export function TowActivityPage({ user }) {
       // property filter at all, so an admin opening this tab pulled other
       // tenants' tow sightings. Explicit .in('property_id', …) makes the
       // scope structural instead of an accident of who's logged in.
-      const props = await db.getProperties(user.id, user._role);
+      // db.getProperties now answers from `/auth/me`, whose property shape has
+      // no `owner_id` — and for a platform admin that list is EVERY tenant's
+      // property, which is exactly what the filter below exists to stop. So
+      // ask for the owner column explicitly here; it is the only thing that
+      // can tell whose property this is.
+      const props = await db.getPropertiesByOwnerColumn(user.id, user._role);
       const propIds = (props || [])
         .filter(p => !p.owner_id || p.owner_id === user.id)
         .map(p => p.id);

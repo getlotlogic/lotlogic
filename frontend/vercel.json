@@ -13,6 +13,9 @@
     { "source": "/apt/:path*", "destination": "/apt.html" },
     { "source": "/set-password", "destination": "/set-password.html" },
     { "source": "/admin", "destination": "/admin.html" },
+    { "source": "/join", "destination": "/dashboard.html" },
+    { "source": "/join/:path*", "destination": "/dashboard.html" },
+    { "source": "/r/:path*", "destination": "/dashboard.html" },
     { "source": "/app", "destination": "/dashboard.html" },
     { "source": "/app/:path*", "destination": "/dashboard.html" }
   ],
@@ -43,6 +46,27 @@
       "headers": [
         { "key": "Content-Security-Policy-Report-Only",
           "value": "default-src 'self'; script-src 'self' https://www.google.com https://www.gstatic.com https://browser.sentry-cdn.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://nzdkoouoaedbbccraoti.supabase.co wss://nzdkoouoaedbbccraoti.supabase.co https://lotlogic-backend-production.up.railway.app https://*.ingest.sentry.io https://*.ingest.us.sentry.io; frame-src https://www.google.com https://nmld-parking-preview.vercel.app blob:; object-src 'none'; base-uri 'self'" }
+      ]
+    },
+    {
+      "source": "/join",
+      "headers": [
+        { "key": "Content-Security-Policy-Report-Only",
+          "value": "default-src 'self'; script-src 'self' https://www.google.com https://www.gstatic.com https://browser.sentry-cdn.com https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https: https://maps.gstatic.com; connect-src 'self' https://nzdkoouoaedbbccraoti.supabase.co wss://nzdkoouoaedbbccraoti.supabase.co https://lotlogic-backend-production.up.railway.app https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://maps.googleapis.com; frame-src https://www.google.com https://www.gstatic.com https://nmld-parking-preview.vercel.app blob:; object-src 'none'; base-uri 'self'" }
+      ]
+    },
+    {
+      "source": "/join/:path*",
+      "headers": [
+        { "key": "Content-Security-Policy-Report-Only",
+          "value": "default-src 'self'; script-src 'self' https://www.google.com https://www.gstatic.com https://browser.sentry-cdn.com https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https: https://maps.gstatic.com; connect-src 'self' https://nzdkoouoaedbbccraoti.supabase.co wss://nzdkoouoaedbbccraoti.supabase.co https://lotlogic-backend-production.up.railway.app https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://maps.googleapis.com; frame-src https://www.google.com https://www.gstatic.com https://nmld-parking-preview.vercel.app blob:; object-src 'none'; base-uri 'self'" }
+      ]
+    },
+    {
+      "source": "/r/:path*",
+      "headers": [
+        { "key": "Content-Security-Policy-Report-Only",
+          "value": "default-src 'self'; script-src 'self' https://www.google.com https://www.gstatic.com https://browser.sentry-cdn.com https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https: https://maps.gstatic.com; connect-src 'self' https://nzdkoouoaedbbccraoti.supabase.co wss://nzdkoouoaedbbccraoti.supabase.co https://lotlogic-backend-production.up.railway.app https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://maps.googleapis.com; frame-src https://www.google.com https://www.gstatic.com https://nmld-parking-preview.vercel.app blob:; object-src 'none'; base-uri 'self'" }
       ]
     }
   ]
