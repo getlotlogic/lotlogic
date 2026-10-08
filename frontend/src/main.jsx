@@ -10,6 +10,8 @@ import { VerifyBanner } from './ui/VerifyBanner.jsx';
 import { requestsApi } from './lib/requestsApi.js';
 import { TeamSection } from './pages/property/TeamSection.jsx';
 import { PendingMembershipPage } from './pages/PendingMembershipPage.jsx';
+import { SignupPage } from './pages/SignupPage.jsx';
+import { FirstRunCard } from './pages/property/FirstRunCard.jsx';
 
 createRoot(document.getElementById('root')).render(
   <ErrorBoundary label="the dashboard"><ToastProvider><App /></ToastProvider></ErrorBoundary>
@@ -81,6 +83,14 @@ if (isE2E()) {
     // backend.
     TeamSection,
     PendingMembershipPage,
+    // SignupPage (Task 25, spec §5.1) and FirstRunCard (§3.4 step 5) — both
+    // plain components, handed out directly like the two above. The axe
+    // spec `tests/a11y/signup.spec.ts` mounts SignupPage standalone for
+    // `scan(page,'join')` / `scan(page,'join-manual')`, because the local
+    // static server in `buildAndServeFrontend` serves files and has no
+    // `/join → dashboard.html` rewrite to make the real route reachable.
+    SignupPage,
+    FirstRunCard,
     ALPRPropertyDetailPage: {
       load: () => import('./pages/ALPRPropertyDetailPage.jsx').then((m) => m.default),
     },
