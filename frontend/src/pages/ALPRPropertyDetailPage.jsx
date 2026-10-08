@@ -736,7 +736,7 @@ export function ALPRPropertyDetailPage({
           <div style={{minWidth:0,flex:1}}>
             <div style={{fontSize:18,fontWeight:800,color:'var(--text-primary)'}}>{property.name}</div>
             <div style={{fontSize:13,color:'var(--text-muted)',marginTop:2}}>{property.address || 'No address'}</div>
-            <div style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',padding:'2px 7px',borderRadius:20,background:isTruckPlaza?'rgba(251,146,60,.12)':'rgba(96,165,250,.12)',color:isTruckPlaza?'#fb923c':'#60a5fa',border:isTruckPlaza?'1px solid rgba(251,146,60,.3)':'1px solid rgba(96,165,250,.3)',display:'inline-block',marginTop:6}}>{isTruckPlaza ? 'Truck Plaza' : 'Apartment'}</div>
+            <div style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',padding:'2px 7px',borderRadius:20,background:isTruckPlaza?'rgba(251,146,60,.12)':'rgba(96,165,250,.12)',color:isTruckPlaza?'#fb923c':'var(--info-ink)',border:isTruckPlaza?'1px solid rgba(251,146,60,.3)':'1px solid rgba(96,165,250,.3)',display:'inline-block',marginTop:6}}>{isTruckPlaza ? 'Truck Plaza' : 'Apartment'}</div>
           </div>
           <button
             onClick={() => {
@@ -780,7 +780,9 @@ export function ALPRPropertyDetailPage({
                   // They stay visually "just open", never "selected".
                   border: `1px solid ${(active && !locked) ? 'var(--accent)' : 'var(--border)'}`,
                   background: (active && !locked) ? 'var(--accent)' : 'var(--bg-card)',
-                  color: locked ? 'var(--text-muted)' : (active ? '#fff' : 'var(--text-primary)'),
+                  // `--on-accent`, not #fff: white on the dark theme's amber is
+                  // 1.66:1 (the Requests chip is now the default active one).
+                  color: locked ? 'var(--text-muted)' : (active ? 'var(--on-accent)' : 'var(--text-primary)'),
                   cursor: 'pointer',
                   letterSpacing: '.02em',
                   whiteSpace: 'nowrap',

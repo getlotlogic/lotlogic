@@ -77,6 +77,8 @@
          the light override below flips to white, which is 4.91:1 (the same
          figure Task 15 solved --accent for). One token, measured in both. */
       --on-accent: #1A1206;
+      /* Info-blue text on its own 12% tint (the property-type badge). */
+      --info-ink: #60a5fa;
       /* Ink on an --accent fill. No single value passes 4.5:1 on both themes'
          accent (#fff is 1.7:1 on the amber, #1A1206 is 3.8:1 on
          .theme-light's #B85309), so the ink is a token — same reason
@@ -143,6 +145,7 @@
       --accent: #B85309;
       --accent-dark: #9A4408;
       --on-accent: #FFFFFF; /* 4.91:1 on #B85309 */
+      --info-ink: #1D4ED8; /* 6.04:1 on the light tint; #60a5fa was 2.29:1 */
       --accent-ink: #FFFFFF; /* 4.9:1 on --accent (#B85309); #1A1206 is 3.8:1 */
       --green: #16A34A;
       --red: #DC2626;
@@ -1092,6 +1095,8 @@
       flex-shrink: 0;
     }
     .pd-share-btn:hover { color: var(--text-primary); border-color: var(--text-faint); }
+    /* --text-muted on --bg-inset is 4.48:1 in the light theme — just under. */
+    .theme-light .pd-share-btn { color: var(--text-secondary); }
     .pd-section-head {
       display: flex; justify-content: space-between; align-items: center;
       margin: 20px 0 8px; gap: 8px;
@@ -1654,7 +1659,8 @@
     .theme-light .header-name { color: #6b7280; }
     .theme-light .bottom-nav { background: rgba(255,255,255,.97); border-top-color: #e5e7eb; }
     .theme-light .nav-item { color: #6B7280; }
-    .theme-light .nav-item.active { color: #B8860B; }
+    /* #B8860B on the white nav was 3.25:1; --accent-dark is 6.55:1. */
+    .theme-light .nav-item.active { color: var(--accent-dark); }
     .theme-light .nav-item.active::before { background: #FBBF24; }
     .theme-light .nav-badge { border-color: #fff; }
 
@@ -1880,7 +1886,8 @@
     .theme-light .earnings-amount span { color: #2563eb; }
 
     /* Connection indicator */
-    .theme-light .conn-indicator.online { color: #16a34a; }
+    /* #16a34a on the tinted pill was 3.17:1 (axe, Task 30); green-700 is 4.83:1. */
+    .theme-light .conn-indicator.online { color: #15803d; }
     .theme-light .conn-dot.on { background: #16a34a; box-shadow: 0 0 6px rgba(22,163,74,.3); }
 
     /* Confidence bar */
@@ -1984,7 +1991,8 @@
 
     /* ── Last updated indicator ── */
     .last-updated {
-      font-size: 10px; font-weight: 600; color: var(--text-ghost);
+      /* --text-ghost was 1.91:1 in the light theme — it is real text. */
+      font-size: 10px; font-weight: 600; color: var(--text-muted);
       text-align: center; padding: 4px 0; margin-bottom: 8px;
     }
 

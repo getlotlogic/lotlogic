@@ -962,7 +962,7 @@ export function App() {
                 aria-expanded={partnerSwitcherOpen}
                 title="Open one of your partners' portals"
                 style={{
-                  background:'rgba(167,139,250,.12)', color:'#a78bfa',
+                  background:'rgba(167,139,250,.12)', color: theme === 'dark' ? '#a78bfa' : '#6d28d9',
                   border:'1px solid rgba(167,139,250,.3)', borderRadius:8,
                   padding:'6px 10px', fontSize:12, fontWeight:700,
                   cursor:'pointer', whiteSpace:'nowrap',

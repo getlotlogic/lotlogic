@@ -93,14 +93,14 @@ function PlateLookupVerdict({ out, scope, propertyName, history, typedPlate, onP
       )}
       {tag}
     </div>
-    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-faint)', textAlign: 'center' }}>Checked just now · logged</div>
+    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>Checked just now · logged</div>
     {/* Fuzzy near-misses: a typo or partial read shouldn't dead-end at
         "not registered". Tapping a plate re-runs the lookup on it, so the
         tow verdict is always rendered from a real exact check — the
         suggestion list itself is never a verdict. */}
     {suggestions.length > 0 && (
       <div style={{ marginTop: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
           No exact match — closest registered plates
         </div>
         <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-card)' }}>
@@ -113,12 +113,12 @@ function PlateLookupVerdict({ out, scope, propertyName, history, typedPlate, onP
                 <span style={{ fontSize: 11, fontWeight: 700, color: s.active_now ? '#4ade80' : 'var(--accent-dark)' }}>
                   {s.source === 'resident' ? 'Pass on file' : (s.active_now ? 'Active pass' : 'Expired pass')}
                 </span>
-                {(s.unit || s.name) && <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{[s.unit ? 'Unit ' + s.unit : null, s.name].filter(Boolean).join(' · ')}</span>}
+                {(s.unit || s.name) && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{[s.unit ? 'Unit ' + s.unit : null, s.name].filter(Boolean).join(' · ')}</span>}
               </span>
             </button>
           ))}
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 6, textAlign: 'center' }}>Tap a plate to check it.</div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, textAlign: 'center' }}>Tap a plate to check it.</div>
       </div>
     )}
     </>
@@ -262,29 +262,29 @@ export function PlateLookupPage({ user }) {
     run(searchedPlate || plate, id);
   }
 
-  const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', margin: '16px 0 6px' };
+  const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.06em', margin: '16px 0 6px' };
   const options = scopeOptions({ properties, partnerLookupAvailable, companyName: user.company_name });
   const selectedPropertyName = properties?.find(p => p.id === scopeValue)?.name;
 
   return (
     <div style={{ maxWidth: 460, margin: '0 auto' }}>
       <div className="section-title" style={{ fontSize: 22, marginBottom: 4 }}>Plate lookup</div>
-      <div style={{ fontSize: 13, color: 'var(--text-faint)', marginBottom: 8 }}>Check a plate against the property's registered passes.</div>
+      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>Check a plate against the property's registered passes.</div>
       {properties === null ? (
-        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>Loading properties…</div>
+        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading properties…</div>
       ) : properties.length === 0 ? (
-        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13, border: '1px solid var(--border)', borderRadius: 12 }}>No apartment properties assigned to this account.</div>
+        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, border: '1px solid var(--border)', borderRadius: 12 }}>No apartment properties assigned to this account.</div>
       ) : (
         <>
-          <label style={labelStyle}>Checking</label>
-          <select value={scopeValue} onChange={e => selectProperty(e.target.value)} style={{ width: '100%', padding: '12px 14px', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 15 }}>
+          <label style={labelStyle} htmlFor="lookup-scope">Checking</label>
+          <select id="lookup-scope" value={scopeValue} onChange={e => selectProperty(e.target.value)} style={{ width: '100%', padding: '12px 14px', background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 15 }}>
             {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
           {probeDone && !partnerLookupAvailable && (
-            <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 6 }}>All-properties check is coming soon — pick a property.</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>All-properties check is coming soon — pick a property.</div>
           )}
-          <label style={labelStyle}>License plate</label>
-          <input value={plate} onChange={e => setPlate(e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter') run(); }}
+          <label style={labelStyle} htmlFor="lookup-plate">License plate</label>
+          <input id="lookup-plate" value={plate} onChange={e => setPlate(e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter') run(); }}
             autoCapitalize="characters" autoCorrect="off" spellCheck="false" enterKeyHint="done" autoComplete="off" placeholder="ABC1234"
             style={{ width: '100%', padding: '16px 14px', background: 'var(--bg-card)', color: 'var(--text-primary)', border: '2px solid var(--border)', borderRadius: 10, fontSize: 32, fontWeight: 700, textAlign: 'center', letterSpacing: '.1em', fontFamily: "'DM Mono', ui-monospace, monospace", outlineColor: 'var(--accent)' }} />
           <button onClick={() => run()} disabled={busy} style={{ width: '100%', marginTop: 18, padding: '15px', background: 'var(--text-primary)', color: 'var(--bg-primary)', border: 'none', borderRadius: 999, fontWeight: 700, fontSize: 16, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>
@@ -298,14 +298,14 @@ export function PlateLookupPage({ user }) {
           )}
           {history && history.entries && history.entries.length > 0 && (
             <div style={{ marginTop: 20 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
                 Pass history · {history.entries.length}{history.entries.length === 50 ? '+' : ''}
               </div>
               <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-card)' }}>
                 {history.entries.map((e, i) => {
                   const statusColor = e.status === 'active' || e.status === 'approved' ? '#4ade80'
                     : e.status === 'rejected' ? '#ef4444'
-                    : e.status === 'pending' ? '#fbbf24' : 'var(--text-faint)';
+                    : e.status === 'pending' ? '#fbbf24' : 'var(--text-muted)';
                   const fmt = (v) => v ? new Date(v).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
                   return (
                     <div key={e.id} style={{ padding: '10px 14px', borderTop: i ? '1px solid var(--border-subtle)' : 'none', display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
@@ -314,7 +314,7 @@ export function PlateLookupPage({ user }) {
                           {e.kind === 'permanent' ? 'Long-term pass' : 'Short-term pass'}
                           {e.unit ? ` · Unit ${e.unit}` : ''}{e.name ? ` · ${e.name}` : ''}
                         </div>
-                        <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
                           {fmt(e.created_at)}{e.valid_until ? ` → ${fmt(e.valid_until)}` : ''}
                         </div>
                         {e.reject_reason && (
