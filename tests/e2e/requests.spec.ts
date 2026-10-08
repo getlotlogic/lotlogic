@@ -81,6 +81,8 @@ test.describe('office Requests section @portal', () => {
     await page.goto(`${frontendOrigin()}/r/${token}`);
     const ok = page.getByRole('button', { name: /^OK — it ends at / });
     await expect(ok).toBeVisible({ timeout: 15_000 });
+    // The 48 h bearer token leaves the address bar once read (`/r/<token>` → `/r`).
+    await expect(page).toHaveURL(`${frontendOrigin()}/r`);
     return { req, ok };
   }
   const holdState = (id: string) =>
