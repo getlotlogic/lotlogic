@@ -94,6 +94,7 @@ test.describe('VerifyEmailSheet @a11y', () => {
   });
 
   test('wrong: a mismatched code clears the field and shows tries left', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.route('**/auth/verify-email', (route) => route.fulfill({
       status: 400, contentType: 'application/json',
       body: JSON.stringify({ detail: 'code_mismatch', tries_left: 3 }),
@@ -106,6 +107,7 @@ test.describe('VerifyEmailSheet @a11y', () => {
   });
 
   test('exhausted: the 5th miss gets a fresh code, no tap needed', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.route('**/auth/verify-email', (route) => route.fulfill({
       status: 400, contentType: 'application/json',
       body: JSON.stringify({ detail: 'code_exhausted' }),
@@ -118,6 +120,7 @@ test.describe('VerifyEmailSheet @a11y', () => {
   });
 
   test('success: a matching code closes the sheet and fires onSuccess', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.route('**/auth/verify-email', (route) => route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify({ email_verified: true }),
