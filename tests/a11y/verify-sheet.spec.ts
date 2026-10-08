@@ -61,10 +61,17 @@ async function mountSheet(page: Page, opts: MountOpts = {}) {
     function Harness() {
       const [open, setOpen] = React.useState(true);
       const [marker, setMarker] = React.useState(null as string | null);
+      const [changedEmail, setChangedEmail] = React.useState(null as string | null);
       return React.createElement(
         React.Fragment,
         null,
         marker && React.createElement('div', { id: 'verify-marker', role: 'status' }, marker),
+        // Stands in for App.jsx's handleEmailChanged — this harness doesn't
+        // own a real `owner` object, so it just records what the sheet
+        // handed back, which is exactly what the fix needs proven: that
+        // VerifyEmailSheet calls onEmailChanged(newEmail) at all, and with
+        // the submitted address.
+        changedEmail && React.createElement('div', { id: 'email-changed-marker', role: 'status' }, changedEmail),
         React.createElement(VerifyEmailSheet, {
           open,
           email,
@@ -73,6 +80,7 @@ async function mountSheet(page: Page, opts: MountOpts = {}) {
           fromWall,
           onClose: () => setOpen(false),
           onSuccess: () => { setOpen(false); setMarker('Email confirmed'); },
+          onEmailChanged: (newEmail: string) => setChangedEmail(newEmail),
           onSignOut: () => setMarker('Signed out'),
         }),
       );
@@ -157,6 +165,21 @@ test.describe('VerifyEmailSheet @a11y', () => {
     await expect(page.locator('.verify-sheet-sub')).toHaveText('We sent it to new@example.com');
   });
 
+  test('change-email success also calls onEmailChanged, not just the sheet\'s own local state', async ({ page }) => {
+    // Regression for the fix-round-1 blocking finding: a successful
+    // "Change email" used to update only the sheet's own `currentEmail` —
+    // nothing told the caller (App.jsx, which owns `owner.email` and is
+    // what the banner actually renders), so the banner kept showing the
+    // stale address indefinitely. onEmailChanged(newEmail) is the fix.
+    await page.route('**/auth/change-email', (route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }),
+    }));
+    await mountSheet(page, { mode: 'changeEmail' });
+    await page.locator('.verify-change-input').fill('fresh@example.com');
+    await page.getByRole('button', { name: 'Send code' }).click();
+    await expect(page.locator('#email-changed-marker')).toHaveText('fresh@example.com');
+  });
+
   test('a pasted "482-190" keeps digits only and auto-submits at 6', async ({ page }) => {
     // A real `paste` ClipboardEvent, not `.fill()` — the field's native
     // `maxlength=6` would otherwise truncate "482-190" (7 chars with the
@@ -178,5 +201,52 @@ test.describe('VerifyEmailSheet @a11y', () => {
     });
     await expect(page.locator('#verify-marker')).toHaveText('Email confirmed');
     expect(JSON.parse(body!)).toEqual({ code: '482190' });
+  });
+});
+
+// ── VerifyBanner's Resend cooldown gate (fix-round-1 blocking finding) ───
+//
+// The banner's Resend button had no client-side cooldown gate at all
+// (`resendDisabled` was never passed at the App.jsx call site), so a user
+// who double-tapped Resend inside the spec's 60s cooldown (e.g. right after
+// signup auto-sends the first code) could race a real request through and
+// get told "Can't reach LotLogic — try again" for the server's own
+// documented 429 `resend_cooldown {retry_after}` — a normal-use path, not a
+// contrived one. These mount the real `VerifyBanner` standalone (no App.jsx
+// session machinery needed — it is a dumb props-in component) to prove the
+// `resendDisabled` prop actually disables the button.
+async function mountBanner(page: Page, opts: { resendDisabled?: boolean } = {}) {
+  const { resendDisabled = false } = opts;
+  await page.goto(`${server.origin}/dashboard.html?e2e=1`);
+  await page.waitForFunction(
+    () => typeof (window as any).__lotlogicTestHooks?.VerifyBanner === 'function',
+    undefined,
+    { timeout: 30_000 },
+  );
+  await page.evaluate(({ resendDisabled }) => {
+    const { React, ReactDOM, VerifyBanner } = (window as any).__lotlogicTestHooks;
+    const host = document.createElement('div');
+    host.id = 'banner-harness';
+    document.body.appendChild(host);
+    ReactDOM.createRoot(host).render(React.createElement(VerifyBanner, {
+      variant: 'banner',
+      email: 'dana@sunsetridge.com',
+      onEnterCode: () => {},
+      onChangeEmail: () => {},
+      onResend: () => {},
+      resendDisabled,
+    }));
+  }, { resendDisabled });
+}
+
+test.describe('VerifyBanner resend cooldown @a11y', () => {
+  test('resendDisabled=true disables the Resend button', async ({ page }) => {
+    await mountBanner(page, { resendDisabled: true });
+    await expect(page.getByRole('button', { name: 'Resend' })).toBeDisabled();
+  });
+
+  test('resendDisabled=false (the default, cooldown expired) leaves it tappable', async ({ page }) => {
+    await mountBanner(page, { resendDisabled: false });
+    await expect(page.getByRole('button', { name: 'Resend' })).toBeEnabled();
   });
 });

@@ -8,6 +8,8 @@ import {
   verifyState,
   onlyDigits,
   secondsUntilResend,
+  cooldownRetryAfter,
+  sentAtForRetryAfter,
   WALL_DAYS,
   RESEND_COOLDOWN_SECONDS,
 } from '../src/lib/verifyState.js';
@@ -88,4 +90,38 @@ test('a missing sent_at means resend is available right away', () => {
   assert.equal(secondsUntilResend(null), 0);
   assert.equal(secondsUntilResend(undefined), 0);
   assert.equal(secondsUntilResend('not-a-date'), 0);
+});
+
+// ── cooldownRetryAfter / sentAtForRetryAfter (fix-round-1 blocking finding) ──
+// The banner's "Resend" catch block used to treat the spec's documented 429
+// `resend_cooldown {retry_after}` identically to a genuine offline failure.
+// These two pure helpers are what the fixed App.jsx catch branches on.
+
+test('cooldownRetryAfter reads retry_after off a resend_cooldown rejection', () => {
+  const e = { code: 'resend_cooldown', body: { retry_after: 37 } };
+  assert.equal(cooldownRetryAfter(e), 37);
+});
+
+test('cooldownRetryAfter falls back to RESEND_COOLDOWN_SECONDS when the body omits retry_after', () => {
+  const e = { code: 'resend_cooldown', body: {} };
+  assert.equal(cooldownRetryAfter(e), RESEND_COOLDOWN_SECONDS);
+  assert.equal(cooldownRetryAfter({ code: 'resend_cooldown' }), RESEND_COOLDOWN_SECONDS);
+});
+
+test('cooldownRetryAfter is null for every other rejection — offline, 5xx, missing e', () => {
+  assert.equal(cooldownRetryAfter({ code: 'offline' }), null);
+  assert.equal(cooldownRetryAfter({ status: 500 }), null);
+  assert.equal(cooldownRetryAfter(null), null);
+  assert.equal(cooldownRetryAfter(undefined), null);
+});
+
+test('sentAtForRetryAfter round-trips through secondsUntilResend', () => {
+  const now = new Date('2026-10-08T00:01:00Z');
+  const sentAt = sentAtForRetryAfter(23, now);
+  assert.equal(secondsUntilResend(sentAt, now), 23);
+});
+
+test('sentAtForRetryAfter at the full cooldown is "sent right now"', () => {
+  const now = new Date('2026-10-08T00:01:00Z');
+  assert.equal(sentAtForRetryAfter(RESEND_COOLDOWN_SECONDS, now), now.toISOString());
 });

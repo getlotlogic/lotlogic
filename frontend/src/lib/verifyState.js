@@ -57,3 +57,34 @@ export function secondsUntilResend(sentAt, now = new Date(), cooldown = RESEND_C
   const left = Math.ceil(cooldown - elapsedSeconds);
   return left > 0 ? left : 0;
 }
+
+/**
+ * Tells apart the spec's documented 429 `resend_cooldown {retry_after}`
+ * (a raced double-tap of Resend inside the 60s window — the server working
+ * as designed) from every other rejection of `POST /auth/resend-verification`
+ * (offline, DNS, CORS, a genuine 5xx) — those two are NOT the same failure
+ * and must not show the same "can't reach" copy. Returns the cooldown
+ * seconds remaining, or `null` when `e` is not a cooldown rejection.
+ * @param {{code?: string, body?: {retry_after?: number}}} e
+ * @param {number} [fallback] seconds to report when the body omits retry_after
+ * @returns {number|null}
+ */
+export function cooldownRetryAfter(e, fallback = RESEND_COOLDOWN_SECONDS) {
+  if (!e || e.code !== 'resend_cooldown') return null;
+  return typeof e.body?.retry_after === 'number' ? e.body.retry_after : fallback;
+}
+
+/**
+ * The inverse of `secondsUntilResend`: an `email_verify_sent_at` timestamp
+ * that makes `secondsUntilResend(result, now, cooldown)` report `retryAfter`
+ * seconds remaining. Used when the server's 429 `retry_after` disagrees with
+ * what the client's own `sentAt` would compute (its clock, or a sibling tab's
+ * resend, raced ahead of ours) — the server's number wins.
+ * @param {number} retryAfter
+ * @param {Date} [now]
+ * @param {number} [cooldown]
+ * @returns {string} ISO timestamp
+ */
+export function sentAtForRetryAfter(retryAfter, now = new Date(), cooldown = RESEND_COOLDOWN_SECONDS) {
+  return new Date(now.getTime() - (cooldown - retryAfter) * 1000).toISOString();
+}

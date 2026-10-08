@@ -6,6 +6,7 @@ import { App } from './App.jsx';
 import { db } from './lib/db.js';
 import { lotDayBound } from './lib/lotdate.js';
 import { VerifyEmailSheet } from './pages/property/VerifyEmailSheet.jsx';
+import { VerifyBanner } from './ui/VerifyBanner.jsx';
 
 createRoot(document.getElementById('root')).render(
   <ErrorBoundary label="the dashboard"><ToastProvider><App /></ToastProvider></ErrorBoundary>
@@ -61,6 +62,10 @@ if (isE2E()) {
     // is. tests/a11y/axe.spec.ts mounts it standalone (wrong / exhausted /
     // success states) for `scan(page, 'verify-sheet')`.
     VerifyEmailSheet,
+    // VerifyBanner (Task 23, spec §3.5) — mounted standalone so a spec can
+    // prove the Resend button actually respects `resendDisabled` without
+    // dragging in the whole App.jsx session/property-fetch machinery.
+    VerifyBanner,
     ALPRPropertyDetailPage: {
       load: () => import('./pages/ALPRPropertyDetailPage.jsx').then((m) => m.default),
     },

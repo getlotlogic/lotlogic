@@ -28,6 +28,11 @@ import { useFocusTrap, useUid } from '../../ui/focusTrap.js';
 //   onSuccess(verifyEmailResponse) - 200 from POST /auth/verify-email; the
 //     caller unmounts the banner/wall, toasts "Email confirmed", and fires
 //     any pending resume() (Task 22's composer)
+//   onEmailChanged(newEmail) - 200 from POST /auth/change-email; the caller
+//     (App.jsx) patches owner.email so the banner above this sheet — which
+//     renders owner.email, not this sheet's own local `currentEmail` — names
+//     the new address too (spec §3.5: "the banner then names the new
+//     address"), persisting the same way handleVerifySuccess already does
 //   onSignOut() - the wall variant's Sign out link
 export function VerifyEmailSheet({
   open,
@@ -37,6 +42,7 @@ export function VerifyEmailSheet({
   fromWall = false,
   onClose,
   onSuccess,
+  onEmailChanged,
   onSignOut,
 }) {
   const [code, setCode] = useState('');
@@ -172,6 +178,7 @@ export function VerifyEmailSheet({
     try {
       await requestsApi.changeEmail({ email: trimmed });
       setCurrentEmail(trimmed);
+      onEmailChanged?.(trimmed);
       setChangingEmail(false);
       setCode('');
       setStatus('idle');
@@ -184,7 +191,7 @@ export function VerifyEmailSheet({
     } finally {
       setChangeEmailSubmitting(false);
     }
-  }, [newEmail, changeEmailSubmitting]);
+  }, [newEmail, changeEmailSubmitting, onEmailChanged]);
 
   if (!open) return null;
   const canResend = secondsLeft <= 0;

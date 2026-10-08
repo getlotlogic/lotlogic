@@ -10,7 +10,7 @@ import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActiv
 import { lazyPage } from './lib/lazyPage.js';
 import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink } from './lib/deepLink.js';
 import { navTabsFor, partnerRequestsReady } from './lib/features.js';
-import { verifyState } from './lib/verifyState.js';
+import { verifyState, secondsUntilResend, cooldownRetryAfter, sentAtForRetryAfter } from './lib/verifyState.js';
 import { requestsApi } from './lib/requestsApi.js';
 import { VerifyBanner } from './ui/VerifyBanner.jsx';
 import { VerifyEmailSheet } from './pages/property/VerifyEmailSheet.jsx';
@@ -185,14 +185,42 @@ export function App() {
     verifyResumeRef.current = null;
     if (resume) resume();
   }, [addToast]);
+  // VerifyEmailSheet's "Change email" success only updates its own local
+  // `currentEmail` — this is what keeps `owner.email` (what the banner
+  // actually renders) in sync, the same persist-to-session pattern
+  // `handleVerifySuccess` above uses.
+  const handleEmailChanged = useCallback((newEmail) => {
+    setOwner(prev => {
+      if (!prev) return prev;
+      const merged = { ...prev, email: newEmail };
+      try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
+      return merged;
+    });
+  }, []);
   // A bare "Resend" tap from the banner/wall (not through the sheet) — the
-  // cooldown gate is enforced by disabling the button; a 429 raced from
-  // another tab is swallowed here (nothing to show without the sheet open).
+  // cooldown gate is enforced by disabling the button (see bannerResendDisabled
+  // below), but a raced double-tap (e.g. right after signup auto-sends the
+  // first code) can still reach the server inside the 60s window and get
+  // back the spec's documented 429 `resend_cooldown {retry_after}`. That is
+  // not the same failure as a genuine offline/network error and must not
+  // show the same "can't reach" toast — mirrors VerifyEmailSheet's own
+  // resend() handling.
   const handleBannerResend = useCallback(() => {
     requestsApi.resendVerification({}).then(() => {
       setOwner(prev => (prev ? { ...prev, email_verify_sent_at: new Date().toISOString() } : prev));
       addToast('Sent. Check your email — and the spam folder.', 'success');
-    }).catch(() => { addToast("Can't reach LotLogic — try again.", 'error'); });
+    }).catch((e) => {
+      const retryAfter = cooldownRetryAfter(e);
+      if (retryAfter !== null) {
+        // Rebase email_verify_sent_at so secondsUntilResend() (driving
+        // bannerResendDisabled) agrees with the server's retry_after,
+        // instead of trusting a client clock that raced ahead of it.
+        setOwner(prev => (prev ? { ...prev, email_verify_sent_at: sentAtForRetryAfter(retryAfter) } : prev));
+        addToast(`Already sent — try again in ${retryAfter}s.`, 'error');
+        return;
+      }
+      addToast("Can't reach LotLogic — try again.", 'error');
+    });
   }, [addToast]);
   // `/auth/me.properties` — the per-property `features` flags behind the
   // bottom-nav rule (spec §5) and the §5.6 upsell chips.
@@ -241,6 +269,19 @@ export function App() {
   // confirmed. `viewAs` / partner sessions never carry signup_source, so
   // verifyState() falls through to 'verified' for them on its own.
   const emailVerifyState = isOwner ? verifyState(owner) : 'verified';
+  // The banner/wall "Resend" button's client-side cooldown gate. `resendTick`
+  // itself is unused — it only exists to force a re-render once a second so
+  // `secondsUntilResend` (evaluated fresh against the real clock every
+  // render) counts down and the button re-enables on its own, the same way
+  // VerifyEmailSheet's own countdown does.
+  const [, setResendTick] = useState(0);
+  useEffect(() => {
+    if (emailVerifyState === 'verified') return undefined;
+    const id = setInterval(() => setResendTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [emailVerifyState]);
+  const bannerResendDisabled = emailVerifyState !== 'verified'
+    && secondsUntilResend(owner?.email_verify_sent_at) > 0;
   // Platform-admin (Gabe / Victor / Standard Vending) — gets admin-only surfaces.
   // Sourced from the JWT claim issued by /auth/login. Never set this from
   // partner-controlled state.
@@ -838,6 +879,7 @@ export function App() {
           onEnterCode={() => openVerifySheet({ mode: 'code', fromWall: emailVerifyState === 'walled' })}
           onChangeEmail={() => openVerifySheet({ mode: 'changeEmail', fromWall: emailVerifyState === 'walled' })}
           onResend={handleBannerResend}
+          resendDisabled={bannerResendDisabled}
         />
       )}
 
@@ -941,6 +983,7 @@ export function App() {
         fromWall={verifyFromWall}
         onClose={closeVerifySheet}
         onSuccess={handleVerifySuccess}
+        onEmailChanged={handleEmailChanged}
         onSignOut={logout}
       />
     </div>
