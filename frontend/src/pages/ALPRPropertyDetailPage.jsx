@@ -7,13 +7,22 @@ import { supabase } from '../lib/supabase.js';
 import { API, apiFetch } from '../lib/api.js';
 import { db } from '../lib/db.js';
 import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
+import { buildSettingsPatch, mergeSavedProperty, settingsSaveErrorMessage, NO_CHANGES_TOAST, PROPERTY_TYPE_READONLY_NOTE } from '../lib/propertySettings.js';
 import { useIntervalFetch, useNowTick } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
+import { FirstRunCard } from './property/FirstRunCard.jsx';
+import { useUid } from '../ui/focusTrap.js';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { CrossCameraSightings } from '../ui/CrossCameraSightings.jsx';
 import { ApartmentPermits } from './ApartmentPermits.jsx';
 import { lazyPage } from '../lib/lazyPage.js';
+// Eager, not lazy (spec §5.2: "Files, eager in the PD chunk"). Requests is the
+// default section for an apartment, so a lazy chunk would put a spinner in
+// front of the one surface a portal-only manager opened the app for.
+import { RequestsSection } from './property/RequestsSection.jsx';
+import { lockedChips } from '../lib/upsell.js';
+import { UpsellPanel } from './property/UpsellPanel.jsx';
 
 // Heavy — lazy-loaded so opening a property doesn't pull in the full
 // parking-log bundle before the operator ever scrolls to it.
@@ -27,6 +36,16 @@ const TruckParkingLog = lazyPage(() => import('./TruckParkingLog.jsx'));
 //   startIndex: which thumbnail was tapped
 //   plate: header text
 //   onClose: () => void
+// Draft the Settings form opens with; the diff on save is against this, so an
+// untouched form is a no-op even when the property has no stored policy yet.
+function settingsBaseline(property) {
+  return {
+    property_type: property?.property_type || 'apartment',
+    policy_text: property?.policy_text || DEFAULT_TRUCK_PLAZA_POLICY,
+    policy_phone: property?.policy_phone || '',
+  };
+}
+
 function SnapsLightbox({ snaps, startIndex, plate, onClose }) {
   const [index, setIndex] = useState(startIndex || 0);
   const touchRef = useRef({ x: 0, y: 0, t: 0 });
@@ -187,7 +206,90 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 }
 
 
-export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
+// The top-of-page section chips, per property type. Single source of truth:
+// the render maps over this and the section resolver below validates against
+// it, so a stored or deep-linked section that this property has no chip for
+// can never be selected.
+//
+// `features` (spec §5.6, `/auth/me.properties[].features {passes, qr,
+// cameras}`) locks the Parking Passes chip — relabelled "🔒 Parking passes"
+// — when this property has never had a pass flow switched on, and adds two
+// chips that otherwise don't exist on this row at all: "🔒 QR codes" and
+// "🔒 Cameras". `lockedChips` (UpsellPanel.jsx) is the single source for
+// which of the three are locked; truck plazas never show them — every
+// truck-plaza property registers passes, by definition.
+export function sectionChipsFor(propertyType, features) {
+  const isTruckPlaza = propertyType === 'truck_plaza';
+  if (isTruckPlaza) {
+    return [
+      { id: 'all', label: 'All' },
+      // No-registration evidence is a camera-enforcement concept — truck
+      // plaza only. Apartments are registration-based and don't get it.
+      { id: 'noreg', label: 'No Registration Evidence Package' },
+      // ActivePassTracker chip removed entirely — the component was
+      // deleted in the parking-pass consolidation. The Parking Log
+      // is the single source of truth now.
+      { id: 'log', label: 'Parking Log' },
+      { id: 'history', label: 'History' },
+    ];
+  }
+  const locked = lockedChips(features);
+  const lockedById = new Map(locked.map(c => [c.id, c]));
+  return [
+    // Requests is first and default for an apartment (spec §5.2) — it is the
+    // portal's whole point. A truck plaza has no office placing holds, so it
+    // does not get the chip and keeps landing on the Parking Log.
+    ...(isTruckPlaza ? [] : [{ id: 'requests', label: 'Requests' }]),
+    { id: 'all', label: 'All' },
+    lockedById.get('log') || { id: 'log', label: 'Parking Passes' },
+    ...locked.filter(c => c.id !== 'log'),
+  ];
+}
+
+// Namespaced per property type: an apartment and a truck plaza have different
+// chips, and one global key meant opening an apartment after a truck plaza
+// landed on a section that does not exist there.
+export function sectionStorageKey(propertyType) {
+  return `lotlogic_pd_section:${propertyType || 'unknown'}`;
+}
+
+// Precedence: the deep link (`/app?property=…&section=requests`) beats the
+// remembered section, which beats the default. Anything not in this
+// property's chip list is ignored outright. Apartments default to Requests —
+// the portal's whole point; truck plazas have no Requests chip and stay on the
+// Parking Log, the surface their operators actually use.
+export function resolveSectionFilter({ propertyType, features, initialSection, stored }) {
+  const ids = sectionChipsFor(propertyType, features).map(c => c.id);
+  if (initialSection && ids.includes(initialSection)) return initialSection;
+  if (stored && ids.includes(stored)) return stored;
+  if (propertyType !== 'truck_plaza' && ids.includes('requests')) return 'requests';
+  return 'log';
+}
+
+export function ALPRPropertyDetailPage({
+  propertyId,
+  onBack,
+  user,
+  // `/auth/me.properties[].features {passes, qr, cameras}` for exactly this
+  // property — ALPRPropertiesPage already holds it (that's where the list
+  // came from) and passes it down, because this page's own `db.getProperty`
+  // read is a raw table row with no computed `features` key (spec §5.6: "no
+  // new column"). `null`/`undefined` (a page opened before the list prop
+  // threading, or a legacy caller) locks nothing — same "explicit false
+  // only" rule as `isPortalOnly` in `lib/features.js`.
+  features = null,
+  // Deep link, forwarded by ALPRPropertiesPage. `initialSection` overrides the
+  // remembered chip; `request` / `upload` / `firstrun` / `verify` name
+  // surfaces that land with Tasks 22, 23 and 25.
+  initialSection = null,
+  request = null,
+  upload = false,
+  firstrun = false,
+  verify = false,
+  // Task 23's VerifyEmailSheet opener. Until it lands the default no-op leaves
+  // the composer's inline "Confirm your email…" copy as the whole answer.
+  onNeedVerify = () => {},
+}) {
   // QR codes + camera registration are owner-only surfaces. Partners see
   // the property + plates + parking log but not the operational chrome.
   const isOwner = user?._role === 'owner';
@@ -239,33 +341,48 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
   // the tiles used to render an empty white box with nothing in the console —
   // say so instead, and point at the Copy link button that still works.
   const [qrLibFailed, setQrLibFailed] = useState(false);
+  // Shared `aria-describedby` target for every locked upsell chip (spec
+  // §5.6) — one hidden node, not a copy per chip.
+  const lockedChipDescId = useUid('pd-chip-locked');
 
   const isTruckPlaza = property?.property_type === 'truck_plaza';
 
   // Top-of-page section filter. Lets the operator focus on one surface
-  // (tracker, log, plates, cameras) instead of scrolling past everything.
-  // Persists across reloads.
-  const [sectionFilter, setSectionFilter] = useState(() => {
-    try {
-      // Default to 'log' so opening any property page lands directly on
-      // the Parking Log — the surface everyone actually uses. Previously
-      // defaulted to 'all' which dumped every section.
-      const saved = localStorage.getItem('lotlogic_pd_section') || 'log';
-      // Migration: 'tracker' no longer exists. Anyone with it cached
-      // gets bumped to 'log' (the same content area, just renamed).
-      if (saved === 'tracker') return 'log';
-      return saved;
-    } catch { return 'log'; }
-  });
+  // instead of scrolling past everything, and persists across reloads.
+  // Resolved once `property` lands, because the chip list — and therefore
+  // which stored or deep-linked value is even legal — depends on its type.
+  const [sectionFilter, setSectionFilter] = useState(null);
+  // One-time: the You're-in card closes for good within this mount. Not
+  // persisted — `firstrun` only ever arrives from a url App.jsx then cleans.
+  const [firstRunDismissed, setFirstRunDismissed] = useState(false);
+  const sectionResolvedRef = useRef(false);
   useEffect(() => {
-    try { localStorage.setItem('lotlogic_pd_section', sectionFilter); } catch {}
-  }, [sectionFilter]);
+    if (sectionResolvedRef.current || !property) return;
+    sectionResolvedRef.current = true;
+    let stored = null;
+    try { stored = localStorage.getItem(sectionStorageKey(property.property_type)); } catch { /* blocked storage */ }
+    setSectionFilter(resolveSectionFilter({
+      propertyType: property.property_type,
+      features,
+      initialSection,
+      stored,
+    }));
+  }, [property, features, initialSection]);
+  useEffect(() => {
+    if (!sectionFilter || !property) return;
+    try { localStorage.setItem(sectionStorageKey(property.property_type), sectionFilter); } catch { /* blocked storage */ }
+  }, [sectionFilter, property]);
   const showSection = (key) => sectionFilter === 'all' || sectionFilter === key;
+  // When Requests is the chosen chip, nothing else renders. Spec §5: "No dead
+  // controls … the layout ships without the control, not with a disabled one."
+  // The three owner surfaces below (the QR tiles, the add-plate form and the
+  // plate list) are not behind a showSection of their own, so they need this.
+  const requestsOnly = sectionFilter === 'requests';
 
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
     setLoading(true);
-    const [prop, pl, cam, ev, pCount, os, ah] = await Promise.all([
+    const [prop, pl, cam, ev, pCount, os, ah, mine] = await Promise.all([
       db.getProperty(propertyId),
       db.getResidentPlates(propertyId),
       db.getALPRCameras(propertyId),
@@ -273,8 +390,14 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
       db.countVisitorPasses(propertyId),
       db.getOpenSessions(propertyId),
       db.getActiveHolds(propertyId),
+      // `/auth/me`'s property shape carries what the raw `properties` row
+      // cannot: this account's member `role`, and the tow company's `phone`
+      // for the §5.2 "couldn't reach N Style" banner. Best-effort — an older
+      // backend answers without it and the Requests section falls back.
+      db.getProperties(user?.id, user?._role).catch(() => []),
     ]);
-    setProperty(prop);
+    const authEntry = (mine || []).find(x => x && x.id === propertyId) || null;
+    setProperty(prop ? { ...prop, ...(authEntry || {}) } : prop);
     setPlates(pl);
     setCameras(cam);
     setEvents(ev);
@@ -282,7 +405,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
     setOpenSessions(os);
     setActiveHolds(ah);
     setLoading(false);
-  }, [propertyId]);
+  }, [propertyId, user?.id, user?._role]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -547,26 +670,19 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
     if (!settingsDraft) return;
     setSaving(true);
     try {
-      const updates = {};
-      // property_type change only allowed when there are zero passes.
-      if (settingsDraft.property_type !== property.property_type) {
-        if (passTotalCount > 0) {
-          addToast('Cannot change property type after passes have been recorded.', 'error');
-          setSaving(false);
-          return;
-        }
-        updates.property_type = settingsDraft.property_type;
-      }
-      if (settingsDraft.property_type === 'truck_plaza') {
-        updates.policy_text = settingsDraft.policy_text || DEFAULT_TRUCK_PLAZA_POLICY;
-        updates.policy_phone = settingsDraft.policy_phone || null;
+      // Only changed, editable fields go out; property_type never does.
+      const updates = buildSettingsPatch(settingsBaseline(property), settingsDraft);
+      if (Object.keys(updates).length === 0) {
+        addToast(NO_CHANGES_TOAST, 'info');
+        setSaving(false);
+        return;
       }
       const updated = await db.updateProperty(propertyId, updates);
-      setProperty(updated);
+      setProperty(prev => mergeSavedProperty(prev, updated));
       setShowSettings(false);
       addToast('Settings saved', 'success');
     } catch (err) {
-      addToast('Failed to save settings. ' + (err.message || ''), 'error');
+      addToast(settingsSaveErrorMessage(err), 'error');
     }
     setSaving(false);
   }
@@ -624,15 +740,11 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           <div style={{minWidth:0,flex:1}}>
             <div style={{fontSize:18,fontWeight:800,color:'var(--text-primary)'}}>{property.name}</div>
             <div style={{fontSize:13,color:'var(--text-muted)',marginTop:2}}>{property.address || 'No address'}</div>
-            <div style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',padding:'2px 7px',borderRadius:20,background:isTruckPlaza?'rgba(251,146,60,.12)':'rgba(96,165,250,.12)',color:isTruckPlaza?'#fb923c':'#60a5fa',border:isTruckPlaza?'1px solid rgba(251,146,60,.3)':'1px solid rgba(96,165,250,.3)',display:'inline-block',marginTop:6}}>{isTruckPlaza ? 'Truck Plaza' : 'Apartment'}</div>
+            <div style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',padding:'2px 7px',borderRadius:20,background:isTruckPlaza?'rgba(251,146,60,.12)':'rgba(96,165,250,.12)',color:isTruckPlaza?'#fb923c':'var(--info-ink)',border:isTruckPlaza?'1px solid rgba(251,146,60,.3)':'1px solid rgba(96,165,250,.3)',display:'inline-block',marginTop:6}}>{isTruckPlaza ? 'Truck Plaza' : 'Apartment'}</div>
           </div>
           <button
             onClick={() => {
-              setSettingsDraft({
-                property_type: property.property_type || 'apartment',
-                policy_text: property.policy_text || DEFAULT_TRUCK_PLAZA_POLICY,
-                policy_phone: property.policy_phone || '',
-              });
+              setSettingsDraft(settingsBaseline(property));
               setShowSettings(!showSettings);
             }}
             className="pd-share-btn"
@@ -642,7 +754,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
 
       {/* Top section filter — pick what's visible below. Sticks to the top of
           the property page; default "All" shows everything. */}
-      <div style={{
+      <div data-testid="pd-section-chips" style={{
         position: 'sticky', top: 'calc(58px + env(safe-area-inset-top))', zIndex: 30,
         display: 'flex', gap: 6, flexWrap: 'wrap',
         padding: '10px 4px',
@@ -651,55 +763,84 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         borderBottom: '1px solid var(--border-subtle, transparent)',
       }}>
         {(() => {
-          const chips = [
-            { id: 'all',     label: 'All' },
-            // No-registration evidence is a camera-enforcement concept — truck
-            // plaza only. Apartments are registration-based and don't get it.
-            ...(isTruckPlaza ? [{ id: 'noreg', label: 'No Registration Evidence Package' }] : []),
-            // ActivePassTracker chip removed entirely — the component was
-            // deleted in the parking-pass consolidation. The Parking Log
-            // is the single source of truth now.
-            ...(isTruckPlaza ? [{ id: 'log', label: 'Parking Log' }, { id: 'history', label: 'History' }] : [{ id: 'log', label: 'Parking Passes' }]),
-          ];
+          const chips = sectionChipsFor(property?.property_type, features);
           return chips.map(c => {
             const active = sectionFilter === c.id;
+            const locked = c.locked === true;
             return (
               <button key={c.id}
                 onClick={() => setSectionFilter(c.id)}
+                aria-describedby={locked ? lockedChipDescId : undefined}
                 style={{
                   fontSize: 12, fontWeight: 800,
                   padding: '6px 12px', borderRadius: 999,
-                  border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-                  background: active ? 'var(--accent)' : 'var(--bg-card)',
-                  color: active ? '#fff' : 'var(--text-primary)',
+                  // Locked chips never take the active fill — `--accent` is
+                  // the brand amber, and amber-on-muted-grey is nowhere
+                  // near 4.5:1 (an axe scan on this exact chip caught it).
+                  // They stay visually "just open", never "selected".
+                  border: `1px solid ${(active && !locked) ? 'var(--accent)' : 'var(--border)'}`,
+                  background: (active && !locked) ? 'var(--accent)' : 'var(--bg-card)',
+                  // `--on-accent`, not #fff: white on the dark theme's amber is
+                  // 1.66:1 (the Requests chip is now the default active one).
+                  color: locked ? 'var(--text-muted)' : (active ? 'var(--on-accent)' : 'var(--text-primary)'),
                   cursor: 'pointer',
                   letterSpacing: '.02em',
                   whiteSpace: 'nowrap',
                   transition: 'background .12s ease, border-color .12s ease',
                 }}
-              >{c.label}</button>
+              >{locked ? `🔒 ${c.label}` : c.label}</button>
             );
           });
         })()}
+        {/* Visually hidden — the text every locked chip's aria-describedby
+            points at (spec §5.6). One node, not one per chip. */}
+        <span id={lockedChipDescId} style={{position:'absolute',width:1,height:1,padding:0,margin:-1,overflow:'hidden',clip:'rect(0,0,0,0)',whiteSpace:'nowrap'}}>Not included yet</span>
       </div>
+
+      {/* The You're-in card (spec §3.4 step 5) — the signup landing only
+          (`/app?property=…&section=requests&firstrun=1`), above the Requests
+          section, dismissed on tap or once the email is confirmed. `firstrun`
+          arrives as a prop through ALPRPropertiesPage from App.jsx's deep-link
+          reader and is never persisted, so a refresh (which cleans the query)
+          does not replay it. */}
+      {firstrun && !firstRunDismissed && isOwner && property && (
+        <FirstRunCard
+          property={property}
+          partnerName={property.partner_name || property.tow_company_name}
+          user={user}
+          onDismiss={() => setFirstRunDismissed(true)}
+        />
+      )}
+
+      {/* Requests — the portal's home (spec §5.2). Rendered before every
+          camera/pass surface because it is the default section. */}
+      {showSection('requests') && !isTruckPlaza && (
+        <ErrorBoundary label="requests">
+          <RequestsSection
+            property={property}
+            user={user}
+            /* With no `/auth/me` entry for this property (an older backend,
+               or `db.getProperties`' PostgREST fallback) the member role is
+               unknown. 'viewer' is the safe default: the server 404s a write
+               either way, and showing a composer that cannot post is worse
+               than showing the view-only line. */
+            role={property?.role || (user?._role === 'partner' ? 'partner' : 'viewer')}
+            onNeedVerify={onNeedVerify}
+            request={request}
+            upload={upload}
+            addToast={addToast}
+          />
+        </ErrorBoundary>
+      )}
 
       {showSettings && settingsDraft && (
         <form onSubmit={handleSaveSettings} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:16,display:'flex',flexDirection:'column',gap:8}}>
           <label style={{fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase'}}>Property Type</label>
-          <select
-            value={settingsDraft.property_type}
-            disabled={passTotalCount > 0}
-            onChange={e => setSettingsDraft({...settingsDraft, property_type: e.target.value})}
-            style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14,opacity: passTotalCount > 0 ? 0.6 : 1}}
-          >
-            <option value="apartment">Apartment</option>
-            <option value="truck_plaza">Truck Plaza</option>
-          </select>
-          {passTotalCount > 0 && (
-            <div style={{fontSize:11,color:'var(--text-faint)'}}>
-              Property type is locked: {passTotalCount} parking pass{passTotalCount === 1 ? '' : 'es'} on record. Changing type after passes exist would corrupt the log.
-            </div>
-          )}
+          <div style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14,opacity:0.8}}>
+            {settingsDraft.property_type === 'truck_plaza' ? 'Truck Plaza' : 'Apartment'}
+          </div>
+          {/* Not spec copy: wording from the G2b brief. */}
+          <div style={{fontSize:11,color:'var(--text-faint)'}}>{PROPERTY_TYPE_READONLY_NOTE}</div>
           {settingsDraft.property_type === 'truck_plaza' && (
             <>
               <label style={{fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:4}}>Parking Policy Text</label>
@@ -721,7 +862,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
       {/* Two QR codes — one for Temporary, one for Permanent. Owner-only.
           Partners don't share QR codes with drivers — that's the property
           owner's onboarding flow. */}
-      {isOwner && (
+      {isOwner && !requestsOnly && (
         <div className="pd-qr-grid">
           <div className="pd-qr-tile">
             <div className="pd-qr-head">
@@ -769,7 +910,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         );
       })()}
 
-      {isOwner && showAddPlate && (
+      {isOwner && !requestsOnly && showAddPlate && (
         <form onSubmit={handleAddPlate} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:12,display:'flex',flexDirection:'column',gap:8}}>
           <input value={newPlate.plate_text} onChange={e => setNewPlate({...newPlate, plate_text: e.target.value})} placeholder="Plate (e.g. ABC1234)" required style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14,textTransform:'uppercase'}} />
           <input value={newPlate.holder_name} onChange={e => setNewPlate({...newPlate, holder_name: e.target.value})} placeholder={isTruckPlaza ? 'Employee name' : 'Holder name'} style={{padding:'8px 10px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-primary)',fontSize:14}} />
@@ -784,7 +925,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </form>
       )}
 
-      {isOwner && (
+      {isOwner && !requestsOnly && (
         <div style={{display:'flex',flexDirection:'column',gap:6}}>
           {plates.map(p => {
             const mySightings = events.filter(e => e.resident_plate_id === p.id);
@@ -841,6 +982,12 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           </div>
           <ErrorBoundary label="truck parking log"><React.Suspense fallback={<SkeletonCards />}><TruckParkingLog propertyId={propertyId} propertyType={property?.property_type} payToParkEnabled={property?.pay_to_park_enabled === true} isOwner={isOwner} /></React.Suspense></ErrorBoundary>
         </>
+      ) : features?.passes === false ? (
+        // Portal-only (spec §5.6): this property has never had a pass flow
+        // switched on, so there is no roster to show — the chip itself
+        // read "🔒 Parking passes" above. Same upsell card the locked "QR
+        // codes" and "Cameras" chips render.
+        <UpsellPanel feature="passes" propertyName={property.name} propertyId={propertyId} />
       ) : (
         // Apartment permit registry (M3): pending approval queue + resident /
         // guest rosters with doc viewing, approve/reject, extend, void.
@@ -861,8 +1008,18 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
         </>
       )}
 
-      {/* Cameras — owner-only. Partners don't manage hardware. */}
-      {showSection('cameras') && isOwner && (
+      {/* QR codes — locked (spec §5.6) when this property has no QR code on
+          file yet. Not role-gated: a partner may want to ask for this too. */}
+      {showSection('qr') && features?.qr === false && (
+        <UpsellPanel feature="qr" propertyName={property.name} propertyId={propertyId} />
+      )}
+
+      {/* Cameras — owner-only. Partners don't manage hardware. Locked (spec
+          §5.6) renders the upsell instead; there is nothing to register. */}
+      {showSection('cameras') && features?.cameras === false && (
+        <UpsellPanel feature="cameras" propertyName={property.name} propertyId={propertyId} />
+      )}
+      {showSection('cameras') && isOwner && features?.cameras !== false && (
         <>
           <div className="pd-section-head">
             <div style={{display:'flex',alignItems:'baseline',gap:8}}>
@@ -1090,7 +1247,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           retries (status='dispatch_failed'). Nobody was paged and nothing
           retries, so this is the only place they surface. Owner-only; read-only
           escalation queue. */}
-      {isOwner && stuckDispatch.length > 0 && (
+      {isOwner && !requestsOnly && stuckDispatch.length > 0 && (
         <>
           <div className="pd-section-head">
             <div style={{display:'flex',alignItems:'baseline',gap:8}}>
@@ -1126,7 +1283,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
 
       {/* Needs Review — match_status held for human decision before enforcement.
           Owner-only: partners don't approve flagged plate events. */}
-      {isOwner && (() => {
+      {isOwner && !requestsOnly && (() => {
         const reviewable = events.filter(e => ['low_confidence','review_needed','camera_suspended','overstay'].includes(e.match_status));
         if (reviewable.length === 0) return null;
         const statusLabel = {
@@ -1190,7 +1347,7 @@ export function ALPRPropertyDetailPage({ propertyId, onBack, user }) {
           Partners' single function is "who's signed in / allowed to be here" —
           that's the parking log above. Operational signals below are noise
           for them. */}
-      {isOwner && (
+      {isOwner && !requestsOnly && (
       <>
       <div className="pd-section-head">
         <div style={{display:'flex',alignItems:'baseline',gap:8}}>

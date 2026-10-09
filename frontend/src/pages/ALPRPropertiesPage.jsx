@@ -1,20 +1,41 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { db } from '../lib/db.js';
-import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
 import { scopePropsToPartner } from '../shared/scope.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
 import { SkeletonCards } from '../ui/Skeletons.jsx';
 import { RegisterPassModal } from '../ui/RegisterPassModal.jsx';
+import { AddPropertyForm } from '../ui/AddPropertyForm.jsx';
+import { RejectedPropertyNotice } from '../ui/RejectedPropertyNotice.jsx';
 import { RegisteredDrill } from './RegisteredDrill.jsx';
 import { lazyPage } from '../lib/lazyPage.js';
+import { listRequests } from '../lib/requestsApi.js';
 
 // Heavy — lazy-loaded so opening the Lots list doesn't pull in the full
 // property-detail bundle (which itself pulls in TruckParkingLog).
 const ALPRPropertyDetailPage = lazyPage(() => import('./ALPRPropertyDetailPage.jsx'));
 
-export function ALPRPropertiesPage({ user, impersonating = false }) {
+// `initialSelectedId` / `initialSection` / `request` / `upload` / `firstrun` /
+// `verify` are the deep link App.jsx read out of `/app?…` — the portal's email
+// and Slack buttons land here (spec §3.4 step 5). `initialSelectedId` opens
+// that property straight away instead of the list; the rest travel on to the
+// property page, which owns the surfaces they name.
+export function ALPRPropertiesPage({
+  user,
+  impersonating = false,
+  initialSelectedId = null,
+  initialSection = null,
+  request = null,
+  upload = false,
+  firstrun = false,
+  verify = false,
+  // App.jsx's VerifyEmailSheet opener (Task 23) — threaded through to the
+  // detail page's RequestsSection, whose composer calls it when a hold on a
+  // pending property needs the 6-digit code first. Without it the default
+  // no-op leaves the composer's "Confirm your email" line with nothing to open.
+  onNeedVerify,
+}) {
   const { addToast } = useToast();
   // Property deletion cascades to plates, cameras and passes. Partners enforce
   // lots, they don't own them — and an admin impersonating a partner arrives
@@ -22,21 +43,43 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
   const canDelete = user?._role === 'owner';
   const [properties, setProperties] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [newProp, setNewProp] = useState({ name: '', address: '', property_type: 'apartment' });
-  const [saving, setSaving] = useState(false);
-  const [selectedId, setSelectedId] = useState(null);
+  // Door (a) — "Add a property" opens AddPropertyForm as a modal, with no
+  // `slug` prop (no `/join/<slug>` context here) so it posts
+  // `partner_id: null` rather than a client-supplied partner id — see
+  // AddPropertyForm.jsx's header comment. The old inline "Create Lot" form
+  // (PostgREST insert, both property types) is gone for owners (spec
+  // §3.4a — self-serve is apartment-only now; a new truck plaza still goes
+  // through POST /admin/clients, unchanged).
+  const [showAddProperty, setShowAddProperty] = useState(false);
+  // "Not ours" (spec §3.8) — Task 14c's owner shape lists an archived,
+  // rejected property here (excluded from `properties` outright) so the
+  // Lots page can explain an empty list instead of showing "No lots yet".
+  const [rejectedProperties, setRejectedProperties] = useState([]);
+  const [selectedId, setSelectedId] = useState(initialSelectedId);
   // KPI counts per property_id — { [propId]: { openJobs, noReg, overstays, registered } }
   const [kpiCounts, setKpiCounts] = useState({});
   // Drill-down state: { propId, drill: 'noreg' | 'registered' }
   const [drillState, setDrillState] = useState(null); // { propId, drill }
   // Partner "Register a parking pass" modal — the property being registered at.
   const [registerProp, setRegisterProp] = useState(null);
+  // ON HOLD / TOW counts for portal-only cards (spec §5.4/§5.6,
+  // `features.passes=false`) — { [propId]: { hold, tow } }. Only fetched for
+  // those properties; a normal card never shows this row.
+  const [requestCounts, setRequestCounts] = useState({});
+
+  function refetchProperties() {
+    if (!user) return;
+    return db.getProperties(user.id, user._role).then(p => setProperties(scopePropsToPartner(p, user)));
+  }
 
   useEffect(() => {
     if (!user) return;
     setLoading(true);
-    db.getProperties(user.id, user._role).then(p => { setProperties(scopePropsToPartner(p, user)); setLoading(false); }).catch(() => setLoading(false));
+    refetchProperties().catch(() => {}).finally(() => setLoading(false));
+    if (user._role === 'owner') {
+      db.getRejectedProperties(user.id).then(setRejectedProperties).catch(() => setRejectedProperties([]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // Fetch all 4 KPI counts for every visible property (best-effort, non-blocking).
@@ -110,26 +153,68 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
     return () => clearInterval(t);
   }, [properties]);
 
-  async function handleAdd(e) {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const propData = { ...newProp };
-      if (user._role === 'partner') propData.tow_company_id = user.id;
-      else propData.owner_id = user.id;
-      if (propData.property_type === 'truck_plaza' && !propData.policy_text) {
-        propData.policy_text = DEFAULT_TRUCK_PLAZA_POLICY;
-      }
-      await db.createProperty(propData);
-      setNewProp({ name: '', address: '', property_type: 'apartment' });
-      setShowAdd(false);
-      const p = await db.getProperties(user.id, user._role);
-      setProperties(scopePropsToPartner(p, user));
-    } catch (err) { addToast('Failed to create property. ' + (err.message || ''), 'error'); }
-    setSaving(false);
+  // ON HOLD / TOW counts for portal-only cards only — `features.passes=false`
+  // (spec §5.6). Every other card's status pill comes from the ALPR KPI
+  // effect above; this is the one request this list makes for a property
+  // that has no cameras, no passes, nothing else to poll.
+  useEffect(() => {
+    const portalOnly = properties.filter(p => p?.features?.passes === false);
+    if (!portalOnly.length) return;
+    const load = () => Promise.all(
+      portalOnly.map(p =>
+        listRequests({ property_id: p.id, view: 'active' })
+          .then(r => {
+            const items = Array.isArray(r?.items) ? r.items : [];
+            return [p.id, {
+              hold: items.filter(i => i.kind === 'hold').length,
+              tow: items.filter(i => i.kind === 'tow').length,
+            }];
+          })
+          .catch(() => [p.id, { hold: 0, tow: 0 }])
+      )
+    ).then(pairs => {
+      setRequestCounts(prev => {
+        const next = { ...prev };
+        pairs.forEach(([id, counts]) => { next[id] = counts; });
+        return next;
+      });
+    });
+    load();
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, [properties]);
+
+  function handlePropertyAdded(property) {
+    setShowAddProperty(false);
+    addToast('Property added', 'success');
+    refetchProperties();
+    if (property?.id) setSelectedId(property.id);
   }
 
-  if (selectedId) return <ErrorBoundary label="this property"><React.Suspense fallback={<SkeletonCards />}><ALPRPropertyDetailPage propertyId={selectedId} onBack={() => setSelectedId(null)} user={user} /></React.Suspense></ErrorBoundary>;
+  function handleJoinedPending() {
+    setShowAddProperty(false);
+    addToast('Request sent', 'success');
+    refetchProperties();
+  }
+
+  if (selectedId) return <ErrorBoundary label="this property"><React.Suspense fallback={<SkeletonCards />}><ALPRPropertyDetailPage
+    propertyId={selectedId}
+    onBack={() => setSelectedId(null)}
+    user={user}
+    // This list's own `/auth/me` row for the open property — the detail
+    // page's `db.getProperty` read is a raw table row with no computed
+    // `features` key, so this is the only way it learns which upsell chips
+    // (spec §5.6) are locked.
+    features={properties.find(p => p.id === selectedId)?.features}
+    // Only the property the deep link named gets the deep link's props; once
+    // the operator navigates to a different property they are back to normal.
+    initialSection={selectedId === initialSelectedId ? initialSection : null}
+    request={selectedId === initialSelectedId ? request : null}
+    upload={selectedId === initialSelectedId ? upload : false}
+    firstrun={selectedId === initialSelectedId ? firstrun : false}
+    verify={selectedId === initialSelectedId ? verify : false}
+    onNeedVerify={onNeedVerify}
+  /></React.Suspense></ErrorBoundary>;
 
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading properties...</div></div>;
 
@@ -152,42 +237,35 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
         <div style={{fontSize:16,fontWeight:800,color:'var(--text-primary)'}}>Lots</div>
         {user?._role !== 'partner' && (
-          <button onClick={() => setShowAdd(!showAdd)} style={{background:'rgba(74,222,128,.12)',color:'var(--text-primary)',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{showAdd ? 'Cancel' : '+ Add Lot'}</button>
+          <button onClick={() => setShowAddProperty(true)} style={{background:'rgba(74,222,128,.12)',color:'var(--text-primary)',border:'1px solid rgba(74,222,128,.3)',borderRadius:8,padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>+ Add a property</button>
         )}
       </div>
 
-      {showAdd && (
-        <form onSubmit={handleAdd} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:10,padding:14,marginBottom:12,display:'flex',flexDirection:'column',gap:8}}>
-          <input value={newProp.name} onChange={e => setNewProp({...newProp, name: e.target.value})} placeholder="Lot name" required style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14}} />
-          <input value={newProp.address} onChange={e => setNewProp({...newProp, address: e.target.value})} placeholder="Address" style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14}} />
-          <label style={{display:'block',fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:2}}>Property Type</label>
-          <select value={newProp.property_type} onChange={e => setNewProp({...newProp, property_type: e.target.value})} style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14}}>
-            <option value="apartment">Apartment</option>
-            <option value="truck_plaza">Truck Plaza</option>
-          </select>
-          {newProp.property_type === 'truck_plaza' && (
-            <>
-              <label style={{display:'block',fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:2}}>Parking Policy Text</label>
-              <textarea
-                value={newProp.policy_text ?? DEFAULT_TRUCK_PLAZA_POLICY}
-                onChange={e => setNewProp({...newProp, policy_text: e.target.value})}
-                rows={8}
-                style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:12,fontFamily:'monospace',resize:'vertical'}}
+      {showAddProperty && (
+        <div className="viol-modal-overlay" onClick={() => setShowAddProperty(false)}>
+          <div className="viol-modal" onClick={e => e.stopPropagation()}>
+            <div className="viol-modal-handle"></div>
+            <div className="viol-modal-body">
+              <div className="viol-modal-title">Add a property</div>
+              <AddPropertyForm
+                onCancel={() => setShowAddProperty(false)}
+                onSuccess={handlePropertyAdded}
+                onJoined={handleJoinedPending}
               />
-              <button type="button" onClick={() => setNewProp({...newProp, policy_text: DEFAULT_TRUCK_PLAZA_POLICY})} className="pd-share-btn" style={{alignSelf:'flex-start'}}>Reset to default</button>
-              <label style={{display:'block',fontSize:11,color:'var(--text-muted)',fontWeight:700,letterSpacing:'.04em',textTransform:'uppercase',marginTop:2}}>Towing Contact Phone</label>
-              <input type="tel" value={newProp.policy_phone || ''} onChange={e => setNewProp({...newProp, policy_phone: e.target.value})} placeholder="+12692176208" style={{padding:'10px 12px',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,color:'var(--text-primary)',fontSize:14}} />
-            </>
-          )}
-          <button type="submit" disabled={saving} style={{background:'var(--accent)',color:'#fff',border:'none',borderRadius:8,padding:'10px',fontSize:14,fontWeight:700,cursor:'pointer'}}>{saving ? 'Creating...' : 'Create Lot'}</button>
-        </form>
+            </div>
+          </div>
+        </div>
       )}
 
       {properties.length === 0 ? (
-        <div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>
-          <div style={{fontSize:14}}>No lots yet</div>
-          <div style={{fontSize:12,marginTop:4}}>Add a lot to start managing parking passes</div>
-        </div>
+        rejectedProperties.length > 0 ? (
+          <RejectedPropertyNotice rejectedProperties={rejectedProperties} onAddProperty={() => setShowAddProperty(true)} />
+        ) : (
+          <div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>
+            <div style={{fontSize:14}}>No lots yet</div>
+            <div style={{fontSize:12,marginTop:4}}>Add a property to start managing parking passes</div>
+          </div>
+        )
       ) : (
         <div>
           {[...properties].sort((a, b) => {
@@ -195,6 +273,45 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
             const score = (k) => (k.registered || 0) + (k.openJobs || 0) + (k.overstays || 0) + (k.noReg || 0);
             return score(kb) - score(ka);
           }).map(p => {
+            // Portal-only (spec §5.4/§5.6): a property with no pass flow
+            // switched on gets the stripped card — name, address, the
+            // verification pill, ON HOLD/TOW counts from the portal's own
+            // requests, and a single View property button. No Registered
+            // KPI (there's nothing registered to count) and no "Register a
+            // parking pass" action (today's partner card shows both — they
+            // are hidden here for both roles).
+            if (p?.features?.passes === false) {
+              const counts = requestCounts[p.id] || { hold: 0, tow: 0 };
+              const verified = p.verification_status === 'verified';
+              return (
+                <article key={p.id} className="lot-card-paper">
+                  <div className="lot-head-paper">
+                    <div style={{minWidth:0,flex:1}}>
+                      <div className="lot-name-paper">{p.name}</div>
+                      <div className="lot-addr-paper">{p.address || 'No address'}</div>
+                    </div>
+                    <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6}}>
+                      <span className={`lot-pill-paper ${verified ? 'green' : 'amber'}`}>
+                        <span className="dot"></span>{verified ? 'Confirmed' : 'Waiting for N Style'}
+                      </span>
+                      {canDelete && (
+                      <button
+                        aria-label={`Delete property ${p.name}`}
+                        onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete "' + p.name + '"? This removes all its plates, cameras, and passes.')) return; try { await db.deleteProperty(p.id); setProperties(prev => prev.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to delete. ' + (err.message || ''), 'error'); } }}
+                        style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'6px 10px',marginTop:2,fontSize:11,fontWeight:700,cursor:'pointer'}}
+                      >Delete</button>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)',letterSpacing:'.02em',padding:'10px 0'}}>
+                    ON HOLD · {counts.hold} · TOW · {counts.tow}
+                  </div>
+                  <div className="lot-foot-paper">
+                    <button onClick={() => setSelectedId(p.id)}>View property <span className="arr">›</span></button>
+                  </div>
+                </article>
+              );
+            }
             const kpi = kpiCounts[p.id] || {};
             const openJobs = kpi.openJobs || 0;
             const noReg = kpi.noReg || 0;
@@ -231,10 +348,14 @@ export function ALPRPropertiesPage({ user, impersonating = false }) {
                         card, and a mis-tap there was unrecoverable. */}
                     {canDelete && (
                     <button
-                      aria-label={`Delete property ${p.name}`}
-                      onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete "' + p.name + '"? This removes all its plates, cameras, and passes.')) return; try { await db.deleteProperty(p.id); setProperties(prev => prev.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to delete. ' + (err.message || ''), 'error'); } }}
+                      aria-label={`Archive property ${p.name}`}
+                      // Soft delete (spec §8.2/§8.3: POST /apartment/properties/{id}/archive,
+                      // archived_at=now()) — plates/cameras/passes/history are kept, not wiped;
+                      // the property just stops appearing on every list and verdict. No
+                      // verbatim confirmation copy exists in the spec for this dialog.
+                      onClick={async (e) => { e.stopPropagation(); if (!confirm('Archive "' + p.name + '"? It stops accepting new requests and leaves your Lots list. Its plates, cameras, passes and history stay on the record.')) return; try { await db.deleteProperty(p.id); setProperties(prev => prev.filter(x => x.id !== p.id)); } catch (err) { addToast('Failed to archive. ' + (err.message || ''), 'error'); } }}
                       style={{background:'rgba(239,68,68,.1)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',borderRadius:6,padding:'6px 10px',marginTop:2,fontSize:11,fontWeight:700,cursor:'pointer'}}
-                    >Delete</button>
+                    >Archive</button>
                     )}
                   </div>
                 </div>

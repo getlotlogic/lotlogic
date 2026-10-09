@@ -38,7 +38,6 @@ const EXCLUDE_FILES = new Set([
   'apt.html',           // registration form (Task 17 surface)
   'admin.html',         // internal admin console
   'dashboard.html',     // ~10k-line product SPA, own naming rule already
-  'lookup.html',        // internal pass-lookup tool
   'set-password.html',  // internal account tool
   'tuner.html',         // internal camera-tuning tool
 ]);

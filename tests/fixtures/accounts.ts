@@ -1,4 +1,5 @@
 import { test as base, expect, APIRequestContext, Page } from '@playwright/test';
+import { pointAtLocalBackend } from './portal';
 
 export type TestAccount = {
   label: string;
@@ -43,6 +44,9 @@ export const API_URL =
   process.env.API_URL ?? 'https://lotlogic-backend-production.up.railway.app';
 
 export async function loginAs(page: Page, account: TestAccount): Promise<string> {
+  // Under the portal suite (PORTAL_E2E=1) BASE_URL is this branch's local
+  // build, which must talk to the local backend — never production.
+  if (process.env.PORTAL_E2E === '1') await pointAtLocalBackend(page);
   await page.goto('/dashboard.html');
   await page.getByLabel(/email/i).fill(account.email);
   await page.getByLabel(/password/i).fill(account.password);

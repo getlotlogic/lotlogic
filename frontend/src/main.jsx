@@ -5,6 +5,14 @@ import { ToastProvider } from './ui/Toast.jsx';
 import { App } from './App.jsx';
 import { db } from './lib/db.js';
 import { lotDayBound } from './lib/lotdate.js';
+import { isE2E } from './lib/e2e.js';
+import { VerifyEmailSheet } from './pages/property/VerifyEmailSheet.jsx';
+import { VerifyBanner } from './ui/VerifyBanner.jsx';
+import { requestsApi } from './lib/requestsApi.js';
+import { TeamSection } from './pages/property/TeamSection.jsx';
+import { PendingMembershipPage } from './pages/PendingMembershipPage.jsx';
+import { SignupPage } from './pages/SignupPage.jsx';
+import { FirstRunCard } from './pages/property/FirstRunCard.jsx';
 
 createRoot(document.getElementById('root')).render(
   <ErrorBoundary label="the dashboard"><ToastProvider><App /></ToastProvider></ErrorBoundary>
@@ -28,18 +36,6 @@ createRoot(document.getElementById('root')).render(
 // via the same dynamic import the app already uses to fetch that chunk.
 // Never on the production origin, even with the right query string or
 // localStorage flag — previews (`*.vercel.app`) and localhost still work.
-const PROD_HOSTNAMES = new Set(['lotlogicparking.com', 'www.lotlogicparking.com']);
-
-function isE2E() {
-  try {
-    if (PROD_HOSTNAMES.has(location.hostname)) return false;
-    return new URLSearchParams(location.search).get('e2e') === '1'
-      || localStorage.getItem('lotlogic:e2e') === '1';
-  } catch {
-    return false;
-  }
-}
-
 if (isE2E()) {
   window.__lotlogicTestHooks = {
     // React + ReactDOM: specs mount a component on a second root, alongside
@@ -53,13 +49,48 @@ if (isE2E()) {
     // stub individual methods on it (e.g. `db.getProperty`) to hand a
     // mounted page fixture data without a real backend or Supabase session.
     db,
+    // requestsApi: the portal's typed HTTP wrappers (Task 21). TeamSection
+    // calls these directly, not through `db` — specs stub methods on this
+    // object the same way (`requestsApi.listMembers = async () => […]`).
+    requestsApi,
     ToastProvider,
     lotDayBound,
+    // VerifyEmailSheet (Task 23, spec §5.9) — not a lazy page, so it's handed
+    // out directly rather than behind a `.load()`, the same way ToastProvider
+    // is. tests/a11y/axe.spec.ts mounts it standalone (wrong / exhausted /
+    // success states) for `scan(page, 'verify-sheet')`.
+    VerifyEmailSheet,
+    // VerifyBanner (Task 23, spec §3.5) — mounted standalone so a spec can
+    // prove the Resend button actually respects `resendDisabled` without
+    // dragging in the whole App.jsx session/property-fetch machinery.
+    VerifyBanner,
+    // TeamSection and PendingMembershipPage (Task 24, spec §5.7/§3.7 (b))
+    // are plain components, not lazy pages — handed out directly, same as
+    // ToastProvider, rather than wrapped in `{load()}` like the two chunks
+    // below. This is what tests/a11y/axe.spec.ts's `team-owner` and
+    // `pending-membership` scans mount in isolation, with no login and no
+    // backend.
+    TeamSection,
+    PendingMembershipPage,
+    // SignupPage (Task 25, spec §5.1) and FirstRunCard (§3.4 step 5) — both
+    // plain components, handed out directly like the two above. The axe
+    // spec `tests/a11y/signup.spec.ts` mounts SignupPage standalone for
+    // `scan(page,'join')` / `scan(page,'join-manual')`, because the local
+    // static server in `buildAndServeFrontend` serves files and has no
+    // `/join → dashboard.html` rewrite to make the real route reachable.
+    SignupPage,
+    FirstRunCard,
     ALPRPropertyDetailPage: {
       load: () => import('./pages/ALPRPropertyDetailPage.jsx').then((m) => m.default),
     },
     TruckParkingLog: {
       load: () => import('./pages/TruckParkingLog.jsx').then((m) => m.default),
+    },
+    // The partner Requests tab (spec §5.4) — a lazy page too, so it is handed
+    // over the same way. Mounted in isolation it needs no session: every read
+    // it makes goes through `apiFetch`, which a spec stubs at `window.fetch`.
+    PartnerRequestsPage: {
+      load: () => import('./pages/PartnerRequestsPage.jsx').then((m) => m.default),
     },
   };
 }

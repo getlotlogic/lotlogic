@@ -35,7 +35,36 @@ export interface BuiltFrontendServer {
   close: () => Promise<void>;
 }
 
-export async function buildAndServeFrontend(frontendDir: string): Promise<BuiltFrontendServer> {
+/**
+ * `vercel.json`'s `rewrites`, applied the way Vercel applies them: only when
+ * no file matches the path. `/join/<slug>`, `/app?…` and `/r/<token>` are
+ * rewrites to `dashboard.html`, so the portal suite (`portal-end-to-end`,
+ * `signup`, `requests`, `partner-requests`) can open the real routes instead
+ * of mounting a page in isolation. Supports the two source shapes the file
+ * uses: an exact path and a trailing `/:path*`.
+ */
+export function vercelRewrite(frontendDir: string, pathname: string): string | null {
+  let rewrites: Array<{ source: string; destination: string }> = [];
+  try {
+    rewrites = JSON.parse(fs.readFileSync(path.join(frontendDir, 'vercel.json'), 'utf8')).rewrites ?? [];
+  } catch {
+    return null;
+  }
+  for (const { source, destination } of rewrites) {
+    if (source.endsWith('/:path*')) {
+      const base = source.slice(0, -'/:path*'.length);
+      if (pathname === base || pathname.startsWith(base + '/')) return destination;
+    } else if (pathname === source) {
+      return destination;
+    }
+  }
+  return null;
+}
+
+export async function buildAndServeFrontend(
+  frontendDir: string,
+  opts: { port?: number } = {},
+): Promise<BuiltFrontendServer> {
   const outName = `.test-dist-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
   const outDir = path.join(frontendDir, outName);
 
@@ -47,7 +76,13 @@ export async function buildAndServeFrontend(frontendDir: string): Promise<BuiltF
 
   const server = http.createServer((req, res) => {
     const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
-    const file = path.join(outDir, pathname.replace(/^\/+/, ''));
+    let file = path.join(outDir, pathname.replace(/^\/+/, ''));
+    // A directory answers with its index.html, as Vercel serves `/`.
+    if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      const dest = vercelRewrite(frontendDir, pathname);
+      if (dest) file = path.join(outDir, dest.replace(/^\/+/, ''));
+    }
     if (!file.startsWith(outDir) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('not found');
@@ -61,7 +96,13 @@ export async function buildAndServeFrontend(frontendDir: string): Promise<BuiltF
     fs.createReadStream(file).pipe(res);
   });
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  // A fixed port only for the portal suite's shared server (the local
+  // backend's CORS allow-list names that exact origin); every other caller
+  // keeps an ephemeral one.
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(opts.port ?? 0, '127.0.0.1', resolve);
+  });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const close = () => new Promise<void>((resolve) => server.close(() => {
     fs.rmSync(outDir, { recursive: true, force: true });

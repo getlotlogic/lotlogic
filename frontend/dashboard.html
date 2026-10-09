@@ -7,6 +7,27 @@
   <script src="/error-reporting.js" defer></script>
   <title>LotLogic — AI Parking Enforcement</title>
   <meta name="description" content="AI-powered parking management dashboard. Manage parking passes, cameras, and earnings in real time." />
+  <!-- Google Places (AddPropertyForm.jsx, spec §3.4a). Substituted at build
+       time from VITE_GOOGLE_MAPS_KEY by scripts/build.mjs — empty when the
+       env var is unset, in which case the form's "Enter it manually" link
+       is the only address input. Never hardcode a real key here: unlike
+       visit.html's reCAPTCHA site key, there is no fallback literal. -->
+  <meta name="google-maps-key" content="{{GOOGLE_MAPS_KEY}}" />
+  <!-- reCAPTCHA v3 for `/join` (spec §3.2: action `property_signup`, server
+       `min_score=0.5`). The site key is a PUBLIC value by Google's design —
+       security rests only on the server-side secret — and is the same literal
+       `visit.html:9` carries; `src/shared/register.js`'s RECAPTCHA_SITE_KEY
+       reads this tag.
+       There is deliberately NO `<script src="…/recaptcha/api.js">` beside
+       this tag, and no inline loader either. The tag is appended at runtime
+       by `src/lib/recaptcha.js`, called from SignupPage's mount, for two
+       reasons: `/app` must not pay for a third-party script (or reCAPTCHA
+       v3's floating badge) on a page that never submits a captcha, and
+       `vercel.json`'s `script-src 'self' https://www.google.com …` carries
+       no `'unsafe-inline'` — an inline loader here would file a CSP report on
+       every `/join` hit today and stop working the day that report-only
+       header is enforced. -->
+  <meta name="recaptcha-site-key" content="6LdaAb4sAAAAACd5g-pYqnQBWHdvMmGCufwtEQnE" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F6F4EE" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0E0F11" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -50,6 +71,19 @@
       /* Accent — parking-sign amber */
       --accent: #FBBF24;
       --accent-dark: #D97706;
+      /* Ink on an --accent fill. Spec §5 names #1A1206 for amber buttons, and
+         that is right on the dark theme's #FBBF24 (11.1:1). The light theme's
+         --accent is the burnt #B85309, on which #1A1206 is only 3.78:1 — so
+         the light override below flips to white, which is 4.91:1 (the same
+         figure Task 15 solved --accent for). One token, measured in both. */
+      --on-accent: #1A1206;
+      /* Info-blue text on its own 12% tint (the property-type badge). */
+      --info-ink: #60a5fa;
+      /* Ink on an --accent fill. No single value passes 4.5:1 on both themes'
+         accent (#fff is 1.7:1 on the amber, #1A1206 is 3.8:1 on
+         .theme-light's #B85309), so the ink is a token — same reason
+         --green-text exists below. */
+      --accent-ink: #1A1206;
       /* Status — traffic-light, calibrated for outdoor visibility */
       --green: #22C55E;
       --red: #EF4444;
@@ -88,6 +122,12 @@
       --green-bg-paper: #DEE9D7;
       --terra-paper: #C97A4A;
       --shadow-paper: 0 1px 0 rgba(31,27,20,.04), 0 1px 3px rgba(31,27,20,.06);
+      /* Plate-lookup verdict fills (spec §5.5) — ANSI Z535 signal colors,
+         deliberately NOT theme-swapped: a solid DO-NOT-TOW card reads the
+         same color in sun or shade regardless of the app's own theme. */
+      --verdict-go: #3FA45B;
+      --verdict-stop: #C0392B;
+      --verdict-amber-ink: #1A1206;
     }
     .theme-light {
       --bg-primary: #F6F4EE;
@@ -104,6 +144,9 @@
       --text-dim: #D9D5C5;
       --accent: #B85309;
       --accent-dark: #9A4408;
+      --on-accent: #FFFFFF; /* 4.91:1 on #B85309 */
+      --info-ink: #1D4ED8; /* 6.04:1 on the light tint; #60a5fa was 2.29:1 */
+      --accent-ink: #FFFFFF; /* 4.9:1 on --accent (#B85309); #1A1206 is 3.8:1 */
       --green: #16A34A;
       --red: #DC2626;
       --yellow: #B85309;
@@ -116,6 +159,9 @@
       --earnings-border: #EBDFB8;
       --revenue-bg: #F0F8EE;
       --grain-overlay: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.04 0'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
+      --verdict-go: #3FA45B;
+      --verdict-stop: #C0392B;
+      --verdict-amber-ink: #1A1206;
     }
     body {
       font-family: 'Manrope', system-ui, -apple-system, sans-serif;
@@ -1049,6 +1095,8 @@
       flex-shrink: 0;
     }
     .pd-share-btn:hover { color: var(--text-primary); border-color: var(--text-faint); }
+    /* --text-muted on --bg-inset is 4.48:1 in the light theme — just under. */
+    .theme-light .pd-share-btn { color: var(--text-secondary); }
     .pd-section-head {
       display: flex; justify-content: space-between; align-items: center;
       margin: 20px 0 8px; gap: 8px;
@@ -1611,7 +1659,8 @@
     .theme-light .header-name { color: #6b7280; }
     .theme-light .bottom-nav { background: rgba(255,255,255,.97); border-top-color: #e5e7eb; }
     .theme-light .nav-item { color: #6B7280; }
-    .theme-light .nav-item.active { color: #B8860B; }
+    /* #B8860B on the white nav was 3.25:1; --accent-dark is 6.55:1. */
+    .theme-light .nav-item.active { color: var(--accent-dark); }
     .theme-light .nav-item.active::before { background: #FBBF24; }
     .theme-light .nav-badge { border-color: #fff; }
 
@@ -1837,7 +1886,8 @@
     .theme-light .earnings-amount span { color: #2563eb; }
 
     /* Connection indicator */
-    .theme-light .conn-indicator.online { color: #16a34a; }
+    /* #16a34a on the tinted pill was 3.17:1 (axe, Task 30); green-700 is 4.83:1. */
+    .theme-light .conn-indicator.online { color: #15803d; }
     .theme-light .conn-dot.on { background: #16a34a; box-shadow: 0 0 6px rgba(22,163,74,.3); }
 
     /* Confidence bar */
@@ -1941,7 +1991,8 @@
 
     /* ── Last updated indicator ── */
     .last-updated {
-      font-size: 10px; font-weight: 600; color: var(--text-ghost);
+      /* --text-ghost was 1.91:1 in the light theme — it is real text. */
+      font-size: 10px; font-weight: 600; color: var(--text-muted);
       text-align: center; padding: 4px 0; margin-bottom: 8px;
     }
 
@@ -2324,6 +2375,498 @@
     }
     .jr-kv-paper dt{color:var(--ink-3-paper);font-weight:600}
     .jr-kv-paper dd{color:var(--ink-paper);font-variant-numeric:tabular-nums}
+
+    /* ── Requests section (portal §5.2 / §5.3) ──────────────────
+       Layout rules from spec §5: single column inside .page-content
+       (max 640 px), primary buttons 56 px, secondary 48 px, chips >= 44 px,
+       8 px gaps. Status is never colour alone — every state carries a glyph
+       or a word as well (WCAG 1.4.1).
+
+       Contrast: the hold row's own text and the outcome pill inside a Recent
+       row both have to clear 4.5:1 in .theme-light. The Recent dimming is
+       therefore applied to the row's *text* colours, never as an `opacity` on
+       the row — an .55 opacity box would drag the pill down with it. The pill
+       keeps full-strength tokens and so clears 4.5:1 in both themes
+       (tests/a11y/axe.spec.ts asserts it). */
+    .req-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 8px;
+    }
+    .req-card + .req-card { margin-top: 8px; }
+    /* The row the 409 `active_hold_exists` response scrolled into view. */
+    .req-card.req-flag { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+    .req-empty-title {
+      font-size: 16px; font-weight: 800; color: var(--text-primary); line-height: 1.35;
+    }
+    .req-section-title {
+      font-size: 11px; font-weight: 800; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--text-muted);
+      margin: 18px 0 8px;
+    }
+
+    /* Kind segmented control + hold presets. 44 px is Apple's minimum and
+       WCAG 2.5.8's; the chips are real buttons so they are keyboard
+       reachable. */
+    .req-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .req-chip {
+      min-height: 44px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg-inset);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.2;
+      cursor: pointer;
+      transition: background .12s ease, border-color .12s ease;
+    }
+    .req-chip:hover { border-color: var(--text-faint); }
+    .req-chip[aria-pressed="true"],
+    .req-chip[aria-selected="true"] {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--on-accent);
+    }
+
+    /* 56 px primary, 48 px secondary (spec §5). */
+    .req-btn-primary {
+      display: block;
+      width: 100%;
+      min-height: 56px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: var(--on-accent);
+      font-family: inherit;
+      font-size: 16px;
+      font-weight: 800;
+      line-height: 1.3;
+      letter-spacing: -.005em;
+      cursor: pointer;
+    }
+    .req-btn-primary[disabled] { opacity: .6; cursor: progress; }
+    .req-btn {
+      min-height: 48px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-inset);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .req-btn:hover { border-color: var(--text-faint); }
+    /* §4.3: a 409 scrolls the existing row in "with Extend highlighted". The
+       border and the ring are the highlight — the label keeps its own colour,
+       so the cue is not carried by colour alone. */
+    .req-btn-flag {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent);
+      background: var(--bg-card);
+    }
+    .req-btn[disabled] { opacity: .6; cursor: not-allowed; }
+    .req-btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+    /* A text link, not a button — History is the third, quieter action. */
+    .req-link {
+      background: none; border: none; padding: 12px 4px; min-height: 44px;
+      color: var(--accent-dark); font-family: inherit; font-size: 14px;
+      font-weight: 700; text-decoration: underline; cursor: pointer;
+    }
+    .theme-light .req-link { color: var(--accent-dark); }
+
+    .req-label {
+      display: block;
+      font-size: 11px; font-weight: 800; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+    .req-label .req-optional { text-transform: none; letter-spacing: 0; font-weight: 600; }
+
+    /* Plate face: DM Mono, 28–32 px, .1em tracking (spec §5). */
+    .req-plate-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px 14px;
+      min-height: 56px;
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-primary);
+      font-family: 'DM Mono', ui-monospace, 'Courier New', monospace;
+      font-size: 30px;
+      font-weight: 500;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .req-plate-input[aria-invalid="true"] { border-color: var(--red); }
+    .req-plate {
+      font-family: 'DM Mono', ui-monospace, 'Courier New', monospace;
+      font-size: 17px; font-weight: 500; letter-spacing: .08em;
+      color: var(--text-primary);
+    }
+    .req-ref {
+      font-family: 'DM Mono', ui-monospace, 'Courier New', monospace;
+      font-size: 13px; font-weight: 500; color: var(--text-muted);
+      margin-left: auto;
+    }
+
+    .req-input, .req-textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px 14px;
+      min-height: 48px;
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 16px;
+    }
+    .req-textarea { min-height: 76px; resize: vertical; line-height: 1.45; }
+    .req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+    .req-help { font-size: 13px; line-height: 1.45; color: var(--text-muted); margin-top: 8px; }
+    .req-quiet { font-size: 13px; line-height: 1.45; color: var(--text-muted); }
+    .req-error { font-size: 13px; line-height: 1.45; color: var(--red); margin-top: 6px; font-weight: 700; }
+    .req-attest { font-size: 13px; line-height: 1.5; color: var(--text-secondary); font-style: italic; margin: 10px 0; }
+
+    /* Row lines. "until … · 22h" is the hold's second line; .urgent is the
+       under-an-hour amber, which also carries the ⚠ glyph and the word
+       "Extend?" so colour is never the only signal. */
+    .req-row-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .req-kind {
+      font-size: 11px; font-weight: 800; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--text-secondary);
+    }
+    .req-when { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-top: 6px; }
+    .req-when .req-tail { font-weight: 800; }
+    .req-when.urgent .req-tail { color: var(--accent-dark); }
+    .theme-light .req-when.urgent .req-tail { color: var(--accent-dark); }
+    .req-meta { font-size: 13px; line-height: 1.5; color: var(--text-muted); margin-top: 4px; }
+    .req-status { font-size: 13px; line-height: 1.5; color: var(--text-secondary); margin-top: 4px; }
+    .req-status.req-unreached { color: var(--red); font-weight: 700; }
+
+    /* The persistent "couldn't reach N Style" banner (§5.2). */
+    .req-banner {
+      border: 1px solid var(--red);
+      /* Fallback first for anything without color-mix(); the tint is
+         decorative — the border, the ⚠ and the sentence carry the meaning. */
+      background: var(--bg-inset);
+      background: color-mix(in srgb, var(--red) 12%, var(--bg-card));
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      font-size: 14px; line-height: 1.5; font-weight: 700;
+      color: var(--text-primary);
+    }
+    .req-banner a { color: var(--text-primary); }
+
+    /* Recent (7 days). The dimming lives on the text colours so the outcome
+       pill below can keep full strength. */
+    .req-recent summary {
+      cursor: pointer; list-style: none;
+      min-height: 44px; display: flex; align-items: center; gap: 8px;
+      font-size: 13px; font-weight: 800; letter-spacing: .02em;
+      color: var(--text-muted);
+      margin-top: 18px;
+    }
+    .req-recent summary::-webkit-details-marker { display: none; }
+    .req-recent summary::before { content: '▸'; font-size: 11px; }
+    .req-recent[open] summary::before { content: '▾'; }
+    .req-recent-row .req-plate,
+    .req-recent-row .req-kind,
+    .req-recent-row .req-status,
+    .req-recent-row .req-when { color: var(--text-muted); }
+    /* --text-faint is 3.26:1 on the light card and 2.62:1 on the dark one, so
+       the dimmest line in a Recent row still uses --text-muted (5.3 / 5.1:1).
+       The row reads as "past" from the muted plate and kind, not from pushing
+       one line under the floor. */
+    .req-recent-row .req-meta { color: var(--text-muted); }
+    /* The pill keeps full-strength ink, so 4.5:1 holds in both themes. */
+    .req-pill {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg-inset);
+      font-size: 13px; font-weight: 800; line-height: 1.3;
+      color: var(--text-primary);
+      margin-top: 6px;
+    }
+
+    /* Photo thumbnail + its upload progress bar. */
+    .req-thumb {
+      display: block; width: 92px; height: 92px; object-fit: cover;
+      border-radius: 8px; border: 1px solid var(--border); background: var(--bg-inset);
+    }
+    .req-progress {
+      width: 92px; height: 4px; margin-top: 6px; border-radius: 2px;
+      background: var(--bg-inset); overflow: hidden;
+    }
+    .req-progress::after {
+      content: ''; display: block; height: 100%; width: 40%;
+      background: var(--accent); border-radius: 2px;
+      animation: req-progress-slide 1.1s ease-in-out infinite;
+    }
+    @keyframes req-progress-slide {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(250%); }
+    }
+
+    /* Bottom sheet — the §5.3 History and §5.2 Extend surfaces. */
+    .req-sheet-backdrop {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,.55);
+      display: flex; align-items: flex-end; justify-content: center;
+    }
+    .req-sheet {
+      width: 100%; max-width: 640px; max-height: 92vh;
+      box-sizing: border-box;
+      overflow-y: auto;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px 16px 0 0;
+      padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+      outline: none;
+    }
+    .req-sheet-head {
+      display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px;
+    }
+    .req-sheet-title {
+      font-size: 16px; font-weight: 800; color: var(--text-primary); line-height: 1.35;
+    }
+    .req-sheet-close {
+      margin-left: auto; min-width: 44px; min-height: 44px;
+      background: none; border: none; cursor: pointer;
+      color: var(--text-muted); font-size: 20px; line-height: 1;
+    }
+    .req-events { list-style: none; margin: 0; padding: 0; }
+    .req-events li {
+      position: relative; padding: 0 0 12px 18px;
+      font-size: 13px; line-height: 1.5; color: var(--text-secondary);
+    }
+    .req-events li::before {
+      content: '●'; position: absolute; left: 0; top: 0;
+      color: var(--text-faint); font-size: 10px; line-height: 1.9;
+    }
+    .req-events .req-event-when { color: var(--text-muted); font-weight: 700; }
+    /* ── Confirm-your-email: banner, wall, VerifyEmailSheet (Task 23, spec §3.5/§5.9) ── */
+    .verify-banner, .verify-wall {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border);
+    }
+    .verify-banner { background: rgba(251,191,36,.12); }
+    .verify-wall { background: rgba(239,68,68,.1); border-bottom-color: rgba(239,68,68,.3); }
+    .verify-banner-copy { flex: 1 1 260px; min-width: 0; }
+    .verify-banner-line { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+    .verify-wall-title { font-size: 14px; font-weight: 800; color: var(--text-primary); }
+    .verify-wall-line { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
+    .verify-banner-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .verify-banner-btn {
+      font-size: 12px; font-weight: 700; padding: 7px 12px; border-radius: 8px;
+      border: 1px solid var(--accent); background: transparent; color: var(--accent);
+      cursor: pointer; white-space: nowrap; font-family: inherit;
+    }
+    .verify-banner-btn:hover:not(:disabled) { background: var(--accent); color: var(--bg-primary); }
+    .verify-banner-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    .verify-sheet-overlay {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,.7); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      display: flex; align-items: flex-end; justify-content: center;
+      animation: fadeIn .2s ease;
+    }
+    .verify-sheet {
+      background: var(--bg-card); border-radius: 20px 20px 0 0; width: 100%; max-width: 440px;
+      max-height: 90vh; overflow-y: auto; animation: slideUp .3s ease;
+      border: 1px solid var(--border); border-bottom: none;
+      padding: 0 20px calc(20px + env(safe-area-inset-bottom));
+      overscroll-behavior: contain; outline: none;
+    }
+    .verify-sheet-handle { width: 36px; height: 4px; background: var(--text-ghost); border-radius: 2px; margin: 10px auto 6px; }
+    .verify-sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .verify-sheet-title { font-size: 17px; font-weight: 800; color: var(--text-primary); }
+    .verify-sheet-close {
+      background: transparent; border: none; color: var(--text-muted); font-size: 18px;
+      line-height: 1; padding: 4px; cursor: pointer;
+    }
+    .verify-sheet-close:hover { color: var(--text-primary); }
+    .verify-sheet-sub { font-size: 13px; color: var(--text-muted); margin: 2px 0 16px; }
+    .verify-code-input {
+      display: block; width: 100%; box-sizing: border-box; text-align: center;
+      font-family: 'DM Mono', 'Courier New', monospace; font-size: 26px; font-weight: 600;
+      letter-spacing: .3em; padding: 14px 10px; border-radius: 12px;
+      border: 1.5px solid var(--border); background: var(--bg-inset); color: var(--text-primary);
+    }
+    .verify-code-input:focus { outline: none; border-color: var(--accent); }
+    .verify-code-input:disabled { opacity: .6; }
+    .verify-confirm-btn {
+      display: block; width: 100%; min-height: 56px; margin-top: 14px; border-radius: 12px;
+      border: none; background: var(--accent); color: var(--bg-primary);
+      font-size: 16px; font-weight: 800; cursor: pointer; font-family: inherit;
+    }
+    .verify-confirm-btn:disabled { opacity: .45; cursor: not-allowed; }
+    .verify-sheet-msg-slot { min-height: 20px; margin-top: 10px; }
+    .verify-sheet-msg { font-size: 13px; line-height: 1.4; }
+    .verify-sheet-msg.error { color: var(--red); }
+    .verify-sheet-msg.success { color: var(--green-text); }
+    .verify-sheet-footer {
+      display: flex; align-items: center; justify-content: center; gap: 4px;
+      margin: 14px 0 18px; font-size: 13px; color: var(--text-muted);
+    }
+    .verify-resend-countdown { font-variant-numeric: tabular-nums; }
+    .verify-sheet-footer-dot { color: var(--text-ghost); }
+    .verify-link-btn {
+      background: transparent; border: none; color: var(--accent); font-weight: 700;
+      font-size: 13px; cursor: pointer; padding: 0; font-family: inherit;
+    }
+    .verify-link-btn:hover:not(:disabled) { text-decoration: underline; }
+    .verify-link-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .verify-change-email { padding-top: 4px; padding-bottom: 8px; }
+    .verify-change-label { display: block; font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+    .verify-change-input {
+      display: block; width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 10px;
+      border: 1.5px solid var(--border); background: var(--bg-inset); color: var(--text-primary);
+      font-size: 15px; font-family: inherit;
+    }
+    .verify-change-input:focus { outline: none; border-color: var(--accent); }
+    .verify-change-back { display: block; margin: 10px auto 4px; }
+    .verify-signout-link {
+      display: block; width: 100%; text-align: center; background: transparent; border: none;
+      color: var(--text-muted); font-size: 13px; font-weight: 700; text-decoration: underline;
+      cursor: pointer; padding: 4px 0 18px; font-family: inherit;
+    }
+    .theme-light .verify-banner { background: rgba(184,83,9,.08); }
+    .theme-light .verify-wall { background: rgba(220,38,38,.08); }
+
+    /* ── /join — public signup (Task 25, spec §3.1–§3.4, §5.1) ─────────
+       Built on the sign-in page's shell (`.login-page`, `.login-box`,
+       `.field-*`, `.login-btn`, `.login-error`), so this block only adds
+       what the form itself needs: the role-chip grid's VIEWPORT breakpoint
+       (2 columns below 400 px, 3 at >= 400 px — a media query, which an
+       inline style cannot express), the Show/Hide password affordance, the
+       duplicate-match card and the You're-in card.
+
+       Contrast: the selected chip is the amber literal #FBBF24 with #1A1206
+       ink (11.3:1) in BOTH themes rather than `var(--accent)`, whose light
+       value #B85309 scores only 3.84:1 against that ink. `.signup-box
+       .field-label` overrides the shell's hardcoded #6b7280 (3.99:1 on the
+       dark ground) with `var(--text-muted)` (5.68:1 dark / 4.99:1 light). */
+    .signup-box { max-width: 420px; }
+    .signup-box .field-label { color: var(--text-muted); }
+    .signup-topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .signup-theme-btn {
+      min-width: 44px; min-height: 44px; border-radius: 12px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      color: var(--text-primary); font-size: 17px; cursor: pointer; font-family: inherit;
+    }
+    .signup-h1 {
+      font-family: 'Anton', system-ui, sans-serif; font-weight: 400; font-size: 24px;
+      text-transform: uppercase; letter-spacing: .02em; color: var(--text-primary);
+      margin: 10px 0 6px;
+    }
+    .signup-sub { font-size: 14px; color: var(--text-muted); margin: 0 0 16px; }
+    .signup-partner-chip {
+      display: block; background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 14px; font-size: 14px; font-weight: 700;
+      color: var(--text-primary); margin-bottom: 18px;
+    }
+    .signup-legend {
+      font-family: inherit; font-size: 11px; font-weight: 800; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--text-muted);
+      margin: 24px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+    }
+    .signup-chip-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    @media (min-width: 400px) { .signup-chip-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    .signup-chip {
+      min-height: 44px; padding: 10px 12px; border-radius: 12px;
+      background: var(--bg-card); border: 1.5px solid var(--border);
+      color: var(--text-primary); font-size: 13px; font-weight: 700; font-family: inherit;
+      cursor: pointer; text-align: center;
+    }
+    .signup-chip.selected { background: #FBBF24; border-color: #FBBF24; color: #1A1206; }
+    .signup-help { font-size: 12.5px; color: var(--text-muted); margin-top: 6px; }
+    .signup-error { font-size: 12.5px; font-weight: 700; color: #fca5a5; margin-top: 6px; }
+    .theme-light .signup-error { color: #b91c1c; }
+    .signup-link-btn {
+      display: inline-block; background: none; border: 0; padding: 10px 0; min-height: 44px;
+      color: var(--accent); font-size: 13px; font-weight: 700; font-family: inherit;
+      cursor: pointer; text-decoration: underline; text-align: left;
+    }
+    .signup-places gmp-place-autocomplete { display: block; width: 100%; }
+    .signup-manual { display: flex; flex-direction: column; gap: 8px; }
+    .signup-manual-row { display: flex; gap: 8px; }
+    .signup-manual-row .signup-state { width: 92px; flex: 0 0 92px; text-transform: uppercase; }
+    .signup-match {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px 14px; margin-top: 10px;
+    }
+    .signup-match-title { font-size: 14px; font-weight: 800; color: var(--text-primary); }
+    .signup-match-line { font-size: 13px; color: var(--text-secondary); margin: 6px 0 10px; }
+    .signup-match-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .signup-match-yes {
+      min-height: 44px; padding: 10px 14px; border: 0; border-radius: 10px;
+      background: #FBBF24; color: #1A1206; font-size: 13px; font-weight: 800;
+      font-family: inherit; cursor: pointer;
+    }
+    .signup-readonly {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .signup-readonly-name { font-size: 15px; font-weight: 800; color: var(--text-primary); }
+    .signup-readonly-line { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+    .signup-pw-wrap { position: relative; display: block; }
+    .signup-pw-input { padding-right: 76px; }
+    .signup-pw-toggle {
+      position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+      min-width: 60px; min-height: 44px; background: none; border: 0;
+      color: var(--accent); font-size: 13px; font-weight: 800; font-family: inherit;
+      cursor: pointer; text-decoration: underline;
+    }
+    .signup-terms { font-size: 12.5px; color: var(--text-muted); margin: 20px 0 0; }
+    .signup-terms a { color: var(--accent); font-weight: 700; }
+    .signup-submit { min-height: 56px; }
+    .signup-btn-link { display: block; text-align: center; text-decoration: none; min-height: 56px; line-height: 24px; }
+    .signup-foot { margin-top: 18px; font-size: 13px; color: var(--text-muted); }
+    .signup-foot a { color: var(--accent); font-weight: 700; }
+
+    /* ── The You're-in card (spec §3.4 step 5) ─────────────────────── */
+    .firstrun-card {
+      position: relative; background: var(--bg-card); border: 1px solid var(--accent);
+      border-radius: 12px; padding: 14px 40px 14px 14px; margin-bottom: 14px;
+    }
+    .firstrun-head { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
+    .firstrun-head strong { color: var(--text-primary); }
+    .firstrun-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .firstrun-btn {
+      min-height: 48px; padding: 12px 16px; border: 0; border-radius: 10px;
+      background: #FBBF24; color: #1A1206; font-size: 14px; font-weight: 800;
+      font-family: inherit; cursor: pointer;
+    }
+    .firstrun-btn.secondary {
+      background: transparent; border: 1.5px solid var(--border); color: var(--text-primary);
+    }
+    .firstrun-code { margin-top: 12px; font-size: 12.5px; color: var(--text-muted); }
+    .firstrun-link {
+      background: none; border: 0; padding: 0; min-height: 24px;
+      color: var(--accent); font-size: 12.5px; font-weight: 800; font-family: inherit;
+      cursor: pointer; text-decoration: underline;
+    }
+    .firstrun-link:disabled { color: var(--text-faint); cursor: not-allowed; text-decoration: none; }
+    .firstrun-dismiss {
+      position: absolute; top: 4px; right: 4px; min-width: 44px; min-height: 44px;
+      background: none; border: 0; color: var(--text-muted); font-size: 15px;
+      cursor: pointer; font-family: inherit;
+    }
   </style>
 </head>
 <body>

@@ -14,6 +14,16 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect, accounts, loginAs } from '../fixtures/accounts';
+import { test as baseTest } from '@playwright/test';
+import { buildAndServeFrontend, type BuiltFrontendServer } from '../fixtures/buildAndServeFrontend';
+import path from 'node:path';
+import {
+  PORTAL_E2E, pointAtLocalBackend, seedNStyle, frontendOrigin, randomPlate, uiLogin,
+  apiSignup, apiVerify, apiCreateRequest, apiConfirmProperty, apiToken, api, mintActionToken,
+} from '../fixtures/portal';
+import http from 'node:http';
+import fs from 'node:fs';
+import type { AddressInfo } from 'node:net';
 
 const BLOCKING = new Set(['serious', 'critical']);
 
@@ -59,7 +69,23 @@ const BLOCKING = new Set(['serious', 'critical']);
  */
 const WAIVED: Record<string, { rule: string; nodes: number }[]> = {};
 
+/**
+ * Let finite CSS animations/transitions (fade-ins, the theme swap) finish
+ * before axe samples colors: a scan mid-fade measures blended colors (seen as
+ * #74756f for --text-muted on the partner Requests tab) and fails at random.
+ * Infinite ones (spinners) are ignored; capped at 2 s.
+ */
+async function settle(page: any) {
+  await page.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations()
+      .filter((a) => Number.isFinite(a.effect?.getComputedTiming().endTime ?? Infinity))
+      .map((a) => a.finished.catch(() => undefined))),
+    new Promise((r) => setTimeout(r, 2000)),
+  ]));
+}
+
 async function scan(page: any, label: string) {
+  await settle(page);
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
     .analyze();
@@ -91,7 +117,44 @@ async function scan(page: any, label: string) {
   ).toEqual([]);
 }
 
+/**
+ * Same blocking rule as `scan()`, scoped to one subtree via axe's
+ * `.include()` — for a harness-mounted component where the rest of the
+ * stubbed page (empty-state copy on surfaces this test isn't about) is not
+ * what the scan is meant to pin down. No WAIVED map: this is a different
+ * query, not a waiver on `scan()`'s.
+ *
+ * `excludeSelectors`: axe's `.exclude()`, for a pre-existing, unrelated
+ * element that happens to sit inside `selector`'s subtree but that the task
+ * adding this call did not touch and is not scoped to fix (see the call
+ * site's comment for which element and why). Defaults to none — most
+ * callers don't need it.
+ */
+async function scanIncluding(page: any, label: string, selector: string, excludeSelectors: string[] = []) {
+  await settle(page);
+  let builder = new AxeBuilder({ page }).include(selector);
+  for (const ex of excludeSelectors) builder = builder.exclude(ex);
+  const results = await builder
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+    .analyze();
+  const blocking = results.violations.filter(v => BLOCKING.has(v.impact ?? ''));
+  const summary = results.violations.map(v => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, help: v.help }));
+  // eslint-disable-next-line no-console
+  console.log(`[a11y ${label}] ${summary.length} violations:`, JSON.stringify(summary, null, 2));
+  expect(
+    blocking,
+    `serious/critical a11y violations on ${label}:\n${JSON.stringify(blocking, null, 2)}`
+  ).toEqual([]);
+}
+
 test.describe('accessibility @a11y', () => {
+  // Under the portal suite (PORTAL_E2E=1, tests/README.md) BASE_URL is this
+  // branch's local build: point every page at the local backend first, so no
+  // scan — not even the stub-token one — ever calls production.
+  test.beforeEach(async ({ page }) => {
+    if (PORTAL_E2E) await pointAtLocalBackend(page);
+  });
+
   test('landing page has no serious a11y violations', async ({ page }) => {
     await page.goto('/');
     await scan(page, 'landing');
@@ -108,6 +171,114 @@ test.describe('accessibility @a11y', () => {
   test('dashboard (owner) has no serious a11y violations @auth', async ({ page }) => {
     await loginAs(page, accounts.ownerA());
     await scan(page, 'dashboard-owner');
+  });
+
+  // @auth — needs TEST_PARTNER_A_* credentials. Task 20: the Lookup tab's
+  // verdict card went from a 12%-tint box to a solid-fill card with
+  // role="status", so this is the first scan to ever touch it.
+  test('lookup tab (partner) has no serious a11y violations @auth', async ({ page }) => {
+    await loginAs(page, accounts.partnerA());
+    await page.getByRole('tab', { name: /^lookup$/i }).click();
+    await scan(page, 'lookup-partner');
+  });
+
+  // The Requests section (portal spec §5.2) — the portal's default surface for
+  // an apartment property, and the one place `.theme-light` has to hold 4.5:1
+  // on the hold row AND on the outcome pill inside the .55-dimmed Recent rows
+  // (which is why the dimming is applied to text colours, never as an
+  // `opacity` on the row).
+  //
+  // @auth — needs TEST_OWNER_A_*. The seed account may own no apartment
+  // property at all; in that case the scan asserts the empty state rendered
+  // and still runs axe over it, because an empty Requests section is a real
+  // screen a brand-new signup sees first.
+  test('requests section (owner) has no serious a11y violations @auth', async ({ page }) => {
+    if (PORTAL_E2E) {
+      // Against the local backend the scan gets the real thing: a confirmed
+      // office with an active hold (row, pill, Extend / Remove / History) and
+      // an ended one in Recent — not just the empty state.
+      const nstyle = seedNStyle();
+      const office = await apiSignup();
+      await apiVerify(office.token);
+      await apiConfirmProperty(await apiToken(nstyle.email, nstyle.password), office.property_id);
+      const live = randomPlate();
+      const ended = randomPlate();
+      await apiCreateRequest(office.token, { property_id: office.property_id, kind: 'hold', plate_text: live, duration_hours: 24 });
+      const gone = await apiCreateRequest(office.token, { property_id: office.property_id, kind: 'hold', plate_text: ended, duration_hours: 24 });
+      await api('POST', `/apartment/requests/${gone.id}/remove`, office.token, {});
+      await uiLogin(page, frontendOrigin(), office.signup.email, office.signup.password,
+        `/app?property=${office.property_id}&section=requests`);
+      await expect(page.locator('.req-card', { hasText: live })).toBeVisible({ timeout: 15_000 });
+      // Recent is a collapsed <details>; open it so the dimmed rows and their
+      // outcome pill are inside the scan.
+      await page.getByText(/^Recent \(7 days\) · \d+$/).click();
+      await expect(page.getByText(ended)).toBeVisible();
+      await scan(page, 'requests-owner');
+      return;
+    }
+    await loginAs(page, accounts.ownerA());
+    await page.goto('/app?tab=lots');
+    // Open the first apartment property, if the account has one.
+    const card = page.locator('[data-testid="property-card"], .lot-card').first();
+    if (await card.count()) {
+      await card.click();
+      // The chip row resolves once the property row lands.
+      const chip = page.getByRole('button', { name: 'Requests', exact: true });
+      if (await chip.count()) await chip.first().click();
+    }
+    // Either the composer or the empty state must be on screen before the
+    // scan — an in-flight skeleton is not the surface under test.
+    await Promise.race([
+      page.getByLabel('Plate').waitFor({ state: 'visible', timeout: 15000 }).catch(() => null),
+      page.getByText('No requests yet.').waitFor({ state: 'visible', timeout: 15000 }).catch(() => null),
+    ]);
+    await scan(page, 'requests-owner');
+  });
+
+  // Task 27 — the partner Requests tab (spec §5.4). Tagged @auth because it
+  // needs TEST_PARTNER_A_*, and @portal because the tab only has data once the
+  // backend's portal routers are deployed: against a backend without them the
+  // page renders its empty state, which is exactly what this scan wants.
+  test('partner Requests tab has no serious a11y violations @auth @portal', async ({ page }) => {
+    // `--grep @portal` with PORTAL_E2E unset must report the portal suite as
+    // skipped, not failed — and without credentials loginAs would throw.
+    test.skip(!PORTAL_E2E && !process.env.TEST_PARTNER_A_EMAIL,
+      'needs TEST_PARTNER_A_* (preview run) or PORTAL_E2E=1 (local backend)');
+    if (PORTAL_E2E) {
+      // A pending property card and an active hold row on the tab.
+      seedNStyle();
+      const office = await apiSignup();
+      await apiVerify(office.token);
+      await apiCreateRequest(office.token, { property_id: office.property_id, kind: 'hold', plate_text: randomPlate(), duration_hours: 24 });
+    }
+    await loginAs(page, accounts.partnerA());
+    // The nav button's accessible name gains ", N pending" when the badge is
+    // non-zero, so this anchors on the start of the label only.
+    await page.getByRole('tab', { name: /^requests\b/i }).first().click();
+    await expect(page.getByRole('tablist', { name: /filter requests/i })).toBeVisible({ timeout: 15_000 });
+    await scan(page, 'requests-partner');
+  });
+
+  // `/r/<token>` (spec §5.8). A stub token 404s/400s against the real API
+  // (or fails to resolve at all when run offline), so the preview fetch
+  // always rejects and the page settles on its invalid-link state — exactly
+  // the stable, no-session DOM this scan needs.
+  test('request-action page has no serious a11y violations', async ({ page }) => {
+    await page.goto('/r/stub-token-for-a11y-scan');
+    await scan(page, 'request-action');
+  });
+
+  // The same page in its preview state — the one an "ends soon" mail lands
+  // on — needs a real token, so only against the local backend.
+  test('request-action preview has no serious a11y violations @portal', async ({ page }) => {
+    test.skip(!PORTAL_E2E, 'needs a token minted by the local backend (PORTAL_E2E=1)');
+    seedNStyle();
+    const office = await apiSignup();
+    await apiVerify(office.token);
+    const hold = await apiCreateRequest(office.token, { property_id: office.property_id, kind: 'hold', plate_text: randomPlate(), duration_hours: 24 });
+    await page.goto(`/r/${mintActionToken(hold.id, 'extend24')}`);
+    await expect(page.getByRole('button', { name: /^Extend/ })).toBeVisible({ timeout: 15_000 });
+    await scan(page, 'request-action-preview');
   });
 
   test('marketing pitch pages are accessible', async ({ page }) => {
@@ -128,4 +299,239 @@ test.describe('accessibility @a11y', () => {
       await scan(page, `marketing:${path}`);
     }
   });
+});
+
+// ── team-owner / pending-membership (Task 24, spec §5.7 / §3.7 (b)) ────────
+//
+// Neither page needs a login or a backend to render meaningfully — Team is
+// one property's membership list, PendingMembershipPage is a static copy
+// screen — so both mount in isolation via `window.__lotlogicTestHooks`
+// (`frontend/src/main.jsx`'s `?e2e=1` surface), the same mechanism
+// `dashboard-qr.spec.ts` uses for ALPRPropertyDetailPage. This runs against
+// a locally built `frontend/dist/`, not BASE_URL, so it needs no env vars
+// and no `@auth` credentials.
+let portalServer: BuiltFrontendServer;
+
+baseTest.beforeAll(async () => {
+  portalServer = await buildAndServeFrontend(path.resolve(__dirname, '../../frontend'));
+});
+
+baseTest.afterAll(async () => {
+  await portalServer.close();
+});
+
+baseTest.describe('accessibility — isolated mounts @a11y', () => {
+  baseTest('Team (owner) has no serious a11y violations', async ({ page }) => {
+    await page.goto(`${portalServer.origin}/dashboard.html?e2e=1`);
+    await page.waitForFunction(
+      () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.TeamSection === 'function',
+    );
+    await page.evaluate(() => {
+      const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
+      hooks.requestsApi.listMembers = async () => ([
+        { account_id: 'a1', name: 'Dana Ortiz', position: 'Property manager', email: 'dana@sunsetridge.com', role: 'admin', status: 'active', last_signed_in_at: '2026-10-07T20:10:00Z' },
+        { account_id: 'a2', name: 'Marcus Lee', position: 'Assistant manager', role: 'manager', status: 'pending' },
+      ]);
+      const host = document.createElement('div');
+      host.id = 'a11y-team-harness';
+      document.body.appendChild(host);
+      hooks.ReactDOM.createRoot(host).render(
+        hooks.React.createElement(
+          hooks.ToastProvider,
+          null,
+          hooks.React.createElement(hooks.TeamSection, {
+            property: { id: 'p1', name: 'Sunset Ridge Apartments', role: 'admin' },
+            user: { id: 'a1', _role: 'owner' },
+          }),
+        ),
+      );
+    });
+    await expect(page.locator('#a11y-team-harness')).toContainText('Dana Ortiz');
+    await scan(page, 'team-owner');
+  });
+
+  baseTest('PendingMembershipPage has no serious a11y violations', async ({ page }) => {
+    await page.goto(`${portalServer.origin}/dashboard.html?e2e=1`);
+    await page.waitForFunction(
+      () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.PendingMembershipPage === 'function',
+    );
+    await page.evaluate(() => {
+      const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
+      const host = document.createElement('div');
+      host.id = 'a11y-pending-harness';
+      document.body.appendChild(host);
+      hooks.ReactDOM.createRoot(host).render(
+        hooks.React.createElement(hooks.PendingMembershipPage, {
+          me: { properties: [{ id: 'p1', name: 'Sunset Ridge Apartments', member_status: 'pending' }] },
+          user: { email: 'dana@sunsetridge.com' },
+          onLogout: () => {},
+          onAddProperty: () => {},
+        }),
+      );
+    });
+    await expect(page.locator('#a11y-pending-harness')).toContainText('Request sent.');
+    await scan(page, 'pending-membership');
+  });
+});
+
+/**
+ * Greyed upsell chips (Task 26, spec §5.6) — the locked-chip contrast.
+ *
+ * No TEST_* account has a portal-only property (`features.passes=false`),
+ * so unlike the credentialed `@auth` scans above this one does not touch
+ * BASE_URL or the fixture login at all: same self-contained harness as
+ * `tests/e2e/dashboard-qr.spec.ts` — serve `frontend/` from a throwaway
+ * local server, boot the real bundle with `?e2e=1`, and mount
+ * `ALPRPropertyDetailPage` directly with `db.getProperty` stubbed to a
+ * property whose `passes`/`qr`/`cameras` all read `false`. That is enough
+ * to exercise the real, muted (`var(--text-muted)`) locked-chip buttons and
+ * the `UpsellPanel` one of them renders — nothing here depends on a seeded
+ * account or a reachable backend.
+ */
+test.describe('upsell chips @a11y', () => {
+  // `frontend/dashboard.html` is the committed source; `dashboard.js` is an
+  // esbuild output that only exists under `dist/` (`npm run build` in
+  // `frontend/`) — so this harness serves the built directory, not the
+  // frontend root.
+  const FRONTEND_DIR = path.resolve(__dirname, '../../frontend/dist');
+  const PROPERTY_ID = '33333333-3333-4333-8333-333333333333';
+  let server: http.Server;
+  let origin: string;
+
+  test.beforeAll(async () => {
+    server = http.createServer((req, res) => {
+      const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
+      const file = path.join(FRONTEND_DIR, pathname.replace(/^\/+/, ''));
+      if (!file.startsWith(FRONTEND_DIR) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('not found');
+        return;
+      }
+      const type = file.endsWith('.html') ? 'text/html; charset=utf-8'
+        : file.endsWith('.js') ? 'text/javascript; charset=utf-8'
+        : file.endsWith('.css') ? 'text/css; charset=utf-8'
+        : 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type });
+      fs.createReadStream(file).pipe(res);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  test.afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  // Run the whole scan under BOTH themes. `App.jsx` wraps its root in
+  // `.theme-light` for every theme other than 'dark' (`frontend/src/App.jsx`:
+  // `` `app ${theme === 'dark' ? '' : 'theme-light'}` ``) — and `light` is
+  // this app's default for every new user (`hooks.js`:
+  // `localStorage.getItem('lotlogic_theme') || 'light'`). A bug fixed only
+  // against the plain (dark-token) harness is a bug a light-theme reader
+  // would still hit — exactly what happened here: `var(--accent)` is
+  // #FBBF24 in dark theme (11.1:1 against the spec's `#1A1206` ink) but
+  // #B85309 in light theme, where that same ink is 3.77:1 — a real,
+  // axe-confirmed "serious" color-contrast violation this describe block's
+  // first version (mounting a bare, unwrapped `#upsell-harness`) could
+  // never see, because it only ever exercised dark-theme token values.
+  for (const theme of ['dark', 'light'] as const) {
+    test(`locked chips meet contrast, and the Cameras panel is clean (${theme} theme)`, async ({ page }) => {
+      const json = (body: unknown, status = 200) => ({
+        status, contentType: 'application/json', body: JSON.stringify(body),
+      });
+      await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+      // Nothing in this test talks to a real backend or a real Supabase —
+      // every call the detail page makes besides `db.getProperty` (stubbed
+      // below) resolves through these to an empty result.
+      await page.route(/^https:\/\/(lotlogic-backend-production\.up\.railway\.app|nzdkoouoaedbbccraoti\.supabase\.co)\//,
+        (route) => route.fulfill(json({})));
+      await page.route(/supabase\.co\/rest\/v1\//, (route) => route.fulfill(json([])));
+
+      await page.goto(`${origin}/dashboard.html?e2e=1`);
+      await page.waitForFunction(
+        () => typeof (window as unknown as Record<string, any>).__lotlogicTestHooks?.ALPRPropertyDetailPage?.load === 'function',
+        undefined,
+        { timeout: 30_000 },
+      );
+
+      await page.evaluate(async ({ propertyId, theme }) => {
+        const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
+        hooks.db.getProperty = async () => ({
+          id: propertyId, name: 'Sunset Ridge Apartments', address: '123 Main St',
+          property_type: 'apartment', qr_code_id: null,
+        });
+        const ALPRPropertyDetailPage = await hooks.ALPRPropertyDetailPage.load();
+        // `.theme-light` is the exact class `App.jsx` applies to its root
+        // whenever `theme !== 'dark'` — CSS custom properties (`--accent`
+        // etc.) cascade from it to every descendant, same as in the real
+        // app. The `dark` pass leaves this wrapper off, so it inherits the
+        // unscoped `:root` (dark) token values untouched.
+        const host = document.createElement('div');
+        if (theme === 'light') host.className = 'theme-light';
+        host.id = 'upsell-harness';
+        document.body.appendChild(host);
+        hooks.ReactDOM.createRoot(host).render(
+          hooks.React.createElement(
+            hooks.ToastProvider,
+            null,
+            hooks.React.createElement(ALPRPropertyDetailPage, {
+              propertyId,
+              onBack: () => {},
+              user: { _role: 'owner', id: 'u1' },
+              // Spec §5.6: the chip row is locked only when `passes`/`qr`/
+              // `cameras` all read explicit `false` — a portal-only property.
+              features: { passes: false, qr: false, cameras: false },
+            }),
+          ),
+        );
+      }, { propertyId: PROPERTY_ID, theme });
+
+      const harness = page.locator('#upsell-harness');
+      await expect(harness).toContainText('Sunset Ridge Apartments');
+
+      const lockedParkingPasses = harness.getByRole('button', { name: '🔒 Parking passes' });
+      const lockedQr = harness.getByRole('button', { name: '🔒 QR codes' });
+      const lockedCameras = harness.getByRole('button', { name: '🔒 Cameras' });
+      await expect(lockedParkingPasses).toBeVisible();
+      await expect(lockedQr).toBeVisible();
+      await expect(lockedCameras).toBeVisible();
+
+      // Scoped to the chip row itself (`data-testid="pd-section-chips"`), not
+      // the whole stubbed page — this harness fakes an apartment with no
+      // camera ever installed, so unrelated surfaces below (the live ALPR
+      // plate-detection feed, say) render their real "nothing here" empty
+      // state, which is not what this scan is for. What this pins down is
+      // exactly the brief's ask: the locked chips' contrast
+      // (`var(--text-muted)` >= 4.5:1 on both themes) and their
+      // `aria-describedby`.
+      await scanIncluding(page, `upsell-${theme}`, '[data-testid="pd-section-chips"]');
+
+      // Tap Cameras: `UpsellPanel` replaces the section, with its one-sentence
+      // pitch and the `Ask LotLogic` button. Scan that card on its own too.
+      await lockedCameras.click();
+      await expect(harness.getByText(/Plate cameras spot cars/)).toBeVisible();
+      await expect(harness.getByRole('button', { name: 'Ask LotLogic' })).toBeVisible();
+      await scanIncluding(page, `upsell-cameras-panel-${theme}`, '[data-testid="upsell-panel"]');
+
+      // "Ask LotLogic" opens `FeedbackModal kind="feature"` prefilled per the
+      // spec's exact sentence — scan the dialog too (it's a real page
+      // region, not scoped out by `#upsell-harness`). `FeedbackModal`
+      // renders in place (no `createPortal`) — its `position:fixed` overlay
+      // is CSS positioning only, not a DOM move, so it stays a descendant
+      // of `#upsell-harness` and still inherits that pass's `.theme-light`
+      // wrapper (or lack of it) exactly like the chip row above. This is
+      // what lets this same loop catch the Submit/kind-tab button
+      // regression the brief flagged: in the `light` pass, `var(--accent)`
+      // on those buttons would resolve to `#B85309`, not `#FBBF24`.
+      await harness.getByRole('button', { name: 'Ask LotLogic' }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog.getByRole('textbox')).toHaveValue(
+        'Sunset Ridge Apartments is interested in cameras.',
+      );
+      // `.pd-share-btn` (the dialog's "Cancel" button) used to be excluded
+      // here at 4.47:1 in the light theme; Task 30 fixed the class
+      // (`.theme-light .pd-share-btn`), so the whole dialog is scanned.
+      await scanIncluding(page, `upsell-feedback-modal-${theme}`, '[role="dialog"]');
+    });
+  }
 });

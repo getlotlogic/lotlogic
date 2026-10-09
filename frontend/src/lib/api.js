@@ -1,5 +1,11 @@
+import { e2eApiOverride } from './e2e.js';
+
 // ── Rails API fallback ───────────────────────────────────────
-export const API = 'https://lotlogic-backend-production.up.railway.app';
+export const PRODUCTION_API = 'https://lotlogic-backend-production.up.railway.app';
+// `window.__LOTLOGIC_API__` replaces the origin only under the `?e2e=1` test
+// surface and never on the production hostnames (lib/e2e.js) — the portal
+// Playwright suite's local-backend switch.
+export const API = e2eApiOverride() || PRODUCTION_API;
 
 // The backend scopes every response to the account whose JWT is presented.
 // We stopped shipping the shared service key from the browser as part of the
@@ -14,6 +20,33 @@ export function getSessionToken() {
   }
 }
 
+// Turn an error response into the Error the UI branches on.
+//
+// `.message` is the human-readable line (today's derivation, unchanged).
+// `.status` is the HTTP status. `.body` is the parsed JSON (or null), because
+// every portal route answers `{"detail": "<code>", ...extra}` and the extras
+// (`request_id`, `retry_after`, `tries_left`, `candidates`) live beside the
+// code. `.code` is that short code string — undefined for a Pydantic 422,
+// whose `detail` is an array of messages, not a code.
+export function errorFromResponse(status, body) {
+  let msg = `Server error (${status})`;
+  if (body && typeof body === 'object') {
+    // Pydantic 422 returns { detail: [{msg, loc, type, ...}] } — same
+    // array-shape bug authLogin already guards against: coercing the
+    // array into new Error() renders "[object Object]" to the user.
+    if (Array.isArray(body.detail)) {
+      const msgs = body.detail.map(d => (d && typeof d === 'object' ? d.msg : String(d))).filter(Boolean);
+      if (msgs.length) msg = msgs.join(', ');
+    } else if (typeof body.detail === 'string') msg = body.detail;
+    else if (body.error) msg = body.error;
+  }
+  const err = new Error(msg);
+  err.status = status;
+  err.body = body ?? null;
+  err.code = typeof body?.detail === 'string' ? body.detail : undefined;
+  return err;
+}
+
 export async function apiFetch(path, options = {}) {
   const token = getSessionToken();
   const headers = { ...(options.headers || {}) };
@@ -26,21 +59,9 @@ export async function apiFetch(path, options = {}) {
     window.dispatchEvent(new CustomEvent('lotlogic:auth-expired'));
   }
   if (!r.ok) {
-    let msg = `Server error (${r.status})`;
-    try {
-      const body = await r.json();
-      // Pydantic 422 returns { detail: [{msg, loc, type, ...}] } — same
-      // array-shape bug authLogin already guards against: coercing the
-      // array into new Error() renders "[object Object]" to the user.
-      if (Array.isArray(body.detail)) {
-        const msgs = body.detail.map(d => (d && typeof d === 'object' ? d.msg : String(d))).filter(Boolean);
-        if (msgs.length) msg = msgs.join(', ');
-      } else if (typeof body.detail === 'string') msg = body.detail;
-      else if (body.error) msg = body.error;
-    } catch {}
-    const err = new Error(msg);
-    err.status = r.status;
-    throw err;
+    let body = null;
+    try { body = await r.json(); } catch {}
+    throw errorFromResponse(r.status, body);
   }
   return r.json();
 }

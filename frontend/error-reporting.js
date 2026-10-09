@@ -46,6 +46,17 @@
     : (host === 'localhost' || host === '127.0.0.1') ? 'local' : 'preview';
 
   /**
+   * A url with its query string cut off and any `/r/<token>` segment cut back
+   * to `/r` — the one-tap email page carries a 48-hour bearer token in its
+   * path, and the query string alone is not where it lives.
+   */
+  function cleanUrl(url) {
+    // `(^|[^/])` keeps a `//r/` host from matching; everything after the
+    // token segment goes with it.
+    return String(url).split('?')[0].split('#')[0].replace(/(^|[^/])\/r\/.*$/, '$1/r');
+  }
+
+  /**
    * Drop anything that could carry a driver's or an operator's details before
    * it leaves the browser. The QR forms hold a name, a phone number and a
    * plate; none of that belongs in an error report.
@@ -55,14 +66,23 @@
       if (event.request) {
         delete event.request.cookies;
         delete event.request.data;
-        if (event.request.url) event.request.url = String(event.request.url).split('?')[0];
+        if (event.request.url) event.request.url = cleanUrl(event.request.url);
+        var h = event.request.headers;
+        if (h) {
+          if (h.Referer) h.Referer = cleanUrl(h.Referer);
+          if (h.referer) h.referer = cleanUrl(h.referer);
+        }
       }
       delete event.user;
       if (event.breadcrumbs) {
         event.breadcrumbs = event.breadcrumbs.filter(function (b) {
           return b.category !== 'ui.input'; // keystrokes in the pass form
         }).map(function (b) {
-          if (b.data && b.data.url) b.data.url = String(b.data.url).split('?')[0];
+          if (b.data) {
+            if (b.data.url) b.data.url = cleanUrl(b.data.url);
+            if (b.data.from) b.data.from = cleanUrl(b.data.from);
+            if (b.data.to) b.data.to = cleanUrl(b.data.to);
+          }
           return b;
         });
       }

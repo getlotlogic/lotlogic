@@ -10,6 +10,16 @@
 #   e2e + a11y  -- `deployment_status`. The full credentialed suite against the
 #     Vercel preview built from the PR's own commit.
 #
+#   portal (local backend) -- only when the repository VARIABLE `PORTAL_E2E`
+#     is '1' (Settings -> Secrets and variables -> Actions -> Variables), which
+#     Gabe flips after the portal backend deploys. Builds a throwaway stack in
+#     the runner -- Postgres 17, the harness schema from lotlogic-backend's
+#     `python -m tests.portal.cluster`, that backend on :8010 with
+#     DEBUG/SIGNUP_TEST_CODE -- and runs `--grep @portal`, the a11y sweep and
+#     access control against it (tests/README.md "Portal suite"). Never
+#     production. Unset, the job does not run, and in every other job the
+#     portal specs report as skipped.
+#
 # IMPORTANT, about that second job: GitHub only ever runs a workflow's
 # `deployment_status` (and `push`) triggers from the version of this file on
 # the DEFAULT BRANCH. Until this file is merged to `main`, no deployment_status
@@ -82,6 +92,11 @@ jobs:
       - name: Install test deps
         working-directory: tests
         run: npm ci
+
+      # Node unit tests for the test fixtures (the portal suite's loopback guard).
+      - name: Fixture unit tests
+        working-directory: tests
+        run: npm run test:unit
 
       - name: Install browsers
         working-directory: tests
@@ -250,5 +265,172 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-${{ github.run_id }}
+          path: tests/playwright-report
+          retention-days: 14
+
+  portal:
+    name: portal (local backend)
+    if: vars.PORTAL_E2E == '1' && github.event_name != 'deployment_status'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Throwaway, runner-local values only — nothing here is a real secret.
+      PORTAL_E2E: '1'
+      API_URL: http://localhost:8010
+      PORTAL_FRONTEND_PORT: '4173'
+      PORTAL_BACKEND_DIR: ${{ github.workspace }}/backend
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
+      PORTAL_TEST_PG_URL: postgresql://postgres:postgres@localhost:5432/postgres_portal
+      SIGNUP_TEST_CODE: '482190'
+      TEST_OWNER_A_EMAIL: pw-owner-a@e2e.lotlogic.dev
+      TEST_OWNER_A_PASSWORD: playwright-a-pw-please-rotate
+      TEST_OWNER_B_EMAIL: pw-owner-b@e2e.lotlogic.dev
+      TEST_OWNER_B_PASSWORD: playwright-b-pw-please-rotate
+      TEST_PARTNER_A_EMAIL: pw-partner-a@e2e.lotlogic.dev
+      TEST_PARTNER_A_PASSWORD: playwright-partner-pw-please-rotate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out lotlogic-backend
+        uses: actions/checkout@v4
+        with:
+          repository: getlotlogic/lotlogic-backend
+          ref: ${{ vars.PORTAL_BACKEND_REF || 'main' }}
+          path: backend
+          token: ${{ secrets.BACKEND_REPO_TOKEN || github.token }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            frontend/package-lock.json
+            tests/package-lock.json
+
+      # Same PGDG snippet the backend's own CI uses: psql 17 for the fixture's
+      # harness reads/writes and the PostgREST stand-in.
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Backend deps
+        working-directory: backend
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt -r requirements-dev.txt
+
+      # Prints DATABASE_URL (the `_portal` sibling of TEST_DATABASE_URL, with
+      # the portal migrations applied), then blocks — so backgrounded.
+      - name: Harness database
+        working-directory: backend
+        run: |
+          nohup .venv/bin/python -m tests.portal.cluster > /tmp/cluster.log 2>&1 &
+          for _ in $(seq 1 120); do
+            grep -q '^DATABASE_URL=' /tmp/cluster.log && break
+            sleep 1
+          done
+          cat /tmp/cluster.log
+          grep -q '^DATABASE_URL=' /tmp/cluster.log
+          echo "BACKEND_DATABASE_URL=$(grep '^DATABASE_URL=' /tmp/cluster.log | cut -d= -f2-)" >> "$GITHUB_ENV"
+
+      - name: Local backend on :8010
+        working-directory: backend
+        env:
+          DEBUG: 'true'
+          JWT_SECRET: portal-test-secret
+          API_KEY: test
+          ADMIN_API_KEY: test
+          RECAPTCHA_SECRET_KEY: ''
+          CORS_ALLOWED_ORIGINS: http://127.0.0.1:4173
+          TWILIO_ACCOUNT_SID: test
+          TWILIO_AUTH_TOKEN: test
+          TWILIO_FROM_NUMBER: '+15555555555'
+          R2_ACCOUNT_ID: test
+          R2_ACCESS_KEY_ID: test
+          R2_SECRET_ACCESS_KEY: test
+          R2_PUBLIC_URL: https://test.invalid
+          ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        run: |
+          DATABASE_URL="$BACKEND_DATABASE_URL" nohup .venv/bin/uvicorn main:app --port 8010 > /tmp/backend.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -fsS -o /dev/null http://localhost:8010/health && exit 0
+            sleep 1
+          done
+          cat /tmp/backend.log >&2
+          exit 1
+
+      - name: Frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      # The a11y sweep's `upsell chips @a11y` block serves frontend/dist,
+      # so it must exist before `npm run test:a11y` (same as the e2e job).
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Test deps + browsers
+        working-directory: tests
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium webkit
+
+      # The seed endpoint needs one market; the fixture then turns partner A
+      # into N Style (`signup_slug='nstyle'`).
+      - name: Seed accounts
+        working-directory: tests
+        run: |
+          psql "$PORTAL_TEST_PG_URL" -v ON_ERROR_STOP=1 -c \
+            "INSERT INTO public.markets (name, state) SELECT 'Charlotte', 'NC' WHERE NOT EXISTS (SELECT 1 FROM public.markets)"
+          ADMIN_API_KEY=test npm run seed
+
+      - name: Portal suite (@portal)
+        working-directory: tests
+        run: npx playwright test --grep @portal
+
+      - name: a11y sweep
+        working-directory: tests
+        run: npm run test:a11y
+
+      - name: Access control
+        working-directory: tests
+        run: npm run test:access
+
+      - name: Backend log
+        if: failure()
+        run: tail -200 /tmp/backend.log || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-portal-${{ github.run_id }}
           path: tests/playwright-report
           retention-days: 14

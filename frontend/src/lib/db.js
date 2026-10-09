@@ -1,6 +1,7 @@
 import { supabase } from './supabase.js';
 import { API, apiFetch, getSessionToken } from './api.js';
 import { lotDayBound } from './lotdate.js';
+import { requestsApi } from './requestsApi.js';
 
 // ── Normalize Supabase violation to app format ───────────────
 // Revenue in DB is dollars; multiply by 100 for fmtMoney (cents display)
@@ -64,6 +65,17 @@ export async function resolveCameraSnapshot(cameraId, tunnelSnapshotUrl, maxAgeS
 // Safety cap on the active-roster query. Not expected to bind — see
 // getActiveRoster, which warns if it ever does.
 export const ACTIVE_ROSTER_CAP = 500;
+
+// True when the caller is asking about an account that is NOT the signed-in
+// one — i.e. an admin inside "View as Partner". `/auth/me` only ever answers
+// for the subject holding the token, so anything that asks about another
+// account has to go to the tables instead.
+function isImpersonating(userId) {
+  try {
+    const session = JSON.parse(localStorage.getItem('lotlogic_session') || '{}');
+    return !!(session && session.id && userId && session.id !== userId);
+  } catch { return false; }
+}
 
 export const db = {
   async getOwners(email) {
@@ -729,7 +741,51 @@ export const db = {
   },
 
   // ── ALPR Parking Pass System ─────────────────────────────────
+  // Every role's property list now comes from `GET /auth/me` (spec §8.3):
+  // `{id, name, address, role, member_status, verification_status,
+  //   property_type, features{passes, qr, cameras}}` per non-archived
+  // property — owners get what they own or are a member of (pending
+  // memberships included), partners get their assigned properties, platform
+  // admins get all of them. The `features` flags are what drive the bottom-nav
+  // rule and the §5.6 upsell chips, and nothing else can derive them.
+  //
+  // Two paths still read PostgREST:
+  //   1. a backend that has not deployed the new shape yet — the response has
+  //      no `properties` key, so fall through (frontend ships first);
+  //   2. "View as Partner" — `/auth/me` only ever answers for the signed-in
+  //      subject, and an impersonating admin is asking about a DIFFERENT
+  //      account, so that path keeps the owner-column read.
   async getProperties(userId, role) {
+    if (!userId) return [];
+    if (!isImpersonating(userId)) {
+      try {
+        const me = await apiFetch('/auth/me');
+        if (me && Array.isArray(me.properties)) return me.properties;
+      } catch { /* offline / old backend — fall through to the column read */ }
+    }
+    return db.getPropertiesByOwnerColumn(userId, role);
+  },
+  // "Not ours" (spec §3.8) — an archived, rejected property is excluded from
+  // `/auth/me.properties` outright; Task 14c's owner shape lists it here
+  // instead so ALPRPropertiesPage can explain an empty Lots list rather than
+  // showing "No lots yet" (RejectedPropertyNotice). Partner/platform-admin
+  // shapes carry no such key, and "View as Partner" asks about a different
+  // account than the one holding the token — same reasoning as getProperties,
+  // so that path just gets nothing rather than a wrong answer.
+  async getRejectedProperties(userId) {
+    if (!userId || isImpersonating(userId)) return [];
+    try {
+      const me = await apiFetch('/auth/me');
+      if (me && Array.isArray(me.rejected_properties)) return me.rejected_properties;
+    } catch { /* offline / old backend */ }
+    return [];
+  },
+  // The legacy read, by `properties.owner_id` / `properties.tow_company_id`.
+  // Kept separate because those columns are the only way to tell WHOSE a
+  // property is: `/auth/me`'s shape deliberately omits them, so the surfaces
+  // that scope by owner (TowActivityPage for a platform admin, "View as
+  // Partner") have to ask for the columns explicitly.
+  async getPropertiesByOwnerColumn(userId, role) {
     if (!userId) return [];
     if (supabase) {
       let q = supabase.from('properties').select('*');
@@ -766,30 +822,29 @@ export const db = {
     }
     return null;
   },
-  async createProperty(prop) {
-    if (supabase) {
-      const qrCode = prop.qr_code_id || (prop.name || 'prop').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20) + '-' + (crypto.randomUUID ? crypto.randomUUID().slice(0, 12) : Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
-      const { data, error } = await supabase.from('properties').insert({ ...prop, qr_code_id: qrCode }).select().single();
-      if (error) throw new Error(error.message);
-      return data;
-    }
-    return null;
+  // Property writes move to the backend (spec §3.4a, §3.8): migration 3
+  // drops the PostgREST owner insert/update/delete policies on `properties`
+  // so a `tow_company_id NULL` apartment can never land again by accident,
+  // and the trust columns (verification_status, partner_id, …) become
+  // backend/service-role-only. `createProperty` is normally called through
+  // `AddPropertyForm.jsx`'s own `requestsApi.createApartmentProperty` (it
+  // needs the 409-duplicate / force-retry flow this thin wrapper doesn't
+  // carry); kept here too for any other caller that just wants a plain
+  // insert body with no duplicate handling.
+  async createProperty(body) {
+    const res = await requestsApi.createApartmentProperty(body);
+    return res?.property || res;
   },
+  // Soft delete: POST /apartment/properties/{id}/archive sets `archived_at`
+  // — plates, cameras, passes and history are kept, nothing is wiped.
   async deleteProperty(id) {
-    if (supabase) {
-      const { error } = await supabase.from('properties').delete().eq('id', id);
-      if (error) throw new Error(error.message);
-      return { success: true };
-    }
+    await requestsApi.archiveApartmentProperty(id);
     return { success: true };
   },
+  // name / address fields / notes only — trust columns are never in this body.
   async updateProperty(id, updates) {
-    if (supabase) {
-      const { data, error } = await supabase.from('properties').update(updates).eq('id', id).select().single();
-      if (error) throw new Error(error.message);
-      return data;
-    }
-    return null;
+    const res = await requestsApi.updateApartmentProperty(id, updates);
+    return res?.property || res;
   },
   async getResidentPlates(propertyId) {
     if (supabase) {

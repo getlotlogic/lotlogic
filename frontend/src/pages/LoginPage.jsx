@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { authLogin, authRequestPasswordReset } from '../lib/api.js';
+import { RETURN_TO_KEY, returnToTarget } from '../lib/deepLink.js';
 
 // ── Login ─────────────────────────────────────────────────────
 export function LoginPage({ onLogin }) {
@@ -8,6 +9,29 @@ export function LoginPage({ onLogin }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [resetSent, setResetSent] = useState(false);
+
+  // Keep the query across sign-in. Every portal email button points at
+  // `/app?property=…&request=…`; a signed-out tap used to land on Lots with
+  // the query gone, because `login()` re-renders the dashboard over whatever
+  // was in the address bar. Park the location here on mount, and replay it
+  // after `onLogin` — only `/app` locations, so nothing else can be planted
+  // in sessionStorage and replayed.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(RETURN_TO_KEY, window.location.pathname + window.location.search);
+    } catch { /* private mode / blocked storage — the query is simply lost */ }
+  }, []);
+
+  function replayReturnTo() {
+    let stored = null;
+    try {
+      stored = sessionStorage.getItem(RETURN_TO_KEY);
+      sessionStorage.removeItem(RETURN_TO_KEY);
+    } catch { return; }
+    const target = returnToTarget(stored);
+    if (!target) return;
+    try { window.history.replaceState(null, '', target); } catch { /* ignore */ }
+  }
 
   async function submit(e) {
     e.preventDefault();
@@ -35,6 +59,7 @@ export function LoginPage({ onLogin }) {
         _token: res.token,
         _expires_in: res.expires_in,
       });
+      replayReturnTo();
     } catch (err) {
       if (err.status === 401) setError('Invalid email or password.');
       else if (err.status === 403) setError(err.message || 'Password not set. Use "Email me a setup link" below.');
@@ -108,6 +133,9 @@ export function LoginPage({ onLogin }) {
         >
           Forgot password? Email me a setup link.
         </button>
+        <div className="login-note" style={{marginTop:16,fontSize:13,color:'var(--text-muted)'}}>
+          New property? <a href="/join" style={{color:'var(--accent)',fontWeight:700}}>Create your account</a>
+        </div>
       </div>
     </div>
   );

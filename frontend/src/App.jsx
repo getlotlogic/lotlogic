@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase, applySupabaseAuth } from './lib/supabase.js';
 import { apiFetch } from './lib/api.js';
 import { db } from './lib/db.js';
@@ -6,16 +6,29 @@ import { useTheme, useOnlineStatus } from './hooks.js';
 import { haptic, NotifyManager } from './lib/notify.js';
 import { useToast } from './ui/Toast.jsx';
 import { SkeletonCards } from './ui/Skeletons.jsx';
-import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview } from './ui/icons.jsx';
+import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview, NavIconRequests } from './ui/icons.jsx';
 import { lazyPage } from './lib/lazyPage.js';
+import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink, readJoinReturnTo } from './lib/deepLink.js';
+import { readActionToken, hideActionToken } from './lib/requestAction.js';
+import { navTabsFor, partnerRequestsReady } from './lib/features.js';
+import { verifyState, secondsUntilResend, cooldownRetryAfter, sentAtForRetryAfter } from './lib/verifyState.js';
+import { requestsApi } from './lib/requestsApi.js';
+import { VerifyBanner } from './ui/VerifyBanner.jsx';
+import { VerifyEmailSheet } from './pages/property/VerifyEmailSheet.jsx';
+import { pendingMembershipState } from './lib/membership.js';
+import { badgeCount, countActionable } from './lib/partnerRequests.js';
+import { parseSlackRedirect, cleanSlackRedirectUrl } from './pages/account/slackSection.js';
 import { EarningsPage } from './pages/EarningsPage.jsx';
 import { InvoicesPage } from './pages/InvoicesPage.jsx';
 import { ALPRPropertiesPage } from './pages/ALPRPropertiesPage.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
+import { PendingMembershipPage } from './pages/PendingMembershipPage.jsx';
+import { RequestActionPage } from './pages/RequestActionPage.jsx';
 import { OperatorActivityPage } from './pages/OperatorActivityPage.jsx';
 import { OverviewPage } from './pages/OverviewPage.jsx';
 import { AccountPage } from './pages/AccountPage.jsx';
 import { PlateLookupPage } from './pages/PlateLookupPage.jsx';
+import { SignupPage } from './pages/SignupPage.jsx';
 import { PartnerAppPage } from './pages/PartnerAppPage.jsx';
 
 // Heavy tabs — lazy so a phone loads a login form, not a billing console.
@@ -26,9 +39,32 @@ const TowActivityPage  = lazyPage(() => import('./pages/TowActivityPage.jsx'));
 const TrainingPage     = lazyPage(() => import('./pages/TrainingPage.jsx'));
 const AdminConsolePage = lazyPage(() => import('./pages/AdminConsolePage.jsx'));
 const HqPage           = lazyPage(() => import('./pages/HqPage.jsx'));
+const PartnerRequestsPage = lazyPage(() => import('./pages/PartnerRequestsPage.jsx'));
 
 const NMLD_PARTNER_ID = '1826b6b4-e8dc-402f-b4e7-926e259a56fe';
 const FRANK_APP_TAB_LIVE = true; // live in Frank's partner portal since 2026-08-07
+
+// The public (no-session) routes `vercel.json` rewrites into this bundle, and
+// the page each one renders. `join` is Task 25's SignupPage; `request-action`
+// is Task 29's `/r/<token>` page (spec §5.8) — it works signed out *and*
+// signed in (the token carries its own authority, not a property-member
+// login), so the same component is registered in both tables below. An
+// unregistered route falls through to the sign-in form, whose "New property?
+// Create your account" link is the door, so no portal link is a dead end.
+const PUBLIC_ROUTE_PAGES = { join: SignupPage, 'request-action': RequestActionPage };
+// Same table for a session that already exists: `join` differs there — spec
+// §3.2, a signed-in manager opening someone else's link gets the
+// add-property form (`mode="add-property"`), never a second sign-up;
+// `request-action` renders identically whether or not the tapper is signed in.
+const PUBLIC_ROUTE_PAGES_SIGNED_IN = { join: SignupPage, 'request-action': RequestActionPage };
+
+// Every tab id the dashboard knows. A `?tab=` deep link is only honoured for
+// one of these; whether this particular account may SEE it is then settled by
+// the coercion effect below against the nav it actually gets.
+const KNOWN_TAB_IDS = [
+  'overview', 'lots', 'requests', 'analytics', 'training', 'towactivity',
+  'earnings', 'invoices', 'admin', 'app', 'hq', 'lookup', 'activity', 'account',
+];
 
 
 
@@ -72,12 +108,28 @@ export function App() {
     if (!owner?._token) return;
     apiFetch('/auth/me').then(me => {
       if (!me || !me.email) return;
+      // The property list with its `features` flags. Absent on a backend that
+      // has not deployed the portal shape yet — leave the state alone then, so
+      // the nav keeps every tab rather than collapsing on a missing key.
+      if (Array.isArray(me.properties)) setProperties(me.properties);
       setOwner(prev => {
         if (!prev) return prev;
-        if (prev.is_admin === !!me.is_admin && prev.is_platform_admin === !!me.is_platform_admin) {
-          return prev; // no change — avoid state churn / re-renders
-        }
-        const merged = { ...prev, is_admin: !!me.is_admin, is_platform_admin: !!me.is_platform_admin };
+        // email_verified / signup_source / created_at / email_verify_sent_at
+        // drive verifyState() (Task 23, spec §3.5) — the banner/wall above
+        // the page content and the "Resend in Ns" countdown in
+        // VerifyEmailSheet. Compared explicitly (not just is_admin) so the
+        // banner unmounts the moment this self-heal re-runs after a verify.
+        const next = {
+          is_admin: !!me.is_admin,
+          is_platform_admin: !!me.is_platform_admin,
+          email_verified: !!me.email_verified,
+          signup_source: me.signup_source,
+          created_at: me.created_at,
+          email_verify_sent_at: me.email_verify_sent_at ?? null,
+        };
+        const unchanged = Object.keys(next).every(k => prev[k] === next[k]);
+        if (unchanged) return prev; // no change — avoid state churn / re-renders
+        const merged = { ...prev, ...next };
         try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
         return merged;
       });
@@ -89,6 +141,119 @@ export function App() {
     const match = path.match(/\/violations\/([0-9a-f-]{36})/i);
     return match ? match[1] : null;
   });
+  // The two paths `vercel.json` rewrites into this bundle without a session:
+  // `/join…` (Task 25's SignupPage) and `/r/…` (Task 29's request-action
+  // page). Read once — this never changes without a navigation.
+  // Settable, not a constant: a signup that completes on `/join/<slug>` turns
+  // this session into a signed-in one while the address bar still says
+  // `/join`. Without clearing the route here, the signed-in branch below
+  // would answer that pathname with the add-property form instead of the
+  // dashboard the new account is supposed to land on.
+  const [publicRoute, setPublicRoute] = useState(() => readPublicRoute(window.location.pathname));
+  const [publicSlug, setPublicSlug] = useState(() => readJoinSlug(window.location.pathname));
+  // The token in a `/r/<token>` link (spec §5.8) — path only, query ignored
+  // (the two email buttons are two different tokens at the same exact path).
+  const [requestActionToken] = useState(() => readActionToken(window.location.pathname));
+  // Then take that 48 h bearer token out of the address bar (`/r/<token>` →
+  // `/r`) so it is not left in history, screenshots or error reports; the
+  // page POSTs from this state, never from the url.
+  useEffect(() => { if (requestActionToken) hideActionToken(window); }, [requestActionToken]);
+  // `/app?property=…&section=…&request=…&tab=…&firstrun=&verify=&upload=&plate=`
+  // — the portal's email and Slack buttons. Captured on mount before anything
+  // can rewrite the address bar, applied once the session exists, then cleaned
+  // out of the url so a refresh does not replay `firstrun`.
+  const [deepLink, setDeepLink] = useState(() => readDeepLink(window.location.search));
+  const clearDeepLink = useCallback(() => setDeepLink(emptyDeepLink()), []);
+
+  // ── VerifyEmailSheet (Task 23, spec §5.9) ──────────────────
+  // Owned here, not by whichever page happens to open it, because the sheet
+  // is reached from three independent places: the banner/wall below, the
+  // `?verify=1` deep link, and (once Task 22 lands) a tow/photo/pending-hold
+  // gate via `onNeedVerify(resume)`. `verifySheetMode` picks the sub-view
+  // ('code' default, 'changeEmail' when opened via "Change email");
+  // `verifyFromWall` is the no-✕/Sign-out variant; `verifyResumeRef` holds
+  // the submit a gate was waiting on, fired once on success and then forgotten.
+  const [verifySheetOpen, setVerifySheetOpen] = useState(false);
+  const [verifySheetMode, setVerifySheetMode] = useState('code');
+  const [verifyFromWall, setVerifyFromWall] = useState(false);
+  const verifyResumeRef = useRef(null);
+  const openVerifySheet = useCallback((opts) => {
+    const { mode = 'code', fromWall = false, resume = null } = opts || {};
+    verifyResumeRef.current = typeof resume === 'function' ? resume : null;
+    setVerifySheetMode(mode);
+    setVerifyFromWall(fromWall);
+    setVerifySheetOpen(true);
+  }, []);
+  const closeVerifySheet = useCallback(() => {
+    setVerifySheetOpen(false);
+    verifyResumeRef.current = null;
+  }, []);
+  // The shape Task 22's composer expects: `onNeedVerify(resume)`, one arg.
+  const onNeedVerify = useCallback((resume) => openVerifySheet({ mode: 'code', fromWall: false, resume }), [openVerifySheet]);
+  const handleVerifySuccess = useCallback((resp) => {
+    setOwner(prev => {
+      if (!prev) return prev;
+      const merged = { ...prev, email_verified: true };
+      // SIGNUP_VERIFY_FIRST's verify-email response carries the login shape
+      // (spec §5.9 success row) — pick up the fresh token so the session
+      // that landed signed-in-via-code keeps working.
+      if (resp && typeof resp.token === 'string') { merged._token = resp.token; merged._ts = Date.now(); }
+      try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
+      return merged;
+    });
+    setVerifySheetOpen(false);
+    addToast('Email confirmed', 'success');
+    const resume = verifyResumeRef.current;
+    verifyResumeRef.current = null;
+    if (resume) resume();
+  }, [addToast]);
+  // VerifyEmailSheet's "Change email" success only updates its own local
+  // `currentEmail` — this is what keeps `owner.email` (what the banner
+  // actually renders) in sync, the same persist-to-session pattern
+  // `handleVerifySuccess` above uses.
+  const handleEmailChanged = useCallback((newEmail) => {
+    setOwner(prev => {
+      if (!prev) return prev;
+      const merged = { ...prev, email: newEmail };
+      try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
+      return merged;
+    });
+  }, []);
+  // A bare "Resend" tap from the banner/wall (not through the sheet) — the
+  // cooldown gate is enforced by disabling the button (see bannerResendDisabled
+  // below), but a raced double-tap (e.g. right after signup auto-sends the
+  // first code) can still reach the server inside the 60s window and get
+  // back the spec's documented 429 `resend_cooldown {retry_after}`. That is
+  // not the same failure as a genuine offline/network error and must not
+  // show the same "can't reach" toast — mirrors VerifyEmailSheet's own
+  // resend() handling.
+  const handleBannerResend = useCallback(() => {
+    requestsApi.resendVerification({}).then(() => {
+      setOwner(prev => (prev ? { ...prev, email_verify_sent_at: new Date().toISOString() } : prev));
+      addToast('Sent. Check your email — and the spam folder.', 'success');
+    }).catch((e) => {
+      const retryAfter = cooldownRetryAfter(e);
+      if (retryAfter !== null) {
+        // Rebase email_verify_sent_at so secondsUntilResend() (driving
+        // bannerResendDisabled) agrees with the server's retry_after,
+        // instead of trusting a client clock that raced ahead of it.
+        setOwner(prev => (prev ? { ...prev, email_verify_sent_at: sentAtForRetryAfter(retryAfter) } : prev));
+        addToast(`Already sent — try again in ${retryAfter}s.`, 'error');
+        return;
+      }
+      addToast("Can't reach LotLogic — try again.", 'error');
+    });
+  }, [addToast]);
+  // `/auth/me.properties` — the per-property `features` flags behind the
+  // bottom-nav rule (spec §5) and the §5.6 upsell chips.
+  const [properties, setProperties] = useState([]);
+  // id → name, for the partner Requests tab's property group headers: the
+  // request shape carries `property_id`, not the name.
+  const propertyNames = useMemo(() => {
+    const map = {};
+    for (const p of (Array.isArray(properties) ? properties : [])) if (p?.id) map[p.id] = p.name || p.id;
+    return map;
+  }, [properties]);
   const [tab, setTab] = useState(() => {
     // Jobs tab is hidden (camera-driven; unreliable until cameras read 100% of
     // cars). Land on Lots and coerce any persisted 'jobs' so nobody opens it.
@@ -129,6 +294,23 @@ export function App() {
 
   const isOwner = owner?._role === 'owner' && !viewAs;
   const isOperator = owner?._role === 'partner' || !!viewAs;
+  // Who is gated (spec §3.5): only a self-serve owner account that hasn't
+  // confirmed. `viewAs` / partner sessions never carry signup_source, so
+  // verifyState() falls through to 'verified' for them on its own.
+  const emailVerifyState = isOwner ? verifyState(owner) : 'verified';
+  // The banner/wall "Resend" button's client-side cooldown gate. `resendTick`
+  // itself is unused — it only exists to force a re-render once a second so
+  // `secondsUntilResend` (evaluated fresh against the real clock every
+  // render) counts down and the button re-enables on its own, the same way
+  // VerifyEmailSheet's own countdown does.
+  const [, setResendTick] = useState(0);
+  useEffect(() => {
+    if (emailVerifyState === 'verified') return undefined;
+    const id = setInterval(() => setResendTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [emailVerifyState]);
+  const bannerResendDisabled = emailVerifyState !== 'verified'
+    && secondsUntilResend(owner?.email_verify_sent_at) > 0;
   // Platform-admin (Gabe / Victor / Standard Vending) — gets admin-only surfaces.
   // Sourced from the JWT claim issued by /auth/login. Never set this from
   // partner-controlled state.
@@ -160,6 +342,43 @@ export function App() {
   const showMoney = (isPlatformAdmin && !viewAs)
     || (viewAsLotIdsEarly ? viewAsLotIdsEarly.length > 0 : (lots || []).length > 0);
 
+  // ── Bottom nav ─────────────────────────────────────────────
+  // Base nav from the role + `/auth/me.properties` (spec §5: an account whose
+  // every property has `features.cameras=false` gets Properties · Account,
+  // tab id `lots`; any camera brings back the five). The account-specific
+  // extras — money surfaces, the platform-admin consoles, Frank's app preview
+  // — splice in ahead of Account, which stays last.
+  const navExtras = isOwner
+    ? [
+      // SaaS (all-apartment) owners have no per-tow money flow — see showMoney.
+      ...(showMoney ? [
+        { id: 'earnings', label: 'Earnings' },
+        { id: 'invoices', label: 'Billing' },
+      ] : []),
+      // Platform-admin only: the internal console (clients / onboard /
+      // feedback) folded in from admin.html, Frank's app-preview tab for QA
+      // before the partner-side entry (below) is switched on, and the fleet
+      // status board (Task 23). Each is gated again at render.
+      ...(isPlatformAdmin ? [
+        { id: 'admin', label: 'Admin' },
+        { id: 'app', label: 'App' },
+        { id: 'hq', label: 'HQ' },
+      ] : []),
+    ]
+    : [
+      // NMLD only: live preview of Frank's NMLD Parking app. Held behind
+      // FRANK_APP_TAB_LIVE until Gabe signs off on the admin-side QA pass.
+      ...((FRANK_APP_TAB_LIVE && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? [{ id: 'app', label: 'App' }] : []),
+    ];
+  const navTabs = (() => {
+    const base = navTabsFor(isOwner ? 'owner' : 'partner', properties, { partnerRequestsReady });
+    const account = base.filter(t => t.id === 'account');
+    return [...base.filter(t => t.id !== 'account'), ...navExtras, ...account];
+  })();
+  // Overview has no nav button (it is reached from the cards) but is a real
+  // owner tab, so it stays valid.
+  const validTabs = isOwner ? ['overview', ...navTabs.map(t => t.id)] : navTabs.map(t => t.id);
+
   useEffect(() => {
     if (!owner) return;
     // Don't coerce until lots have actually loaded once — showMoney is false
@@ -169,15 +388,48 @@ export function App() {
     // The transient `loading` flag is NOT a safe guard here: on mount this
     // effect fires before the loadData effect ever sets loading=true.
     if (!lotsLoaded) return;
-    const valid = isOwner
-      ? ['overview', 'lots', 'analytics', 'training', 'towactivity', 'account',
-         ...(showMoney ? ['earnings', 'invoices'] : []),
-         ...(isPlatformAdmin ? ['admin', 'app', 'hq'] : [])]
-      : ['lots', 'lookup', 'activity', 'account',
-         ...(((viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? ['app'] : [])];
-    if (!valid.includes(tab)) setTab('lots');
+    if (!validTabs.includes(tab)) setTab('lots');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [owner, viewAs, isOwner, isPlatformAdmin, tab, showMoney, lotsLoaded]);
+  }, [owner, viewAs, isOwner, isPlatformAdmin, tab, showMoney, lotsLoaded, validTabs.join(',')]);
+
+  // Apply the deep link, once, as soon as there is a session. Deliberately not
+  // while signed out: the query has to survive the sign-in (LoginPage replays
+  // it), and cleaning it then would throw away the request the email named.
+  // `tab` wins when it names a real tab; otherwise a `property` link means
+  // Lots, because that is where the property page lives. `verify` (the code
+  // email's `/app?verify=1`, spec §5.9) opens VerifyEmailSheet directly — the
+  // rest (`section`, `request`, `firstrun`, `upload`) travel down to the
+  // Lots page as props.
+  const deepLinkAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!owner || deepLinkAppliedRef.current) return;
+    deepLinkAppliedRef.current = true;
+    if (deepLink.tab && KNOWN_TAB_IDS.includes(deepLink.tab)) setTab(deepLink.tab);
+    else if (deepLink.property) setTab('lots');
+    if (deepLink.verify) openVerifySheet({ mode: 'code', fromWall: false });
+    cleanDeepLink();
+  }, [owner, deepLink, openVerifySheet]);
+
+  // `/slack/oauth_redirect` lands the partner back on
+  // `/app?tab=account&slack=connected` (or `…&slack=error`) — a key
+  // deepLink.js deliberately leaves alone ("for whoever owns it"). Read it
+  // once on mount, toast the spec's verbatim copy, then strip just that key
+  // so a refresh of the Account tab does not replay the toast.
+  const slackRedirectHandledRef = useRef(false);
+  useEffect(() => {
+    if (slackRedirectHandledRef.current) return;
+    slackRedirectHandledRef.current = true;
+    const outcome = parseSlackRedirect(window.location.search);
+    if (!outcome) return;
+    if (outcome === 'connected') {
+      addToast("Connected to N Style Towing's Slack. Now invite @LotLogic to the channel your crew uses.", 'success');
+    } else {
+      addToast("Slack didn't connect — try again from Account.", 'error');
+    }
+    try {
+      window.history.replaceState(null, '', cleanSlackRedirectUrl(window.location.pathname, window.location.search));
+    } catch { /* non-browser / blocked */ }
+  }, [addToast]);
   const viewAsLotIds = viewAsLotIdsEarly;
   const effectiveLots = viewAsLotIds ? lots.filter(l => viewAsLotIds.includes(l.id)) : lots;
   const effectiveViolations = viewAsLotIds ? violations.filter(v => viewAsLotIds.includes(v.lot_id)) : violations;
@@ -240,7 +492,28 @@ export function App() {
     finally { if (!silent) setLoading(false); }
   }, [addToast]);
 
+  // `?return_to=` (spec §3.4a door (c)): the "You already have an account"
+  // card on `/join/<slug>` sends the visitor to `/app?return_to=%2Fjoin%2F…`
+  // to sign in. Once signed in they belong back on that `/join` link, which
+  // the signed-in branch below answers with the add-property form, prefilled
+  // from the sessionStorage draft. Only `/join` or `/join/<slug>` is
+  // honoured (`readJoinReturnTo`); the key is stripped from the address
+  // either way so a refresh cannot replay it.
+  function applyJoinReturnTo() {
+    const r = readJoinReturnTo(window.location.search);
+    if (!r.present) return;
+    const url = r.path || `${window.location.pathname}${r.rest}${window.location.hash || ''}`;
+    try { window.history.replaceState(null, '', url); } catch { /* blocked */ }
+    if (r.path) {
+      setPublicSlug(r.slug);
+      setPublicRoute('join');
+    }
+  }
+  // Already signed in when the link was opened (another tab signed in first).
+  useEffect(() => { if (owner) applyJoinReturnTo(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   function login(o) {
+    applyJoinReturnTo();
     const session = { ...o, _ts: Date.now() };
     setOwner(session);
     try { localStorage.setItem('lotlogic_session', JSON.stringify(session)); } catch {}
@@ -265,6 +538,38 @@ export function App() {
           try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
         });
     }
+  }
+
+  // `SignupPage`'s `onDone` (spec §3.4 step 5 / §3.6). Three things the plain
+  // `login` cannot do on its own, and all three have to happen in the same
+  // commit or the new account lands on the wrong screen:
+  //   1. leave `/join` — `publicRoute` was read from the pathname on mount
+  //      and the address bar still says `/join/<slug>`;
+  //   2. replace the address with the url the response names
+  //      (`/app?property=…&section=requests&firstrun=1`, or a bare `/app`
+  //      for the pending-membership path);
+  //   3. re-read the deep link from THAT url, because `deepLink` was parsed
+  //      at mount from a query that did not exist yet — the apply-once effect
+  //      below would otherwise fire against an empty one and `firstrun`,
+  //      `property` and `section` would all be lost.
+  function handleJoinDone(session, nav) {
+    const url = (nav && nav.url) || '/app';
+    try { window.history.replaceState(null, '', url); } catch { /* blocked */ }
+    const q = url.indexOf('?');
+    setDeepLink(readDeepLink(q === -1 ? '' : url.slice(q)));
+    deepLinkAppliedRef.current = false;
+    setPublicRoute(null);
+    login(session);
+  }
+
+  // Re-pulls `/auth/me.properties` after AddPropertyForm (inside Account)
+  // adds a property or sends a join request — the nav, the pending-
+  // membership gate above and AccountPage's Team list all key off this
+  // state, and none of them refetch it on their own.
+  function refreshProperties() {
+    apiFetch('/auth/me').then(me => {
+      if (me && Array.isArray(me.properties)) setProperties(me.properties);
+    }).catch(() => {});
   }
 
   function logout() {
@@ -319,6 +624,11 @@ export function App() {
   // Refreshed every 60s so it tracks the cron-plate-pair-learn output.
   // Owner-only; partners never see this tab.
   const [trainingBadge, setTrainingBadge] = useState(0);
+  // Bumped by the Requests page after any write, so the badge drops the moment
+  // Austin clears something instead of up to a minute later. The callback is
+  // stable so the page's own effects do not re-run on every App render.
+  const [badgeNonce, setBadgeNonce] = useState(0);
+  const bumpRequestsBadge = useCallback(() => setBadgeNonce(n => n + 1), []);
   useEffect(() => {
     if (!owner) return;
     let cancelled = false;
@@ -341,6 +651,46 @@ export function App() {
     const t = setInterval(refreshTrainingBadge, 60_000);
     return () => { cancelled = true; clearInterval(t); };
   }, [owner]);
+
+  // Partner Requests badge (spec §5.4). **Active tows + active photo requests
+  // + unconfirmed properties + pending join requests** — what N Style must act
+  // on. Holds are deliberately NOT counted: they are the steady-state volume,
+  // and "a badge of 14 that never clears is a badge he stops reading".
+  //
+  // Three reads, polled on the same 60 s beat as the Training badge:
+  //   `/apartment/requests?view=active`  — the tows and photos (the route
+  //        already excludes archived and rejected properties, so the badge and
+  //        the list agree by construction);
+  //   `/partner/properties?verification_status=pending` — the confirm cards;
+  //   `/auth/me.pending_joins`           — the membership requests, taken from
+  //        the count the server emits, never derived from a members listing.
+  // Every one of them tolerates a 404 so the tab survives a backend that has
+  // not deployed the portal routers yet.
+  const [requestsBadge, setRequestsBadge] = useState(0);
+  const [pendingJoins, setPendingJoins] = useState(0);
+  useEffect(() => {
+    if (!owner || !isOperator) { setRequestsBadge(0); setPendingJoins(0); return; }
+    let cancelled = false;
+    async function refreshRequestsBadge() {
+      const [active, pendingProps, me] = await Promise.all([
+        apiFetch('/apartment/requests?view=active&limit=200').catch(() => null),
+        apiFetch('/partner/properties?verification_status=pending').catch(() => null),
+        apiFetch('/auth/me').catch(() => null),
+      ]);
+      if (cancelled) return;
+      const items = Array.isArray(active?.items) ? active.items : [];
+      const { tows, photos } = countActionable(items);
+      const pendingList = Array.isArray(pendingProps?.items)
+        ? pendingProps.items
+        : (Array.isArray(pendingProps) ? pendingProps : []);
+      const joins = Number(me?.pending_joins) || 0;
+      setPendingJoins(joins);
+      setRequestsBadge(badgeCount({ tows, photos, pendingProps: pendingList.length, pendingJoins: joins }));
+    }
+    refreshRequestsBadge();
+    const t = setInterval(refreshRequestsBadge, 60_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [owner, isOperator, badgeNonce]);
 
   // Load data on mount if session was restored
   useEffect(() => { if (owner) loadData(owner); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -492,9 +842,65 @@ export function App() {
   // below) — without it, `.theme-light .login-page` etc. never match and
   // the login page ignores the operator's theme choice.
   if (!owner) {
+    // `publicRoute` is the no-session switch for the two paths `vercel.json`
+    // rewrites into this bundle. Both render the sign-in form today:
+    //   'join'           → SignupPage (spec §3.1–§3.4): `/join/<slug>` or a
+    //                      bare `/join` that asks who tows the property
+    //                      first.
+    //   'request-action' → Task 29 swaps in the /r/<token> page; the spec's
+    //                      own fallback copy for a token this page cannot use
+    //                      is "Sign in to manage the hold", which is exactly
+    //                      what the form offers.
+    const PublicPage = publicRoute ? PUBLIC_ROUTE_PAGES[publicRoute] : null;
     return (
       <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
-        <LoginPage onLogin={login} />
+        {PublicPage
+          ? <PublicPage route={publicRoute} slug={publicSlug} token={requestActionToken} onDone={handleJoinDone} onLogin={login}
+              theme={theme} onToggleTheme={toggleTheme} />
+          : <LoginPage onLogin={login} />}
+      </div>
+    );
+  }
+
+  // A signed-in manager opening someone else's `/join/<slug>` link gets the
+  // add-property form, not a second sign-up (spec §3.2) — the property
+  // section only, header "Add a property to your account", button
+  // **Add property**.
+  // `request-action` (spec §5.8) renders the same way signed in as signed
+  // out — the token is its own authority.
+  const SignedInPublicPage = (publicRoute === 'join' || publicRoute === 'request-action')
+    ? PUBLIC_ROUTE_PAGES_SIGNED_IN[publicRoute]
+    : null;
+  if (SignedInPublicPage) {
+    return (
+      <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
+        <SignedInPublicPage route={publicRoute} slug={publicSlug} token={requestActionToken} mode="add-property" user={owner}
+          theme={theme} onToggleTheme={toggleTheme} />
+      </div>
+    );
+  }
+
+  // The "ask to join" outcome (spec §3.7 (b)): a signed-in owner with no
+  // active membership anywhere and >= 1 pending one has nothing to do on
+  // Lots/Earnings/etc. — PendingMembershipPage (sign out, resend, add a
+  // different property) is the whole app for this account until someone
+  // approves or declines. Rendered as its own full-screen gate, the same
+  // shape as the `!owner` branch above, rather than threading a one-tab nav
+  // through every tab/validTabs computation below — "nav = Account only"
+  // the brief asks for is this: there is no other destination that does
+  // anything until the membership resolves, and the page carries its own
+  // Sign out. Never for a partner session or View-as-Partner — `properties`
+  // here is always the signed-in owner's own list (never a partner's).
+  const isPendingMembership = isOwner && pendingMembershipState({ properties });
+  if (isPendingMembership) {
+    return (
+      <div className={`app ${theme === 'dark' ? '' : 'theme-light'}`}>
+        <PendingMembershipPage
+          me={{ properties }}
+          user={owner}
+          onLogout={logout}
+          onAddProperty={() => { window.location.assign('/join'); }}
+        />
       </div>
     );
   }
@@ -531,47 +937,18 @@ export function App() {
   const NavIconLookup = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('circle', {cx:'11',cy:'11',r:'7'}), React.createElement('line', {x1:'21',y1:'21',x2:'16.65',y2:'16.65'}));
   const NavIconApp = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('rect', {x:'6.5',y:'2.5',width:'11',height:'19',rx:'2.5'}), React.createElement('line', {x1:'10.5',y1:'18.5',x2:'13.5',y2:'18.5'}));
   const NavIconHq = () => React.createElement('svg', {width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round'}, React.createElement('rect', {x:'4',y:'10',width:'7',height:'11'}), React.createElement('rect', {x:'13',y:'4',width:'7',height:'17'}), React.createElement('line', {x1:'4',y1:'21',x2:'20',y2:'21'}));
-  const navIcons = { app: NavIconApp, overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, training: NavIconAnalytics, towactivity: NavIconTow, admin: NavIconAdmin, lookup: NavIconLookup, hq: NavIconHq };
+  const navIcons = { app: NavIconApp, overview: NavIconOverview, jobs: NavIconJobs, lots: NavIconLots, earnings: NavIconEarnings, invoices: NavIconInvoices, activity: NavIconActivity, account: NavIconAccount, analytics: NavIconAnalytics, training: NavIconAnalytics, towactivity: NavIconTow, admin: NavIconAdmin, lookup: NavIconLookup, hq: NavIconHq, requests: NavIconRequests };
   // Tab roles (kept intentionally narrow so each surface has one meaning):
   //   Jobs     → every violation needing action (enforcement + ALPR unified)
   //   Lots     → register + manage properties (plates, passes, cameras, plate detections)
   //   Analytics/Activity → summaries
   //   Earnings → $$
-  const navTabs = isOwner ? [
-    // Jobs tab hidden until cameras read 100% — everything surfaces on the pass.
-    { id: 'lots',        label: 'Lots',        badge: 0 },
-    { id: 'analytics',   label: 'Analytics',   badge: 0 },
-    { id: 'training',    label: 'Training',    badge: trainingBadge },
-    { id: 'towactivity', label: 'Tow truck',   badge: 0 },
-    // SaaS (all-apartment) owners have no per-tow money flow — see showMoney.
-    ...(showMoney ? [
-      { id: 'earnings',    label: 'Earnings',    badge: 0 },
-      { id: 'invoices',    label: 'Billing',     badge: 0 },
-    ] : []),
-    // Platform-admin only: the internal console (clients / onboard / feedback),
-    // folded in from admin.html. Gated again at render on isPlatformAdmin.
-    ...(isPlatformAdmin ? [{ id: 'admin', label: 'Admin', badge: 0 }] : []),
-    // Soft launch of Frank's app-preview tab: platform admins only, for QA
-    // before the partner-side entry (below) is switched on.
-    ...(isPlatformAdmin ? [{ id: 'app', label: 'App', badge: 0 }] : []),
-    // Platform-admin only: the fleet status board (businesses, red
-    // findings, questions waiting on Gabe, fleet health). Task 23.
-    ...(isPlatformAdmin ? [{ id: 'hq', label: 'HQ', badge: 0 }] : []),
-    { id: 'account',     label: 'Account',     badge: 0 },
-  ] : [
-    // Partner navigation. Earnings + Billing/Invoices are owner-only
-    // surfaces — partners must NEVER see revenue_share, fee schedules,
-    // or QuickBooks state. Removed 2026-04-28 per Gabe.
-    { id: 'lots',     label: 'Lots',     badge: 0 },
-    // In-lot plate lookup, folded in from lookup.html — the tow partner's
-    // field tool. Shows for a partner login and when an admin views-as-partner.
-    { id: 'lookup',   label: 'Lookup',   badge: 0 },
-    { id: 'activity', label: 'Activity', badge: 0 },
-    // NMLD only: live preview of Frank's NMLD Parking app. Held behind
-    // FRANK_APP_TAB_LIVE until Gabe signs off on the admin-side QA pass.
-    ...((FRANK_APP_TAB_LIVE && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID) ? [{ id: 'app', label: 'App', badge: 0 }] : []),
-    { id: 'account',  label: 'Account',  badge: 0 },
-  ];
+  // Badges hang off the base nav computed above: Training for owners,
+  // Requests for partners (spec §5.4).
+  const navTabsWithBadges = navTabs.map(t => ({
+    ...t,
+    badge: t.id === 'training' ? trainingBadge : (t.id === 'requests' ? requestsBadge : 0),
+  }));
 
   const lastRefreshLabel = lastRefresh ? (
     Math.floor((Date.now() - lastRefresh) / 1000) < 10 ? 'Just now' :
@@ -611,7 +988,7 @@ export function App() {
                 aria-expanded={partnerSwitcherOpen}
                 title="Open one of your partners' portals"
                 style={{
-                  background:'rgba(167,139,250,.12)', color:'#a78bfa',
+                  background:'rgba(167,139,250,.12)', color: theme === 'dark' ? '#a78bfa' : '#6d28d9',
                   border:'1px solid rgba(167,139,250,.3)', borderRadius:8,
                   padding:'6px 10px', fontSize:12, fontWeight:700,
                   cursor:'pointer', whiteSpace:'nowrap',
@@ -671,6 +1048,22 @@ export function App() {
         </div>
       </header>
 
+      {/* Confirm-your-email banner/wall (spec §3.5) — mounted above the page
+          content, not inside it, so it stays put across tab switches and
+          never scrolls away with the page it's gating. 'unverified' is the
+          banner; 'walled' (day 7) is the wall — same three actions, heavier
+          copy, no implicit dismiss either way. */}
+      {emailVerifyState !== 'verified' && (
+        <VerifyBanner
+          variant={emailVerifyState === 'walled' ? 'wall' : 'banner'}
+          email={owner.email}
+          onEnterCode={() => openVerifySheet({ mode: 'code', fromWall: emailVerifyState === 'walled' })}
+          onChangeEmail={() => openVerifySheet({ mode: 'changeEmail', fromWall: emailVerifyState === 'walled' })}
+          onResend={handleBannerResend}
+          resendDisabled={bannerResendDisabled}
+        />
+      )}
+
       <main id="main-content" className="page-content" role="main">
         {/* "Viewing as Partner" banner */}
         {viewAs && (
@@ -707,7 +1100,17 @@ export function App() {
           <React.Suspense fallback={<SkeletonCards />}>
           {tab === 'overview' && isOwner && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
-          {tab === 'lots' && <ALPRPropertiesPage user={effectiveUser} impersonating={!!viewAs} />}
+          {tab === 'lots' && <ALPRPropertiesPage
+            user={effectiveUser}
+            impersonating={!!viewAs}
+            initialSelectedId={deepLink.property}
+            initialSection={deepLink.section}
+            request={deepLink.request}
+            upload={deepLink.upload}
+            firstrun={deepLink.firstrun}
+            verify={deepLink.verify}
+            onNeedVerify={onNeedVerify}
+          />}
           {tab === 'training' && isOwner && <TrainingPage user={effectiveUser} isOwner={isOwner} />}
           {tab === 'towactivity' && isOwner && <TowActivityPage user={effectiveUser} />}
           {tab === 'earnings' && isOwner && showMoney && <EarningsPage violations={effectiveViolations} lots={effectiveLots} isOwner={isOwner} user={effectiveUser} onNavigate={setTab} />}
@@ -715,10 +1118,15 @@ export function App() {
           {tab === 'invoices' && isOwner && showMoney && <InvoicesPage lots={lots} partners={partners} user={owner} isOwner={isOwner} isPlatformAdmin={isPlatformAdmin} />}
           {tab === 'admin' && isPlatformAdmin && <AdminConsolePage user={owner} />}
           {tab === 'hq' && isPlatformAdmin && <HqPage />}
-          {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} />}
+          {tab === 'requests' && isOperator && <PartnerRequestsPage
+            pendingJoins={pendingJoins}
+            propertyNames={propertyNames}
+            onBadgeChange={bumpRequestsBadge}
+          />}
+          {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} plate={deepLink.plate} property={deepLink.property} />}
           {tab === 'app' && (isPlatformAdmin || (FRANK_APP_TAB_LIVE && isOperator && (viewAs?.id || owner?.id) === NMLD_PARTNER_ID)) && <PartnerAppPage />}
           {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
-          {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} isPlatformAdmin={isPlatformAdmin} />}
+          {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} isPlatformAdmin={isPlatformAdmin} properties={isOwner ? properties : []} onPropertyAdded={refreshProperties} />}
           </React.Suspense>
         </div>
       </main>
@@ -730,12 +1138,15 @@ export function App() {
             display:contents keeps it out of the flex layout .bottom-nav relies
             on for its direct children. */}
         <div role="tablist" aria-label="Main navigation" style={{display: 'contents'}}>
-          {navTabs.map(t => {
+          {navTabsWithBadges.map(t => {
             const Icon = navIcons[t.id];
             return (
               <button key={t.id}
                 className={`nav-item ${tab === t.id ? 'active' : ''}`}
-                onClick={() => { setTab(t.id); haptic('light'); }}
+                // Tapping a tab by hand retires the deep link: coming back to
+                // Lots should show the list, not re-open the property the
+                // email named half an hour ago.
+                onClick={() => { clearDeepLink(); setTab(t.id); haptic('light'); }}
                 aria-label={`${t.label}${t.badge > 0 ? `, ${t.badge} pending` : ''}`}
                 aria-current={tab === t.id ? 'page' : undefined}
                 role="tab"
@@ -749,6 +1160,18 @@ export function App() {
           })}
         </div>
       </nav>
+
+      <VerifyEmailSheet
+        open={verifySheetOpen}
+        email={owner.email}
+        sentAt={owner.email_verify_sent_at}
+        mode={verifySheetMode}
+        fromWall={verifyFromWall}
+        onClose={closeVerifySheet}
+        onSuccess={handleVerifySuccess}
+        onEmailChanged={handleEmailChanged}
+        onSignOut={logout}
+      />
     </div>
   );
 }
