@@ -7,7 +7,7 @@ import { supabase } from '../lib/supabase.js';
 import { API, apiFetch } from '../lib/api.js';
 import { db } from '../lib/db.js';
 import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
-import { changedSettings, settingsSaveErrorMessage, NO_CHANGES_TOAST, PROPERTY_TYPE_READONLY_NOTE } from '../lib/propertySettings.js';
+import { buildSettingsPatch, mergeSavedProperty, settingsSaveErrorMessage, NO_CHANGES_TOAST, PROPERTY_TYPE_READONLY_NOTE } from '../lib/propertySettings.js';
 import { useIntervalFetch, useNowTick } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
 import { useToast } from '../ui/Toast.jsx';
@@ -671,14 +671,14 @@ export function ALPRPropertyDetailPage({
     setSaving(true);
     try {
       // Only changed, editable fields go out; property_type never does.
-      const updates = changedSettings(settingsBaseline(property), settingsDraft);
+      const updates = buildSettingsPatch(settingsBaseline(property), settingsDraft);
       if (Object.keys(updates).length === 0) {
         addToast(NO_CHANGES_TOAST, 'info');
         setSaving(false);
         return;
       }
       const updated = await db.updateProperty(propertyId, updates);
-      setProperty(updated);
+      setProperty(prev => mergeSavedProperty(prev, updated));
       setShowSettings(false);
       addToast('Settings saved', 'success');
     } catch (err) {

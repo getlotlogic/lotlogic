@@ -46,3 +46,48 @@ test('db.updateProperty unwraps {property}', async () => {
   const fn = new Function('requestsApi', 'id', 'updates', `return (async () => {${body}})();`);
   assert.deepEqual(await fn(requestsApi, 'p1', {}), { id: 'p1', name: 'X' });
 });
+
+// --- G5: the save must merge the PATCH response, never replace state -------
+import { mergeSavedProperty, buildSettingsPatch } from '../src/lib/propertySettings.js';
+
+const pageState = {
+  id: 'p1', property_type: 'truck_plaza', qr_code_id: 'qr-real-1', pay_to_park_enabled: true,
+  role: 'owner', partner_name: 'Acme', tow_company_name: 'Tow Co',
+  name: 'Plaza', policy_text: 'No overnight.', policy_phone: '+17045550199',
+};
+// property_json shape: no property_type / qr_code_id / role / partner_name ...
+const patchResponse = { id: 'p1', name: 'Plaza', policy_text: 'Tow after 1 hour.', policy_phone: '+17045550199' };
+
+test('mergeSavedProperty keeps fields the PATCH response lacks', () => {
+  const next = mergeSavedProperty(pageState, patchResponse);
+  assert.equal(next.policy_text, 'Tow after 1 hour.');
+  for (const k of ['property_type', 'qr_code_id', 'role', 'pay_to_park_enabled', 'partner_name', 'tow_company_name']) {
+    assert.equal(next[k], pageState[k], k);
+  }
+  assert.equal(`/temp/${next.qr_code_id}`, '/temp/qr-real-1');
+  assert.notEqual(next, pageState);
+});
+
+test('mergeSavedProperty tolerates a missing response or previous state', () => {
+  assert.deepEqual(mergeSavedProperty(pageState, null), pageState);
+  assert.deepEqual(mergeSavedProperty(null, patchResponse), patchResponse);
+});
+
+test('buildSettingsPatch never carries property_type', () => {
+  const patch = buildSettingsPatch(pageState, { ...pageState, property_type: 'apartment', policy_text: 'X' });
+  assert.deepEqual(patch, { policy_text: 'X' });
+});
+
+test('handleSaveSettings uses the helpers and a functional merge', () => {
+  const src = readFileSync(new URL('../src/pages/ALPRPropertyDetailPage.jsx', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('async function handleSaveSettings'), src.indexOf('async function handleRemovePlate'));
+  assert.match(body, /buildSettingsPatch\(/);
+  assert.match(body, /setProperty\(\s*prev\s*=>\s*mergeSavedProperty\(prev,\s*updated\)\s*\)/);
+  assert.doesNotMatch(body, /setProperty\(updated\)/);
+});
+
+test('RequestActionPage has a no-token view distinct from the expired one', () => {
+  const src = readFileSync(new URL('../src/pages/RequestActionPage.jsx', import.meta.url), 'utf8');
+  assert.match(src, /Open the link from your email again\./);
+  assert.match(src, /kind: 'no_token'/);
+});

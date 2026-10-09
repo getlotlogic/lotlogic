@@ -50,3 +50,17 @@ export function settingsSaveErrorMessage(err, fallback = 'Failed to save setting
   }
   return SETTINGS_ERROR_COPY[code] || fallback;
 }
+
+/** Diff for the PATCH body: changed editable keys only, never property_type. */
+export function buildSettingsPatch(prev, draft) {
+  return changedSettings(prev, draft);
+}
+
+/**
+ * The PATCH answer is the backend's property_json, which lacks property_type,
+ * qr_code_id, pay_to_park_enabled, role, partner_name and tow_company_name.
+ * Merge it over the page state; never replace the state with it.
+ */
+export function mergeSavedProperty(prev, updated) {
+  return { ...(prev || {}), ...(updated || {}) };
+}
