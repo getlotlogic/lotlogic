@@ -6,8 +6,7 @@
  * matched and the login page ignored the operator's theme — it always
  * rendered with the dark, unthemed default. See progress.md Task 15.
  *
- * This spec is self-contained (build-and-serve THIS branch's frontend, like
- * hq.spec.ts) rather than pointing at playwright.config.ts's default
+ * This spec is self-contained (build-and-serve THIS branch's frontend) rather than pointing at playwright.config.ts's default
  * baseURL (the live production site), and asserts on computed style rather
  * than a screenshot so it stays meaningful without regenerating a baseline
  * image every time an unrelated color token changes.

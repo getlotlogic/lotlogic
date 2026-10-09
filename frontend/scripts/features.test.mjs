@@ -8,12 +8,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { navTabsFor, isPortalOnly, partnerRequestsReady } from '../src/lib/features.js';
+import { navTabsFor, isPortalOnly, partnerRequestsReady, KNOWN_TAB_IDS, isKnownTab } from '../src/lib/features.js';
 
 const ids = tabs => tabs.map(t => t.id);
 const labelOf = (tabs, id) => tabs.find(t => t.id === id)?.label;
 
-const FIVE = ['lots', 'analytics', 'training', 'towactivity', 'account'];
+const FOUR = ['lots', 'analytics', 'towactivity', 'account'];
 
 test('owner with no cameras anywhere gets Properties · Account', () => {
   const tabs = navTabsFor('owner', [{ features: { cameras: false } }]);
@@ -29,24 +29,24 @@ test('owner with several camera-less properties still gets Properties · Account
   assert.deepEqual(ids(tabs), ['lots', 'account']);
 });
 
-test('one property with a camera brings back the five', () => {
+test('one property with a camera brings back the four', () => {
   const tabs = navTabsFor('owner', [
     { features: { cameras: false } },
     { features: { cameras: true } },
   ]);
-  assert.deepEqual(ids(tabs), FIVE);
+  assert.deepEqual(ids(tabs), FOUR);
   assert.equal(labelOf(tabs, 'lots'), 'Lots');
 });
 
 test('an unknown property list never collapses the nav', () => {
   // No properties loaded yet, a legacy PostgREST row with no `features` key,
   // or a non-array: all of these must keep today's five tabs rather than
-  // hiding Analytics/Training/Tow truck from an owner who has cameras.
-  assert.deepEqual(ids(navTabsFor('owner', [])), FIVE);
-  assert.deepEqual(ids(navTabsFor('owner', null)), FIVE);
-  assert.deepEqual(ids(navTabsFor('owner', [{}])), FIVE);
-  assert.deepEqual(ids(navTabsFor('owner', [{ features: {} }])), FIVE);
-  assert.deepEqual(ids(navTabsFor('owner', [{ features: { cameras: false } }, {}])), FIVE);
+  // hiding Analytics/Tow truck from an owner who has cameras.
+  assert.deepEqual(ids(navTabsFor('owner', [])), FOUR);
+  assert.deepEqual(ids(navTabsFor('owner', null)), FOUR);
+  assert.deepEqual(ids(navTabsFor('owner', [{}])), FOUR);
+  assert.deepEqual(ids(navTabsFor('owner', [{ features: {} }])), FOUR);
+  assert.deepEqual(ids(navTabsFor('owner', [{ features: { cameras: false } }, {}])), FOUR);
 });
 
 test('partner nav omits requests until Task 27 flips the constant', () => {
@@ -77,4 +77,19 @@ test('isPortalOnly is true only for an explicit cameras:false', () => {
   assert.equal(isPortalOnly({}), false);
   assert.equal(isPortalOnly(null), false);
   assert.equal(isPortalOnly(undefined), false);
+});
+
+test('training, app and hq are no longer tabs: a deep link to them is not honoured', () => {
+  for (const id of ['training', 'app', 'hq']) {
+    assert.equal(isKnownTab(id), false, id);
+    assert.equal(KNOWN_TAB_IDS.includes(id), false, id);
+  }
+  assert.equal(isKnownTab('lots'), true);
+  assert.equal(isKnownTab('admin'), true);
+  assert.equal(isKnownTab(null), false);
+});
+
+test('no role gets a training tab', () => {
+  assert.equal(ids(navTabsFor('owner', [])).includes('training'), false);
+  assert.equal(ids(navTabsFor('partner', [], { partnerRequestsReady: true })).includes('training'), false);
 });
