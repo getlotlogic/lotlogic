@@ -12,8 +12,7 @@
  *
  * `scan(page, 'verify-sheet')` mirrors tests/a11y/axe.spec.ts's helper
  * (same blocking-impact set, no waivers) — kept local to this file because
- * that one isn't exported; the hq.spec.ts a11y file already keeps its own
- * local check rather than importing one.
+ * that one isn't exported.
  */
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';

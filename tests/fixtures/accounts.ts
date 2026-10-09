@@ -53,7 +53,7 @@ export async function loginAs(page: Page, account: TestAccount): Promise<string>
   await page.getByRole('button', { name: /sign in|log in/i }).click();
 
   // The post-login shell is the registration-based tab bar (Lots / Analytics /
-  // Training / Tow Truck / Earnings / Billing / Account) — these are rendered
+  // Tow Truck / Earnings / Billing / Account) — these are rendered
   // as role="tab", not role="button", and "Lots" is present for every owner
   // regardless of whether they have any properties yet.
   await expect(page.getByRole('tab', { name: /^lots$/i }).first()).toBeVisible({

@@ -27,7 +27,7 @@ test.describe('dashboard smoke @smoke', () => {
     await loginAs(page, accounts.ownerA());
 
     // The registration-based dashboard's bottom nav is a role="tab" bar:
-    // Lots / Analytics / Training / Tow Truck / Earnings / Billing / Account.
+    // Lots / Analytics / Tow Truck / Earnings / Billing / Account.
     for (const tab of ['Lots', 'Analytics', 'Billing']) {
       const t = page.getByRole('tab', { name: new RegExp(`^${tab}$`, 'i') }).first();
       await t.click();

@@ -1,11 +1,8 @@
 // Naming guard for the portal's JSX (spec §5's copy rule, CLAUDE.md's
 // "User-facing naming — parking pass ONLY").
 //
-// `scripts/check-naming.mjs` only walks `frontend/**/*.html`, and
-// `scripts/hqNaming.test.mjs` only covers the HQ pages, so every portal
-// component added by this plan would otherwise ship unguarded. This is the
-// `hqNaming.test.mjs` precedent applied to the portal surfaces, with one
-// difference that matters: it scans **string literals and JSX text**, not the
+// `scripts/check-naming.mjs` only walks `frontend/**/*.html`, so every portal
+// component added by this plan would otherwise ship unguarded. It scans **string literals and JSX text**, not the
 // raw file. The DB vocabulary is unchanged — `resident_plates`,
 // `visitor_passes`, `holder_role='resident'`, `db.getActiveRoster` — so a
 // whole-file regex would fire on identifiers and column names that are not
@@ -23,7 +20,7 @@ import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..'); // frontend/
 
-// The same six words `check-naming.mjs` and `hqNaming.test.mjs` ban. The Slack
+// The same six words `check-naming.mjs` bans. The Slack
 // roles render as "Office" / "Truck", never "Driver" (§5.7).
 const WORDS = /\b(resident|visitor|permanent|temporary|guest|driver)s?\b/i;
 
