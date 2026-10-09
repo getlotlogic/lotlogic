@@ -33,7 +33,9 @@ export function RequestActionPage({ token }) {
 
   const load = useCallback(() => {
     if (!token) {
-      setView({ kind: 'invalid', request: null });
+      // After hideActionToken rewrote the URL to /r, a reload or tab restore
+      // has no token. That is not an expired link.
+      setView({ kind: 'no_token', request: null });
       setLoading(false);
       return;
     }
@@ -75,6 +77,17 @@ export function RequestActionPage({ token }) {
   }
 
   const request = view.request;
+
+  // Not spec copy: neutral wording for a visit that carries no token.
+  if (view.kind === 'no_token') {
+    return (
+      <div className="login-page" role="main">
+        <div className="login-box">
+          <p>Open the link from your email again.</p>
+        </div>
+      </div>
+    );
+  }
 
   // The ordinary preview — one primary button for whichever action this
   // token carries, nothing pressed yet.
