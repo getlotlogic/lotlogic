@@ -302,6 +302,8 @@ jobs:
       TEST_PARTNER_A_PASSWORD: playwright-partner-pw-please-rotate
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Check out lotlogic-backend
         uses: actions/checkout@v4
