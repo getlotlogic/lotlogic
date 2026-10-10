@@ -54,14 +54,14 @@ test('partner nav omits requests until Task 27 flips the constant', () => {
   assert.deepEqual(ids(tabs), ['lots', 'lookup', 'activity', 'account']);
 });
 
-test('partner nav lists requests when told it is ready', () => {
-  const tabs = navTabsFor('partner', [], { partnerRequestsReady: true });
+test('partner nav lists requests when told it is ready (and the partner has a portal property)', () => {
+  const tabs = navTabsFor('partner', [{ property_type: 'apartment' }], { partnerRequestsReady: true });
   assert.deepEqual(ids(tabs), ['lots', 'requests', 'lookup', 'activity', 'account']);
   assert.equal(labelOf(tabs, 'requests'), 'Requests');
 });
 
 test('partner nav defaults to the module constant', () => {
-  const tabs = navTabsFor('partner', []);
+  const tabs = navTabsFor('partner', [{ property_type: 'apartment' }]);
   assert.equal(ids(tabs).includes('requests'), partnerRequestsReady === true);
 });
 
@@ -92,4 +92,15 @@ test('training, app and hq are no longer tabs: a deep link to them is not honour
 test('no role gets a training tab', () => {
   assert.equal(ids(navTabsFor('owner', [])).includes('training'), false);
   assert.equal(ids(navTabsFor('partner', [], { partnerRequestsReady: true })).includes('training'), false);
+});
+
+test('a partner with only truck plazas (NMLD) keeps the pre-portal nav: no Requests, no Lookup', () => {
+  const plazaOnly = [{ id: 'p1', property_type: 'truck_plaza', features: { cameras: true } }];
+  assert.deepEqual(ids(navTabsFor('partner', plazaOnly, { partnerRequestsReady: true })), ['lots', 'activity', 'account']);
+  assert.deepEqual(ids(navTabsFor('partner', [], { partnerRequestsReady: true })), ['lots', 'activity', 'account']);
+});
+
+test('a partner with an apartment property (N Style) gets Requests and Lookup', () => {
+  const mixed = [{ id: 'p1', property_type: 'truck_plaza' }, { id: 'p2', property_type: 'apartment', features: { cameras: false } }];
+  assert.deepEqual(ids(navTabsFor('partner', mixed, { partnerRequestsReady: true })), ['lots', 'requests', 'lookup', 'activity', 'account']);
 });
