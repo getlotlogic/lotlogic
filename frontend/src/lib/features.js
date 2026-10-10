@@ -64,16 +64,21 @@ const OWNER_PORTAL_ONLY_TABS = [
  */
 export function navTabsFor(role, properties, opts = {}) {
   if (role === 'partner') {
-    const requestsReady = opts.partnerRequestsReady ?? partnerRequestsReady;
+    // Requests and Lookup are the communication portal's surfaces. A partner
+    // whose only properties are truck plazas (NMLD) is not on the portal —
+    // their nav stays Lots · Activity · Account, as before the portal shipped
+    // (Gabe, 2026-10-09: "plate lookup is only for the communication portal").
+    const list = Array.isArray(properties) ? properties : [];
+    const onPortal = list.some(p => p && p.property_type !== 'truck_plaza');
+    const requestsReady = (opts.partnerRequestsReady ?? partnerRequestsReady) && onPortal;
     // Earnings + Billing/Invoices are owner-only surfaces — partners must
     // NEVER see revenue_share, fee schedules, or QuickBooks state. Removed
     // 2026-04-28 per Gabe, and this list is why.
     return [
       { id: 'lots', label: 'Lots' },
       ...(requestsReady ? [{ id: 'requests', label: 'Requests' }] : []),
-      // In-lot plate lookup, folded in from lookup.html — the tow partner's
-      // field tool. Shows for a partner login and when an admin views-as-partner.
-      { id: 'lookup', label: 'Lookup' },
+      // Plate lookup — portal partners only (see onPortal above).
+      ...(onPortal ? [{ id: 'lookup', label: 'Lookup' }] : []),
       { id: 'activity', label: 'Activity' },
       { id: 'account', label: 'Account' },
     ];
