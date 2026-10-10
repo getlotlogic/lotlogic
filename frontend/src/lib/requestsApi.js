@@ -197,7 +197,9 @@ export const rejectPartnerProperty = (id, body) => post(`/partner/properties/${s
 export const getSlackStatus = () => get('/partner/slack/status');
 
 /** POST /partner/slack/install-link */
-export const slackInstallLink = () => post('/partner/slack/install-link', {});
+// `partnerId` is only honoured for a platform admin (View as Partner); a real
+// partner session's partner comes from its JWT and the backend ignores the body.
+export const slackInstallLink = (partnerId) => post('/partner/slack/install-link', partnerId ? { partner_id: partnerId } : {});
 
 /** GET /partner/slack/identities */
 export const listSlackIdentities = () => get('/partner/slack/identities');
