@@ -88,7 +88,7 @@ export function SlackSection({ user }) {
     setConnecting(true);
     setConnectErr('');
     try {
-      const { url } = await slackInstallLink();
+      const { url } = await slackInstallLink(user?.id);
       if (!url) throw new Error('Slack did not return an install link.');
       window.location = url;
     } catch (e) {
