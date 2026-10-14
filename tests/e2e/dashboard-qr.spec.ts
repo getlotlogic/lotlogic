@@ -21,7 +21,9 @@
  *   - an apartment opens on its Requests section, where the QR tiles are not on
  *     screen at all. Moving to another section MOUNTS fresh, blank canvases, and
  *     they have to be drawn then too — they used to stay white boxes.
- *   - a truck plaza shows the one tile it has.
+ *   - an apartment hands out ONE entry, /apt/<qr>, with the role in the query
+ *     (short-term = guest, long-term = resident), on the tile and on Copy link,
+ *     and says "parking pass"; a truck plaza keeps /temp/<qr> and its own label.
  *
  * Tagged @desktop-only so the mobile-safari project (which targets the remote
  * deploy) skips it.
@@ -131,6 +133,20 @@ async function canvasHasInk(page: Page, selector: string): Promise<boolean> {
 
 const TILE_CANVAS = (n: number) => `#qr-harness .pd-qr-tile:nth-child(${n}) canvas`;
 
+/** Record what the Copy link buttons write, instead of touching the clipboard. */
+async function recordClipboard(page: Page) {
+  await page.addInitScript(() => {
+    const copied: string[] = [];
+    (window as unknown as Record<string, unknown>).__copied = copied;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: (text: string) => { copied.push(text); return Promise.resolve(); } },
+    });
+  });
+}
+const copiedLinks = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __copied: string[] }).__copied);
+
 test.describe('property QR codes @desktop-only', () => {
   test('the tile draws a real QR code, not an empty box', async ({ page }) => {
     const detail = await mountPropertyDetail(page, { initialSection: 'all' });
@@ -152,10 +168,37 @@ test.describe('property QR codes @desktop-only', () => {
     await expect.poll(() => canvasHasInk(page, TILE_CANVAS(2)), { timeout: 15_000 }).toBe(true);
   });
 
-  test('a truck plaza shows its one tile, drawn', async ({ page }) => {
+  test('an apartment hands out its one entry, /apt/<qr> with the role, labelled parking pass', async ({ page }) => {
+    await recordClipboard(page);
+    const detail = await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
+    const short = detail.locator('.pd-qr-tile').nth(0);
+    const long = detail.locator('.pd-qr-tile').nth(1);
+    await expect(short.locator('.pd-share-label')).toHaveText('Short-term parking pass');
+    await expect(short.locator('.pd-qr-url')).toHaveText(`${origin}/apt/${QR_CODE_ID}?role=guest`);
+    await expect(long.locator('.pd-share-label')).toHaveText('Long-term parking pass');
+    await expect(long.locator('.pd-qr-url')).toHaveText(`${origin}/apt/${QR_CODE_ID}?role=resident`);
+
+    await short.getByRole('button', { name: 'Copy link' }).click();
+    await expect(page.getByText('Short-term link copied')).toBeVisible();
+    await long.getByRole('button', { name: 'Copy link' }).click();
+    await expect(page.getByText('Long-term link copied')).toBeVisible();
+    expect(await copiedLinks(page)).toEqual([
+      `${origin}/apt/${QR_CODE_ID}?role=guest`,
+      `${origin}/apt/${QR_CODE_ID}?role=resident`,
+    ]);
+  });
+
+  test('a truck plaza shows its one tile, drawn, on the /temp/ link', async ({ page }) => {
+    await recordClipboard(page);
     const detail = await mountPropertyDetail(page, { propertyType: 'truck_plaza' });
     await expect(detail.locator('.pd-qr-tile')).toHaveCount(1);
     await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
+    const tile = detail.locator('.pd-qr-tile').first();
+    await expect(tile.locator('.pd-share-label')).toHaveText('Self-serve pass');
+    await expect(tile.locator('.pd-qr-url')).toHaveText(`${origin}/temp/${QR_CODE_ID}`);
+    await tile.getByRole('button', { name: 'Copy link' }).click();
+    await expect(page.getByText('Self-serve link copied')).toBeVisible();
+    expect(await copiedLinks(page)).toEqual([`${origin}/temp/${QR_CODE_ID}`]);
   });
 
   // Two tests were removed here, both stale for the same reason: qrcode is

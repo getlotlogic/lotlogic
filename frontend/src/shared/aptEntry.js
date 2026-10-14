@@ -32,3 +32,22 @@ export function initialScreenForRole(search) {
 export function aptEntryUrl(qrCodeId, role) {
   return `/apt/${encodeURIComponent(qrCodeId)}?role=${role}`;
 }
+
+/**
+ * The two public registration links a property hands out (the dashboard's QR
+ * tiles and Copy link buttons). An apartment has one entry and the role picks
+ * the form; every other type keeps its own two pages.
+ * @param {string} origin  e.g. window.location.origin
+ * @param {{property_type?: string|null, qr_code_id?: string|null}} property
+ * @returns {{shortTermUrl: string, longTermUrl: string}}
+ */
+export function registrationLinks(origin, property) {
+  const qr = property && property.qr_code_id;
+  if (property && property.property_type === 'apartment') {
+    return {
+      shortTermUrl: origin + aptEntryUrl(qr, 'guest'),
+      longTermUrl: origin + aptEntryUrl(qr, 'resident'),
+    };
+  }
+  return { shortTermUrl: `${origin}/temp/${qr}`, longTermUrl: `${origin}/perm/${qr}` };
+}

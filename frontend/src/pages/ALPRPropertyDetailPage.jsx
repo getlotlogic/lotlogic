@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase.js';
 import { API, apiFetch } from '../lib/api.js';
 import { db } from '../lib/db.js';
 import { DEFAULT_TRUCK_PLAZA_POLICY } from '../shared/policy.js';
+import { registrationLinks } from '../shared/aptEntry.js';
 import { buildSettingsPatch, mergeSavedProperty, settingsSaveErrorMessage, NO_CHANGES_TOAST, PROPERTY_TYPE_READONLY_NOTE } from '../lib/propertySettings.js';
 import { useIntervalFetch, useNowTick } from '../hooks.js';
 import { ErrorBoundary } from '../ui/ErrorBoundary.jsx';
@@ -502,6 +503,10 @@ export function ALPRPropertyDetailPage({
     });
   }
 
+  // The two public registration links this property hands out. One computation
+  // feeds the QR canvases, the URL printed under each, and its Copy link button.
+  const regLinks = property ? registrationLinks(window.location.origin, property) : null;
+
   // Draw the QR codes onto the tiles' canvases. The tiles are not mounted while
   // Requests is the open section (an apartment's default), and leaving it
   // mounts fresh, blank canvases, so this runs again whenever they appear.
@@ -520,9 +525,9 @@ export function ALPRPropertyDetailPage({
         if (err) { console.error(label + ' qr:', err); setQrLibFailed(true); }
       });
     };
-    draw(tempQrRef.current, `${window.location.origin}/temp/${property.qr_code_id}`, 'temp');
-    draw(permQrRef.current, `${window.location.origin}/perm/${property.qr_code_id}`, 'perm');
-  }, [property?.qr_code_id, isOwner, requestsOnly]);
+    draw(tempQrRef.current, regLinks.shortTermUrl, 'temp');
+    draw(permQrRef.current, regLinks.longTermUrl, 'perm');
+  }, [regLinks?.shortTermUrl, regLinks?.longTermUrl, isOwner, requestsOnly]);
 
   // ── Permanent plates (new /perm submissions land here) ──
   // Same live pattern as parking regs and plate events so the admin doesn't
@@ -730,8 +735,11 @@ export function ALPRPropertyDetailPage({
   if (loading) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Loading...</div></div>;
   if (!property) return <div className="page-enter"><div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Lot not found</div></div>;
 
-  const tempUrl = `${window.location.origin}/temp/${property.qr_code_id}`;
-  const permUrl = `${window.location.origin}/perm/${property.qr_code_id}`;
+  const tempUrl = regLinks.shortTermUrl;
+  const permUrl = regLinks.longTermUrl;
+  // An apartment's two tiles are its /apt/ entry in its two roles; a plaza's
+  // are its own two pages and keep their own names.
+  const isApartment = property.property_type === 'apartment';
 
   return (
     <div className="page-enter">
@@ -868,13 +876,13 @@ export function ALPRPropertyDetailPage({
         <div className="pd-qr-grid">
           <div className="pd-qr-tile">
             <div className="pd-qr-head">
-              <span className="pd-share-label" style={{color:'#3b82f6'}}>Self-serve pass</span>
+              <span className="pd-share-label" style={{color:'#3b82f6'}}>{isApartment ? 'Short-term parking pass' : 'Self-serve pass'}</span>
               <span className="pd-qr-sub">up to 48 hrs</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={tempQrRef} /></div>
             {qrLibFailed && <div className="pd-qr-fallback" data-testid="qr-unavailable">QR unavailable &mdash; use Copy link</div>}
             <div className="pd-qr-url">{tempUrl}</div>
-            <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast('Self-serve link copied', 'success'); }}>Copy link</button>
+            <button className="pd-share-btn" onClick={() => { navigator.clipboard.writeText(tempUrl); addToast(isApartment ? 'Short-term link copied' : 'Self-serve link copied', 'success'); }}>Copy link</button>
           </div>
           {/* Long-term (owner-approved) QR is apartment-only. On a truck plaza
               the /perm form short-circuits to a dead end, so don't surface the
@@ -882,7 +890,7 @@ export function ALPRPropertyDetailPage({
           {!isTruckPlaza && (
           <div className="pd-qr-tile">
             <div className="pd-qr-head">
-              <span className="pd-share-label" style={{color:'#4ade80'}}>Long-term pass</span>
+              <span className="pd-share-label" style={{color:'#4ade80'}}>{isApartment ? 'Long-term parking pass' : 'Long-term pass'}</span>
               <span className="pd-qr-sub">owner-approved</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={permQrRef} /></div>

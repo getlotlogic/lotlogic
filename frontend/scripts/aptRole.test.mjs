@@ -4,7 +4,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { initialScreenForRole, aptEntryUrl } from '../src/shared/aptEntry.js';
+import { initialScreenForRole, aptEntryUrl, registrationLinks } from '../src/shared/aptEntry.js';
 
 const ORIGIN = 'https://lotlogic-beta.vercel.app';
 
@@ -60,6 +60,38 @@ test('what aptEntryUrl writes is what initialScreenForRole reads back', () => {
     const url = new URL(aptEntryUrl('fort-mill-townhomes-i', role), 'https://example.test');
     assert.equal(initialScreenForRole(url.search), role);
     assert.deepEqual(url.pathname.split('/').filter(Boolean), ['apt', 'fort-mill-townhomes-i']);
+  }
+});
+
+// ── the links the dashboard hands a manager ────────────────────────────────
+
+test('an apartment gets one entry, /apt/<qr>, with the role in the query', () => {
+  assert.deepEqual(
+    registrationLinks(ORIGIN, { property_type: 'apartment', qr_code_id: 'fort-mill-townhomes-i' }),
+    {
+      shortTermUrl: 'https://lotlogic-beta.vercel.app/apt/fort-mill-townhomes-i?role=guest',
+      longTermUrl: 'https://lotlogic-beta.vercel.app/apt/fort-mill-townhomes-i?role=resident',
+    },
+  );
+});
+
+test('a truck plaza keeps /temp/<qr> and /perm/<qr>', () => {
+  assert.deepEqual(
+    registrationLinks(ORIGIN, { property_type: 'truck_plaza', qr_code_id: 'charlotte-travel-plaza' }),
+    {
+      shortTermUrl: 'https://lotlogic-beta.vercel.app/temp/charlotte-travel-plaza',
+      longTermUrl: 'https://lotlogic-beta.vercel.app/perm/charlotte-travel-plaza',
+    },
+  );
+});
+
+test('any other type, or none, keeps /temp/<qr> and /perm/<qr> too', () => {
+  for (const property_type of [null, undefined, '', 'garage']) {
+    assert.deepEqual(
+      registrationLinks(ORIGIN, { property_type, qr_code_id: 'some-lot' }),
+      { shortTermUrl: `${ORIGIN}/temp/some-lot`, longTermUrl: `${ORIGIN}/perm/some-lot` },
+      String(property_type),
+    );
   }
 });
 
@@ -268,4 +300,14 @@ test('an old /perm/ sign ends on the long-term form, and an old /temp/ sign on t
   const temp = await openPage('visit.js', `${ORIGIN}/temp/${QR}`, [APARTMENT]);
   const landedTemp = await openPage('apt.js', new URL(temp.replaced[0], ORIGIN).href, [APARTMENT]);
   assert.match(landedTemp.app.innerHTML, /id="guestForm"/);
+});
+
+test('the dashboard links open the matching form, for the same qr_code_id they were built from', async () => {
+  const { shortTermUrl, longTermUrl } = registrationLinks(ORIGIN, { ...APARTMENT, qr_code_id: QR });
+  const guest = await openPage('apt.js', shortTermUrl, [APARTMENT]);
+  assert.match(guest.app.innerHTML, /id="guestForm"/);
+  assert.match(guest.queries[0], new RegExp(`qr_code_id=eq\\.${QR}\\b`));
+  const resident = await openPage('apt.js', longTermUrl, [APARTMENT]);
+  assert.match(resident.app.innerHTML, /id="residentForm"/);
+  assert.match(resident.queries[0], new RegExp(`qr_code_id=eq\\.${QR}\\b`));
 });
