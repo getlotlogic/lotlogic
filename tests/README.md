@@ -66,6 +66,7 @@ production. Every portal spec calls `skipUnlessPortal()`, so without
 | `e2e/signup.spec.ts` | Places autocomplete (skipped without `VITE_GOOGLE_MAPS_KEY`), the ZIP-blur twin match, existing email → sign in → prefilled add-property form, password reset, and the code sheet's wrong / expired / exhausted / cooldown states. |
 | `e2e/requests.spec.ts` | "sending" toast, Undo leaves the `removed` notice `cancelled`, the T-1 h `ack_end` link changes nothing, Extend "1 of 4", the 409 that flags the row and its Extend. |
 | `e2e/partner-requests.spec.ts` | Got it → Seen, Decline needs a reason, Not ours archives + declines + mails. |
+| `e2e/apartment-entry.spec.ts` | One entry for apartments: an old `/perm/<slug>` sign ends on `/apt/<slug>?role=resident` with the long-term form open, `/temp/<slug>` on `?role=guest` with the short-term form, and the bare `/apt/<slug>` (or an unknown role) still shows the landing, which the back link on a `?role=` form returns to. The fixture gives one signup property a `qr_code_id`, its only write. |
 | `e2e/access-control.spec.ts` (`@portal` block) | Office A gets 404 on office B's requests and invite route; a session JWT cannot insert a `verified` property through PostgREST (`42501`). |
 | `a11y/*` | Under `PORTAL_E2E` the `requests-owner`, `requests-partner` and `request-action-preview` scans get real rows and a real token. `WAIVED` stays empty. |
 
