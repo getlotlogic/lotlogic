@@ -21,6 +21,10 @@
  *   - an apartment opens on its Requests section, where the QR tiles are not on
  *     screen at all. Moving to another section MOUNTS fresh, blank canvases, and
  *     they have to be drawn then too — they used to stay white boxes.
+ *   - each tile fits its column on a phone and on a tablet, with the QR square
+ *     and whole: the library sizes the canvas with an inline 320px that no
+ *     stylesheet width can beat, which made a tile 366px wide and clipped it on
+ *     any column narrower than that.
  *   - an apartment hands out ONE entry, /apt/<qr>, with the role in the query
  *     (short-term = guest, long-term = resident), on the tile and on Copy link,
  *     and says "parking pass"; a truck plaza keeps /temp/<qr> and its own label.
@@ -95,9 +99,17 @@ async function mountPropertyDetail(
       property_type: type, address: '1 Test Way', pay_to_park_enabled: false,
     });
     const ALPRPropertyDetailPage = await hooks.ALPRPropertyDetailPage.load();
+    // The app's own shell, so the page gets the column it really gets
+    // (`.page-content` is max 640px, with 16px gutters) and not the bare body.
+    const shell = document.createElement('div');
+    shell.className = 'app theme-light';
+    const main = document.createElement('main');
+    main.className = 'page-content';
     const host = document.createElement('div');
     host.id = 'qr-harness';
-    document.body.appendChild(host);
+    main.appendChild(host);
+    shell.appendChild(main);
+    document.body.appendChild(shell);
     hooks.ReactDOM.createRoot(host).render(
       hooks.React.createElement(
         hooks.ToastProvider,
@@ -200,6 +212,25 @@ test.describe('property QR codes @desktop-only', () => {
     await expect(page.getByText('Self-serve link copied')).toBeVisible();
     expect(await copiedLinks(page)).toEqual([`${origin}/temp/${QR_CODE_ID}`]);
   });
+
+  for (const width of [360, 390, 600]) {
+    test(`each tile fits its column at ${width}px, with the QR square and whole`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      const detail = await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
+      await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
+      await expect.poll(() => canvasHasInk(page, TILE_CANVAS(2)), { timeout: 15_000 }).toBe(true);
+      const column = (await detail.boundingBox())!;
+      for (const n of [1, 2]) {
+        const tile = (await detail.locator('.pd-qr-tile').nth(n - 1).boundingBox())!;
+        const canvas = (await page.locator(TILE_CANVAS(n)).boundingBox())!;
+        expect(tile.x, `tile ${n} starts inside the column`).toBeGreaterThanOrEqual(column.x - 0.5);
+        expect(tile.x + tile.width, `tile ${n} ends inside the column`).toBeLessThanOrEqual(column.x + column.width + 0.5);
+        expect(canvas.x + canvas.width, `QR ${n} ends inside its tile`).toBeLessThanOrEqual(tile.x + tile.width);
+        expect(Math.abs(canvas.width - canvas.height), `QR ${n} is square`).toBeLessThan(1);
+        expect(canvas.width, `QR ${n} stays large enough to scan`).toBeGreaterThanOrEqual(160);
+      }
+    });
+  }
 
   // Two tests were removed here, both stale for the same reason: qrcode is
   // bundled (Task 14), not loaded from a CDN.

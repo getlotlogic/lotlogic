@@ -1165,7 +1165,11 @@
     .pd-qr-canvas-wrap {
       background: #fff; padding: 8px; border-radius: 8px; line-height: 0;
     }
-    .pd-qr-canvas-wrap canvas { display: block; width: 160px; height: 160px; }
+    /* qrcode's toCanvas() writes an inline 320px width and height, which beats
+       any stylesheet width, so a fixed size here never applied, and the tile
+       could not shrink below 366px (wider than a phone's column). Follow the
+       tile instead, and keep the QR square. */
+    .pd-qr-canvas-wrap canvas { display: block; max-width: 100%; height: auto !important; }
     .pd-qr-fallback {
       font-size: 11px; font-weight: 600; color: var(--yellow);
       text-align: center; max-width: 176px;
