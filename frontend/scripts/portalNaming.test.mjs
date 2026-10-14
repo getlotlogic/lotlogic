@@ -37,6 +37,12 @@ const TARGET_FILES = [
   'src/lib/requestErrors.js',
   // The bottom-sheet shell every portal sheet renders inside.
   'src/ui/Sheet.jsx',
+  // The apartment registration page (Task F3): its copy (STRINGS.en), the
+  // document card, and the page itself. holder_role='resident' stays a bare
+  // token there, which isNotCopy() lets through.
+  'src/apt.js',
+  'src/shared/aptFlow.js',
+  'src/shared/docCard.js',
 ];
 const TARGET_DIRS = ['src/pages/property'];
 
