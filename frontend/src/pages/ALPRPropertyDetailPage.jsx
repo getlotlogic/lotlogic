@@ -877,7 +877,7 @@ export function ALPRPropertyDetailPage({
           <div className="pd-qr-tile">
             <div className="pd-qr-head">
               <span className="pd-share-label" style={{color:'#3b82f6'}}>{isApartment ? 'Short-term parking pass' : 'Self-serve pass'}</span>
-              <span className="pd-qr-sub">up to 48 hrs</span>
+              <span className="pd-qr-sub">{isApartment ? 'up to 72 hrs' : 'up to 48 hrs'}</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={tempQrRef} /></div>
             {qrLibFailed && <div className="pd-qr-fallback" data-testid="qr-unavailable">QR unavailable &mdash; use Copy link</div>}

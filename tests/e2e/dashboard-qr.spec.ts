@@ -255,6 +255,9 @@ test.describe('property QR codes @desktop-only', () => {
     await expect(short.locator('.pd-qr-url')).toHaveText(`${origin}/apt/${QR_CODE_ID}?role=guest`);
     await expect(long.locator('.pd-share-label')).toHaveText('Long-term parking pass');
     await expect(long.locator('.pd-qr-url')).toHaveText(`${origin}/apt/${QR_CODE_ID}?role=resident`);
+    // The short-term form at /apt/ (apt.js) goes up to 72 hours, so the tile says so.
+    await expect(short.locator('.pd-qr-sub')).toHaveText('up to 72 hrs');
+    await expect(long.locator('.pd-qr-sub')).toHaveText('owner-approved');
 
     // What gets printed is the bitmap, not the text under it: each code encodes
     // the link under it, and not the other tile's, nor the old /temp/ and /perm/.
@@ -278,6 +281,7 @@ test.describe('property QR codes @desktop-only', () => {
     await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
     const tile = detail.locator('.pd-qr-tile').first();
     await expect(tile.locator('.pd-share-label')).toHaveText('Self-serve pass');
+    await expect(tile.locator('.pd-qr-sub')).toHaveText('up to 48 hrs');
     await expect(tile.locator('.pd-qr-url')).toHaveText(`${origin}/temp/${QR_CODE_ID}`);
     await expectTileEncodes(page, 1, `${origin}/temp/${QR_CODE_ID}`);
     await tile.getByRole('button', { name: 'Copy link' }).click();
