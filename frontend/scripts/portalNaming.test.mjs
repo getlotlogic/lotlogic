@@ -37,6 +37,9 @@ const TARGET_FILES = [
   'src/lib/requestErrors.js',
   // The bottom-sheet shell every portal sheet renders inside.
   'src/ui/Sheet.jsx',
+  // The approval queue's pure model (task F4): deny sentences, tags, chips
+  // and empty-state lines.
+  'src/lib/permitsQueue.js',
 ];
 const TARGET_DIRS = ['src/pages/property'];
 
