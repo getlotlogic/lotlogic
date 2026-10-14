@@ -8,14 +8,20 @@
  * page's `typeof QRCode === 'undefined'` guard returned quietly, so there was
  * nothing on screen and nothing in the console to report.
  *
- * Same harness as `pay2park-dashboard.spec.ts`: serve `frontend/` locally, let
- * the real page transpile itself, then mount only the property detail page on
- * its own React root with every data call stubbed.
+ * Serves the BUILT frontend (fixtures/buildAndServeFrontend.ts) and mounts only
+ * the property detail page on its own React root with every data call stubbed.
+ * (It used to serve `frontend/` straight from source; since Task 17 the page's
+ * script exists only after a build, so the page never booted and this spec
+ * timed out waiting for it.)
  *
  * What it pins down:
  *   - the tile's canvas is NON-EMPTY once it has drawn, i.e. it has dark
  *     pixels, not a blank box — that only happens if the bundled `qrcode`
  *     module actually ran, so a missing/broken module fails this test too.
+ *   - an apartment opens on its Requests section, where the QR tiles are not on
+ *     screen at all. Moving to another section MOUNTS fresh, blank canvases, and
+ *     they have to be drawn then too — they used to stay white boxes.
+ *   - a truck plaza shows the one tile it has.
  *
  * Tagged @desktop-only so the mobile-safari project (which targets the remote
  * deploy) skips it.
@@ -23,45 +29,30 @@
  * Run: cd tests && npx playwright test dashboard-qr --project=chromium-desktop
  */
 import { test, expect, type Page } from '@playwright/test';
-import http from 'node:http';
-import fs from 'node:fs';
 import path from 'node:path';
-import type { AddressInfo } from 'node:net';
+import { buildAndServeFrontend } from '../fixtures/buildAndServeFrontend';
 
 const FRONTEND_DIR = path.resolve(__dirname, '../../frontend');
 const PROPERTY_ID = '22222222-2222-4222-8222-222222222222';
 const QR_CODE_ID = 'test-plaza-qr-0001';
 
-let server: http.Server;
 let origin: string;
+let closeServer: () => Promise<void>;
 
 test.beforeAll(async () => {
-  server = http.createServer((req, res) => {
-    const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
-    const file = path.join(FRONTEND_DIR, pathname.replace(/^\/+/, ''));
-    if (!file.startsWith(FRONTEND_DIR) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('not found');
-      return;
-    }
-    const type = file.endsWith('.html') ? 'text/html; charset=utf-8'
-      : file.endsWith('.js') ? 'text/javascript; charset=utf-8'
-      : file.endsWith('.css') ? 'text/css; charset=utf-8'
-      : 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': type });
-    fs.createReadStream(file).pipe(res);
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  ({ origin, close: closeServer } = await buildAndServeFrontend(FRONTEND_DIR));
 });
 
 test.afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeServer();
 });
 
 type Options = {
   /** Truck plazas only show the self-serve tile; apartments show both. */
   propertyType?: string;
+  /** The section the page opens on (the deep link / remembered chip). Left
+   *  out, the page picks its own default: Requests for an apartment. */
+  initialSection?: string;
 };
 
 /**
@@ -70,7 +61,7 @@ type Options = {
  */
 async function mountPropertyDetail(
   page: Page,
-  { propertyType = 'apartment' }: Options = {},
+  { propertyType = 'apartment', initialSection }: Options = {},
 ) {
   const json = (body: unknown, status = 200) => ({
     status, contentType: 'application/json', body: JSON.stringify(body),
@@ -93,7 +84,7 @@ async function mountPropertyDetail(
     { timeout: 30_000 },
   );
 
-  await page.evaluate(async ({ propertyId, qrCodeId, type }) => {
+  await page.evaluate(async ({ propertyId, qrCodeId, type, section }) => {
     const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
     // The detail page loads its property through `db`; hand it one directly so
     // the tiles render without a session or a database.
@@ -111,13 +102,14 @@ async function mountPropertyDetail(
         null,
         hooks.React.createElement(ALPRPropertyDetailPage, {
           propertyId, onBack: () => {}, user: { _role: 'owner', id: 'u1' },
+          ...(section ? { initialSection: section } : {}),
         }),
       ),
     );
-  }, { propertyId: PROPERTY_ID, qrCodeId: QR_CODE_ID, type: propertyType });
+  }, { propertyId: PROPERTY_ID, qrCodeId: QR_CODE_ID, type: propertyType, section: initialSection ?? null });
 
   const detail = page.locator('#qr-harness');
-  await expect(detail).toContainText('Self-serve pass');
+  await expect(detail.locator('[data-testid="pd-section-chips"]')).toBeVisible();
   return detail;
 }
 
@@ -137,14 +129,33 @@ async function canvasHasInk(page: Page, selector: string): Promise<boolean> {
   }, selector);
 }
 
+const TILE_CANVAS = (n: number) => `#qr-harness .pd-qr-tile:nth-child(${n}) canvas`;
+
 test.describe('property QR codes @desktop-only', () => {
   test('the tile draws a real QR code, not an empty box', async ({ page }) => {
-    await mountPropertyDetail(page);
-    const canvas = '#qr-harness .pd-qr-canvas-wrap canvas';
-    await expect(page.locator(canvas).first()).toBeVisible();
+    const detail = await mountPropertyDetail(page, { initialSection: 'all' });
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
+    await expect(page.locator(TILE_CANVAS(1))).toBeVisible();
     // The draw happens in an effect after the property arrives.
-    await expect.poll(() => canvasHasInk(page, canvas), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => canvasHasInk(page, TILE_CANVAS(2)), { timeout: 15_000 }).toBe(true);
     await expect(page.locator('#qr-harness [data-testid="qr-unavailable"]')).toHaveCount(0);
+  });
+
+  test('an apartment draws both codes after leaving Requests, where its tiles are not mounted', async ({ page }) => {
+    const detail = await mountPropertyDetail(page, { propertyType: 'apartment' });
+    // Requests is the apartment default and nothing else renders there.
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(0);
+    await detail.getByRole('button', { name: 'All', exact: true }).click();
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
+    await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => canvasHasInk(page, TILE_CANVAS(2)), { timeout: 15_000 }).toBe(true);
+  });
+
+  test('a truck plaza shows its one tile, drawn', async ({ page }) => {
+    const detail = await mountPropertyDetail(page, { propertyType: 'truck_plaza' });
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(1);
+    await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
   });
 
   // Two tests were removed here, both stale for the same reason: qrcode is
