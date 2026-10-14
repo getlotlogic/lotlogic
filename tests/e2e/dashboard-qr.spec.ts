@@ -28,6 +28,10 @@
  *   - an apartment hands out ONE entry, /apt/<qr>, with the role in the query
  *     (short-term = guest, long-term = resident), on the tile and on Copy link,
  *     and says "parking pass"; a truck plaza keeps /temp/<qr> and its own label.
+ *   - the bitmap is the link: what each canvas encodes is read back from its
+ *     pixels and compared with the QR code the same library makes for the link
+ *     printed under it, so a pair swapped between the tiles, or still pointing
+ *     at the old /temp/ and /perm/ pages, fails here and not on a printed sign.
  *
  * Tagged @desktop-only so the mobile-safari project (which targets the remote
  * deploy) skips it.
@@ -36,11 +40,19 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { buildAndServeFrontend } from '../fixtures/buildAndServeFrontend';
 
 const FRONTEND_DIR = path.resolve(__dirname, '../../frontend');
 const PROPERTY_ID = '22222222-2222-4222-8222-222222222222';
 const QR_CODE_ID = 'test-plaza-qr-0001';
+
+// The encoder the dashboard bundles (frontend/package.json pins qrcode). The
+// expected code for a link is made here, in Node, so the test does not ask the
+// page what the page drew.
+const QRCode = createRequire(path.join(FRONTEND_DIR, 'package.json'))('qrcode') as {
+  create(text: string, options: { errorCorrectionLevel: 'M' }): { modules: { size: number; data: Uint8Array } };
+};
 
 let origin: string;
 let closeServer: () => Promise<void>;
@@ -145,6 +157,58 @@ async function canvasHasInk(page: Page, selector: string): Promise<boolean> {
 
 const TILE_CANVAS = (n: number) => `#qr-harness .pd-qr-tile:nth-child(${n}) canvas`;
 
+/** The links a tile could be encoding: the apartment entry in each role, and
+ *  the old pages a plaza still uses. Naming the one a canvas does encode is
+ *  what makes a swapped pair, or a stale link, read as such in the failure. */
+const knownLinks = () => [
+  `${origin}/apt/${QR_CODE_ID}?role=guest`,
+  `${origin}/apt/${QR_CODE_ID}?role=resident`,
+  `${origin}/temp/${QR_CODE_ID}`,
+  `${origin}/perm/${QR_CODE_ID}`,
+];
+
+/**
+ * Which of the known links the canvas encodes, read from its pixels: the
+ * centre of every module of the link's QR code must be dark where the code has
+ * a dark module and light where it does not. null when the canvas is blank or
+ * encodes none of them. The drawing is qrcode's: width 320 and margin 1 module.
+ */
+async function linkEncodedBy(page: Page, selector: string): Promise<string | null> {
+  const candidates = knownLinks().map((url) => {
+    const { size, data } = QRCode.create(url, { errorCorrectionLevel: 'M' }).modules;
+    return { url, size, dark: Array.from(data) };
+  });
+  return page.evaluate(({ sel, grids }) => {
+    const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
+    const ctx = canvas && canvas.width ? canvas.getContext('2d') : null;
+    if (!canvas || !ctx) return null;
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const margin = 1;
+    for (const grid of grids) {
+      const scale = canvas.width / (grid.size + 2 * margin);
+      let matches = true;
+      for (let row = 0; row < grid.size && matches; row++) {
+        for (let col = 0; col < grid.size; col++) {
+          const x = Math.floor((margin + col + 0.5) * scale);
+          const y = Math.floor((margin + row + 0.5) * scale);
+          const at = (y * canvas.width + x) * 4;
+          const dark = data[at + 3] > 0 && data[at] < 128 && data[at + 1] < 128 && data[at + 2] < 128;
+          if (dark !== (grid.dark[row * grid.size + col] === 1)) { matches = false; break; }
+        }
+      }
+      if (matches) return grid.url;
+    }
+    return null;
+  }, { sel: selector, grids: candidates });
+}
+
+/** The code on tile `n` is the QR code for `url`, and for no other link. */
+async function expectTileEncodes(page: Page, n: number, url: string) {
+  await expect.poll(() => linkEncodedBy(page, TILE_CANVAS(n)), {
+    message: `tile ${n}'s QR code encodes ${url}`, timeout: 15_000,
+  }).toBe(url);
+}
+
 /** Record what the Copy link buttons write, instead of touching the clipboard. */
 async function recordClipboard(page: Page) {
   await page.addInitScript(() => {
@@ -178,6 +242,8 @@ test.describe('property QR codes @desktop-only', () => {
     await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
     await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
     await expect.poll(() => canvasHasInk(page, TILE_CANVAS(2)), { timeout: 15_000 }).toBe(true);
+    await expectTileEncodes(page, 1, `${origin}/apt/${QR_CODE_ID}?role=guest`);
+    await expectTileEncodes(page, 2, `${origin}/apt/${QR_CODE_ID}?role=resident`);
   });
 
   test('an apartment hands out its one entry, /apt/<qr> with the role, labelled parking pass', async ({ page }) => {
@@ -189,6 +255,11 @@ test.describe('property QR codes @desktop-only', () => {
     await expect(short.locator('.pd-qr-url')).toHaveText(`${origin}/apt/${QR_CODE_ID}?role=guest`);
     await expect(long.locator('.pd-share-label')).toHaveText('Long-term parking pass');
     await expect(long.locator('.pd-qr-url')).toHaveText(`${origin}/apt/${QR_CODE_ID}?role=resident`);
+
+    // What gets printed is the bitmap, not the text under it: each code encodes
+    // the link under it, and not the other tile's, nor the old /temp/ and /perm/.
+    await expectTileEncodes(page, 1, `${origin}/apt/${QR_CODE_ID}?role=guest`);
+    await expectTileEncodes(page, 2, `${origin}/apt/${QR_CODE_ID}?role=resident`);
 
     await short.getByRole('button', { name: 'Copy link' }).click();
     await expect(page.getByText('Short-term link copied')).toBeVisible();
@@ -208,6 +279,7 @@ test.describe('property QR codes @desktop-only', () => {
     const tile = detail.locator('.pd-qr-tile').first();
     await expect(tile.locator('.pd-share-label')).toHaveText('Self-serve pass');
     await expect(tile.locator('.pd-qr-url')).toHaveText(`${origin}/temp/${QR_CODE_ID}`);
+    await expectTileEncodes(page, 1, `${origin}/temp/${QR_CODE_ID}`);
     await tile.getByRole('button', { name: 'Copy link' }).click();
     await expect(page.getByText('Self-serve link copied')).toBeVisible();
     expect(await copiedLinks(page)).toEqual([`${origin}/temp/${QR_CODE_ID}`]);
