@@ -215,6 +215,7 @@ export function ApartmentPermits({ property }) {
     const docs = [
       ['id', 'ID', row.has_id],
       ['lease', 'Lease', row.has_lease],
+      ['registration', 'Registration', row.has_registration],
       ['plate', 'Plate', row.has_plate],
     ].filter(([, , present]) => present);
     if (docs.length === 0) return <span style={{fontSize:11,color:'var(--text-faint)'}}>No documents</span>;
