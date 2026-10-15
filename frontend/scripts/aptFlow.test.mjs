@@ -1191,14 +1191,17 @@ test('the only string in the flow that tells anyone to call is the content-block
   assert.deepEqual(calling, ['STRINGS.en.errors.blocked()']);
 });
 
+test('the only phone-shaped string in the flow is the example in the phone field\'s own error', () => {
+  const shaped = allStrings(S).filter(([, s]) => /\(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}/.test(s)).map(([path]) => path);
+  assert.deepEqual(shaped, ['STRINGS.en.about.errorPhone']);
+});
+
 test('the "No, I\'m not on the lease" branch points at the office in words, not a number', () => {
   assert.equal(S.start.gateNoAsk, 'Ask the office about adding you to the lease.');
 });
 
 test('apt.js offers the office phone in one place only: the content-blocker panel', () => {
-  const source = readFileSync(new URL('../src/apt.js', import.meta.url), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*\/\/.*$/gm, '');
+  const source = readFileSync(new URL('../src/apt.js', import.meta.url), 'utf8');
   // What may mention the number: the query that loads it, the helpers that format it, the panel
   // that offers it, and the context that lets S5's summary say the same sentence for the same condition.
   const allowed = [
@@ -1214,8 +1217,12 @@ test('apt.js offers the office phone in one place only: the content-blocker pane
     assert.match(rest, re, `apt.js no longer holds ${re}; update this guard with it`);
     rest = rest.replace(re, '');
   }
+  // Lines of code only. Comments are skipped by the shape of the line, never stripped as a
+  // block: a "/*" inside a string (accept="image/*,application/pdf" in the short-term form)
+  // would otherwise swallow the markup after it and hide a phone there.
   const offered = rest.split('\n')
-    .filter((line) => /officePhone|officeTel|telLink|policy_phone|tel:|ICONS\.phone|\.call\(|Questions\? Call/.test(line))
-    .map((line) => line.trim());
+    .map((line) => line.trim())
+    .filter((line) => line && !/^(\/\/|\/\*|\*)/.test(line))
+    .filter((line) => /officePhone|officeTel|telLink|policy_phone|tel:|ICONS\.phone|\.call\(|Questions\? Call/.test(line));
   assert.deepEqual(offered, [], 'the office phone is offered somewhere other than the content-blocker panel');
 });
