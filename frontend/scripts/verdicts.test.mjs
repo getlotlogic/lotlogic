@@ -37,6 +37,79 @@ test('guest with hours_left appends "<n>h left"', () => {
   assert.match(p.reason, /14h left/);
 });
 
+// ── pending: a long-term parking pass request the office has not reviewed ──
+// Protected from tow while the office reviews it (the backend's 72-hour
+// window). `protected_until_local` arrives already rendered in ET, so the
+// presentation never does its own timezone or window arithmetic.
+
+const hoursFromNow = (h) => new Date(Date.now() + h * 3600000).toISOString();
+
+test('pending -> DO NOT TOW, green, ⏳, with the property, hours since submitted and the protected-until time', () => {
+  const p = verdictPresentation('pending', {
+    unit: '12B', name: 'Dana Ortiz', plate: 'ABC1234',
+    submitted_at: hoursFromNow(-5), protected_until: hoursFromNow(67),
+    protected_until_local: 'Sat Oct 17, 2:15 PM ET', property_name: 'Fort Mill Townhomes I',
+  }, 'property');
+  assert.equal(p.signal, 'DO NOT TOW');
+  assert.equal(p.glyph, '⏳');
+  assert.equal(p.tone, 'go');
+  assert.match(p.reason, /pending approval/);
+  assert.match(p.reason, /Fort Mill Townhomes I/);
+  assert.match(p.reason, /submitted 5h ago/);
+  assert.match(p.reason, /protected until Sat Oct 17, 2:15 PM ET/);
+});
+
+test('pending reason is the spec copy exactly, with no holder name or unit on the curb card', () => {
+  const p = verdictPresentation('pending', {
+    unit: '12B', name: 'Dana Ortiz', plate: 'ABC1234',
+    submitted_at: hoursFromNow(-5), protected_until_local: 'Sat Oct 17, 2:15 PM ET',
+    property_name: 'Fort Mill Townhomes I',
+  }, 'property');
+  assert.equal(
+    p.reason,
+    'Registration pending approval · Fort Mill Townhomes I · submitted 5h ago · protected until Sat Oct 17, 2:15 PM ET',
+  );
+});
+
+test('pending leaves the protected-until clause out when the backend sent no local time', () => {
+  const p = verdictPresentation('pending', { submitted_at: hoursFromNow(-3), property_name: 'Fort Mill Townhomes I' }, 'property');
+  assert.equal(p.signal, 'DO NOT TOW');
+  assert.match(p.reason, /pending approval/);
+  assert.match(p.reason, /submitted 3h ago/);
+  assert.doesNotMatch(p.reason, /protected until/);
+});
+
+test('pending with no readable submitted_at drops the age clause instead of printing NaN', () => {
+  for (const bad of [undefined, null, '', 'not-a-date']) {
+    const p = verdictPresentation('pending', {
+      submitted_at: bad, property_name: 'Fort Mill Townhomes I', protected_until_local: 'Sat Oct 17, 2:15 PM ET',
+    }, 'property');
+    assert.equal(p.signal, 'DO NOT TOW', String(bad));
+    assert.doesNotMatch(p.reason, /submitted|NaN|undefined|null/, String(bad));
+    assert.match(p.reason, /protected until Sat Oct 17, 2:15 PM ET/, String(bad));
+  }
+});
+
+test('a pending request submitted moments ago still shows its age (0h is not "missing")', () => {
+  const p = verdictPresentation('pending', { submitted_at: new Date().toISOString(), property_name: 'X' }, 'property');
+  assert.match(p.reason, /submitted \d+h ago/);
+});
+
+test('pending without a property_name falls back to "the property" like every other verdict', () => {
+  const p = verdictPresentation('pending', { submitted_at: hoursFromNow(-1) }, 'property');
+  assert.match(p.reason, /the property/);
+});
+
+test('pending with no detail at all is still DO NOT TOW — the verdict is authoritative, the detail is decoration', () => {
+  for (const detail of [undefined, null, {}]) {
+    const p = verdictPresentation('pending', detail, 'property');
+    assert.equal(p.signal, 'DO NOT TOW');
+    assert.equal(p.tone, 'go');
+    assert.match(p.reason, /pending approval/);
+    assert.doesNotMatch(p.reason, /undefined|null|NaN/);
+  }
+});
+
 test('expired_guest -> ELIGIBLE TO TOW, amber (never green), !', () => {
   const p = verdictPresentation('expired_guest', { property_name: 'Spring Lake Apartments', hours_ago: 3 }, 'property');
   assert.equal(p.signal, 'ELIGIBLE TO TOW');
@@ -104,6 +177,19 @@ test('grouped returns lines[], one per match, and no single signal word', () => 
   assert.match(p.lines[1], /At Stevensons: parking pass/);
 });
 
+test('grouped: a pending match reads "pending approval" — plain English, no signal word', () => {
+  const p = verdictPresentation('grouped', {
+    matches: [
+      { property_name: 'Fort Mill Townhomes I', verdict: 'pending', detail: { submitted_at: hoursFromNow(-2) } },
+      { property_name: 'Spring Lake', verdict: 'tow_requested', detail: { ref: 'T-0231' } },
+    ],
+  }, 'all');
+  assert.equal(p.signal, null);
+  assert.equal(p.lines.length, 2);
+  assert.equal(p.lines[0], 'At Fort Mill Townhomes I: pending approval');
+  assert.match(p.lines[1], /At Spring Lake: TOW REQUESTED T-0231/);
+});
+
 test('unknown verdict -> the fallback line, amber, never "eligible to tow"', () => {
   for (const bogus of [undefined, null, '', 'something_new', 'towed_already']) {
     const p = verdictPresentation(bogus, {}, 'property');
@@ -118,10 +204,12 @@ test('no banned naming-rule word appears in any signal or reason string', () => 
     ['hold', { ref: 'H-1', property_name: 'X', note: 'n', placed_at: '2026-01-01T00:00:00Z', expires_local: 'y' }],
     ['resident', { property_name: 'X' }],
     ['guest', { property_name: 'X', hours_left: 1 }],
+    ['pending', { property_name: 'X', submitted_at: '2026-01-01T00:00:00Z', protected_until: '2026-01-04T00:00:00Z', protected_until_local: 'y' }],
     ['expired_guest', { property_name: 'X', hours_ago: 1 }],
     ['tow_requested', { property_name: 'X', ref: 'T-1', note: 'n' }],
     ['not_registered', { property_name: 'X' }],
     ['hold_unconfirmed', { ref: 'H-1', property_name: 'X', signed_up_by: 'Y', signup_phone: 'Z', expires_local: 'y' }],
+    ['grouped', { matches: [{ property_name: 'X', verdict: 'pending', detail: {} }, { property_name: 'Y', verdict: 'guest', detail: {} }] }],
     ['on_file_elsewhere', { property_name: 'X' }],
     ['grouped', { matches: [{ property_name: 'X', verdict: 'guest', detail: {} }] }],
     ['bogus', {}],
@@ -156,6 +244,16 @@ test('resolveAllScopeResult: single match at a DIFFERENT property than remembere
   }, 'p1');
   assert.equal(r.verdict, 'on_file_elsewhere');
   assert.equal(r.detail.property_name, 'Spring Lake');
+});
+
+test('resolveAllScopeResult: a pending match at a DIFFERENT property is on_file_elsewhere (amber), never a green DO NOT TOW for this lot', () => {
+  const r = resolveAllScopeResult({
+    verdict: 'pending',
+    matches: [{ property_id: 'p2', property_name: 'Fort Mill Townhomes II', verdict: 'pending', detail: { unit: '12B' } }],
+  }, 'p1');
+  assert.equal(r.verdict, 'on_file_elsewhere');
+  assert.equal(r.detail.property_name, 'Fort Mill Townhomes II');
+  assert.equal(verdictPresentation(r.verdict, r.detail, 'all').tone, 'amber');
 });
 
 test('resolveAllScopeResult: no remembered property -> no on_file_elsewhere override, backend result stands', () => {

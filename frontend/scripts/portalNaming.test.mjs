@@ -43,8 +43,13 @@ const TARGET_FILES = [
   'src/apt.js',
   'src/shared/aptFlow.js',
   'src/shared/docCard.js',
+  // The manager's approval queue (task F4): the page, its pure model (deny
+  // sentences, tags, chips, empty-state lines) and the folder its pieces
+  // live in.
+  'src/pages/ApartmentPermits.jsx',
+  'src/lib/permitsQueue.js',
 ];
-const TARGET_DIRS = ['src/pages/property'];
+const TARGET_DIRS = ['src/pages/property', 'src/pages/permits'];
 
 function exists(abs) {
   try { statSync(abs); return true; } catch { return false; }
