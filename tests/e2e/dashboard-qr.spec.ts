@@ -32,6 +32,8 @@
  *     pixels and compared with the QR code the same library makes for the link
  *     printed under it, so a pair swapped between the tiles, or still pointing
  *     at the old /temp/ and /perm/ pages, fails here and not on a printed sign.
+ *   - the codes are drawn again when the page reloads its data (which unmounts
+ *     the tiles).
  *
  * Tagged @desktop-only so the mobile-safari project (which targets the remote
  * deploy) skips it.
@@ -106,10 +108,17 @@ async function mountPropertyDetail(
     const hooks = (window as unknown as Record<string, any>).__lotlogicTestHooks;
     // The detail page loads its property through `db`; hand it one directly so
     // the tiles render without a session or a database.
-    hooks.db.getProperty = async () => ({
-      id: propertyId, name: 'Test Property', qr_code_id: qrCodeId,
-      property_type: type, address: '1 Test Way', pay_to_park_enabled: false,
-    });
+    // A test can hold the next load open (`hold()`), so the page sits in its
+    // "Loading..." state, which has no tiles, for as long as the test needs.
+    let gate: Promise<void> = Promise.resolve();
+    let release: () => void = () => {};
+    hooks.db.getProperty = async () => {
+      await gate;
+      return {
+        id: propertyId, name: 'Test Property', qr_code_id: qrCodeId,
+        property_type: type, address: '1 Test Way', pay_to_park_enabled: false,
+      };
+    };
     const ALPRPropertyDetailPage = await hooks.ALPRPropertyDetailPage.load();
     // The app's own shell, so the page gets the column it really gets
     // (`.page-content` is max 640px, with 16px gutters) and not the bare body.
@@ -122,16 +131,25 @@ async function mountPropertyDetail(
     main.appendChild(host);
     shell.appendChild(main);
     document.body.appendChild(shell);
-    hooks.ReactDOM.createRoot(host).render(
+    const root = hooks.ReactDOM.createRoot(host);
+    const render = (user: Record<string, unknown>) => root.render(
       hooks.React.createElement(
         hooks.ToastProvider,
         null,
         hooks.React.createElement(ALPRPropertyDetailPage, {
-          propertyId, onBack: () => {}, user: { _role: 'owner', id: 'u1' },
+          propertyId, onBack: () => {}, user,
           ...(section ? { initialSection: section } : {}),
         }),
       ),
     );
+    render({ _role: 'owner', id: 'u1' });
+    (window as unknown as Record<string, unknown>).__qrHarness = {
+      hold() { gate = new Promise<void>((resolve) => { release = resolve; }); },
+      release() { release(); },
+      // Same property, same role, another account: the page reloads its data
+      // (loadAll depends on user.id) and nothing the tiles depend on changes.
+      signInAs(id: string) { render({ _role: 'owner', id }); },
+    };
   }, { propertyId: PROPERTY_ID, qrCodeId: QR_CODE_ID, type: propertyType, section: initialSection ?? null });
 
   const detail = page.locator('#qr-harness');
@@ -242,6 +260,27 @@ test.describe('property QR codes @desktop-only', () => {
     await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
     await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
     await expect.poll(() => canvasHasInk(page, TILE_CANVAS(2)), { timeout: 15_000 }).toBe(true);
+    await expectTileEncodes(page, 1, `${origin}/apt/${QR_CODE_ID}?role=guest`);
+    await expectTileEncodes(page, 2, `${origin}/apt/${QR_CODE_ID}?role=resident`);
+  });
+
+  test('the codes are drawn again when the page reloads its data and its tiles come back', async ({ page }) => {
+    const detail = await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
+    await expectTileEncodes(page, 1, `${origin}/apt/${QR_CODE_ID}?role=guest`);
+    await expectTileEncodes(page, 2, `${origin}/apt/${QR_CODE_ID}?role=resident`);
+
+    // Another account opens the same property: the page reloads, and while it
+    // does it shows "Loading..." and no tiles. Nothing a tile depends on changed.
+    await page.evaluate(() => {
+      const harness = (window as unknown as Record<string, any>).__qrHarness;
+      harness.hold();
+      harness.signInAs('u2');
+    });
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(0);
+    await page.evaluate(() => (window as unknown as Record<string, any>).__qrHarness.release());
+
+    // The tiles that come back are fresh, blank canvases, and need drawing again.
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
     await expectTileEncodes(page, 1, `${origin}/apt/${QR_CODE_ID}?role=guest`);
     await expectTileEncodes(page, 2, `${origin}/apt/${QR_CODE_ID}?role=resident`);
   });

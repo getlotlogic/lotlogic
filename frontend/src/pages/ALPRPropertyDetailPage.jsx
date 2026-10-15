@@ -508,8 +508,9 @@ export function ALPRPropertyDetailPage({
   const regLinks = property ? registrationLinks(window.location.origin, property) : null;
 
   // Draw the QR codes onto the tiles' canvases. The tiles are not mounted while
-  // Requests is the open section (an apartment's default), and leaving it
-  // mounts fresh, blank canvases, so this runs again whenever they appear.
+  // Requests is the open section (an apartment's default) or while the page
+  // reloads its data, and they come back as fresh, blank canvases, so this runs
+  // again whenever they appear.
   useEffect(() => {
     if (!property?.qr_code_id) return;
     if (typeof QRCode === 'undefined' || typeof QRCode.toCanvas !== 'function') {
@@ -527,7 +528,7 @@ export function ALPRPropertyDetailPage({
     };
     draw(tempQrRef.current, regLinks.shortTermUrl, 'temp');
     draw(permQrRef.current, regLinks.longTermUrl, 'perm');
-  }, [regLinks?.shortTermUrl, regLinks?.longTermUrl, isOwner, requestsOnly]);
+  }, [regLinks?.shortTermUrl, regLinks?.longTermUrl, isOwner, requestsOnly, loading]);
 
   // ── Permanent plates (new /perm submissions land here) ──
   // Same live pattern as parking regs and plate events so the admin doesn't
