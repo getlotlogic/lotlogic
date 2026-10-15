@@ -157,6 +157,10 @@ async function loadPropertyRow() {
   }
 }
 
+// The office's phone is offered in one place: the panel for a page a content blocker is holding back
+// (showBlocked, and the same sentence in S5's summary), where it is the person's only way past.
+// Nowhere else: Gabe, 2026-10-15, "They don't need a phone number on it". The guard in
+// scripts/aptFlow.test.mjs fails when a screen of this page starts using these three again.
 const officePhone = () => (property && property.policy_phone ? formatPhone(property.policy_phone) : null);
 const officeTel = () => {
   if (!property || !property.policy_phone) return '';
