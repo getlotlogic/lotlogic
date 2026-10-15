@@ -69,7 +69,6 @@ export const STRINGS = {
       liveSub: 'Register a car for a long-term parking pass',
       visitTitle: "I'm visiting",
       visitSub: 'Get a short-term parking pass, up to 72 hours',
-      questions: 'Questions? Call',
     },
 
     start: {
@@ -91,7 +90,7 @@ export const STRINGS = {
       gateYes: "Yes, I'm on the lease",
       gateNo: "No, I'm not on the lease",
       gateNoExplain: "Only the person on the lease can hold a long-term parking pass. If you're staying with someone, get a short-term parking pass instead (up to 72 hours).",
-      gateNoPhone: 'Ask the office about adding you to the lease:',
+      gateNoAsk: 'Ask the office about adding you to the lease.',
       startButton: 'Start',
       shortTermButton: 'Get a short-term parking pass',
       errorGate: 'Select whether your name is on the lease',
@@ -284,8 +283,6 @@ export const STRINGS = {
         'The office reviews your documents, usually within 72 hours.',
         "Once approved, your plate is your pass. There's nothing to display in your car.",
       ],
-      contactHeading: 'Questions? Call the office.',
-      call: (phone) => `Call ${phone}`,
       emailed: (email) => `We emailed a copy of this receipt to ${email} from dispatch@lotlogicparking.com. Check your spam folder if you don't see it.`,
       keep: 'Save or screenshot this page. The reference is what the office and the tow company will ask for.',
       copy: (count) => (Number(count) > 1 ? 'Copy references' : 'Copy reference'),

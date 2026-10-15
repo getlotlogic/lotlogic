@@ -7,6 +7,7 @@
 // section before "copy").
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   STRINGS, TTL_MS, storageKey, emptyFlow, addVehicle, removeVehicle,
@@ -1152,4 +1153,53 @@ test('the vehicle photo card says what to take and why, and that it is optional'
 test('the attestation is a statement, with the unit in it', () => {
   assert.equal(S.review.attest('214'),
     "By sending this request you confirm you're named on the lease for Unit 214 and these vehicles are registered to you.");
+});
+
+// ── the office phone (Gabe, 2026-10-15 ~03:30 ET: "They don't need a phone number on it") ──
+//
+// The receipt, the landing, the "No, I'm not on the lease" branch and the short-term
+// confirmation do not print the office's number, or a button that dials it. The one place it
+// stays is the sentence for a page a content blocker is holding back ("… or call (704) 555-0100"),
+// which the person has no other way past. tests/e2e/apt-flow.spec.ts shows it in a browser
+// against a property that has a phone; these run on every push, whether or not the portal suite does.
+
+test('no string under received, landing or start offers the office phone', () => {
+  assert.equal('call' in S.received, false, "the receipt's \"Call <phone>\" button");
+  assert.equal('contactHeading' in S.received, false, "the receipt's \"Questions? Call the office.\"");
+  assert.equal('questions' in S.landing, false, "the landing's \"Questions? Call\"");
+  assert.equal('gateNoPhone' in S.start, false, "the \"No\" branch's \"Ask the office…: <phone>\"");
+});
+
+test('the only string in the flow that tells anyone to call is the content-blocker sentence', () => {
+  const calling = allStrings(S).filter(([, s]) => /\bcall\b/i.test(s)).map(([path]) => path);
+  assert.deepEqual(calling, ['STRINGS.en.errors.blocked()']);
+});
+
+test('the "No, I\'m not on the lease" branch points at the office in words, not a number', () => {
+  assert.equal(S.start.gateNoAsk, 'Ask the office about adding you to the lease.');
+});
+
+test('apt.js offers the office phone in one place only: the content-blocker panel', () => {
+  const source = readFileSync(new URL('../src/apt.js', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  // What may mention the number: the query that loads it, the helpers that format it, the panel
+  // that offers it, and the context that lets S5's summary say the same sentence for the same condition.
+  const allowed = [
+    /^function showBlocked\(\) \{[\s\S]*?^\}/m,
+    /^const officePhone = .*$/m,
+    /^const officeTel = \(\) => \{[\s\S]*?^\};/m,
+    /^const telLink = .*$/m,
+    /^const BASE_COLUMNS = .*$/m,
+    /phone: officePhone\(\) \}/,
+  ];
+  let rest = source;
+  for (const re of allowed) {
+    assert.match(rest, re, `apt.js no longer holds ${re}; update this guard with it`);
+    rest = rest.replace(re, '');
+  }
+  const offered = rest.split('\n')
+    .filter((line) => /officePhone|officeTel|telLink|policy_phone|tel:|ICONS\.phone|\.call\(|Questions\? Call/.test(line))
+    .map((line) => line.trim());
+  assert.deepEqual(offered, [], 'the office phone is offered somewhere other than the content-blocker panel');
 });

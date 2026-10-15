@@ -85,7 +85,6 @@ const ICONS = {
   shield: ICON('<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>'),
   clock: ICON('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   info: ICON('<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/>'),
-  phone: ICON('<path d="M5 3h4l2 5-2.5 1.5a11 11 0 0 0 6 6L16 13l5 2v4a2 2 0 0 1-2 2A17 17 0 0 1 3 5a2 2 0 0 1 2-2"/>', 20),
   check: ICON('<circle cx="12" cy="12" r="10"/><path d="M7.5 12.5l3 3 6-6.5"/>', 32),
 };
 
@@ -649,7 +648,6 @@ function hideBlocked() {
 
 // ── S0 the landing (kept) ───────────────────────────────────────────────────
 function renderLanding() {
-  const phone = officePhone();
   app.innerHTML = `
     ${logoHtml()}
     <div class="property-name">
@@ -664,7 +662,6 @@ function renderLanding() {
       <span><span class="choice-title">${esc(S.landing.visitTitle)}</span><span class="sub">${esc(S.landing.visitSub)}</span></span>
       <span class="arrow" aria-hidden="true">→</span>
     </button>
-    ${phone ? `<p class="landing-footer">${esc(S.landing.questions)} ${telLink()}</p>` : ''}
   `;
   document.getElementById('chooseResident').addEventListener('click', () => show(flowEntryStep(), { mode: 'push' }));
   document.getElementById('chooseGuest').addEventListener('click', () => show('guest', { mode: 'push' }));
@@ -725,9 +722,8 @@ function renderStart() {
 function updateGate() {
   const no = flow.leaseholder === 'no';
   document.getElementById('continueBtn').textContent = no ? S.start.shortTermButton : S.start.startButton;
-  const phone = officePhone();
   document.getElementById('gateNo').innerHTML = no
-    ? `<p>${esc(S.start.gateNoExplain)}</p>${phone ? `<p>${esc(S.start.gateNoPhone)} ${telLink()}</p>` : ''}`
+    ? `<p>${esc(S.start.gateNoExplain)}</p><p>${esc(S.start.gateNoAsk)}</p>`
     : '';
 }
 
@@ -1063,7 +1059,6 @@ function renderReview() {
 // ── S6 request received ─────────────────────────────────────────────────────
 function renderReceived() {
   const r = flow.receipt;
-  const phone = officePhone();
   const rows = r.vehicles.map((v) => `
     <li class="receipt-vehicle">
       <dl>
@@ -1091,11 +1086,6 @@ function renderReceived() {
         <h2 class="next-h2" id="nextHeading">${esc(S.received.nextHeading)}</h2>
         <ol class="next-list">${S.received.next.map((n) => `<li>${esc(n)}</li>`).join('')}</ol>
       </section>
-      ${phone ? `
-        <section class="contact" aria-labelledby="contactHeading">
-          <h2 class="contact-h2" id="contactHeading">${esc(S.received.contactHeading)}</h2>
-          <a class="btn-secondary call-btn" href="tel:${esc(officeTel())}">${ICONS.phone}<span>${esc(S.received.call(phone))}</span></a>
-        </section>` : ''}
       <section class="keep">
         ${r.email ? `<p class="receipt-email">${esc(emailedBefore)}<strong>${esc(r.email)}</strong>${esc(emailedAfter)}</p>` : ''}
         <p>${esc(S.received.keep)}</p>
@@ -1541,7 +1531,6 @@ function showSuccess(opts) {
   const refId = opts && opts.refId;
   const validUntil = opts && opts.validUntil;
   const plate = opts && opts.plate;
-  const phone = property.policy_phone ? escapeHtml(property.policy_phone) : null;
   // A returned validity window means the property auto-approves: the pass
   // is LIVE — say so. No window = the classic review flow.
   const live = !!validUntil;
@@ -1564,7 +1553,6 @@ function showSuccess(opts) {
         ${refId ? `<div class="success-ref">${escapeHtml(refId)}</div>` : ''}
         <div class="pending-badge">Pending approval</div>
       `}
-      ${phone ? `<div class="success-detail">Questions? Call ${phone}</div>` : ''}
     </div>
   `;
 }

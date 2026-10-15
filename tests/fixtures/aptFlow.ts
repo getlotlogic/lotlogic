@@ -61,6 +61,27 @@ export function onePixelPng(rgb: [number, number, number]): Buffer {
 
 export const photo = (name: string, rgb: [number, number, number]) => ({ name, mimeType: 'image/png', buffer: onePixelPng(rgb) });
 
+// ── the office phone: on no screen but the content-blocker panel ─────────────
+/**
+ * The seeded apartment's office phone, as production's Fort Mill rows have one. Gabe,
+ * 2026-10-15: "They don't need a phone number on it" — no screen of the flow prints it,
+ * or a link that dials it, except the panel a content blocker brings up ("… or call
+ * (704) 555-0100"), which the person has no other way past. A property with a phone is what
+ * lets a test see a screen that still did.
+ */
+export const OFFICE_PHONE = { stored: '+17045550100', shown: '(704) 555-0100' };
+
+/** Phone-shaped text: ten digits grouped 3-3-4 with whatever sits between — (704) 555-0100, 704.555.0100, +1 704 555 0100. */
+const PHONE_SHAPED = /(?:\+?1[\s.-]*)?\(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}/;
+
+/** The screen offers no office phone: no link that dials, no number in any format, no "Questions? Call". */
+export async function expectNoOfficePhone(page: Page, screen: string) {
+  await expect(page.locator('a[href^="tel:"]'), `${screen}: nothing dials the office`).toHaveCount(0);
+  const text = await page.locator('main').innerText();
+  expect(text, `${screen}: no phone number, in any format`).not.toMatch(PHONE_SHAPED);
+  expect(text, `${screen}: no "Questions? Call"`).not.toMatch(/Questions\?\s*Call/i);
+}
+
 // ── the apartment ─────────────────────────────────────────────────────────────
 export interface ResidentApartment {
   slug: string;
@@ -105,6 +126,7 @@ export async function seedResidentApartment(): Promise<ResidentApartment> {
     sql(`UPDATE public.properties SET max_vehicles_per_unit = 2, require_vehicle_registration = true
           WHERE id = ${lit(account.property_id)}`);
   }
+  sql(`UPDATE public.properties SET policy_phone = ${lit(OFFICE_PHONE.stored)} WHERE id = ${lit(account.property_id)}`);
   const hasVehiclePhoto = sqlValue(`SELECT count(*) FROM information_schema.columns
                                      WHERE table_schema = 'public' AND table_name = 'resident_plates'
                                        AND column_name = 'vehicle_photo_url'`) === '1';

@@ -32,16 +32,21 @@
  *   - the short-term form asks for the same three fields in the same words,
  *     sends them, and shows the same two answers beside the field. Its register
  *     call is answered by the test (the page's contract is what is checked, not
- *     a backend version).
+ *     a backend version);
+ *   - no screen of the flow prints the office's phone (Gabe, 2026-10-15: "They
+ *     don't need a phone number on it"): the seeded property has one, and neither
+ *     the landing, the "No" branch of S1, the receipt (also after a reload) nor the
+ *     short-term confirmation shows it or a link that dials it. The panel for a page
+ *     a content blocker holds back still does, and a test says so.
  *
  * Portal suite (tests/README.md, "Portal suite"): local backend and a
  * throwaway Postgres only. Without PORTAL_E2E=1 every test here is reported as
  * skipped, never failed.
  */
-import { test, expect, skipUnlessPortal, frontendOrigin, sql, lit, PRODUCTION_API } from '../fixtures/portal';
+import { test, expect, skipUnlessPortal, frontendOrigin, sql, lit, PRODUCTION_API, pointAtLocalBackend } from '../fixtures/portal';
 import {
   seedResidentApartment, openResidentFlow, toFirstVehicle, vehicleAndDocumentsToReview, fillVehicle,
-  photo, VEHICLE, vehicleLine, RESIDENT,
+  photo, VEHICLE, vehicleLine, RESIDENT, OFFICE_PHONE, expectNoOfficePhone,
 } from '../fixtures/aptFlow';
 
 test.describe('apartment long-term request @portal', () => {
@@ -197,6 +202,7 @@ test.describe('apartment long-term request @portal', () => {
     await expect(page.locator('.receipt-email')).toHaveText(emailed);
     await expect(page.locator('.receipt-email strong')).toHaveText(RESIDENT.email);
     await expect(page.locator('.keep')).toContainText('Save or screenshot this page.');
+    await expectNoOfficePhone(page, 'S6, the receipt');
 
     // What went with the request. The first call carries everything the page collected: the
     // vehicle photo and the make, model and color. A backend that has them (tasks B3 and B4)
@@ -245,6 +251,7 @@ test.describe('apartment long-term request @portal', () => {
     await expect(page.locator('.receipt-car')).toContainText(vehicleLine(plate));
     if (notes.length) await expect(page.locator('.receipt-note')).toHaveText(notes);
     else await expect(page.locator('.receipt-note')).toHaveCount(0);
+    await expectNoOfficePhone(page, 'S6 after a reload');
   });
 
   test('a phone with nothing saved starts at S1, and a saved answer survives a reload mid-way', async ({ page }) => {
@@ -458,10 +465,45 @@ test.describe('apartment long-term request @portal', () => {
     await expect(color).toBeFocused();
     await submit.click();
     await expect(page.locator('.success-card')).toContainText('AB12CD34');
+    await expectNoOfficePhone(page, 'the short-term confirmation');
 
     expect(sent).toHaveLength(3);
     for (const body of sent) {
       expect(body).toMatchObject({ plate_text: 'SHORT12', vehicle_make: 'Honda', vehicle_model: 'Civic', vehicle_color: 'white' });
     }
+  });
+
+  // Gabe, 2026-10-15: "They don't need a phone number on it." The seeded property has an office
+  // phone (fixtures/aptFlow.ts), so a screen that still printed it, or a button that dials it,
+  // would show it here. The receipt and the short-term confirmation are checked in the tests above.
+  test('the landing and the "No" branch of S1 print no office phone', async ({ page }) => {
+    const apartment = await seedResidentApartment();
+    await openResidentFlow(page, apartment);
+    await page.goto(`${frontendOrigin()}/apt/${apartment.slug}`);
+    await expect(page.getByRole('button', { name: /I live here/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /I'm visiting/ })).toBeVisible();
+    await expectNoOfficePhone(page, 'the landing');
+
+    await page.getByRole('button', { name: /I live here/ }).click();
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    await page.getByLabel("No, I'm not on the lease").check();
+    await expect(page.locator('#gateNo')).toContainText('Ask the office about adding you to the lease.');
+    await expectNoOfficePhone(page, 'S1, "No, I\'m not on the lease"');
+  });
+
+  // The one place the office phone stays. Without Google's script (here aborted, as a content
+  // blocker does, and no stand-in `grecaptcha`) the page cannot send anything and says so, with the
+  // number as a link. It also shows the seeded phone does reach the page, so the absences above
+  // are not vacuous.
+  test('a page a content blocker holds back still says to call the office, the number a link that dials', async ({ page }) => {
+    const apartment = await seedResidentApartment();
+    await pointAtLocalBackend(page);
+    await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+    await page.goto(`${frontendOrigin()}/apt/${apartment.slug}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    const panel = page.locator('#pageAlert');
+    await expect(panel).toHaveText(`Something is blocking this page from sending. Turn off content blockers for this site, or call ${OFFICE_PHONE.shown}.`);
+    await expect(panel.locator('a')).toHaveAttribute('href', `tel:${OFFICE_PHONE.stored}`);
+    await expect(panel.locator('a')).toHaveText(OFFICE_PHONE.shown);
   });
 });
