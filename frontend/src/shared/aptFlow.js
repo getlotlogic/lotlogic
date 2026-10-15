@@ -31,7 +31,6 @@ const plural = (n, one, many) => (Number(n) === 1 ? one : many);
 // pass words and for shouted capitals.
 export const STRINGS = {
   en: {
-    loading: 'Loading the form…',
     back: 'Back',
     continue: 'Continue',
     stepOf: (n, total) => `Step ${n} of ${total}`,
@@ -192,7 +191,6 @@ export const STRINGS = {
       email: 'Email',
       id: 'Photo ID',
       lease: 'Lease',
-      plate: 'Plate',
       change: 'Change',
       hidden: {
         name: ' name',
