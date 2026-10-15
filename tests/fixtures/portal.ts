@@ -215,6 +215,21 @@ export function archiveEarlierRuns() {
           AND p.archived_at IS NULL AND p.created_at < now()`);
 }
 
+/**
+ * The register routes call services.plate_synonyms.synonym_set, which reads
+ * inferred_plate_pairs; the portal subset schema does not carry that table (no
+ * portal test drove /resident_plates/register before the apartment flow). An
+ * empty one with the columns it reads is what production has for a property
+ * with no pairs. Called once by the global setup: `CREATE TABLE IF NOT EXISTS`
+ * is not safe to run from parallel workers on a fresh database (the loser fails
+ * on pg_type_typname_nsp_index).
+ */
+export function ensureInferredPlatePairs() {
+  if (!PG_URL || !isLoopbackUrl(PG_URL)) return;
+  sql(`CREATE TABLE IF NOT EXISTS public.inferred_plate_pairs (
+         property_id uuid, plate_a text, plate_b text, verified_at timestamptz, dismissed_at timestamptz)`);
+}
+
 /** A plate no other spec in the run is using. */
 export function randomPlate(): string {
   const letters = 'ABCDEFGHJKLMNPRSTUVWXYZ';

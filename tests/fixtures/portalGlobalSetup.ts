@@ -10,7 +10,7 @@
  */
 import path from 'node:path';
 import { buildAndServeFrontend } from './buildAndServeFrontend';
-import { archiveEarlierRuns } from './portal';
+import { archiveEarlierRuns, ensureInferredPlatePairs } from './portal';
 
 export default async function portalGlobalSetup() {
   if (process.env.PORTAL_E2E !== '1') return undefined;
@@ -18,6 +18,8 @@ export default async function portalGlobalSetup() {
   // Style; partner A's dashboard loads per-property counts for each of them,
   // which slows (and times out) the partner-side specs run after run.
   archiveEarlierRuns();
+  // The apartment register route reads a table the portal subset schema lacks; once, not per worker.
+  ensureInferredPlatePairs();
   const port = Number(process.env.PORTAL_FRONTEND_PORT ?? 4173);
   const server = await buildAndServeFrontend(path.resolve(__dirname, '../../frontend'), { port });
   process.env.PORTAL_FRONTEND_ORIGIN = server.origin;

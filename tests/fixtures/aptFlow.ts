@@ -133,12 +133,6 @@ export async function seedResidentApartment(): Promise<ResidentApartment> {
   const hasVehicleDetails = sqlValue(`SELECT count(*) FROM information_schema.columns
                                        WHERE table_schema = 'public' AND table_name = 'resident_plates'
                                          AND column_name = 'vehicle_make'`) === '1';
-  // The register route calls services.plate_synonyms.synonym_set, which reads
-  // inferred_plate_pairs; the portal subset schema does not carry that table
-  // (no portal test drove /resident_plates/register before). An empty one with
-  // the columns it reads is what production has for a property with no pairs.
-  sql(`CREATE TABLE IF NOT EXISTS public.inferred_plate_pairs (
-         property_id uuid, plate_a text, plate_b text, verified_at timestamptz, dismissed_at timestamptz)`);
   return { slug, propertyId: account.property_id, name: account.signup.name, hasRules, hasVehiclePhoto, hasVehicleDetails };
 }
 
