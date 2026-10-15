@@ -75,6 +75,13 @@ export interface ResidentApartment {
    * request once more without it.
    */
   hasVehiclePhoto: boolean;
+  /**
+   * The harness database has backend task B4's `resident_plates.vehicle_make`
+   * (and so, from the same backend branch, the `vehicle_make`, `vehicle_model`
+   * and `vehicle_color` register fields). Without it the register call answers
+   * 422 to those fields and the page sends the request once more without them.
+   */
+  hasVehicleDetails: boolean;
 }
 
 /**
@@ -101,13 +108,16 @@ export async function seedResidentApartment(): Promise<ResidentApartment> {
   const hasVehiclePhoto = sqlValue(`SELECT count(*) FROM information_schema.columns
                                      WHERE table_schema = 'public' AND table_name = 'resident_plates'
                                        AND column_name = 'vehicle_photo_url'`) === '1';
+  const hasVehicleDetails = sqlValue(`SELECT count(*) FROM information_schema.columns
+                                       WHERE table_schema = 'public' AND table_name = 'resident_plates'
+                                         AND column_name = 'vehicle_make'`) === '1';
   // The register route calls services.plate_synonyms.synonym_set, which reads
   // inferred_plate_pairs; the portal subset schema does not carry that table
   // (no portal test drove /resident_plates/register before). An empty one with
   // the columns it reads is what production has for a property with no pairs.
   sql(`CREATE TABLE IF NOT EXISTS public.inferred_plate_pairs (
          property_id uuid, plate_a text, plate_b text, verified_at timestamptz, dismissed_at timestamptz)`);
-  return { slug, propertyId: account.property_id, name: account.signup.name, hasRules, hasVehiclePhoto };
+  return { slug, propertyId: account.property_id, name: account.signup.name, hasRules, hasVehiclePhoto, hasVehicleDetails };
 }
 
 export interface UploadSeen { kind: string; filename: string; partType: string; propertyId: string; token: string }
@@ -165,6 +175,20 @@ export const RESIDENT = {
   email: 'jane.smith@e2e.lotlogic.dev',
 };
 
+/** The vehicle every walkthrough registers: what a person types, and what the page shows and sends. */
+export type Vehicle = { make: string; model: string; color: string };
+export const VEHICLE: Vehicle = { make: 'Honda', model: 'Civic', color: 'white' };
+
+/** "white Honda Civic · ABC1234" — the line S3b, S5 and the receipt show for a vehicle. */
+export const vehicleLine = (plate: string, v: Vehicle = VEHICLE) => `${v.color} ${v.make} ${v.model} · ${plate}`;
+
+/** The three vehicle fields, on S3 or on the short-term form (same labels on both). */
+export async function fillVehicle(page: Page, v: Vehicle = VEHICLE) {
+  await page.getByLabel('Make', { exact: true }).fill(v.make);
+  await page.getByLabel('Model', { exact: true }).fill(v.model);
+  await page.getByLabel('Color', { exact: true }).selectOption(v.color);
+}
+
 /** S1 → S3: through the gate and About you, onto Vehicle 1. */
 export async function toFirstVehicle(page: Page) {
   await page.getByLabel("Yes, I'm on the lease").check();
@@ -179,13 +203,15 @@ export async function toFirstVehicle(page: Page) {
 }
 
 /**
- * S3 → S5: one vehicle with its documents (and, unless `vehiclePhoto` is false,
- * the optional photo of the vehicle), then the ID and the lease. Returns the plate.
+ * S3 → S5: one vehicle with its plate, make, model and color, its documents
+ * (and, unless `vehiclePhoto` is false, the optional photo of the vehicle), then
+ * the ID and the lease. Returns the plate.
  */
 export async function vehicleAndDocumentsToReview(
   page: Page, apartment: ResidentApartment, plate = randomPlate(), { vehiclePhoto = true } = {},
 ) {
   await page.getByLabel('License plate').fill(plate);
+  await fillVehicle(page);
   await upload(page, 'card-plate-v1', photo('plate.png', [40, 60, 90]));
   if (apartment.hasRules) {
     await upload(page, 'card-registration-v1', photo('registration.png', [200, 190, 170]));
@@ -195,6 +221,7 @@ export async function vehicleAndDocumentsToReview(
   if (vehiclePhoto) await upload(page, 'card-vehicle-v1', photo('car.png', [90, 30, 30]));
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', { name: 'Your vehicles' })).toBeVisible();
+  await expect(page.locator('#row-v1'), 'the list shows the vehicle as "white Honda Civic · ABC1234"').toContainText(vehicleLine(plate));
   const no = page.getByLabel('No', { exact: true });
   if (await no.count()) await no.check();
   await page.getByRole('button', { name: 'Continue' }).click();
