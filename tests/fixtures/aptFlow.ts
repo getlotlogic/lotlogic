@@ -103,6 +103,10 @@ export interface ResidentApartment {
    * 422 to those fields and the page sends the request once more without them.
    */
   hasVehicleDetails: boolean;
+  /** The harness database has backend task B5's `properties.require_lease`. */
+  hasLeaseColumn: boolean;
+  /** The property does not ask for the lease (Task F8): `require_lease = false`. */
+  leaseNotRequired: boolean;
 }
 
 /**
@@ -112,10 +116,10 @@ export interface ResidentApartment {
  * property gets Fort Mill's rules: two vehicles per unit, registration card
  * required.
  */
-export async function seedResidentApartment(): Promise<ResidentApartment> {
+export async function seedResidentApartment(opts: { slug?: string; requireLease?: boolean } = {}): Promise<ResidentApartment> {
   seedNStyle(); // the signup partner (slug "nstyle") must exist
   const account = await apiSignup();
-  const slug = `apt-flow-${crypto.randomBytes(4).toString('hex')}`;
+  const slug = opts.slug ?? `apt-flow-${crypto.randomBytes(4).toString('hex')}`;
   const type = sqlValue(`UPDATE public.properties SET qr_code_id = ${lit(slug)}
                           WHERE id = ${lit(account.property_id)} RETURNING property_type`);
   expect(type, 'a portal signup is an apartment property').toBe('apartment');
@@ -133,7 +137,43 @@ export async function seedResidentApartment(): Promise<ResidentApartment> {
   const hasVehicleDetails = sqlValue(`SELECT count(*) FROM information_schema.columns
                                        WHERE table_schema = 'public' AND table_name = 'resident_plates'
                                          AND column_name = 'vehicle_make'`) === '1';
-  return { slug, propertyId: account.property_id, name: account.signup.name, hasRules, hasVehiclePhoto, hasVehicleDetails };
+  const hasLeaseColumn = sqlValue(`SELECT count(*) FROM information_schema.columns
+                                    WHERE table_schema = 'public' AND table_name = 'properties'
+                                      AND column_name = 'require_lease'`) === '1';
+  const leaseNotRequired = hasLeaseColumn && opts.requireLease === false;
+  if (leaseNotRequired) sql(`UPDATE public.properties SET require_lease = false WHERE id = ${lit(account.property_id)}`);
+  return {
+    slug, propertyId: account.property_id, name: account.signup.name, hasRules, hasVehiclePhoto, hasVehicleDetails,
+    hasLeaseColumn, leaseNotRequired,
+  };
+}
+
+export interface GroupMember extends ResidentApartment { address: string }
+export interface ApartmentGroup {
+  /** The shared prefix: /apt/<group> is the one link. */
+  group: string;
+  /** The members, in qr_code_id order: <group>-1, <group>-2, ... */
+  members: GroupMember[];
+}
+
+/**
+ * A group of `n` apartments under one fresh prefix (Task F6): `<group>-1` ... `<group>-n`, each
+ * verified, with its own name and a one-line address (the legacy `address` column, the only
+ * address the anon role can read). They are created in reverse so that insertion order is not
+ * the order the page must show.
+ */
+export async function seedApartmentGroup(n: number): Promise<ApartmentGroup> {
+  const group = `grp-${crypto.randomBytes(4).toString('hex')}`;
+  const members: GroupMember[] = [];
+  for (let i = n; i >= 1; i--) {
+    const apartment = await seedResidentApartment({ slug: `${group}-${i}` });
+    const name = `Grove Townhomes ${'I'.repeat(i)}`;
+    const address = `${100 * i} Grove Street`;
+    sql(`UPDATE public.properties SET name = ${lit(name)}, address = ${lit(address)}, verification_status = 'verified'
+          WHERE id = ${lit(apartment.propertyId)}`);
+    members.unshift({ ...apartment, name, address });
+  }
+  return { group, members };
 }
 
 export interface UploadSeen { kind: string; filename: string; partType: string; propertyId: string; token: string }
@@ -241,9 +281,13 @@ export async function vehicleAndDocumentsToReview(
   const no = page.getByLabel('No', { exact: true });
   if (await no.count()) await no.check();
   await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page.getByRole('heading', { name: 'Your ID and lease' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: apartment.leaseNotRequired ? 'Your ID' : 'Your ID and lease' })).toBeVisible();
   await upload(page, 'card-id', photo('id.png', [120, 120, 120]));
-  await upload(page, 'card-lease', { name: 'lease.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% e2e lease\n%%EOF\n') });
+  if (apartment.leaseNotRequired) {
+    await expect(page.locator('#card-lease')).toHaveCount(0);
+  } else {
+    await upload(page, 'card-lease', { name: 'lease.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% e2e lease\n%%EOF\n') });
+  }
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', { name: 'Check your answers' })).toBeVisible();
   return plate;

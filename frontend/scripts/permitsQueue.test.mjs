@@ -877,3 +877,18 @@ test('a temp tag date is a calendar day, the same in every time zone', () => {
   assert.equal(tagDateLabel('2026-13-01'), '2026-13-01', 'an impossible month is shown as stored, not rolled into January');
   assert.equal(tagDateLabel('2026-12-31'), 'Dec 31');
 });
+
+
+test('F8: a property without the lease requirement shows "not required", not a missing lease', () => {
+  const [none] = rowsOf([longTerm('n', { has_lease: false, has_registration: true })]);
+  const [sent] = rowsOf([longTerm('s', { has_lease: true })]);
+  const lease = (row, opts) => evidenceCards(row, opts).find(c => c.which === 'lease');
+  assert.equal(lease(none, { requireLease: false }).notRequired, true);
+  assert.equal(lease(none).notRequired, undefined, 'default: the lease is asked for');
+  assert.equal(lease(none, { requireLease: true }).notRequired, undefined);
+  assert.equal(lease(sent, { requireLease: false }).notRequired, undefined, 'a lease that came anyway is shown');
+  assert.deepEqual(missingDocs(none, { requireLease: false }), []);
+  assert.deepEqual(missingDocs(none, {}), ['lease']);
+  assert.equal(initialDenyReason(none, { requireLease: false }), null);
+  assert.equal(initialDenyReason(none, {}), 'document_missing');
+});

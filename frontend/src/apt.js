@@ -28,12 +28,14 @@ import {
   pgRest, backendRegister, getRecaptchaToken, friendlyErrorMessage,
   escapeHtml, showNotFound, showConnectionError, normalizePlate, normalizePhone,
   newIdempotencyKey, propertyQuery, logoHtml, BACKEND_URL, initialScreenForRole, aptEntryUrl,
+  groupQuery, groupRows, isGroup, groupEntryUrl,
 } from './shared/register.js';
 import {
   STRINGS, storageKey, emptyFlow, addVehicle, removeVehicle, findVehicle,
   parseStep, resolveStep, nextStep, prevStep, stepCaption,
   vehicleCap, canAddVehicle, requiresRegistration,
   formatPhone, phoneToE164, validateField, validateStep,
+  requiresLease, startNeeds, documentSlots,
   slotId, cardId, docRefs, docState, serializeFlow, restoreFlow, receiptFlow,
   registerErrorMessage, rejectedUnknownFields, docFields, sentFlags, invalidDocSlots,
   formatSubmitted, copyText, displayPlate, vehicleRowStatus,
@@ -51,17 +53,17 @@ const app = document.getElementById('app');
 // QR code id comes from /apt/<qr> in the URL, but we also accept ?qr=<id> so a
 // shared / emailed link like /apt.html?qr=... still works.
 const pathParts = window.location.pathname.split('/').filter(Boolean);
-const qrCodeId = (pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null)
+let qrCodeId = (pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null)
   || new URLSearchParams(window.location.search).get('qr');
 
 // The two rule columns are read with the rest; before the backend migration
 // grants them (or adds them) the wide read fails and the narrow one is used:
 // no cap line, no registration card, and the page still works.
 const BASE_COLUMNS = 'id,name,address,property_type,policy_phone';
-const RULE_COLUMNS = 'max_vehicles_per_unit,require_vehicle_registration';
+const RULE_COLUMNS = 'max_vehicles_per_unit,require_vehicle_registration,require_lease';
 
 let property = null;
-let rules = { cap: null, requireRegistration: false };
+let rules = { cap: null, requireRegistration: false, requireLease: true };
 let flow = null;            // the long-term request, see ./shared/aptFlow.js
 const slots = new Map();    // document slot id → its upload pipeline (holds the bytes in memory)
 let cards = [];             // the document cards drawn on the current screen
@@ -134,17 +136,70 @@ async function init() {
     const rows = await loadPropertyRow();
     const data = Array.isArray(rows) ? rows[0] : null;
     if (!data) {
+      // Not a property: it may be a group's link (spec 9, Task F6).
+      if (await tryGroup()) return;
       showNotFound('Property not found', 'This registration link is not valid or has expired.');
       return;
     }
     property = data;
-    rules = { cap: vehicleCap(property), requireRegistration: requiresRegistration(property) };
+    rules = { cap: vehicleCap(property), requireRegistration: requiresRegistration(property), requireLease: requiresLease(property) };
     if (recaptchaBlocked) showBlocked(); // the panel learned the office's phone
     showFirstScreen();
   } catch (err) {
     console.error('init error:', err);
     showConnectionError(err, init);
   }
+}
+
+// /apt/<group>: the siblings under `<group>-`. Several: S0, the person picks. One: straight to
+// it. None: false, and the caller shows the unknown-property state. Either way what follows is
+// the boot a direct visit to /apt/<that slug> takes: the URL is rewritten and init() runs again.
+async function tryGroup() {
+  const path = groupQuery(qrCodeId);
+  if (!path) return false;
+  const rows = await pgRest(path);
+  const siblings = groupRows(rows, qrCodeId);
+  if (siblings.length === 1) {
+    enterProperty(siblings[0].slug);
+    return true;
+  }
+  if (!isGroup(rows, qrCodeId)) return false;
+  renderPick(siblings);
+  return true;
+}
+
+function enterProperty(slug) {
+  const url = groupEntryUrl(slug, window.location.search);
+  try {
+    window.history.replaceState(null, '', url);
+  } catch { /* no history (a sandboxed frame): the page carries on from the slug alone */ }
+  qrCodeId = slug;
+  init();
+}
+
+// ── S0 which address ────────────────────────────────────────────────────────
+function renderPick(siblings) {
+  const role = initialScreenForRole(window.location.search);
+  const lead = role === 'resident' ? S.pick.resident : role === 'guest' ? S.pick.guest : '';
+  app.innerHTML = `
+    ${logoHtml()}
+    <section class="flow pick" aria-labelledby="stepTitle">
+      <h1 class="flow-h1" id="stepTitle" tabindex="-1">${esc(S.pick.title)}</h1>
+      ${lead ? `<p class="pick-lead">${esc(lead)}</p>` : ''}
+      <ul class="pick-list" aria-label="${esc(S.pick.listLabel)}">
+        ${siblings.map((p, i) => `
+        <li><button type="button" class="choice-btn pick-btn" data-slug="${esc(p.slug)}" data-index="${i}">
+          <span><span class="choice-title">${esc(p.name)}</span>${p.address ? `<span class="sub">${esc(p.address)}</span>` : ''}</span>
+          <span class="arrow" aria-hidden="true">→</span>
+        </button></li>`).join('')}
+      </ul>
+      <p class="pick-office">${esc(S.pick.office)}</p>
+    </section>
+  `;
+  app.querySelectorAll('.pick-btn').forEach((btn) => {
+    btn.addEventListener('click', () => enterProperty(btn.getAttribute('data-slug')));
+  });
+  document.title = `${S.pick.title} – ${S.titleSuffix}`;
 }
 
 async function loadPropertyRow() {
@@ -681,12 +736,7 @@ function renderLanding() {
 // ── S1 before you start ─────────────────────────────────────────────────────
 function renderStart() {
   const cap = rules.cap;
-  const need = [
-    S.start.needPlate,
-    rules.requireRegistration ? S.start.needRegistration : null,
-    S.start.needId,
-    S.start.needLease,
-  ].filter(Boolean);
+  const need = startNeeds(rules);
   app.innerHTML = `
     ${topBar()}
     <form id="residentForm" class="flow" data-step="start" novalidate>
@@ -977,17 +1027,17 @@ function renderDocuments() {
   app.innerHTML = `
     ${topBar()}
     <form id="residentForm" class="flow" data-step="documents" novalidate>
-      ${stepHeader('documents', S.documents.title)}
-      <p class="intro">${esc(S.documents.intro)}</p>
+      ${stepHeader('documents', rules.requireLease ? S.documents.title : S.documents.titleIdOnly)}
+      <p class="intro">${esc(rules.requireLease ? S.documents.intro : S.documents.introIdOnly)}</p>
       ${cardField('id')}
-      ${cardField('lease')}
+      ${rules.requireLease ? cardField('lease') : ''}
       <p class="privacy-line">${esc(S.documents.privacy)} <a class="text-link" href="/privacy.html">${esc(S.documents.privacyLink)}</a></p>
       ${actionsHtml(S.continue)}
     </form>`;
   bindForm(onContinue);
   mountCard('id', { title: S.documents.idTitle, makeSure: S.documents.idChecks, sizeLine: S.documents.size, schematic: 'id' });
-  mountCard('lease', { title: S.documents.leaseTitle, makeSure: S.documents.leaseChecks, sizeLine: S.documents.size, schematic: 'lease' });
-  setTitle(S.documents.title);
+  if (rules.requireLease) mountCard('lease', { title: S.documents.leaseTitle, makeSure: S.documents.leaseChecks, sizeLine: S.documents.size, schematic: 'lease' });
+  setTitle(rules.requireLease ? S.documents.title : S.documents.titleIdOnly);
 }
 
 // ── S5 check your answers ───────────────────────────────────────────────────
@@ -1054,7 +1104,7 @@ function renderReview() {
       </section>
       <section class="summary" aria-labelledby="sumDocs">
         <h2 class="summary-h2" id="sumDocs">${esc(S.review.documentsHeading)}</h2>
-        <dl class="summary-list">${docRow('id', S.review.id, S.review.hidden.id)}${docRow('lease', S.review.lease, S.review.hidden.lease)}</dl>
+        <dl class="summary-list">${docRow('id', S.review.id, S.review.hidden.id)}${rules.requireLease ? docRow('lease', S.review.lease, S.review.hidden.lease) : ''}</dl>
       </section>
       <p class="statement">${esc(S.review.statement)}</p>
       <p class="attest">${esc(S.review.attest(flow.unit.trim()))}</p>
@@ -1169,7 +1219,7 @@ function slotIdsFor(key) {
   if (p.name === 'vehicle') {
     return VEHICLE_KINDS.filter((kind) => kind !== 'registration' || rules.requireRegistration).map((kind) => slotId(kind, p.vid));
   }
-  if (p.name === 'documents') return ['id', 'lease'];
+  if (p.name === 'documents') return documentSlots(rules);
   if (p.name === 'review') return Object.keys(docRefs(flow, rules));
   return [];
 }
@@ -1195,7 +1245,7 @@ function titleFor(key) {
     case 'about': return S.about.title;
     case 'vehicle': return S.vehicle.title(flow.vehicles.findIndex((v) => v.vid === p.vid) + 1);
     case 'vehicles': return S.vehicles.title;
-    case 'documents': return S.documents.title;
+    case 'documents': return rules.requireLease ? S.documents.title : S.documents.titleIdOnly;
     case 'review': return S.review.title;
     default: return S.received.title;
   }
@@ -1248,7 +1298,7 @@ function payloadFor(v) {
     phone: phoneToE164(flow.phone) || normalizePhone(flow.phone),
     email: flow.email.trim(),
     id_doc_url: flow.docs.id ? flow.docs.id.key : null,
-    lease_doc_url: flow.docs.lease ? flow.docs.lease.key : null,
+    lease_doc_url: rules.requireLease && flow.docs.lease ? flow.docs.lease.key : null,
     plate_photo_url: v.docs.plate ? v.docs.plate.key : null,
   };
 }

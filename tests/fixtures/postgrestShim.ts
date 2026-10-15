@@ -77,6 +77,8 @@ export function translateQuery(params: URLSearchParams): { select: string; where
       else if (value === 'not.is.null') where.push(`${key} IS NOT NULL`);
       else if (value.startsWith('eq.')) where.push(`${key}::text = ${q(value.slice(3))}`);
       else if (value.startsWith('neq.')) where.push(`${key}::text <> ${q(value.slice(4))}`);
+      // PostgREST's like: `*` stands for `%`; the rest is the LIKE pattern as given
+      else if (value.startsWith('like.')) where.push(`${key}::text LIKE ${q(value.slice(5).replace(/\*/g, '%'))}`);
       else if (/^in\.\(.*\)$/.test(value)) {
         const items = value.slice(4, -1).split(',').filter(Boolean);
         where.push(items.length ? `${key}::text IN (${items.map(q).join(', ')})` : 'false');

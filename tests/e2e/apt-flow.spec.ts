@@ -39,14 +39,19 @@
  *     short-term confirmation shows it or a link that dials it. The panel for a page
  *     a content blocker holds back still does, and a test says so.
  *
+ * One QR for a group of properties (Task F6, spec 9) has its own block at the end: /apt/<group>
+ * shows "Which address are you at?" for two or more verified apartments under <group>-, a tap
+ * rewrites the URL to that property and continues as a direct visit, one sibling goes straight
+ * in, an unknown prefix is the unknown-property state.
+ *
  * Portal suite (tests/README.md, "Portal suite"): local backend and a
  * throwaway Postgres only. Without PORTAL_E2E=1 every test here is reported as
  * skipped, never failed.
  */
-import { test, expect, skipUnlessPortal, frontendOrigin, sql, lit, PRODUCTION_API, pointAtLocalBackend } from '../fixtures/portal';
+import { test, expect, skipUnlessPortal, frontendOrigin, sql, lit, PRODUCTION_API, pointAtLocalBackend, randomPlate } from '../fixtures/portal';
 import {
-  seedResidentApartment, openResidentFlow, toFirstVehicle, vehicleAndDocumentsToReview, fillVehicle,
-  photo, VEHICLE, vehicleLine, RESIDENT, OFFICE_PHONE, expectNoOfficePhone,
+  seedResidentApartment, openResidentFlow, toFirstVehicle, upload, vehicleAndDocumentsToReview, fillVehicle,
+  photo, VEHICLE, vehicleLine, RESIDENT, OFFICE_PHONE, expectNoOfficePhone, seedApartmentGroup,
 } from '../fixtures/aptFlow';
 
 test.describe('apartment long-term request @portal', () => {
@@ -69,6 +74,8 @@ test.describe('apartment long-term request @portal', () => {
     await expect(page.locator('.property-name')).toContainText(apartment.name);
 
     // S1: Start with no answer → the error summary, focused; answering clears it.
+    // The flag is true (the default): the lease is on the list of what to have ready.
+    await expect(page.locator('.flow')).toContainText('A copy or photo of your lease');
     await page.getByRole('button', { name: 'Start' }).click();
     const summary = page.locator('#errorSummary');
     await expect(summary).toBeFocused();
@@ -513,5 +520,159 @@ test.describe('apartment long-term request @portal', () => {
     await expect(panel).toHaveText(`Something is blocking this page from sending. Turn off content blockers for this site, or call ${OFFICE_PHONE.shown}.`);
     await expect(panel.locator('a')).toHaveAttribute('href', `tel:${OFFICE_PHONE.stored}`);
     await expect(panel.locator('a')).toHaveText(OFFICE_PHONE.shown);
+  });
+});
+
+// Task F8, spec 10: a property that does not ask for the lease. The resident gives an ID,
+// the registration card and the photo of the plate, and reaches the receipt; the lease
+// appears on no screen and goes nowhere.
+test.describe('apartment without a lease upload @portal', () => {
+  test.beforeEach(() => {
+    skipUnlessPortal();
+  });
+
+  test('require_lease = false: S1 to the receipt with an ID and no lease', async ({ page }) => {
+    const apartment = await seedResidentApartment({ requireLease: false });
+    test.skip(!apartment.hasLeaseColumn, 'the harness database lacks properties.require_lease (backend task B5)');
+    const uploads = await openResidentFlow(page, apartment);
+    const registerCalls: Record<string, unknown>[] = [];
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && r.url().endsWith('/resident_plates/register')) registerCalls.push(JSON.parse(r.postData() ?? '{}'));
+    });
+
+    await page.goto(`${frontendOrigin()}/apt/${apartment.slug}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    // S1: the rules are untouched, the lease is not on the list.
+    await expect(page.locator('.flow')).toContainText('Only leaseholders can hold a long-term parking pass.');
+    await expect(page.locator('.flow')).not.toContainText('A copy or photo of your lease');
+    await expect(page.locator('.flow')).toContainText('Photo ID');
+    await toFirstVehicle(page);
+
+    const plate = await vehicleAndDocumentsToReview(page, apartment);
+    // S5: an ID row, no lease row.
+    await expect(page.locator('#review-id')).toBeVisible();
+    await expect(page.locator('#review-lease')).toHaveCount(0);
+    await expect(page.locator('.summary').last()).not.toContainText('Lease');
+    expect(uploads.map((u) => u.kind)).not.toContain('lease');
+    expect(uploads.map((u) => u.kind)).toContain('id');
+
+    await page.getByRole('button', { name: 'Send for review' }).click();
+    await expect(page.getByRole('heading', { name: 'Request received' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.receipt')).not.toContainText('lease');
+    expect(registerCalls[0].lease_doc_url ?? null).toBeNull();
+    const row = sql(`SELECT id_doc_url IS NOT NULL, lease_doc_url IS NULL, plate_photo_url IS NOT NULL, status
+                       FROM public.resident_plates
+                      WHERE property_id = ${lit(apartment.propertyId)} AND plate_text = ${lit(plate)}`);
+    expect(row).toEqual([['t', 't', 't', 'pending']]);
+  });
+
+  test('S4 asks for the ID only, in the id-only words, and Continue wants nothing else', async ({ page }) => {
+    const apartment = await seedResidentApartment({ requireLease: false });
+    test.skip(!apartment.hasLeaseColumn, 'the harness database lacks properties.require_lease (backend task B5)');
+    await openResidentFlow(page, apartment);
+    await page.goto(`${frontendOrigin()}/apt/${apartment.slug}?role=resident`);
+    await toFirstVehicle(page);
+    await page.getByLabel('License plate').fill(randomPlate());
+    await fillVehicle(page);
+    await upload(page, 'card-plate-v1', photo('plate.png', [40, 60, 90]));
+    if (apartment.hasRules) await upload(page, 'card-registration-v1', photo('registration.png', [200, 190, 170]));
+    await page.getByRole('button', { name: 'Continue' }).click();
+    const no = page.getByLabel('No', { exact: true });
+    if (await no.count()) await no.check();
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.getByRole('heading', { name: 'Your ID', exact: true })).toBeVisible();
+    await expect(page.locator('.intro')).toHaveText(
+      "The property office and its parking enforcement company use this to confirm you're on the lease for this unit and that the cars are yours.",
+    );
+    await expect(page.locator('#card-id')).toBeVisible();
+    await expect(page.locator('#card-lease')).toHaveCount(0);
+    await expect(page).toHaveTitle(/^Your ID/);
+    // Continue with no ID → one error, the ID's.
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.locator('#errorSummary li')).toHaveText(['Add a photo of your ID']);
+  });
+});
+
+test.describe('one QR for a group of properties @portal', () => {
+  test.beforeEach(() => {
+    skipUnlessPortal();
+  });
+
+  test('the group link lists the siblings in order; a tap lands on that property\'s S1 with the URL rewritten', async ({ page }) => {
+    const { group, members } = await seedApartmentGroup(3);
+    await openResidentFlow(page, members[0]);
+    await page.goto(`${frontendOrigin()}/apt/${group}?role=resident`);
+
+    await expect(page.getByRole('heading', { name: 'Which address are you at?' })).toBeVisible();
+    await expect(page.getByText('Pick the building your lease is for.')).toBeVisible();
+    await expect(page.getByText('Not sure? Ask the office.')).toBeVisible();
+    const buttons = page.locator('.pick-btn');
+    await expect(buttons).toHaveCount(3);
+    for (let i = 0; i < 3; i++) {
+      await expect(buttons.nth(i).locator('.choice-title')).toHaveText(members[i].name);
+      await expect(buttons.nth(i).locator('.sub')).toHaveText(members[i].address);
+    }
+    await expectNoOfficePhone(page, 'S0');
+
+    // 52 px targets and 16 px text, as F5a asserted for the flow's controls
+    for (let i = 0; i < 3; i++) {
+      const box = await buttons.nth(i).boundingBox();
+      expect(box!.height, `target ${i}`).toBeGreaterThanOrEqual(52);
+      expect(await buttons.nth(i).locator('.sub').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
+    }
+    for (const sel of ['.pick-lead', '.pick-office']) {
+      expect(await page.locator(sel).evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), sel).toBeGreaterThanOrEqual(16);
+    }
+
+    await buttons.nth(1).click();
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    const landed = new URL(page.url());
+    expect(landed.pathname + landed.search).toBe(`/apt/${members[1].slug}?role=resident`);
+    await expect(page.locator('.flow-top .property-name')).toHaveText(members[1].name);
+
+    // the same as a direct visit: a reload stays on that property
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    await expect(page.locator('.flow-top .property-name')).toHaveText(members[1].name);
+  });
+
+  test('a guest link carries the role through and says which address the person is visiting', async ({ page }) => {
+    const { group, members } = await seedApartmentGroup(2);
+    await openResidentFlow(page, members[0]);
+    await page.goto(`${frontendOrigin()}/apt/${group}?role=guest`);
+    await expect(page.getByText("Pick the address you're visiting.")).toBeVisible();
+    await page.locator('.pick-btn').nth(0).click();
+    await expect(page).toHaveURL(new RegExp(`/apt/${members[0].slug}\\?role=guest$`));
+    await expect(page.locator('#guestForm')).toBeVisible();
+    await expect(page.locator('.property-name strong')).toHaveText(members[0].name);
+  });
+
+  test('a prefix with one sibling goes straight to it, no S0', async ({ page }) => {
+    const { group, members } = await seedApartmentGroup(1);
+    await openResidentFlow(page, members[0]);
+    await page.goto(`${frontendOrigin()}/apt/${group}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    await expect(page.locator('.pick-btn')).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`/apt/${members[0].slug}\\?role=resident$`));
+    await expect(page.locator('.flow-top .property-name')).toHaveText(members[0].name);
+  });
+
+  test('an exact property slug is never a group, even when siblings sit under it', async ({ page }) => {
+    const { group, members } = await seedApartmentGroup(2);
+    // a property whose slug is the prefix itself
+    const parent = await seedResidentApartment({ slug: group });
+    await openResidentFlow(page, parent);
+    await page.goto(`${frontendOrigin()}/apt/${group}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    await expect(page.locator('.pick-btn')).toHaveCount(0);
+    expect(members.length).toBe(2);
+  });
+
+  test('an unknown prefix is the unknown-property state', async ({ page }) => {
+    await pointAtLocalBackend(page);
+    await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+    await page.goto(`${frontendOrigin()}/apt/no-such-group-${Date.now()}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Property not found' })).toBeVisible();
+    await expect(page.locator('.pick-btn')).toHaveCount(0);
   });
 });
