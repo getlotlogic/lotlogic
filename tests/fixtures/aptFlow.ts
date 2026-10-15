@@ -61,6 +61,27 @@ export function onePixelPng(rgb: [number, number, number]): Buffer {
 
 export const photo = (name: string, rgb: [number, number, number]) => ({ name, mimeType: 'image/png', buffer: onePixelPng(rgb) });
 
+// ── the office phone: on no screen but the content-blocker panel ─────────────
+/**
+ * The seeded apartment's office phone, as production's Fort Mill rows have one. Gabe,
+ * 2026-10-15: "They don't need a phone number on it" — no screen of the flow prints it,
+ * or a link that dials it, except the panel a content blocker brings up ("… or call
+ * (704) 555-0100"), which the person has no other way past. A property with a phone is what
+ * lets a test see a screen that still did.
+ */
+export const OFFICE_PHONE = { stored: '+17045550100', shown: '(704) 555-0100' };
+
+/** Phone-shaped text: ten digits grouped 3-3-4 with whatever sits between — (704) 555-0100, 704.555.0100, +1 704 555 0100. */
+const PHONE_SHAPED = /(?:\+?1[\s.-]*)?\(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}/;
+
+/** The screen offers no office phone: no link that dials, no number in any format, no "Questions? Call". */
+export async function expectNoOfficePhone(page: Page, screen: string) {
+  await expect(page.locator('a[href^="tel:"]'), `${screen}: nothing dials the office`).toHaveCount(0);
+  const text = await page.locator('main').innerText();
+  expect(text, `${screen}: no phone number, in any format`).not.toMatch(PHONE_SHAPED);
+  expect(text, `${screen}: no "Questions? Call"`).not.toMatch(/Questions\?\s*Call/i);
+}
+
 // ── the apartment ─────────────────────────────────────────────────────────────
 export interface ResidentApartment {
   slug: string;
@@ -75,6 +96,13 @@ export interface ResidentApartment {
    * request once more without it.
    */
   hasVehiclePhoto: boolean;
+  /**
+   * The harness database has backend task B4's `resident_plates.vehicle_make`
+   * (and so, from the same backend branch, the `vehicle_make`, `vehicle_model`
+   * and `vehicle_color` register fields). Without it the register call answers
+   * 422 to those fields and the page sends the request once more without them.
+   */
+  hasVehicleDetails: boolean;
 }
 
 /**
@@ -98,16 +126,14 @@ export async function seedResidentApartment(): Promise<ResidentApartment> {
     sql(`UPDATE public.properties SET max_vehicles_per_unit = 2, require_vehicle_registration = true
           WHERE id = ${lit(account.property_id)}`);
   }
+  sql(`UPDATE public.properties SET policy_phone = ${lit(OFFICE_PHONE.stored)} WHERE id = ${lit(account.property_id)}`);
   const hasVehiclePhoto = sqlValue(`SELECT count(*) FROM information_schema.columns
                                      WHERE table_schema = 'public' AND table_name = 'resident_plates'
                                        AND column_name = 'vehicle_photo_url'`) === '1';
-  // The register route calls services.plate_synonyms.synonym_set, which reads
-  // inferred_plate_pairs; the portal subset schema does not carry that table
-  // (no portal test drove /resident_plates/register before). An empty one with
-  // the columns it reads is what production has for a property with no pairs.
-  sql(`CREATE TABLE IF NOT EXISTS public.inferred_plate_pairs (
-         property_id uuid, plate_a text, plate_b text, verified_at timestamptz, dismissed_at timestamptz)`);
-  return { slug, propertyId: account.property_id, name: account.signup.name, hasRules, hasVehiclePhoto };
+  const hasVehicleDetails = sqlValue(`SELECT count(*) FROM information_schema.columns
+                                       WHERE table_schema = 'public' AND table_name = 'resident_plates'
+                                         AND column_name = 'vehicle_make'`) === '1';
+  return { slug, propertyId: account.property_id, name: account.signup.name, hasRules, hasVehiclePhoto, hasVehicleDetails };
 }
 
 export interface UploadSeen { kind: string; filename: string; partType: string; propertyId: string; token: string }
@@ -165,6 +191,20 @@ export const RESIDENT = {
   email: 'jane.smith@e2e.lotlogic.dev',
 };
 
+/** The vehicle every walkthrough registers: what a person types, and what the page shows and sends. */
+export type Vehicle = { make: string; model: string; color: string };
+export const VEHICLE: Vehicle = { make: 'Honda', model: 'Civic', color: 'white' };
+
+/** "white Honda Civic · ABC1234" — the line S3b, S5 and the receipt show for a vehicle. */
+export const vehicleLine = (plate: string, v: Vehicle = VEHICLE) => `${v.color} ${v.make} ${v.model} · ${plate}`;
+
+/** The three vehicle fields, on S3 or on the short-term form (same labels on both). */
+export async function fillVehicle(page: Page, v: Vehicle = VEHICLE) {
+  await page.getByLabel('Make', { exact: true }).fill(v.make);
+  await page.getByLabel('Model', { exact: true }).fill(v.model);
+  await page.getByLabel('Color', { exact: true }).selectOption(v.color);
+}
+
 /** S1 → S3: through the gate and About you, onto Vehicle 1. */
 export async function toFirstVehicle(page: Page) {
   await page.getByLabel("Yes, I'm on the lease").check();
@@ -179,13 +219,15 @@ export async function toFirstVehicle(page: Page) {
 }
 
 /**
- * S3 → S5: one vehicle with its documents (and, unless `vehiclePhoto` is false,
- * the optional photo of the vehicle), then the ID and the lease. Returns the plate.
+ * S3 → S5: one vehicle with its plate, make, model and color, its documents
+ * (and, unless `vehiclePhoto` is false, the optional photo of the vehicle), then
+ * the ID and the lease. Returns the plate.
  */
 export async function vehicleAndDocumentsToReview(
   page: Page, apartment: ResidentApartment, plate = randomPlate(), { vehiclePhoto = true } = {},
 ) {
   await page.getByLabel('License plate').fill(plate);
+  await fillVehicle(page);
   await upload(page, 'card-plate-v1', photo('plate.png', [40, 60, 90]));
   if (apartment.hasRules) {
     await upload(page, 'card-registration-v1', photo('registration.png', [200, 190, 170]));
@@ -195,6 +237,7 @@ export async function vehicleAndDocumentsToReview(
   if (vehiclePhoto) await upload(page, 'card-vehicle-v1', photo('car.png', [90, 30, 30]));
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', { name: 'Your vehicles' })).toBeVisible();
+  await expect(page.locator('#row-v1'), 'the list shows the vehicle as "white Honda Civic · ABC1234"').toContainText(vehicleLine(plate));
   const no = page.getByLabel('No', { exact: true });
   if (await no.count()) await no.check();
   await page.getByRole('button', { name: 'Continue' }).click();

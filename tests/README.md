@@ -126,7 +126,10 @@ has no SendGrid key — the acceptance path's one DB write); move a code's
 clock for the expired / exhausted / cooldown states; archive earlier runs'
 properties holding the acceptance plate `ABC1234`; and, once per run in the
 global setup, archive the properties earlier runs' `pw-signup-*` offices
-created, so a reused harness does not pile hundreds of lots onto N Style.
+created, so a reused harness does not pile hundreds of lots onto N Style. The
+same setup creates the empty `inferred_plate_pairs` table the apartment register
+route reads (the portal subset schema lacks it): once, because `CREATE TABLE IF NOT
+EXISTS` fails for the loser when parallel workers run it on a fresh database.
 
 Both URLs must be loopback (`fixtures/portalGuard.ts`, unit-tested by `npm
 run test:unit`): with `PORTAL_E2E=1`, a non-local `API_URL` or

@@ -124,7 +124,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
   color: var(--ink);
   margin: 0 0 16px;
 }
-.section-h2, .summary-h2, .next-h2, .contact-h2 {
+.section-h2, .summary-h2, .next-h2 {
   font-family: 'Manrope', system-ui, sans-serif;
   font-size: 17px;
   font-weight: 700;
@@ -158,12 +158,33 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
   padding-left: 12px;
 }
 .field.has-error input:not([type=radio]) { border-color: var(--status-no); }
+/* A control in error carries aria-invalid, and its border follows. The rule above reaches
+   only inputs inside a `.field`; this one also reaches the Color select. */
+input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--status-no); }
 .field-error {
   color: var(--status-no);
   font-size: 15px;
   font-weight: 700;
   line-height: 1.4;
   margin: 0 0 8px;
+}
+
+/* The selects (Task F5a: Color on both forms, "How long" on the short-term form). The
+   browser's own arrow is off (appearance: none, below), so the control draws a chevron of
+   its own and still reads as a menu. */
+.select-wrap { position: relative; }
+.select-wrap select { padding-right: 44px; }
+.select-wrap::after {
+  content: '';
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
 }
 
 .choice-cards { display: grid; gap: 8px; }
@@ -380,6 +401,26 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
   padding: 5px 10px;
   overflow-wrap: anywhere;
 }
+/* "white Honda Civic · ABC1234": the description, then the plate. On a phone the two rarely
+   fit on one line, and a line must never end or begin with a stray dot. So the dot lives in
+   the plate's left gutter, and the whole line is pulled one gutter to the left inside a
+   clipping box: when the plate fits beside the description, the dot shows between them;
+   when the plate wraps, its gutter (and the dot) falls outside the box and is clipped.
+   Colors are inherited, so the same line reads on paper (S3b, S5) and on the green receipt (S6). */
+.vehicle-line { --gutter: 20px; display: block; min-width: 0; overflow: hidden; }
+.vehicle-flow { display: block; margin-left: calc(-1 * var(--gutter)); line-height: 1.6; }
+.vehicle-desc, .vehicle-tail {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding-left: var(--gutter);
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+.vehicle-tail { position: relative; }
+.vehicle-sep { position: absolute; left: 0; top: 50%; width: var(--gutter); text-align: center; line-height: 1; transform: translateY(-50%); }
+.vehicle-desc { font-size: 16px; font-weight: 700; }
+.vehicle-row .vehicle-desc, .summary-vehicle .vehicle-desc { color: var(--ink); }
 .row-thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
 .row-thumb { width: 56px; height: 42px; object-fit: cover; border: 1px solid var(--ink); display: block; }
 .row-glyph { display: flex; align-items: center; justify-content: center; background: var(--paper-2); color: var(--ink-2); font-family: 'DM Mono', ui-monospace, monospace; font-size: 13px; font-weight: 500; }
@@ -448,6 +489,10 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
   overflow-wrap: anywhere;
   user-select: all;
 }
+/* The vehicle row: the description in the page's face, the plate in the plate's. */
+.receipt-vehicle dd.receipt-car { font-family: 'Manrope', system-ui, sans-serif; font-size: 17px; font-weight: 700; letter-spacing: 0; line-height: 1.4; user-select: text; }
+.receipt-car .vehicle-desc { font-size: 17px; }
+.receipt-car .vehicle-plate { font-family: 'DM Mono', ui-monospace, monospace; font-size: 22px; font-weight: 500; letter-spacing: .1em; user-select: all; }
 .receipt-note { font-size: 14px; line-height: 1.4; margin-top: 6px; }
 .receipt-status { margin-top: 18px; }
 .status-tag { display: inline-block; background: var(--paper); color: var(--status-ok); font-size: 15px; font-weight: 700; line-height: 1.2; padding: 5px 12px; border-radius: 999px; }
@@ -464,9 +509,6 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; font-weight: 700; line-height: 1;
 }
-.contact { margin-top: 24px; background: var(--paper-2); padding: 16px; display: grid; gap: 10px; }
-.contact-h2 { margin: 0; }
-.contact .btn-secondary { justify-self: stretch; }
 .keep { margin-top: 24px; display: grid; gap: 10px; font-size: 15px; line-height: 1.5; }
 .receipt-email { overflow-wrap: anywhere; }
 .keep .btn-secondary { justify-self: stretch; }
@@ -496,7 +538,6 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .choice-title { display: block; font-size: 18px; font-weight: 700; line-height: 1.3; }
 .choice-btn .sub { display: block; font-size: 14px; font-weight: 500; line-height: 1.4; color: var(--ink-2); margin-top: 2px; }
 .choice-btn .arrow { font-size: 22px; color: var(--amber); }
-.landing-footer { margin-top: 20px; font-size: 14px; line-height: 1.45; color: var(--ink-2); text-align: center; }
 
 /* ── the short-term form (restyled only; same markup and behaviour) ─────── */
 label .optional { font-weight: 500; color: var(--ink-2); }

@@ -302,10 +302,38 @@ test.describe('accessibility @a11y', () => {
     await upload(page, 'card-plate-v1', photo('plate.png', [40, 60, 90]));
     await scan(page, 'apt-s3-vehicle');
 
+    // The same screen with the make, model and color left empty (Task F5a): the error summary
+    // and the inline errors, aria-invalid and aria-describedby on a text field and on the select.
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.locator('#errorSummary')).toBeFocused();
+    await expect(page.locator('#errorSummary')).toContainText('Pick the color.');
+    await scan(page, 'apt-s3-vehicle-errors');
+
     await vehicleAndDocumentsToReview(page, apartment);
     await page.getByRole('button', { name: 'Send for review' }).click();
     await expect(page.getByRole('heading', { name: 'Request received' })).toBeVisible({ timeout: 20_000 });
     await scan(page, 'apt-s6-request-received');
+  });
+
+  // Task F5a — the short-term form gained the make, model and color. The whole page is scanned,
+  // as it opens and again with those three fields' errors showing.
+  test('apartment short-term form has no serious a11y violations, with or without its errors @portal', async ({ page }) => {
+    test.skip(!PORTAL_E2E, 'needs the local backend and harness database (PORTAL_E2E=1)');
+    const apartment = await seedResidentApartment();
+    await openResidentFlow(page, apartment);
+    await page.goto(`/apt/${apartment.slug}?role=guest`);
+    await expect(page.getByLabel('License plate')).toBeVisible();
+    await scan(page, 'apt-short-term-form');
+    await page.getByLabel('Full name').fill('Sam Parker');
+    await page.getByLabel("Unit you're visiting").fill('12B');
+    await page.getByLabel('Phone number').fill('7045550123');
+    await page.getByLabel('Email').fill('sam.parker@e2e.lotlogic.dev');
+    await page.getByLabel('License plate').fill(randomPlate());
+    await page.locator('#g_plate_photo').setInputFiles(photo('plate.png', [40, 60, 90]));
+    await page.locator('#g_id').setInputFiles(photo('id.png', [120, 120, 120]));
+    await page.getByRole('button', { name: /Get my pass/ }).click();
+    await expect(page.locator('#g_make-error')).toContainText('Add the make.');
+    await scan(page, 'apt-short-term-form-errors');
   });
 
   test('marketing pitch pages are accessible', async ({ page }) => {

@@ -135,6 +135,9 @@ export async function backendRegister(path, payload, timeoutMs = 12000) {
       const err = new Error(typeof detail === 'string' ? detail : ('HTTP ' + res.status));
       err.status = res.status;
       err.detail = detail;
+      // The whole answer: a 400 can carry extras beside `detail` (apt.js reads
+      // vehicle_required's "missing" list from here).
+      err.body = body;
       throw err;
     }
     return body;
