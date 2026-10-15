@@ -103,7 +103,7 @@ jobs:
       # so they need no BASE_URL and no credentials.
       - name: Self-serving e2e specs
         working-directory: tests
-        run: npx playwright test e2e/pay2park-visit.spec.ts e2e/error-reporting.spec.ts --project=chromium-desktop
+        run: npx playwright test e2e/pay2park-visit.spec.ts e2e/error-reporting.spec.ts e2e/dashboard-qr.spec.ts --project=chromium-desktop
 
       # Backgrounded with its stdout/stderr redirected to a file: a child that
       # keeps the step's output pipe open makes the step itself hang.
