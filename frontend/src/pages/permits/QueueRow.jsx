@@ -7,6 +7,7 @@ import {
   isLongTerm,
   plateText,
   segmentOf,
+  vehicleLine,
 } from '../../lib/permitsQueue.js';
 import { PlateThumb } from './Evidence.jsx';
 import { MoreMenu, PlateChip, Tag, TypeTag, whoLine } from './parts.jsx';
@@ -42,6 +43,7 @@ export function QueueRow({ row, now, selected, overLimit, cap, ageChip, showThum
   const segment = segmentOf(row);
   const cards = evidenceCards(row);
   const who = showUnit ? whoLine(row) : holderName(row);
+  const car = vehicleLine(row);
   const live = segment === 'approved' && !isLongTerm(row);
   return (
     <li className={`pq-row${selected ? ' is-selected' : ''}`}>
@@ -61,6 +63,7 @@ export function QueueRow({ row, now, selected, overLimit, cap, ageChip, showThum
             {row.is_temp_tag && <Tag>Temp tag</Tag>}
             {row.tag_expired && <Tag tone="red">Tag expired</Tag>}
           </span>
+          {car && <span className="pq-vehicle">{car}</span>}
           {who && <span className="pq-row-who">{who}</span>}
           <span className="pq-docs">{cards.map(card => <DocPill key={card.which} card={card} />)}</span>
           {ageChip ? (
