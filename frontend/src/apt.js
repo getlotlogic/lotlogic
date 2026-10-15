@@ -531,7 +531,13 @@ function bindField(id, field, set, { persist = true } = {}) {
         if (persist) scheduleSave();
       }
     }
-    if (dirty.has(id) || showsError(id)) setInlineError(id, validateField(field, input.value));
+    // Blur only adds an error: a field the user has fixed already lost its error on
+    // input/change above. Clearing here would drop the backend's answer about a value
+    // the user has not touched, and on mobile Safari the collapsing message moved the
+    // submit button out from under the very tap that blurred the field, so the tap
+    // landed on nothing (CI, 2026-10-15).
+    const problem = dirty.has(id) || showsError(id) ? validateField(field, input.value) : null;
+    if (problem) setInlineError(id, problem);
   });
 }
 
