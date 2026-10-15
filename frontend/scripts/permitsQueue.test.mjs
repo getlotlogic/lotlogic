@@ -42,6 +42,15 @@ import {
   unitLabel,
   decisionLine,
   statusTag,
+  actionPath,
+  serverPatch,
+  patchRows,
+  parseExtendHours,
+  telHref,
+  createDocCache,
+  previewKind,
+  downloadName,
+  tagDateLabel,
 } from '../src/lib/permitsQueue.js';
 
 // ── Fixtures ─────────────────────────────────────────────────
@@ -588,4 +597,114 @@ test('the status tag always carries a word', () => {
     { tone: 'green', text: 'Approved' },
     { tone: 'neutral', text: 'Ended' },
   ]);
+});
+
+// ── Wiring helpers the page uses ─────────────────────────────
+
+test('each decision posts to its own route for the row\'s table', () => {
+  const [lt] = rowsOf([longTerm('11111111-1111-4111-8111-111111111111')]);
+  const [st] = rowsOf([], [shortTerm('22222222-2222-4222-8222-222222222222')]);
+  assert.equal(actionPath(lt, 'approve'), '/apartment/passes/resident/11111111-1111-4111-8111-111111111111/approve');
+  assert.equal(actionPath(lt, 'reject'), '/apartment/passes/resident/11111111-1111-4111-8111-111111111111/reject');
+  assert.equal(actionPath(st, 'void'), '/apartment/passes/guest/22222222-2222-4222-8222-222222222222/void');
+  assert.equal(actionPath(st, 'extend'), '/apartment/passes/guest/22222222-2222-4222-8222-222222222222/extend');
+});
+
+test('a server answer patches only the decision columns, never the reviewer', () => {
+  assert.deepEqual(
+    serverPatch({ id: 'x', status: 'active', valid_from: 'A', valid_until: 'B', reviewed_by: 'office@example.test', reviewed_at: 'C' }),
+    { status: 'active', valid_from: 'A', valid_until: 'B', reviewed_at: 'C' },
+  );
+  assert.deepEqual(serverPatch({ status: 'rejected', reject_reason: 'R', reviewed_at: 'C' }), { status: 'rejected', reject_reason: 'R', reviewed_at: 'C' });
+  assert.deepEqual(serverPatch(null), {});
+});
+
+test('patching a row replaces only that row', () => {
+  const rows = rowsOf([longTerm('a'), longTerm('b')]);
+  const next = patchRows(rows, 'resident:b', { status: 'approved' });
+  assert.equal(next[1].status, 'approved');
+  assert.equal(next[1].plate_text, 'TEST001', 'the rest of the row is kept');
+  assert.equal(next[0], rows[0], 'other rows keep their identity');
+  assert.equal(rows[1].status, 'pending', 'the input is not mutated');
+  assert.equal(patchRows(rows, 'resident:none', { status: 'void' }), rows, 'an unknown key changes nothing');
+});
+
+test('Extend takes a whole number of hours from 1 to 72', () => {
+  assert.equal(parseExtendHours('24'), 24);
+  assert.equal(parseExtendHours(' 5 '), 5);
+  assert.equal(parseExtendHours('1'), 1);
+  assert.equal(parseExtendHours('72'), 72);
+  for (const bad of ['0', '73', '1.5', 'abc', '', '-3', null]) assert.equal(parseExtendHours(bad), null, String(bad));
+});
+
+test('a phone number becomes a dialable tel: link', () => {
+  assert.equal(telHref('(555) 010-0100'), 'tel:5550100100');
+  assert.equal(telHref('+1 555 010 0100'), 'tel:+15550100100');
+  assert.equal(telHref(''), null);
+  assert.equal(telHref('call me'), null);
+});
+
+// ── Documents in the browser ─────────────────────────────────
+
+function countingFetcher(fail = new Set()) {
+  const calls = [];
+  const fetcher = (path) => {
+    calls.push(path);
+    return fail.has(path) ? Promise.reject(new Error(`nope ${path}`)) : Promise.resolve(`blob:${path}`);
+  };
+  return { calls, fetcher };
+}
+
+test('the thumbnail and the detail card share one fetch per document', async () => {
+  const { calls, fetcher } = countingFetcher();
+  const cache = createDocCache(fetcher, 10);
+  const [a, b] = [cache.get('/d/1/plate'), cache.get('/d/1/plate')];
+  assert.equal(await a, 'blob:/d/1/plate');
+  assert.equal(await b, 'blob:/d/1/plate');
+  assert.deepEqual(calls, ['/d/1/plate']);
+});
+
+test('a failed document fetch is forgotten, so Try again fetches it again', async () => {
+  const fail = new Set(['/d/2/id']);
+  const { calls, fetcher } = countingFetcher(fail);
+  const cache = createDocCache(fetcher, 10);
+  await assert.rejects(cache.get('/d/2/id'), /nope/);
+  fail.clear();
+  assert.equal(await cache.get('/d/2/id'), 'blob:/d/2/id');
+  assert.deepEqual(calls, ['/d/2/id', '/d/2/id']);
+});
+
+test('the cache keeps the most recently used documents and drops the oldest past its limit', async () => {
+  const { calls, fetcher } = countingFetcher();
+  const cache = createDocCache(fetcher, 2);
+  await cache.get('A');
+  await cache.get('B');
+  await cache.get('A');       // A is now the most recent
+  await cache.get('C');       // evicts B
+  await cache.get('A');       // still cached
+  await cache.get('B');       // fetched again
+  assert.deepEqual(calls, ['A', 'B', 'C', 'B']);
+});
+
+test('what a document can be previewed as, from the type the proxy served', () => {
+  assert.equal(previewKind('application/pdf'), 'pdf');
+  assert.equal(previewKind('image/jpeg'), 'image');
+  assert.equal(previewKind('image/heic'), 'image', 'the browser decides: Safari renders it, Chrome errors to the fallback');
+  assert.equal(previewKind('application/octet-stream'), 'none');
+  assert.equal(previewKind(''), 'none');
+  assert.equal(previewKind(undefined), 'none');
+});
+
+test('a downloaded document is named for what it is, with the right extension', () => {
+  const [row] = rowsOf([longTerm('r', { plate_text: 'ABC 1234' })]);
+  assert.equal(downloadName(row, 'plate', 'image/heic'), 'plate-ABC1234.heic');
+  assert.equal(downloadName(row, 'registration', 'application/pdf'), 'registration-ABC1234.pdf');
+  assert.equal(downloadName(row, 'id', 'application/octet-stream'), 'id-ABC1234');
+});
+
+test('a temp tag date is a calendar day, the same in every time zone', () => {
+  assert.equal(tagDateLabel('2026-10-20'), 'Oct 20');
+  assert.equal(tagDateLabel('2026-01-01'), 'Jan 1');
+  assert.equal(tagDateLabel(''), '');
+  assert.equal(tagDateLabel('soon'), 'soon', 'anything unparseable is shown as stored');
 });

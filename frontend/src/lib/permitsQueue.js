@@ -389,6 +389,57 @@ export function missingDocs(row, { requireRegistration = false } = {}) {
     .map(card => card.which);
 }
 
+/**
+ * A bounded cache of document fetches (promises of Blobs), keyed by docs path,
+ * so a list thumbnail and the detail card it opens fetch once. A rejected
+ * fetch is forgotten so "Try again" goes back to the network; past `limit`
+ * the least recently used entry goes. The page owns one per mount.
+ */
+export function createDocCache(fetcher, limit = 40) {
+  const entries = new Map();
+  return {
+    get(path) {
+      if (entries.has(path)) {
+        const hit = entries.get(path);
+        entries.delete(path);
+        entries.set(path, hit);
+        return hit;
+      }
+      const pending = Promise.resolve()
+        .then(() => fetcher(path))
+        .catch(err => {
+          if (entries.get(path) === pending) entries.delete(path);
+          throw err;
+        });
+      entries.set(path, pending);
+      while (entries.size > limit) entries.delete(entries.keys().next().value);
+      return pending;
+    },
+  };
+}
+
+/** `pdf` | `image` | `none` from the served type. HEIC counts as an image: the browser decides. */
+export function previewKind(type) {
+  const t = String(type ?? '').toLowerCase();
+  if (t.includes('pdf')) return 'pdf';
+  if (t.startsWith('image/')) return 'image';
+  return 'none';
+}
+
+const DOWNLOAD_EXTENSIONS = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/heic': '.heic',
+  'application/pdf': '.pdf',
+};
+
+/** `plate-ABC1234.heic` — what Download saves when the browser cannot preview a file. */
+export function downloadName(row, which, type) {
+  const plate = normalizePlate(row?.plate_text) || 'document';
+  return `${which}-${plate}${DOWNLOAD_EXTENSIONS[String(type ?? '').toLowerCase()] || ''}`;
+}
+
 // ── URL state (`?status=&q=`) ─────────────────────────────────
 
 const Q_MAX = 40;
@@ -415,6 +466,47 @@ export function writeQueueQuery(search, { status = 'pending', q = '' } = {}) {
 }
 
 // ── Decisions ─────────────────────────────────────────────────
+
+/** The decision route for a row: approve, reject, void, or extend (short-term only). */
+export function actionPath(row, action) {
+  return `/apartment/passes/${row.kind}/${encodeURIComponent(row.id)}/${action}`;
+}
+
+// The columns a decision response can change. `reviewed_by` is deliberately
+// not among them: the list carries no reviewer, so the queue shows times only.
+const DECISION_COLUMNS = ['status', 'valid_from', 'valid_until', 'reject_reason', 'reviewed_at'];
+
+/** The decision columns of an approve / reject / void / extend response. */
+export function serverPatch(out) {
+  const patch = {};
+  for (const column of DECISION_COLUMNS) {
+    if (out && out[column] !== undefined) patch[column] = out[column];
+  }
+  return patch;
+}
+
+/** A new list with one row merged with `patch`; every other row keeps its identity. */
+export function patchRows(rows, key, patch) {
+  const at = (rows || []).findIndex(r => r.key === key);
+  if (at === -1) return rows;
+  const next = rows.slice();
+  next[at] = { ...rows[at], ...patch };
+  return next;
+}
+
+/** Extend's hours field: a whole number from 1 to 72 (the route's own bounds), else null. */
+export function parseExtendHours(raw) {
+  const text = String(raw ?? '').trim();
+  if (!/^\d+$/.test(text)) return null;
+  const hours = Number(text);
+  return hours >= 1 && hours <= 72 ? hours : null;
+}
+
+/** `tel:` link for a typed phone number, or null when there is nothing to dial. */
+export function telHref(phone) {
+  const digits = String(phone ?? '').replace(/[^\d+]/g, '');
+  return /\d/.test(digits) ? `tel:${digits}` : null;
+}
 
 /** What an approval changes on the row before the server answers. */
 export function approvedPatch(row, nowIso) {
@@ -495,6 +587,15 @@ const STATUS_TAGS = {
 /** A status tag is never colour alone. */
 export function statusTag(row) {
   return STATUS_TAGS[row?.status] || { tone: 'neutral', text: 'Unknown status' };
+}
+
+const TAG_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+
+/** `tag_expiration` is a bare `YYYY-MM-DD`: a calendar day, never shifted by the viewer's zone. */
+export function tagDateLabel(date) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date ?? ''));
+  if (!m) return String(date ?? '');
+  return TAG_DATE.format(new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))));
 }
 
 /** "Long-term pass" / "Short-term pass" — the only pass names the queue uses. */
