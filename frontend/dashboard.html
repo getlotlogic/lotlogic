@@ -1166,6 +1166,17 @@
       justify-content: space-between;
     }
     .pd-qr-sub { font-size: 10px; color: var(--text-faint); letter-spacing: .04em; white-space: nowrap; }
+    /* Side by side, from the 521px at which the grid has two columns up to the
+       640px at which the column stops growing, a pair puts its qualifiers under
+       the headings in both tiles. Left to flow, whether one fits beside its
+       heading depends on the words in that tile and on the font, so one tile
+       stacked while its neighbour did not and the two codes sat at different
+       heights. Above 640px the tiles are as wide as they get and the qualifiers
+       sit beside the headings, as they did. A lone tile (a plaza's) is left to
+       flow at every width. */
+    @media (min-width: 521px) and (max-width: 640px) {
+      .pd-qr-tile:not(:only-child) .pd-qr-head { flex-direction: column; align-items: flex-start; gap: 2px; }
+    }
     .pd-qr-canvas-wrap {
       background: #fff; padding: 8px; border-radius: 8px; line-height: 0;
     }
