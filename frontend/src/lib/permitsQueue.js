@@ -589,13 +589,18 @@ export function statusTag(row) {
   return STATUS_TAGS[row?.status] || { tone: 'neutral', text: 'Unknown status' };
 }
 
-const TAG_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** `tag_expiration` is a bare `YYYY-MM-DD`: a calendar day, never shifted by the viewer's zone. */
+/**
+ * `tag_expiration` is a bare `YYYY-MM-DD` calendar day. It is read as text, so
+ * no time zone can shift it; anything else is shown as stored.
+ */
 export function tagDateLabel(date) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date ?? ''));
-  if (!m) return String(date ?? '');
-  return TAG_DATE.format(new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))));
+  const text = String(date ?? '');
+  const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(text);
+  const month = m ? MONTHS[Number(m[1]) - 1] : null;
+  const day = m ? Number(m[2]) : 0;
+  return month && day >= 1 && day <= 31 ? `${month} ${day}` : text;
 }
 
 /** "Long-term pass" / "Short-term pass" — the only pass names the queue uses. */

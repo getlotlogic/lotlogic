@@ -707,4 +707,6 @@ test('a temp tag date is a calendar day, the same in every time zone', () => {
   assert.equal(tagDateLabel('2026-01-01'), 'Jan 1');
   assert.equal(tagDateLabel(''), '');
   assert.equal(tagDateLabel('soon'), 'soon', 'anything unparseable is shown as stored');
+  assert.equal(tagDateLabel('2026-13-01'), '2026-13-01', 'an impossible month is shown as stored, not rolled into January');
+  assert.equal(tagDateLabel('2026-12-31'), 'Dec 31');
 });
