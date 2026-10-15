@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../lib/db.js';
 import { apiFetch } from '../lib/api.js';
 import { scopePropsToPartner } from '../shared/scope.js';
+import { PlateTimeline } from './lot/PlateTimeline.jsx';
 import { verdictPresentation, resolveAllScopeResult, scopeOptions } from '../lib/verdicts.js';
 
 const REMEMBERED_KEY = 'lotlogic_lookup_property';
@@ -294,6 +295,11 @@ export function PlateLookupPage({ user, plate: deepPlate = null, property: deepP
             <PlateLookupVerdict out={result} scope={scopeValue === ALL_SCOPE ? 'all' : 'property'} propertyName={selectedPropertyName}
               history={history} typedPlate={searchedPlate} onPick={(pl) => { setPlate(pl); run(pl); }}
               onSwitchProperty={switchPropertyAndRecheck} />
+          )}
+          {/* Everything that happened to this plate here, newest first (task F7).
+              Single-property checks only: the timeline is per property. */}
+          {result && scopeValue !== ALL_SCOPE && (
+            <PlateTimeline key={`${scopeValue}:${result.detail?.plate || searchedPlate}`} propertyId={scopeValue} plate={result.detail?.plate || searchedPlate} />
           )}
           {history && history.entries && history.entries.length > 0 && (
             <div style={{ marginTop: 20 }}>

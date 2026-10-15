@@ -3246,6 +3246,62 @@
       border: 1px solid rgba(217,119,6,.55); border-radius: 10px; background: rgba(251,191,36,.1);
       font-size: 14px; font-weight: 700; color: var(--text-primary);
     }
+
+    /* ── State of the lot (Lot status tab, Lookup timeline; task F7) ──
+       Phone first: 52 px rows, the plate in large monospaced type, the car under
+       it, the time phrase on the right. Reuses the approval queue's segments,
+       search, tags and empty states (.pq-*). */
+    .ls { display: flex; flex-direction: column; gap: 12px; }
+    .ls-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+    .ls-head .pq-title { margin: 20px 0 0; }
+    .ls-asof { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+    .ls-refresh {
+      min-height: 44px; padding: 0 6px; background: none; border: 0; color: var(--text-primary);
+      font-family: inherit; font-size: 13px; font-weight: 800; text-decoration: underline; cursor: pointer;
+    }
+    .ls-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+    @media (min-width: 640px) { .ls-tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+    .ls-tile {
+      display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 2px; padding: 10px 12px;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+    }
+    .ls-tile.is-stop { border-color: rgba(239,68,68,.5); }
+    .ls-tile-n { margin: 0; font-size: 26px; font-weight: 800; line-height: 1.1; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+    .ls-tile-l { font-size: 12px; font-weight: 700; color: var(--text-secondary); }
+    .ls-controls { display: flex; flex-direction: column; gap: 8px; }
+    .ls-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .ls-row {
+      display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 10px 12px; box-sizing: border-box;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; color: inherit;
+      font-family: inherit; font-size: 14px; text-align: left; cursor: pointer;
+    }
+    .ls-row:hover { border-color: var(--text-faint); }
+    .ls-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+    .ls-plate-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .ls-plate {
+      font-family: 'DM Mono', ui-monospace, 'Courier New', monospace; font-size: 22px; font-weight: 600;
+      letter-spacing: .08em; line-height: 1.2; color: var(--text-primary);
+    }
+    .ls-car { font-size: 14px; line-height: 1.35; color: var(--text-secondary); overflow-wrap: anywhere; }
+    .ls-row-side { flex: 0 0 auto; max-width: 46%; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; }
+    .ls-when { font-size: 14px; font-weight: 800; color: var(--text-primary); }
+    .ls-when--stop { color: #F87171; }
+    .ls-when--warn { color: #FBBF24; }
+    .theme-light .ls-when--stop { color: #B91C1C; }
+    .theme-light .ls-when--warn { color: #8A4B06; }
+    .ls-sub { font-size: 12px; color: var(--text-secondary); }
+    .ls-note { margin: 0; font-size: 13px; color: var(--text-secondary); }
+    .ls-timeline { margin-top: 20px; }
+    .ls-timeline-title { margin: 0 0 8px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-secondary); }
+    .ls-events { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--bg-card); }
+    .ls-event { display: flex; flex-direction: column; gap: 3px; padding: 10px 14px; }
+    .ls-event + .ls-event { border-top: 1px solid var(--border-subtle, var(--border)); }
+    .ls-event-top { display: flex; flex-wrap: wrap; gap: 6px; }
+    .ls-event-detail { font-size: 14px; font-weight: 700; color: var(--text-primary); overflow-wrap: anywhere; }
+    .ls-event-when { font-size: 12px; color: var(--text-secondary); }
+    @media (min-width: 640px) {
+      .ls-controls { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+    }
   </style>
 </head>
 <body>

@@ -13,6 +13,8 @@ import { TeamSection } from './pages/property/TeamSection.jsx';
 import { PendingMembershipPage } from './pages/PendingMembershipPage.jsx';
 import { SignupPage } from './pages/SignupPage.jsx';
 import { FirstRunCard } from './pages/property/FirstRunCard.jsx';
+import { LotStatusTab } from './pages/lot/LotStatusTab.jsx';
+import { PlateLookupPage } from './pages/PlateLookupPage.jsx';
 
 createRoot(document.getElementById('root')).render(
   <ErrorBoundary label="the dashboard"><ToastProvider><App /></ToastProvider></ErrorBoundary>
@@ -80,6 +82,10 @@ if (isE2E()) {
     // `/join → dashboard.html` rewrite to make the real route reachable.
     SignupPage,
     FirstRunCard,
+    // Lot status tab and the Lookup page (task F7) - mounted standalone by
+    // tests/e2e/lot-status.spec.ts against a served JSON contract.
+    LotStatusTab,
+    PlateLookupPage,
     ALPRPropertyDetailPage: {
       load: () => import('./pages/ALPRPropertyDetailPage.jsx').then((m) => m.default),
     },

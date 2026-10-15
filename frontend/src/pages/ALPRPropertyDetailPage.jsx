@@ -24,6 +24,9 @@ import { lazyPage } from '../lib/lazyPage.js';
 import { RequestsSection } from './property/RequestsSection.jsx';
 import { lockedChips } from '../lib/upsell.js';
 import { UpsellPanel } from './property/UpsellPanel.jsx';
+import { LotStatusTab } from './lot/LotStatusTab.jsx';
+import { withLotStatusChip, rowTarget } from '../lib/lotStatus.js';
+import { writeQueueQuery } from '../lib/permitsQueue.js';
 
 // Heavy — lazy-loaded so opening a property doesn't pull in the full
 // parking-log bundle before the operator ever scrolls to it.
@@ -219,7 +222,10 @@ function SightingStrip({ sightings, cameras, nowTick }) {
 // "🔒 Cameras". `lockedChips` (UpsellPanel.jsx) is the single source for
 // which of the three are locked; truck plazas never show them — every
 // truck-plaza property registers passes, by definition.
-export function sectionChipsFor(propertyType, features) {
+//
+// Lot status (task F7) is an apartment chip: first for a partner session, right
+// after Parking Passes for an owner or office session.
+export function sectionChipsFor(propertyType, features, { isPartner = false } = {}) {
   const isTruckPlaza = propertyType === 'truck_plaza';
   if (isTruckPlaza) {
     return [
@@ -236,7 +242,7 @@ export function sectionChipsFor(propertyType, features) {
   }
   const locked = lockedChips(features);
   const lockedById = new Map(locked.map(c => [c.id, c]));
-  return [
+  return withLotStatusChip([
     // Requests is first and default for an apartment (spec §5.2) — it is the
     // portal's whole point. A truck plaza has no office placing holds, so it
     // does not get the chip and keeps landing on the Parking Log.
@@ -244,7 +250,7 @@ export function sectionChipsFor(propertyType, features) {
     { id: 'all', label: 'All' },
     lockedById.get('log') || { id: 'log', label: 'Parking Passes' },
     ...locked.filter(c => c.id !== 'log'),
-  ];
+  ], { isPartner });
 }
 
 // Namespaced per property type: an apartment and a truck plaza have different
@@ -259,10 +265,13 @@ export function sectionStorageKey(propertyType) {
 // property's chip list is ignored outright. Apartments default to Requests —
 // the portal's whole point; truck plazas have no Requests chip and stay on the
 // Parking Log, the surface their operators actually use.
-export function resolveSectionFilter({ propertyType, features, initialSection, stored }) {
-  const ids = sectionChipsFor(propertyType, features).map(c => c.id);
+export function resolveSectionFilter({ propertyType, features, initialSection, stored, isPartner = false }) {
+  const ids = sectionChipsFor(propertyType, features, { isPartner }).map(c => c.id);
   if (initialSection && ids.includes(initialSection)) return initialSection;
   if (stored && ids.includes(stored)) return stored;
+  // A partner opens an apartment on its lot status: that is what the driver
+  // came to the property for.
+  if (isPartner && ids.includes('lotstatus')) return 'lotstatus';
   if (propertyType !== 'truck_plaza' && ids.includes('requests')) return 'requests';
   return 'log';
 }
@@ -367,8 +376,9 @@ export function ALPRPropertyDetailPage({
       features,
       initialSection,
       stored,
+      isPartner: user?._role === 'partner',
     }));
-  }, [property, features, initialSection]);
+  }, [property, features, initialSection, user?._role]);
   useEffect(() => {
     if (!sectionFilter || !property) return;
     try { localStorage.setItem(sectionStorageKey(property.property_type), sectionFilter); } catch { /* blocked storage */ }
@@ -378,7 +388,21 @@ export function ALPRPropertyDetailPage({
   // controls … the layout ships without the control, not with a disabled one."
   // The three owner surfaces below (the QR tiles, the add-plate form and the
   // plate list) are not behind a showSection of their own, so they need this.
-  const requestsOnly = sectionFilter === 'requests';
+  const requestsOnly = sectionFilter === 'requests' || sectionFilter === 'lotstatus';
+
+  // A Lot status row tap: a hold goes to Requests; a pass goes to the Parking
+  // Passes queue, searched for the plate (it reads `?status=&q=` as it mounts).
+  const openLotRow = useCallback((row, list) => {
+    const target = rowTarget(row, list);
+    if (target.section === 'log') {
+      try {
+        const { pathname, search, hash } = window.location;
+        window.history.replaceState(window.history.state, '', `${pathname}${writeQueueQuery(search, target)}${hash}`);
+      } catch { /* history blocked: the section still opens, unsearched */ }
+    }
+    setSectionFilter(target.section);
+    try { window.scrollTo(0, 0); } catch { /* ignore */ }
+  }, []);
 
   const loadAll = useCallback(async () => {
     if (!propertyId) return;
@@ -774,7 +798,7 @@ export function ALPRPropertyDetailPage({
         borderBottom: '1px solid var(--border-subtle, transparent)',
       }}>
         {(() => {
-          const chips = sectionChipsFor(property?.property_type, features);
+          const chips = sectionChipsFor(property?.property_type, features, { isPartner: user?._role === 'partner' });
           return chips.map(c => {
             const active = sectionFilter === c.id;
             const locked = c.locked === true;
@@ -821,6 +845,14 @@ export function ALPRPropertyDetailPage({
           user={user}
           onDismiss={() => setFirstRunDismissed(true)}
         />
+      )}
+
+      {/* Lot status (task F7): the state of the lot for the driver at the curb
+          and the office at the desk. Apartments only; never under All. */}
+      {sectionFilter === 'lotstatus' && !isTruckPlaza && (
+        <ErrorBoundary label="lot status">
+          <LotStatusTab propertyId={propertyId} propertyName={property?.name || ''} onOpenRow={openLotRow} />
+        </ErrorBoundary>
       )}
 
       {/* Requests — the portal's home (spec §5.2). Rendered before every

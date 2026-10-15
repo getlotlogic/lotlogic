@@ -48,8 +48,11 @@ const TARGET_FILES = [
   // live in.
   'src/pages/ApartmentPermits.jsx',
   'src/lib/permitsQueue.js',
+  // State of the lot (task F7): the pure half and the folder holding the tab
+  // and the timeline.
+  'src/lib/lotStatus.js',
 ];
-const TARGET_DIRS = ['src/pages/property', 'src/pages/permits'];
+const TARGET_DIRS = ['src/pages/property', 'src/pages/permits', 'src/pages/lot'];
 
 function exists(abs) {
   try { statSync(abs); return true; } catch { return false; }
