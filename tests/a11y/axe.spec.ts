@@ -22,7 +22,7 @@ import {
   apiSignup, apiVerify, apiCreateRequest, apiConfirmProperty, apiToken, api, mintActionToken,
 } from '../fixtures/portal';
 import {
-  seedResidentApartment, openResidentFlow, toFirstVehicle, vehicleAndDocumentsToReview, upload, photo, seedApartmentGroup,
+  seedResidentApartment, openResidentFlow, toFirstVehicle, vehicleAndDocumentsToReview, fillVehicle, upload, photo, seedApartmentGroup,
 } from '../fixtures/aptFlow';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -322,6 +322,29 @@ test.describe('accessibility @a11y', () => {
     await page.getByRole('button', { name: 'Send for review' }).click();
     await expect(page.getByRole('heading', { name: 'Request received' })).toBeVisible({ timeout: 20_000 });
     await scan(page, 'apt-s6-request-received');
+  });
+
+  // Task F8 — S4 for a property that does not ask for the lease: the ID card alone, with its own title.
+  test('apartment request S4, ID only, has no serious a11y violations @portal', async ({ page }) => {
+    test.skip(!PORTAL_E2E, 'needs the local backend and harness database (PORTAL_E2E=1)');
+    const apartment = await seedResidentApartment({ requireLease: false });
+    test.skip(!apartment.hasLeaseColumn, 'the harness database lacks properties.require_lease (backend task B5)');
+    await openResidentFlow(page, apartment);
+    await page.goto(`/apt/${apartment.slug}?role=resident`);
+    await toFirstVehicle(page);
+    await page.getByLabel('License plate').fill(randomPlate());
+    await fillVehicle(page);
+    await upload(page, 'card-plate-v1', photo('plate.png', [40, 60, 90]));
+    if (apartment.hasRules) await upload(page, 'card-registration-v1', photo('registration.png', [200, 190, 170]));
+    await page.getByRole('button', { name: 'Continue' }).click();
+    const no = page.getByLabel('No', { exact: true });
+    if (await no.count()) await no.check();
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.getByRole('heading', { name: 'Your ID', exact: true })).toBeVisible();
+    await scan(page, 'apt-s4-id-only');
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.locator('#errorSummary')).toContainText('Add a photo of your ID');
+    await scan(page, 'apt-s4-id-only-errors');
   });
 
   // Task F5a — the short-term form gained the make, model and color. The whole page is scanned,

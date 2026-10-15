@@ -32,7 +32,7 @@ export function EvidenceCard({ row, card, onZoom }) {
 
   let body;
   if (!card.present) {
-    body = <p className="pq-well-note">Not provided</p>;
+    body = <p className="pq-well-note">{card.notRequired ? 'Not required' : 'Not provided'}</p>;
   } else if (doc.status === 'error') {
     body = (
       <div className="pq-well-note">
@@ -63,7 +63,7 @@ export function EvidenceCard({ row, card, onZoom }) {
   }
 
   return (
-    <article ref={ref} className={`pq-card${card.present ? '' : ' is-missing'}`} aria-labelledby={titleId}>
+    <article ref={ref} className={`pq-card${card.present || card.notRequired ? '' : ' is-missing'}`} aria-labelledby={titleId}>
       <h4 id={titleId} className="pq-card-title">{card.title}</h4>
       <ul className="pq-should">
         {card.should.map(line => <li key={line}>{line}</li>)}

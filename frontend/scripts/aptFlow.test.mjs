@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import {
   STRINGS, TTL_MS, storageKey, emptyFlow, addVehicle, removeVehicle,
   parseStep, resolveStep, nextStep, prevStep, stepCaption,
-  vehicleCap, canAddVehicle, requiresRegistration,
+  vehicleCap, canAddVehicle, requiresRegistration, requiresLease, startNeeds, documentSlots,
   formatPhone, phoneToE164, validateField, validateStep,
   slotId, fieldId, cardId, docRefs, docState, docKeyValid,
   serializeFlow, restoreFlow, receiptFlow,
@@ -1225,4 +1225,66 @@ test('apt.js offers the office phone in one place only: the content-blocker pane
     .filter((line) => line && !/^(\/\/|\/\*|\*)/.test(line))
     .filter((line) => /officePhone|officeTel|telLink|policy_phone|tel:|ICONS\.phone|\.call\(|Questions\? Call/.test(line));
   assert.deepEqual(offered, [], 'the office phone is offered somewhere other than the content-blocker panel');
+});
+
+
+// ── Task F8 — no lease upload when the property says so (spec 10) ───────────
+
+const NOLEASE = { ...CTX, requireLease: false };
+
+test('F8: requiresLease defaults to true: missing column, NULL, no property; only false turns it off', () => {
+  assert.equal(requiresLease(null), true);
+  assert.equal(requiresLease({}), true);
+  assert.equal(requiresLease({ require_lease: null }), true);
+  assert.equal(requiresLease({ require_lease: true }), true);
+  assert.equal(requiresLease({ require_lease: false }), false);
+});
+
+test('F8: docRefs omits the lease slot only when the flag is false', () => {
+  const f = completeFlow();
+  assert.ok('lease' in docRefs(f, CTX));
+  assert.ok('lease' in docRefs(f, { ...CTX, requireLease: true }));
+  assert.ok(!('lease' in docRefs(f, NOLEASE)));
+  assert.deepEqual(Object.keys(docRefs(f, NOLEASE)).sort(), ['id', 'plate:v1', 'registration:v1', 'vehicle:v1']);
+});
+
+test('F8: S1 "You will need" drops the lease line when not required', () => {
+  assert.ok(startNeeds(CTX).includes(S.start.needLease));
+  assert.ok(startNeeds({ requireLease: true }).includes(S.start.needLease));
+  assert.ok(!startNeeds(NOLEASE).includes(S.start.needLease));
+  assert.deepEqual(startNeeds({ requireLease: false }), [S.start.needPlate, S.start.needId]);
+});
+
+test('F8: S4 and S5 document slots', () => {
+  assert.deepEqual(documentSlots(CTX), ['id', 'lease']);
+  assert.deepEqual(documentSlots(NOLEASE), ['id']);
+});
+
+test('F8: S4 does not ask for a lease when not required, and still asks for the ID', () => {
+  const f = completeFlow();
+  f.docs = { id: null, lease: null };
+  assert.deepEqual(validateStep('documents', f, NOLEASE), [{ field: 'card-id', message: 'Add a photo of your ID' }]);
+  f.docs.id = ref('id');
+  assert.deepEqual(validateStep('documents', f, NOLEASE), []);
+  assert.deepEqual(validateStep('documents', f, CTX), [{ field: 'card-lease', message: 'Add your lease' }]);
+});
+
+test('F8: S5 does not block the send on a missing lease when not required', () => {
+  const f = completeFlow();
+  f.docs.lease = null;
+  assert.deepEqual(validateStep('review', f, NOLEASE), []);
+  assert.deepEqual(validateStep('review', f, CTX).map((e) => e.message), ['Add your lease']);
+});
+
+test('F8: the id-only strings', () => {
+  assert.equal(S.documents.titleIdOnly, 'Your ID');
+  assert.equal(S.documents.introIdOnly, "The property office and its parking enforcement company use this to confirm you're on the lease for this unit and that the cars are yours.");
+  assert.equal(S.start.ruleLeaseholders, 'Only leaseholders can hold a long-term parking pass.');
+});
+
+test('F8: the receipt carries no document of either kind', () => {
+  const f = completeFlow();
+  const r = receiptFlow(f, { now: NOW, refs: { v1: '8F3E2A1D' }, registrationSent: {} });
+  assert.deepEqual(r.docs, { id: null, lease: null });
+  assert.ok(!JSON.stringify(r.receipt).toLowerCase().includes('lease'));
 });

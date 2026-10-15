@@ -87,6 +87,7 @@ export function ApartmentPermits({ property }) {
   const propertyName = property?.name || '';
   const cap = capOf(property);
   const requireRegistration = property?.require_vehicle_registration === true;
+  const requireLease = property?.require_lease !== false;
   const { addToast } = useToast();
   const now = useNowTick();
   const isWide = useMediaQuery(WIDE_QUERY);
@@ -305,8 +306,8 @@ export function ApartmentPermits({ property }) {
   const closeDocView = useCallback(() => setDocView(null), []);
   const closeFeedback = useCallback(() => setFeedbackOpen(false), []);
   const openDeny = useCallback((row, { viaOverLimit = false } = {}) => {
-    setSheet({ type: 'deny', key: row.key, initialReason: initialDenyReason(row, { viaOverLimit, requireRegistration }) });
-  }, [requireRegistration]);
+    setSheet({ type: 'deny', key: row.key, initialReason: initialDenyReason(row, { viaOverLimit, requireRegistration, requireLease }) });
+  }, [requireRegistration, requireLease]);
 
   const onStale = useCallback((text) => {
     pendingFocus.current = { to: 'segment', onlyIfLost: true };
@@ -366,6 +367,7 @@ export function ApartmentPermits({ property }) {
     selected: (isWide || phoneOpen) && row.key === selectedKey,
     overLimit: overKeys.has(row.key),
     cap,
+    requireLease,
     ageChip: ageChip(row, now),
     showThumb,
     showUnit,
@@ -436,6 +438,7 @@ export function ApartmentPermits({ property }) {
         headingRef={headingRef}
         propertyName={propertyName}
         cap={cap}
+        requireLease={requireLease}
         overLimit={overKeys.has(selectedRow.key)}
         ageChip={ageChip(selectedRow, now)}
         unitChip={unitChip}

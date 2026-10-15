@@ -48,9 +48,9 @@
  * throwaway Postgres only. Without PORTAL_E2E=1 every test here is reported as
  * skipped, never failed.
  */
-import { test, expect, skipUnlessPortal, frontendOrigin, sql, lit, PRODUCTION_API, pointAtLocalBackend } from '../fixtures/portal';
+import { test, expect, skipUnlessPortal, frontendOrigin, sql, lit, PRODUCTION_API, pointAtLocalBackend, randomPlate } from '../fixtures/portal';
 import {
-  seedResidentApartment, openResidentFlow, toFirstVehicle, vehicleAndDocumentsToReview, fillVehicle,
+  seedResidentApartment, openResidentFlow, toFirstVehicle, upload, vehicleAndDocumentsToReview, fillVehicle,
   photo, VEHICLE, vehicleLine, RESIDENT, OFFICE_PHONE, expectNoOfficePhone, seedApartmentGroup,
 } from '../fixtures/aptFlow';
 
@@ -74,6 +74,8 @@ test.describe('apartment long-term request @portal', () => {
     await expect(page.locator('.property-name')).toContainText(apartment.name);
 
     // S1: Start with no answer → the error summary, focused; answering clears it.
+    // The flag is true (the default): the lease is on the list of what to have ready.
+    await expect(page.locator('.flow')).toContainText('A copy or photo of your lease');
     await page.getByRole('button', { name: 'Start' }).click();
     const summary = page.locator('#errorSummary');
     await expect(summary).toBeFocused();
@@ -518,6 +520,76 @@ test.describe('apartment long-term request @portal', () => {
     await expect(panel).toHaveText(`Something is blocking this page from sending. Turn off content blockers for this site, or call ${OFFICE_PHONE.shown}.`);
     await expect(panel.locator('a')).toHaveAttribute('href', `tel:${OFFICE_PHONE.stored}`);
     await expect(panel.locator('a')).toHaveText(OFFICE_PHONE.shown);
+  });
+});
+
+// Task F8, spec 10: a property that does not ask for the lease. The resident gives an ID,
+// the registration card and the photo of the plate, and reaches the receipt; the lease
+// appears on no screen and goes nowhere.
+test.describe('apartment without a lease upload @portal', () => {
+  test.beforeEach(() => {
+    skipUnlessPortal();
+  });
+
+  test('require_lease = false: S1 to the receipt with an ID and no lease', async ({ page }) => {
+    const apartment = await seedResidentApartment({ requireLease: false });
+    test.skip(!apartment.hasLeaseColumn, 'the harness database lacks properties.require_lease (backend task B5)');
+    const uploads = await openResidentFlow(page, apartment);
+    const registerCalls: Record<string, unknown>[] = [];
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && r.url().endsWith('/resident_plates/register')) registerCalls.push(JSON.parse(r.postData() ?? '{}'));
+    });
+
+    await page.goto(`${frontendOrigin()}/apt/${apartment.slug}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    // S1: the rules are untouched, the lease is not on the list.
+    await expect(page.locator('.flow')).toContainText('Only leaseholders can hold a long-term parking pass.');
+    await expect(page.locator('.flow')).not.toContainText('A copy or photo of your lease');
+    await expect(page.locator('.flow')).toContainText('Photo ID');
+    await toFirstVehicle(page);
+
+    const plate = await vehicleAndDocumentsToReview(page, apartment);
+    // S5: an ID row, no lease row.
+    await expect(page.locator('#review-id')).toBeVisible();
+    await expect(page.locator('#review-lease')).toHaveCount(0);
+    await expect(page.locator('.summary').last()).not.toContainText('Lease');
+    expect(uploads.map((u) => u.kind)).not.toContain('lease');
+    expect(uploads.map((u) => u.kind)).toContain('id');
+
+    await page.getByRole('button', { name: 'Send for review' }).click();
+    await expect(page.getByRole('heading', { name: 'Request received' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.receipt')).not.toContainText('lease');
+    expect(registerCalls[0].lease_doc_url ?? null).toBeNull();
+    const row = sql(`SELECT id_doc_url IS NOT NULL, lease_doc_url IS NULL, plate_photo_url IS NOT NULL, status
+                       FROM public.resident_plates
+                      WHERE property_id = ${lit(apartment.propertyId)} AND plate_text = ${lit(plate)}`);
+    expect(row).toEqual([['t', 't', 't', 'pending']]);
+  });
+
+  test('S4 asks for the ID only, in the id-only words, and Continue wants nothing else', async ({ page }) => {
+    const apartment = await seedResidentApartment({ requireLease: false });
+    test.skip(!apartment.hasLeaseColumn, 'the harness database lacks properties.require_lease (backend task B5)');
+    await openResidentFlow(page, apartment);
+    await page.goto(`${frontendOrigin()}/apt/${apartment.slug}?role=resident`);
+    await toFirstVehicle(page);
+    await page.getByLabel('License plate').fill(randomPlate());
+    await fillVehicle(page);
+    await upload(page, 'card-plate-v1', photo('plate.png', [40, 60, 90]));
+    if (apartment.hasRules) await upload(page, 'card-registration-v1', photo('registration.png', [200, 190, 170]));
+    await page.getByRole('button', { name: 'Continue' }).click();
+    const no = page.getByLabel('No', { exact: true });
+    if (await no.count()) await no.check();
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.getByRole('heading', { name: 'Your ID', exact: true })).toBeVisible();
+    await expect(page.locator('.intro')).toHaveText(
+      "The property office and its parking enforcement company use this to confirm you're on the lease for this unit and that the cars are yours.",
+    );
+    await expect(page.locator('#card-id')).toBeVisible();
+    await expect(page.locator('#card-lease')).toHaveCount(0);
+    await expect(page).toHaveTitle(/^Your ID/);
+    // Continue with no ID → one error, the ID's.
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.locator('#errorSummary li')).toHaveText(['Add a photo of your ID']);
   });
 });
 
