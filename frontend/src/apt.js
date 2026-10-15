@@ -1019,6 +1019,8 @@ function renderReceived() {
       ${v.registrationSent ? '' : `<p class="receipt-note">${esc(S.received.registrationNotSent)}</p>`}
       ${v.vehiclePhotoSent === false ? `<p class="receipt-note">${esc(S.received.vehiclePhotoNotSent)}</p>` : ''}
     </li>`).join('');
+  // The address in bold, so a typo is easy to spot (GOV.UK's confirmation page does the same).
+  const [emailedBefore, emailedAfter] = S.received.emailed('\u0000').split('\u0000');
   app.innerHTML = `
     ${topBar()}
     <div class="flow" data-step="received">
@@ -1040,6 +1042,7 @@ function renderReceived() {
           <a class="btn-secondary call-btn" href="tel:${esc(officeTel())}">${ICONS.phone}<span>${esc(S.received.call(phone))}</span></a>
         </section>` : ''}
       <section class="keep">
+        ${r.email ? `<p class="receipt-email">${esc(emailedBefore)}<strong>${esc(r.email)}</strong>${esc(emailedAfter)}</p>` : ''}
         <p>${esc(S.received.keep)}</p>
         <button type="button" class="btn-secondary" id="copyRefBtn">${esc(S.received.copy(r.vehicles.length))}</button>
       </section>

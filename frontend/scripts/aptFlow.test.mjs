@@ -516,12 +516,13 @@ test('restore keeps at least one vehicle so S3 always has something to show', ()
   assert.equal(f.vehicles.length, 1);
 });
 
-test('the receipt keeps plates, references and the time, and forgets the answers and keys', () => {
+test('the receipt keeps plates, references, the time and the email, and forgets the answers and keys', () => {
   const f = receiptFlow(completeFlow(), { now: NOW, refs: { v1: '8f3e2a1d' }, registrationSent: { v1: false } });
   assert.equal(f.step, 'received');
   assert.deepEqual(f.receipt, {
     submittedAt: NOW,
     unit: '214',
+    email: 'jane@example.com',
     vehicles: [{ plate: 'ABC1234', ref: '8F3E2A1D', registrationSent: false, vehiclePhotoSent: null }],
   });
   assert.equal(f.name, '');
@@ -533,15 +534,33 @@ test('the receipt keeps plates, references and the time, and forgets the answers
   assert.equal(resolveStep(back.step, back), 'received');
 });
 
-test('a reloaded receipt still says which vehicle photo did not go', () => {
+test('a reloaded receipt still says where the email went and which vehicle photo did not go', () => {
   const f = completeFlow();
   f.vehicles.push({ ...f.vehicles[0], vid: 'v2', plate: 'XYZ 789' });
   const sent = receiptFlow(f, {
     now: NOW, refs: { v1: '8F3E2A1D', v2: '1a2b3c4d' }, registrationSent: { v1: true, v2: true }, vehiclePhotoSent: { v1: true, v2: false },
   });
+  assert.equal(sent.receipt.email, 'jane@example.com');
   assert.deepEqual(sent.receipt.vehicles.map((v) => v.vehiclePhotoSent), [true, false]);
   const back = restoreFlow(serializeFlow(sent, { now: NOW, propertyId: PID }), { now: NOW + 60_000, propertyId: PID });
   assert.deepEqual(back.receipt, sent.receipt);
+});
+
+test('the saved receipt is cleaned: a malformed email is dropped, unknown fields are not kept', () => {
+  const sent = receiptFlow(completeFlow(), { now: NOW, refs: { v1: '8F3E2A1D' }, registrationSent: { v1: true } });
+  const raw = JSON.parse(serializeFlow(sent, { now: NOW, propertyId: PID }));
+  raw.flow.receipt.email = 'not an email<script>';
+  raw.flow.receipt.name = 'Jane Smith';
+  raw.flow.receipt.vehicles[0].vehiclePhotoSent = 'nope';
+  raw.flow.receipt.vehicles[0].idKey = key('id');
+  const back = restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID });
+  assert.equal(back.receipt.email, '');
+  assert.deepEqual(Object.keys(back.receipt).sort(), ['email', 'submittedAt', 'unit', 'vehicles']);
+  assert.deepEqual(back.receipt.vehicles[0], { plate: 'ABC1234', ref: '8F3E2A1D', registrationSent: true, vehiclePhotoSent: null });
+  raw.flow.receipt.email = 'x'.repeat(250) + '@example.com';
+  assert.equal(restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID }).receipt.email, '', 'longer than an address can be');
+  delete raw.flow.receipt.email;
+  assert.equal(restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID }).receipt.email, '', 'a receipt saved before the email line');
 });
 
 // ── restored uploads ────────────────────────────────────────────────────────
@@ -789,6 +808,13 @@ test('the two status phrases are the constraints\' wording', () => {
   assert.equal(S.received.status, 'Pending approval');
   assert.equal(S.received.protected, 'Protected from towing while the office reviews your request (up to 72 hours).');
   assert.match(S.start.ruleReview, /protected from towing while the office reviews your request \(up to 72 hours\)/);
+});
+
+test('S6 says where the emailed copy went, verbatim, and still asks to save the page', () => {
+  assert.equal(S.received.emailed('jane@example.com'),
+    "We emailed a copy of this receipt to jane@example.com from dispatch@lotlogicparking.com. Check your spam folder if you don't see it.");
+  assert.match(S.received.keep, /^Save or screenshot this page\./);
+  assert.equal(S.about.emailHint, "We'll email your receipt here.");
 });
 
 test('the vehicle photo card says what to take and why, and that it is optional', () => {

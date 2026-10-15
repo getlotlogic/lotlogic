@@ -85,7 +85,7 @@ export const STRINGS = {
       phoneLabel: 'Mobile phone',
       phoneHint: 'Only used if the office has a question about this request.',
       emailLabel: 'Email',
-      emailHint: 'The office uses this to contact you about this request.',
+      emailHint: "We'll email your receipt here.",
       errorName: 'Enter your full name',
       errorUnit: 'Enter your unit number',
       errorPhone: 'Enter a phone number, like (704) 555-0123',
@@ -251,6 +251,7 @@ export const STRINGS = {
       ],
       contactHeading: 'Questions? Call the office.',
       call: (phone) => `Call ${phone}`,
+      emailed: (email) => `We emailed a copy of this receipt to ${email} from dispatch@lotlogicparking.com. Check your spam folder if you don't see it.`,
       keep: 'Save or screenshot this page. The reference is what the office and the tow company will ask for.',
       copy: (count) => (Number(count) > 1 ? 'Copy references' : 'Copy reference'),
       copied: (count) => (Number(count) > 1 ? 'References copied' : 'Reference copied'),
@@ -623,6 +624,7 @@ const oneOf = (v, allowed) => (allowed.includes(v) ? v : null);
 const REF_RE = /^[0-9A-F]{8}$/;
 const cleanRefId = (v) => (typeof v === 'string' && REF_RE.test(v.toUpperCase()) ? v.toUpperCase() : null);
 const flag = (v) => (typeof v === 'boolean' ? v : null);
+const cleanEmail = (v) => (typeof v === 'string' && v.length <= MAX.email && EMAIL_RE.test(v) ? v : '');
 
 function pickDoc(ref) {
   if (!ref || typeof ref !== 'object' || typeof ref.key !== 'string' || !ref.key) return null;
@@ -651,7 +653,7 @@ function cleanReceipt(r) {
       vehiclePhotoSent: flag(v.vehiclePhotoSent),
     }));
   if (!vehicles.length) return null;
-  return { submittedAt: r.submittedAt, unit: str(r.unit, MAX.unit), vehicles };
+  return { submittedAt: r.submittedAt, unit: str(r.unit, MAX.unit), email: cleanEmail(r.email), vehicles };
 }
 
 /** Only the answers and the upload keys — never file bytes, previews or anything unknown. */
@@ -745,7 +747,8 @@ export function restoreFlow(raw, { now, propertyId, ttlMs = TTL_MS }) {
 
 /**
  * The flow once every vehicle is sent: the receipt (plates, references, time,
- * unit) and nothing else — the answers and the document keys are forgotten.
+ * unit, and the email the backend sent its copy to) and nothing else — the
+ * other answers and the document keys are forgotten.
  * @param {{now: number, refs: Record<string,string>, registrationSent: Record<string,boolean>,
  *          vehiclePhotoSent?: Record<string,boolean|null>}} sent
  */
@@ -759,7 +762,7 @@ export function receiptFlow(flow, { now, refs, registrationSent, vehiclePhotoSen
   return {
     ...emptyFlow(),
     step: 'received',
-    receipt: { submittedAt: now, unit: flow.unit.trim(), vehicles },
+    receipt: { submittedAt: now, unit: flow.unit.trim(), email: cleanEmail(flow.email.trim()), vehicles },
   };
 }
 
