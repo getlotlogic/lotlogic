@@ -22,7 +22,7 @@ import {
   apiSignup, apiVerify, apiCreateRequest, apiConfirmProperty, apiToken, api, mintActionToken,
 } from '../fixtures/portal';
 import {
-  seedResidentApartment, openResidentFlow, toFirstVehicle, vehicleAndDocumentsToReview, upload, photo,
+  seedResidentApartment, openResidentFlow, toFirstVehicle, vehicleAndDocumentsToReview, upload, photo, seedApartmentGroup,
 } from '../fixtures/aptFlow';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -289,6 +289,15 @@ test.describe('accessibility @a11y', () => {
   // document cards, after a photo uploaded) and S6 (the receipt). The page
   // reads its property row and sends the request through the local backend
   // (fixtures/aptFlow.ts), so this runs only under the portal suite.
+  test('the group link\'s "Which address are you at?" has no serious a11y violations @portal', async ({ page }) => {
+    test.skip(!PORTAL_E2E, 'needs the local backend and harness database (PORTAL_E2E=1)');
+    const { group, members } = await seedApartmentGroup(3);
+    await openResidentFlow(page, members[0]);
+    await page.goto(`/apt/${group}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Which address are you at?' })).toBeVisible();
+    await scan(page, 'apt-s0-which-address');
+  });
+
   test('apartment request S1, S3 and S6 have no serious a11y violations @portal', async ({ page }) => {
     test.skip(!PORTAL_E2E, 'needs the local backend and harness database (PORTAL_E2E=1)');
     const apartment = await seedResidentApartment();

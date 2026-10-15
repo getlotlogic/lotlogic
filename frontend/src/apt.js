@@ -28,6 +28,7 @@ import {
   pgRest, backendRegister, getRecaptchaToken, friendlyErrorMessage,
   escapeHtml, showNotFound, showConnectionError, normalizePlate, normalizePhone,
   newIdempotencyKey, propertyQuery, logoHtml, BACKEND_URL, initialScreenForRole, aptEntryUrl,
+  groupQuery, groupRows, isGroup, groupEntryUrl,
 } from './shared/register.js';
 import {
   STRINGS, storageKey, emptyFlow, addVehicle, removeVehicle, findVehicle,
@@ -51,7 +52,7 @@ const app = document.getElementById('app');
 // QR code id comes from /apt/<qr> in the URL, but we also accept ?qr=<id> so a
 // shared / emailed link like /apt.html?qr=... still works.
 const pathParts = window.location.pathname.split('/').filter(Boolean);
-const qrCodeId = (pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null)
+let qrCodeId = (pathParts.length >= 2 ? pathParts[pathParts.length - 1] : null)
   || new URLSearchParams(window.location.search).get('qr');
 
 // The two rule columns are read with the rest; before the backend migration
@@ -134,6 +135,8 @@ async function init() {
     const rows = await loadPropertyRow();
     const data = Array.isArray(rows) ? rows[0] : null;
     if (!data) {
+      // Not a property: it may be a group's link (spec 9, Task F6).
+      if (await tryGroup()) return;
       showNotFound('Property not found', 'This registration link is not valid or has expired.');
       return;
     }
@@ -145,6 +148,57 @@ async function init() {
     console.error('init error:', err);
     showConnectionError(err, init);
   }
+}
+
+// /apt/<group>: the siblings under `<group>-`. Several: S0, the person picks. One: straight to
+// it. None: false, and the caller shows the unknown-property state. Either way what follows is
+// the boot a direct visit to /apt/<that slug> takes: the URL is rewritten and init() runs again.
+async function tryGroup() {
+  const path = groupQuery(qrCodeId);
+  if (!path) return false;
+  const rows = await pgRest(path);
+  const siblings = groupRows(rows, qrCodeId);
+  if (siblings.length === 1) {
+    enterProperty(siblings[0].slug);
+    return true;
+  }
+  if (!isGroup(rows, qrCodeId)) return false;
+  renderPick(siblings);
+  return true;
+}
+
+function enterProperty(slug) {
+  const url = groupEntryUrl(slug, window.location.search);
+  try {
+    window.history.replaceState(null, '', url);
+  } catch { /* no history (a sandboxed frame): the page carries on from the slug alone */ }
+  qrCodeId = slug;
+  init();
+}
+
+// ── S0 which address ────────────────────────────────────────────────────────
+function renderPick(siblings) {
+  const role = initialScreenForRole(window.location.search);
+  const lead = role === 'resident' ? S.pick.resident : role === 'guest' ? S.pick.guest : '';
+  app.innerHTML = `
+    ${logoHtml()}
+    <section class="flow pick" aria-labelledby="stepTitle">
+      <h1 class="flow-h1" id="stepTitle" tabindex="-1">${esc(S.pick.title)}</h1>
+      ${lead ? `<p class="pick-lead">${esc(lead)}</p>` : ''}
+      <ul class="pick-list" aria-label="${esc(S.pick.listLabel)}">
+        ${siblings.map((p, i) => `
+        <li><button type="button" class="choice-btn pick-btn" data-slug="${esc(p.slug)}" data-index="${i}">
+          <span><span class="choice-title">${esc(p.name)}</span>${p.address ? `<span class="sub">${esc(p.address)}</span>` : ''}</span>
+          <span class="arrow" aria-hidden="true">→</span>
+        </button></li>`).join('')}
+      </ul>
+      <p class="pick-office">${esc(S.pick.office)}</p>
+    </section>
+  `;
+  app.querySelectorAll('.pick-btn').forEach((btn) => {
+    btn.addEventListener('click', () => enterProperty(btn.getAttribute('data-slug')));
+  });
+  document.title = `${S.pick.title} – ${S.titleSuffix}`;
 }
 
 async function loadPropertyRow() {
