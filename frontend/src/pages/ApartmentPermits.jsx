@@ -1,398 +1,538 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { fmtPassRemaining } from '../lib/time.js';
-import { fmtTime } from '../lib/format.js';
-import { API, apiFetch, getSessionToken } from '../lib/api.js';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { apiFetch } from '../lib/api.js';
 import { useNowTick } from '../hooks.js';
 import { useToast } from '../ui/Toast.jsx';
-import { useFocusTrap, useUid } from '../ui/focusTrap.js';
 import { FeedbackModal } from '../ui/FeedbackModal.jsx';
+import { SkeletonCards } from '../ui/Skeletons.jsx';
+import {
+  SEGMENTS,
+  actionError,
+  actionPath,
+  ageChip,
+  allCaughtUpLine,
+  approvedPatch,
+  approvedVehicleCount,
+  capChip,
+  capOf,
+  createDocCache,
+  decidedRows,
+  initialDenyReason,
+  isLongTerm,
+  nextPendingKey,
+  normalizeUnit,
+  overLimitKeys,
+  patchRows,
+  plateText,
+  queueRows,
+  readQueueQuery,
+  registrationLink,
+  reviewGroups,
+  segmentCounts,
+  segmentOf,
+  serverPatch,
+  unitLabel,
+  unitTally,
+  unitText,
+  writeQueueQuery,
+} from '../lib/permitsQueue.js';
+import { DocCacheContext, fetchDocBlob, useMediaQuery } from './permits/docs.js';
+import { DocViewerModal } from './permits/DocViewerModal.jsx';
+import { QueueRow } from './permits/QueueRow.jsx';
+import { RequestDetail } from './permits/RequestDetail.jsx';
+import { DenySheet, ExtendPassSheet, VoidSheet } from './permits/sheets.jsx';
+import { Tag } from './permits/parts.jsx';
 
-// ── Apartment permit registry (M3) ───────────────────────────
-// Leasing-office / partner view for an apartment property: a pending
-// approval queue (residents + guests) with PII document viewers, plus
-// active resident / guest rosters with extend + void controls.
+// ── The manager's approval queue (Passes tab, task F4) ───────
 //
-// Doc bytes are PII and auth-gated, so an <img src> can't carry the
-// bearer token. We fetch the doc to a blob with an explicit Authorization
-// header (token via the shared getSessionToken helper), make an object URL,
-// open it, and revoke the URL afterward so it doesn't leak.
-async function fetchDocBlob(kind, id, which) {
-  const token = getSessionToken();
-  const res = await fetch(`${API}/apartment/docs/${kind}/${id}/${which}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (res.status === 401) {
-    // Match apiFetch: dead session → clear it and bounce to login, don't just toast.
-    try { localStorage.removeItem('lotlogic_session'); } catch {}
-    window.dispatchEvent(new CustomEvent('lotlogic:auth-expired'));
-  }
-  if (!res.ok) {
-    let msg = `Could not load document (${res.status})`;
-    try { const b = await res.json(); if (b.detail) msg = b.detail; } catch {}
-    throw new Error(msg);
-  }
-  return res.blob();
+// Needs review / Approved / Denied over the whole permits payload, a plate-or-
+// unit search, requests grouped by unit against the property's vehicle cap,
+// each request's documents inline beside the values they prove, one-tap
+// Approve (optimistic; the row comes back if the server says no), Deny through
+// a reason sheet that previews the email, and Void / Extend behind a "More
+// actions" menu with real confirms. The pure rules live in
+// `lib/permitsQueue.js` (scripts/permitsQueue.test.mjs).
+//
+// Layout: at 1024 px and up a 360 px list beside a sticky detail pane; below
+// that the detail replaces the list, pushed onto history so the browser or
+// hardware Back closes it. `?status=&q=` keep the segment and search across a
+// refresh.
+
+const WIDE_QUERY = '(min-width: 1024px)';
+
+// The detail's top (its Back control) to the top of the screen. The app
+// header does not stick today (see the .pq-layout note in dashboard.html), but
+// if it ever does, step back out from under it.
+function scrollDetailIntoView(heading) {
+  const detail = heading?.closest('.pq-detail');
+  if (!detail) return;
+  try {
+    detail.scrollIntoView({ block: 'start' });
+    const header = document.querySelector('.header');
+    const overlap = header ? header.getBoundingClientRect().bottom - detail.getBoundingClientRect().top : 0;
+    window.scrollBy(0, overlap > 0 ? -(overlap + 8) : -8);
+  } catch { /* ignore */ }
 }
 
-
-// ── In-page PII document viewer ──────────────────────────────
-// Renders an already-fetched (authed) blob INLINE rather than opening a new tab.
-// `window.open(blob:, '_blank', 'noopener')` is unreliable on mobile Safari
-// (leasing / N Style on phones) — with noopener it frequently refuses blob:
-// URLs and lands on a blank tab. The authed fetch-to-blob already happened in
-// the caller, so we just render the resulting object URL here: images via <img>,
-// PDFs via <iframe>. The object URL is revoked when the modal closes. Reuses the
-// overlay + focus-trap pattern from FeedbackModal.
-function DocViewerModal({ blob, label, onClose }) {
-  const dialogRef = useRef(null);
-  const titleId = useUid('doc-title');
-  useFocusTrap(dialogRef, true, onClose);
-
-  const [objectUrl, setObjectUrl] = useState(null);
-  useEffect(() => {
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    setObjectUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [blob]);
-
-  const isPdf = (blob?.type || '').includes('pdf');
-
-  return (
-    <div
-      onClick={onClose}
-      style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:1100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        onClick={e => e.stopPropagation()}
-        style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:12,padding:12,maxWidth:920,width:'100%',maxHeight:'92vh',display:'flex',flexDirection:'column',outline:'none'}}
-      >
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,gap:12}}>
-          <div id={titleId} style={{fontSize:15,fontWeight:800,color:'var(--text-primary)'}}>{label || 'Document'}</div>
-          <div style={{display:'flex',gap:8}}>
-            {objectUrl && (
-              <a href={objectUrl} download className="pd-share-btn" style={{textDecoration:'none'}}>Download</a>
-            )}
-            <button onClick={onClose} className="pd-share-btn">Close</button>
-          </div>
-        </div>
-        <div style={{flex:1,minHeight:0,overflow:'auto',background:'var(--bg-inset)',border:'1px solid var(--border)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          {!objectUrl ? (
-            <div style={{padding:24,fontSize:13,color:'var(--text-faint)'}}>Loading…</div>
-          ) : isPdf ? (
-            <iframe src={objectUrl} title={label || 'Document'} sandbox="" style={{width:'100%',height:'80vh',border:'none',borderRadius:6}} />
-          ) : (
-            <img src={objectUrl} alt={label || 'Document'} style={{maxWidth:'100%',maxHeight:'80vh',objectFit:'contain',display:'block'}} />
-          )}
-        </div>
-      </div>
-    </div>
-  );
+function replaceQuery(state) {
+  try {
+    const { pathname, search, hash } = window.location;
+    const next = writeQueueQuery(search, state);
+    if (next !== search) window.history.replaceState(window.history.state, '', `${pathname}${next}${hash}`);
+  } catch { /* history blocked: the view still works, it just will not survive a refresh */ }
 }
 
 export function ApartmentPermits({ property }) {
   const propertyId = property?.id;
+  const propertyName = property?.name || '';
+  const cap = capOf(property);
+  const requireRegistration = property?.require_vehicle_registration === true;
   const { addToast } = useToast();
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  // Currently-open PII document ({ blob, label }) for the in-page viewer.
-  const [docView, setDocView] = useState(null);
-  const [data, setData] = useState({ residents: [], guests: [] });
+  const now = useNowTick();
+  const isWide = useMediaQuery(WIDE_QUERY);
+
+  const initialQuery = useMemo(() => readQueueQuery(window.location.search), []);
+  const [segment, setSegment] = useState(initialQuery.status);
+  const [q, setQ] = useState(initialQuery.q);
+  const [rows, setRows] = useState([]);
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
-  // Non-null when the last refresh failed — distinguishes "nothing pending"
-  // from "we don't know what's pending".
+  // Non-null when the last load failed — "nothing pending" and "we don't know
+  // what's pending" must never look the same.
   const [loadErr, setLoadErr] = useState(null);
-  // id of the row currently mid-action, so we can disable its buttons.
-  const [busy, setBusy] = useState(null);
-  const [docBusy, setDocBusy] = useState(null);
-  const nowTick = useNowTick();
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [phoneOpen, setPhoneOpen] = useState(false);
+  const [sheet, setSheet] = useState(null);
+  const [docView, setDocView] = useState(null);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [savingKeys, setSavingKeys] = useState(() => new Set());
+  const [announcement, setAnnouncement] = useState('');
+
+  const docCache = useMemo(() => createDocCache(fetchDocBlob), [propertyId]);
+  // Optimistic patches still waiting on the server, re-applied over any list
+  // that lands in the meantime.
+  const inFlight = useRef(new Map());
+  const loadToken = useRef(0);
+  const openerRef = useRef(null);
+  const listScrollY = useRef(0);
+  const headingRef = useRef(null);
+  // Where focus goes after the next commit: `{to: 'heading' | 'segment',
+  // onlyIfLost, scroll}`. A decision removes the button that had focus
+  // (Approve, or a sheet's opener in a row that just left the list), so focus
+  // lands somewhere that still exists instead of falling to <body>.
+  const pendingFocus = useRef(null);
+  const segmentRefs = useRef({});
+  const phoneWasOpen = useRef(false);
+  // Sheets and viewers render into the app root, not in place: the tab and
+  // page wrappers keep a filled entrance-animation transform, which turns a
+  // position: fixed overlay inside them into one anchored to the page box
+  // (the backdrop covered one column and the buttons sat off screen).
+  const rootRef = useRef(null);
+  const [layer, setLayer] = useState(null);
+  useEffect(() => { setLayer(rootRef.current?.closest('.app') || document.body); }, []);
+  const overlay = (node) => (layer ? createPortal(node, layer) : null);
 
   const refresh = useCallback(async () => {
     if (!propertyId) return;
+    const token = ++loadToken.current;
     setLoading(true);
     try {
-      const res = await apiFetch(`/apartment/passes/permits?property_id=${propertyId}`);
-      setData({ residents: res.residents || [], guests: res.guests || [] });
+      const res = await apiFetch(`/apartment/passes/permits?property_id=${encodeURIComponent(propertyId)}`);
+      if (token !== loadToken.current) return;
+      let next = queueRows(res);
+      for (const [key, patch] of inFlight.current) next = patchRows(next, key, patch);
+      setRows(next);
+      setLoaded(true);
       setLoadErr(null);
     } catch (e) {
-      // Record the failure so the queue can say "couldn't load" instead of
-      // rendering the initial empty state as "Nothing waiting for review" —
-      // a confident false negative backed only by a toast that auto-dismisses.
-      setLoadErr(e.message || 'Could not load');
-      addToast('Could not load permits. ' + (e.message || ''), 'error');
+      if (token !== loadToken.current) return;
+      setLoadErr(e?.message || 'Could not load');
     } finally {
-      setLoading(false);
+      if (token === loadToken.current) setLoading(false);
     }
-  }, [propertyId, addToast]);
+  }, [propertyId]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  // A decision the server just confirmed is newer than any list still in
+  // flight, so that list is dropped rather than painted over it.
+  const supersedeLoads = useCallback(() => {
+    loadToken.current += 1;
+    setLoading(false);
+  }, []);
 
-  // Fetches a PII doc (authed) to a blob, then opens it in the in-page viewer
-  // modal. We do NOT window.open a blob: URL — mobile Safari refuses it under
-  // noopener and lands on a blank tab. The modal owns the object URL lifecycle
-  // (created on mount, revoked on close).
-  const viewDoc = useCallback(async (kind, id, which, label) => {
-    const key = `${kind}:${id}:${which}`;
-    setDocBusy(key);
-    try {
-      const blob = await fetchDocBlob(kind, id, which);
-      setDocView({ blob, label });
-    } catch (e) {
-      addToast(e.message || 'Could not load document.', 'error');
-    } finally {
-      setDocBusy(null);
-    }
+  useEffect(() => {
+    setRows([]);
+    setLoaded(false);
+    setSelectedKey(null);
+    setPhoneOpen(false);
+    refresh();
+  }, [refresh]);
+
+  // ?status=&q= follow the view; leaving the queue takes them out again.
+  useEffect(() => { replaceQuery({ status: segment, q }); }, [segment, q]);
+  useEffect(() => () => replaceQuery({}), []);
+
+  const say = useCallback((text, type) => {
+    addToast(text, type);
+    setAnnouncement(text);
   }, [addToast]);
 
-  // Generic action runner: POST to a path, refresh on success, surface errors.
-  const runAction = useCallback(async (rowKey, path, body, okMsg) => {
-    setBusy(rowKey);
+  // ── Derived lists ──
+  const overKeys = useMemo(() => overLimitKeys(rows, cap), [rows, cap]);
+  const counts = useMemo(() => segmentCounts(rows, q), [rows, q]);
+  const groups = useMemo(() => (segment === 'pending' ? reviewGroups(rows, { q, cap }) : []), [rows, q, cap, segment]);
+  const decided = useMemo(() => (segment === 'pending' ? [] : decidedRows(rows, segment, q)), [rows, segment, q]);
+  const visible = segment === 'pending' ? groups.flatMap(g => g.rows) : decided;
+  const selectedRow = selectedKey ? rows.find(r => r.key === selectedKey) || null : null;
+  const sheetRow = sheet ? rows.find(r => r.key === sheet.key) || null : null;
+  const phoneDetail = !isWide && phoneOpen && !!selectedRow;
+
+  // Laptop: the pane always shows something when the list does. A new segment
+  // or search selects its first request; a decision keeps the decided row on
+  // screen (it shows its new status and "Next request").
+  useEffect(() => {
+    if (!isWide || !loaded) return;
+    setSelectedKey(current => (current && visible.some(r => r.key === current) ? current : (visible[0]?.key || null)));
+  }, [isWide, loaded, segment, q]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A phone that turns into a laptop shows the pane instead.
+  useEffect(() => { if (isWide) setPhoneOpen(false); }, [isWide]);
+
+  // Phone: the pushed detail closes on Back, reopens on Forward.
+  useEffect(() => {
+    const onPop = (e) => {
+      const key = e.state && e.state.pqDetail;
+      if (key) { setSelectedKey(key); setPhoneOpen(true); } else setPhoneOpen(false);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  // Leaving the queue with the detail pushed: take the entry back off so the
+  // next Back press is not a dead one.
+  const phoneOpenRef = useRef(false);
+  phoneOpenRef.current = phoneDetail;
+  useEffect(() => () => {
+    try { if (phoneOpenRef.current && window.history.state?.pqDetail) window.history.back(); } catch { /* ignore */ }
+  }, []);
+
+  // Phone focus and scroll: into the detail on open, back to the row (and the
+  // list position) on close.
+  useEffect(() => {
+    if (phoneDetail) {
+      phoneWasOpen.current = true;
+      scrollDetailIntoView(headingRef.current);
+      headingRef.current?.focus({ preventScroll: true });
+    } else if (phoneWasOpen.current) {
+      phoneWasOpen.current = false;
+      window.scrollTo(0, listScrollY.current);
+      const opener = openerRef.current;
+      const target = opener && opener.isConnected ? opener : segmentRefs.current[segment];
+      try { target?.focus({ preventScroll: true }); } catch { /* ignore */ }
+    }
+  }, [phoneDetail]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const want = pendingFocus.current;
+    if (!want) return;
+    pendingFocus.current = null;
+    const active = document.activeElement;
+    if (want.onlyIfLost && active && active !== document.body && active.isConnected) return;
+    const heading = headingRef.current && headingRef.current.isConnected ? headingRef.current : null;
+    const target = want.to === 'heading' && heading ? heading : segmentRefs.current[segment];
+    try { target?.focus({ preventScroll: true }); } catch { /* ignore */ }
+    if (want.scroll && !isWide) scrollDetailIntoView(heading);
+  });
+
+  const openRow = useCallback((row, el) => {
+    openerRef.current = el;
+    setSelectedKey(row.key);
+    if (!isWide) {
+      listScrollY.current = window.scrollY;
+      try { window.history.pushState({ ...(window.history.state || {}), pqDetail: row.key }, ''); } catch { /* ignore */ }
+      setPhoneOpen(true);
+    }
+  }, [isWide]);
+
+  const closeDetail = useCallback(() => {
+    if (window.history.state && window.history.state.pqDetail) window.history.back();
+    else setPhoneOpen(false);
+  }, []);
+
+  const goNext = useCallback((key) => {
+    pendingFocus.current = { to: 'heading', scroll: true };
+    setSelectedKey(key);
+    if (!isWide) {
+      try { window.history.replaceState({ ...(window.history.state || {}), pqDetail: key }, ''); } catch { /* ignore */ }
+    }
+  }, [isWide]);
+
+  const markSaving = useCallback((key, on) => {
+    setSavingKeys(prev => {
+      const next = new Set(prev);
+      if (on) next.add(key); else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  // ── Decisions ──
+  const approve = useCallback(async (row) => {
+    if (inFlight.current.has(row.key)) return;
+    const before = { status: row.status, reviewed_at: row.reviewed_at };
+    const patch = approvedPatch(row, new Date().toISOString());
+    inFlight.current.set(row.key, patch);
+    pendingFocus.current = { to: 'heading', onlyIfLost: true };
+    setRows(rs => patchRows(rs, row.key, patch));
+    markSaving(row.key, true);
+    const unit = unitText(row);
     try {
-      await apiFetch(path, {
-        method: 'POST',
-        headers: body ? { 'content-type': 'application/json' } : {},
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      });
-      if (okMsg) addToast(okMsg, 'success');
-      await refresh();
-    } catch (e) {
-      addToast(e.message || 'Action failed.', 'error');
+      const out = await apiFetch(actionPath(row, 'approve'), { method: 'POST' });
+      inFlight.current.delete(row.key);
+      supersedeLoads();
+      setRows(rs => patchRows(rs, row.key, serverPatch(out)));
+      say(`Approved: ${plateText(row)}${unit ? ` · ${unitLabel(unit)}` : ''}`, 'success');
+    } catch (err) {
+      inFlight.current.delete(row.key);
+      setRows(rs => patchRows(rs, row.key, before));
+      const failure = actionError(err, 'approve');
+      say(failure.text, 'error');
+      if (failure.refresh) refresh();
     } finally {
-      setBusy(null);
+      markSaving(row.key, false);
     }
-  }, [refresh, addToast]);
+  }, [markSaving, refresh, say, supersedeLoads]);
 
-  const approve = (kind, id) => runAction(`${kind}:${id}`, `/apartment/passes/${kind}/${id}/approve`, null, 'Approved');
-  const reject = (kind, id) => {
-    const reason = window.prompt('Reason for rejection?');
-    if (reason == null) return; // operator cancelled
-    runAction(`${kind}:${id}`, `/apartment/passes/${kind}/${id}/reject`, { reason }, 'Rejected');
-  };
-  const voidPass = (kind, id) => {
-    if (!window.confirm('Void this pass? This cannot be undone.')) return;
-    runAction(`${kind}:${id}`, `/apartment/passes/${kind}/${id}/void`, null, 'Voided');
-  };
-  const extend = (id) => {
-    const raw = window.prompt('Extend by how many hours? (1-72)');
-    if (raw == null) return;
-    const hours = parseInt(raw, 10);
-    if (!Number.isInteger(hours) || hours < 1 || hours > 72) {
-      addToast('Enter a whole number of hours between 1 and 72.', 'error');
-      return;
+  const closeSheet = useCallback(() => setSheet(null), []);
+  const closeDocView = useCallback(() => setDocView(null), []);
+  const closeFeedback = useCallback(() => setFeedbackOpen(false), []);
+  const openDeny = useCallback((row, { viaOverLimit = false } = {}) => {
+    setSheet({ type: 'deny', key: row.key, initialReason: initialDenyReason(row, { viaOverLimit, requireRegistration }) });
+  }, [requireRegistration]);
+
+  const onStale = useCallback((text) => {
+    pendingFocus.current = { to: 'segment', onlyIfLost: true };
+    setSheet(null);
+    say(text, 'error');
+    refresh();
+  }, [refresh, say]);
+
+  const finish = useCallback((row, patch, message) => {
+    pendingFocus.current = { to: row.key === selectedKey ? 'heading' : 'segment', onlyIfLost: true };
+    supersedeLoads();
+    setRows(rs => patchRows(rs, row.key, patch));
+    setSheet(null);
+    say(message, 'success');
+  }, [say, selectedKey, supersedeLoads]);
+
+  const onDenied = useCallback((out, { reason, notified }) => {
+    if (!sheetRow) return;
+    finish(sheetRow, { status: 'rejected', reject_reason: reason, ...serverPatch(out) },
+      `Denied: ${plateText(sheetRow)}${notified ? ' — reason sent' : ''}`);
+  }, [finish, sheetRow]);
+  const onVoided = useCallback((out) => {
+    if (!sheetRow) return;
+    finish(sheetRow, { status: 'void', ...serverPatch(out) }, `Voided: ${plateText(sheetRow)}`);
+  }, [finish, sheetRow]);
+  const onExtended = useCallback((out, { hours }) => {
+    if (!sheetRow) return;
+    finish(sheetRow, serverPatch(out), `Extended ${hours}h`);
+  }, [finish, sheetRow]);
+
+  // A sheet whose row left the list (a refresh) closes itself.
+  useEffect(() => { if (sheet && !sheetRow) setSheet(null); }, [sheet, sheetRow]);
+
+  const moreItemsFor = useCallback((row) => {
+    if (segmentOf(row) !== 'approved') return [];
+    const items = [];
+    if (!isLongTerm(row)) items.push({ id: 'extend', label: 'Extend…', onSelect: () => setSheet({ type: 'extend', key: row.key }) });
+    items.push({ id: 'void', label: 'Void pass…', danger: true, onSelect: () => setSheet({ type: 'void', key: row.key }) });
+    return items;
+  }, []);
+
+  const copyLink = useCallback(async () => {
+    const link = registrationLink(window.location.origin, property?.qr_code_id);
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      say('Registration link copied', 'success');
+    } catch {
+      say("Couldn't copy the link. Try again.", 'error');
     }
-    runAction(`guest:${id}`, `/apartment/passes/guest/${id}/extend`, { hours }, `Extended ${hours}h`);
-  };
+  }, [property?.qr_code_id, say]);
 
-  const residents = data.residents || [];
-  const guests = data.guests || [];
-  const pendingResidents = residents.filter(r => r.status === 'pending');
-  const pendingGuests = guests.filter(g => g.status === 'pending');
-  const pending = [
-    ...pendingResidents.map(r => ({ ...r, _kind: 'resident' })),
-    ...pendingGuests.map(g => ({ ...g, _kind: 'guest' })),
-  ].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
-  const approvedResidents = residents.filter(r => r.status === 'approved');
-  const activeGuests = guests.filter(g => g.status === 'active');
+  // ── Pieces ──
+  const rowProps = (row, { showThumb, showUnit }) => ({
+    row,
+    now,
+    selected: (isWide || phoneOpen) && row.key === selectedKey,
+    overLimit: overKeys.has(row.key),
+    cap,
+    ageChip: ageChip(row, now),
+    showThumb,
+    showUnit,
+    moreItems: moreItemsFor(row),
+    onOpen: openRow,
+  });
 
-  const plateChip = (txt) => (
-    <span style={{fontFamily:"'Courier New',monospace",background:'#fef3c7',color:'#1c1009',border:'1.5px solid #fbbf24',fontWeight:800,letterSpacing:'.08em',fontSize:13,padding:'3px 9px',borderRadius:4}}>{txt || '—'}</span>
-  );
-  const fmtTime = (t) => t ? new Date(t).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
-  // tag_expiration is a bare "YYYY-MM-DD" date — parse as local (not UTC) so the
-  // displayed day doesn't shift backwards in western timezones.
-  const fmtTagDate = (d) => {
-    if (!d) return '';
-    const [y, m, day] = String(d).split('-').map(Number);
-    if (!y || !m || !day) return d;
-    return new Date(y, m - 1, day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  };
-
-  const docButtons = (row, kind) => {
-    const docs = [
-      ['id', 'ID', row.has_id],
-      ['lease', 'Lease', row.has_lease],
-      ['plate', 'Plate', row.has_plate],
-    ].filter(([, , present]) => present);
-    if (docs.length === 0) return <span style={{fontSize:11,color:'var(--text-faint)'}}>No documents</span>;
-    return (
-      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-        {docs.map(([which, label]) => {
-          const key = `${kind}:${row.id}:${which}`;
-          return (
-            <button key={which} disabled={docBusy === key}
-              onClick={() => viewDoc(kind, row.id, which, label)}
-              style={{fontSize:11,fontWeight:700,padding:'3px 9px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-inset)',color:'var(--text-primary)',cursor:docBusy===key?'wait':'pointer',opacity:docBusy===key?0.6:1}}>
-              {docBusy === key ? 'Loading…' : `View ${label}`}
-            </button>
-          );
-        })}
+  let listBody;
+  if (!loaded && loadErr) {
+    listBody = (
+      <div className="pq-empty pq-empty--error">
+        <p>Couldn't load the approval queue — this is not "nothing pending".</p>
+        <button type="button" className="pq-btn pq-btn--quiet pq-btn--small" onClick={refresh}>Retry</button>
       </div>
     );
-  };
+  } else if (!loaded) {
+    listBody = <SkeletonCards count={3} />;
+  } else if (visible.length === 0) {
+    const link = registrationLink(window.location.origin, property?.qr_code_id);
+    listBody = q ? (
+      <div className="pq-empty">
+        <p className="pq-empty-title">No results for “{q}”</p>
+        <button type="button" className="pq-btn pq-btn--quiet pq-btn--small" onClick={() => setQ('')}>Clear search</button>
+      </div>
+    ) : segment === 'pending' ? (
+      <div className="pq-empty">
+        <p className="pq-empty-title">{allCaughtUpLine(approvedVehicleCount(rows), propertyName)}</p>
+        {property?.guest_auto_approve && (
+          <p className="pq-empty-body">Short-term passes approve automatically at this property — only long-term registrations appear here.</p>
+        )}
+        {link && <button type="button" className="pq-btn pq-btn--quiet" onClick={copyLink}>Copy registration link</button>}
+      </div>
+    ) : (
+      <div className="pq-empty">
+        <p className="pq-empty-title">{segment === 'approved' ? 'No approved parking passes yet.' : 'No denied requests.'}</p>
+      </div>
+    );
+  } else if (segment === 'pending') {
+    listBody = groups.map(group => (
+      <section key={group.key || 'none'} className="pq-group">
+        <div className="pq-group-head">
+          <h3 className="pq-group-title">{group.label}</h3>
+          {group.variants.length > 0 && (
+            <span className="pq-group-also">also entered as {group.variants.map(v => `“${v}”`).join(', ')}</span>
+          )}
+          {group.chip && <Tag tone={group.chip.over ? 'red' : 'neutral'}>{group.chip.text}</Tag>}
+        </div>
+        <ul className="pq-rows">
+          {group.rows.map(row => <QueueRow key={row.key} {...rowProps(row, { showThumb: true, showUnit: false })} />)}
+        </ul>
+      </section>
+    ));
+  } else {
+    listBody = (
+      <ul className="pq-rows">
+        {decided.map(row => <QueueRow key={row.key} {...rowProps(row, { showThumb: false, showUnit: true })} />)}
+      </ul>
+    );
+  }
+
+  const detail = selectedRow && (isWide || phoneDetail) ? (() => {
+    const unitKey = normalizeUnit(unitText(selectedRow));
+    const unitChip = isLongTerm(selectedRow) && unitKey ? capChip(unitTally(rows, unitKey), cap) : null;
+    return (
+      <RequestDetail
+        row={selectedRow}
+        isPhone={!isWide}
+        headingRef={headingRef}
+        propertyName={propertyName}
+        cap={cap}
+        overLimit={overKeys.has(selectedRow.key)}
+        ageChip={ageChip(selectedRow, now)}
+        unitChip={unitChip}
+        saving={savingKeys.has(selectedRow.key)}
+        moreItems={moreItemsFor(selectedRow)}
+        nextKey={segmentOf(selectedRow) === 'pending' ? null : nextPendingKey(rows, { cap, q, after: selectedRow.key })}
+        onBack={closeDetail}
+        onApprove={approve}
+        onDeny={openDeny}
+        onNext={goNext}
+        onZoom={setDocView}
+      />
+    );
+  })() : null;
+
+  const showPane = isWide && loaded && (visible.length > 0 || !!selectedRow);
 
   return (
-    <div style={{display:'flex',flexDirection:'column',gap:18}}>
-      {feedbackOpen && <FeedbackModal propertyId={propertyId} onClose={() => setFeedbackOpen(false)} />}
-      {docView && <DocViewerModal blob={docView.blob} label={docView.label} onClose={() => setDocView(null)} />}
-      {/* ── Pending approval queue ── */}
-      <div>
-        <div className="pd-section-head">
-          <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-            <span className="pd-section-title">Pending approval</span>
-            <span className="pd-section-count">{pending.length}</span>
-          </div>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'flex-end'}}>
-            <button onClick={() => setFeedbackOpen(true)} className="pd-share-btn">Feedback</button>
-            <button onClick={refresh} className="pd-share-btn">Refresh</button>
-          </div>
-        </div>
-        {loading ? (
-          <div className="pd-empty">Loading…</div>
-        ) : loadErr ? (
-          <div className="pd-empty" style={{color:'#b45309'}}>
-            Couldn't load the approval queue — this is not "nothing pending".{' '}
-            <button onClick={refresh} className="pd-share-btn" style={{marginLeft:6}}>Retry</button>
-          </div>
-        ) : pending.length === 0 ? (
-          <div className="pd-empty">
-            {property?.guest_auto_approve
-              ? 'Short-term passes approve automatically at this property — only long-term registrations appear here.'
-              : 'Nothing waiting for review'}
-          </div>
-        ) : (
-          <div style={{display:'flex',flexDirection:'column',gap:6}}>
-            {pending.map(row => {
-              const kind = row._kind;
-              const rowKey = `${kind}:${row.id}`;
-              const unit = kind === 'resident' ? row.unit_number : row.host_unit;
-              const name = kind === 'resident' ? row.holder_name : row.visitor_name;
-              return (
-                <div key={rowKey} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',flexDirection:'column',gap:8}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-                    <div style={{minWidth:0,flex:1}}>
-                      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                        {plateChip(row.plate_text)}
-                        <span style={{fontSize:10,fontWeight:700,letterSpacing:'.06em',textTransform:'uppercase',padding:'2px 7px',borderRadius:20,background:kind==='resident'?'rgba(96,165,250,.12)':'rgba(192,132,252,.12)',color:kind==='resident'?'#60a5fa':'#c084fc',border:kind==='resident'?'1px solid rgba(96,165,250,.3)':'1px solid rgba(192,132,252,.3)'}}>{kind === 'resident' ? 'Long-term' : 'Short-term'}</span>
-                        {unit && <span style={{fontSize:12,color:'var(--text-primary)',fontWeight:600}}>Unit {unit}</span>}
-                        {name && <span style={{fontSize:12,color:'var(--text-primary)',fontWeight:600}}>{name}</span>}
-                      </div>
-                      <div style={{fontSize:11,color:'var(--text-faint)',marginTop:3}}>
-                        Submitted {fmtTime(row.created_at)}{row.phone ? ` · ${row.phone}` : ''}{row.email ? ` · ${row.email}` : ''}
-                      </div>
-                    </div>
-                  </div>
-                  {docButtons(row, kind)}
-                  <div style={{display:'flex',gap:8}}>
-                    <button disabled={busy === rowKey} onClick={() => approve(kind, row.id)}
-                      style={{flex:1,fontSize:12,fontWeight:700,padding:'7px',borderRadius:6,border:'1px solid rgba(74,222,128,.3)',background:'rgba(74,222,128,.12)',color:'#4ade80',cursor:busy===rowKey?'wait':'pointer',opacity:busy===rowKey?0.6:1}}>
-                      {busy === rowKey ? 'Working…' : 'Approve'}
-                    </button>
-                    <button disabled={busy === rowKey} onClick={() => reject(kind, row.id)}
-                      style={{flex:1,fontSize:12,fontWeight:700,padding:'7px',borderRadius:6,border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'#ef4444',cursor:busy===rowKey?'wait':'pointer',opacity:busy===rowKey?0.6:1}}>
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+    <DocCacheContext.Provider value={docCache}>
+      <div className="pq" ref={rootRef}>
+        {feedbackOpen && overlay(<FeedbackModal propertyId={propertyId} onClose={closeFeedback} />)}
+        {docView && overlay(<DocViewerModal blob={docView.blob} label={docView.label} filename={docView.filename} onClose={closeDocView} />)}
+        {sheet && sheetRow && sheet.type === 'deny' && overlay(
+          <DenySheet
+            row={sheetRow}
+            propertyName={propertyName}
+            cap={cap}
+            towNote={property?.reject_tow_disclaimer === true}
+            initialReason={sheet.initialReason}
+            onClose={closeSheet}
+            onDone={onDenied}
+            onStale={onStale}
+          />,
         )}
-      </div>
+        {sheet && sheetRow && sheet.type === 'void' && overlay(
+          <VoidSheet row={sheetRow} propertyName={propertyName} onClose={closeSheet} onDone={onVoided} onStale={onStale} />,
+        )}
+        {sheet && sheetRow && sheet.type === 'extend' && overlay(
+          <ExtendPassSheet row={sheetRow} onClose={closeSheet} onDone={onExtended} onStale={onStale} />,
+        )}
+        <div className="pq-sr" role="status" aria-live="polite">{announcement}</div>
 
-      {/* ── Approved residents ── */}
-      <div>
-        <div className="pd-section-head">
-          <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-            <span className="pd-section-title">Long-term passes</span>
-            <span className="pd-section-count">{approvedResidents.length}</span>
+        <div className="pq-head" hidden={phoneDetail}>
+          <h2 className="pq-title">Parking pass requests</h2>
+          <div className="pq-controls">
+            <div className="pq-segments" role="group" aria-label="Show requests">
+              {SEGMENTS.map(s => (
+                <button
+                  key={s.id}
+                  ref={el => { segmentRefs.current[s.id] = el; }}
+                  type="button"
+                  className="pq-segment"
+                  aria-pressed={segment === s.id}
+                  onClick={() => setSegment(s.id)}
+                >
+                  {s.label} <span className="pq-segment-count">({counts[s.id]})</span>
+                </button>
+              ))}
+            </div>
+            <div className="pq-tools">
+              <label className="pq-search">
+                <span className="pq-sr">Search by plate or unit</span>
+                <input
+                  type="search"
+                  value={q}
+                  maxLength={40}
+                  onChange={e => setQ(e.target.value)}
+                  placeholder="Plate or unit"
+                  autoComplete="off"
+                  spellCheck={false}
+                  enterKeyHint="search"
+                />
+              </label>
+              <button type="button" className="pq-btn pq-btn--quiet pq-btn--small" onClick={() => setFeedbackOpen(true)}>Feedback</button>
+              <button type="button" className="pq-btn pq-btn--quiet pq-btn--small" onClick={refresh}>
+                {loading && loaded ? 'Refreshing…' : 'Refresh'}
+              </button>
+            </div>
           </div>
+          {loaded && loadErr && (
+            <div className="pq-banner" role="status">
+              Couldn't refresh the list — what's shown may be out of date.
+              <button type="button" className="pq-btn pq-btn--quiet pq-btn--small" onClick={refresh}>Retry</button>
+            </div>
+          )}
         </div>
-        {loadErr ? (
-          <div className="pd-empty" style={{color:'#b45309'}}>Couldn't load — the list below may be incomplete.</div>
-        ) : !loading && approvedResidents.length === 0 ? (
-          <div className="pd-empty">No long-term passes yet</div>
-        ) : (
-          <div style={{display:'flex',flexDirection:'column',gap:6}}>
-            {approvedResidents.map(r => {
-              const rowKey = `resident:${r.id}`;
-              return (
-                <div key={rowKey} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-                  <div style={{minWidth:0,flex:1,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                    {plateChip(r.plate_text)}
-                    {r.unit_number && <span style={{fontSize:12,color:'var(--text-primary)',fontWeight:600}}>Unit {r.unit_number}</span>}
-                    {r.holder_name && <span style={{fontSize:12,color:'var(--text-muted)'}}>{r.holder_name}</span>}
-                  </div>
-                  <button disabled={busy === rowKey} onClick={() => voidPass('resident', r.id)}
-                    style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'#ef4444',cursor:busy===rowKey?'wait':'pointer',opacity:busy===rowKey?0.6:1}}>
-                    Void
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
 
-      {/* ── Active guests ── */}
-      <div>
-        <div className="pd-section-head">
-          <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-            <span className="pd-section-title">Short-term passes</span>
-            <span className="pd-section-count">{activeGuests.length}</span>
-          </div>
+        <div className={`pq-layout${showPane ? ' has-pane' : ''}`}>
+          <div className="pq-list" hidden={phoneDetail}>{listBody}</div>
+          {showPane && (
+            <div className="pq-pane">
+              {detail || <p className="pq-pane-empty">Choose a request to see its documents.</p>}
+            </div>
+          )}
         </div>
-        {loadErr ? (
-          <div className="pd-empty" style={{color:'#b45309'}}>Couldn't load — the list below may be incomplete.</div>
-        ) : !loading && activeGuests.length === 0 ? (
-          <div className="pd-empty">No short-term passes yet</div>
-        ) : (
-          <div style={{display:'flex',flexDirection:'column',gap:6}}>
-            {activeGuests.map(g => {
-              const rowKey = `guest:${g.id}`;
-              const remainMs = g.valid_until ? new Date(g.valid_until).getTime() - nowTick : 0;
-              const urgent = remainMs > 0 && remainMs < 60 * 60 * 1000;
-              return (
-                <div key={rowKey} style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-                  <div style={{minWidth:0,flex:1}}>
-                    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                      {plateChip(g.plate_text)}
-                      {g.host_unit && <span style={{fontSize:12,color:'var(--text-primary)',fontWeight:600}}>Unit {g.host_unit}</span>}
-                      {g.visitor_name && <span style={{fontSize:12,color:'var(--text-muted)'}}>{g.visitor_name}</span>}
-                      {g.is_temp_tag && (
-                        <span style={{fontSize:11,fontWeight:700,padding:'3px 8px',borderRadius:20,background:'rgba(148,163,184,.15)',color:'var(--text-muted)',border:'1px solid var(--border)',whiteSpace:'nowrap'}}>Temp tag</span>
-                      )}
-                      {g.tag_expired && (
-                        <span style={{fontSize:11,fontWeight:700,padding:'3px 8px',borderRadius:20,background:'rgba(239,68,68,.12)',color:'#ef4444',border:'1px solid rgba(239,68,68,.3)',whiteSpace:'nowrap'}}>EXPIRED</span>
-                      )}
-                    </div>
-                    <div style={{fontSize:11,color:'var(--text-faint)',marginTop:3}}>
-                      {g.valid_until ? <>Expires {fmtTime(g.valid_until)}</> : 'No expiry'}
-                      {g.is_temp_tag && g.tag_expiration && <> · tag expires {fmtTagDate(g.tag_expiration)}</>}
-                    </div>
-                  </div>
-                  <div style={{display:'flex',alignItems:'center',gap:8}}>
-                    {g.valid_until && (
-                      <span style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:20,whiteSpace:'nowrap',background:urgent?'rgba(251,191,36,.12)':'rgba(74,222,128,.12)',color:urgent?'#fbbf24':'#4ade80',border:urgent?'1px solid rgba(251,191,36,.25)':'1px solid rgba(74,222,128,.25)'}}>{fmtPassRemaining(remainMs)}</span>
-                    )}
-                    <button disabled={busy === rowKey} onClick={() => extend(g.id)}
-                      style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-inset)',color:'var(--text-primary)',cursor:busy===rowKey?'wait':'pointer',opacity:busy===rowKey?0.6:1}}>
-                      Extend
-                    </button>
-                    <button disabled={busy === rowKey} onClick={() => voidPass('guest', g.id)}
-                      style={{fontSize:11,fontWeight:700,padding:'5px 10px',borderRadius:6,border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.1)',color:'#ef4444',cursor:busy===rowKey?'wait':'pointer',opacity:busy===rowKey?0.6:1}}>
-                      Void
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {phoneDetail && detail}
       </div>
-    </div>
+    </DocCacheContext.Provider>
   );
 }

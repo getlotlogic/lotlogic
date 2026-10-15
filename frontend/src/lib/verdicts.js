@@ -46,6 +46,7 @@ function groupedLine(match) {
     case 'hold_unconfirmed': return `HOLD — NOT CONFIRMED${d.ref ? ' ' + d.ref : ''}`;
     case 'resident':
     case 'guest': return 'parking pass';
+    case 'pending': return 'pending approval';
     case 'expired_guest': return 'parking pass expired';
     case 'tow_requested': return `TOW REQUESTED${d.ref ? ' ' + d.ref : ''}`;
     default: return "can't read this answer";
@@ -66,6 +67,17 @@ export function verdictPresentation(verdict, detail, scope) {
       let reason = `Parking pass · ${d.property_name || 'the property'}`;
       if (d.hours_left != null) reason += ` · ${d.hours_left}h left`;
       return { signal: 'DO NOT TOW', glyph: '✓', tone: 'go', reason };
+    }
+    case 'pending': {
+      // A parking pass request the office has not reviewed yet. It is protected
+      // from tow until `protected_until` — the backend's 72-hour window, which
+      // arrives rendered in ET as `protected_until_local`, so it is never
+      // restated (or recomputed) here.
+      const ago = hoursAgo(d.submitted_at);
+      const bits = ['Registration pending approval', d.property_name || 'the property'];
+      if (ago != null) bits.push(`submitted ${ago}h ago`);
+      if (d.protected_until_local) bits.push(`protected until ${d.protected_until_local}`);
+      return { signal: 'DO NOT TOW', glyph: '⏳', tone: 'go', reason: bits.join(' · ') };
     }
     case 'expired_guest': {
       const ago = d.hours_ago != null ? d.hours_ago : hoursAgo(d.valid_until || d.expires_at);

@@ -26,6 +26,11 @@
  *     stylesheet width can beat, which made a tile 366px wide and clipped it on
  *     any column narrower than that. The heading's qualifier ("up to 72 hrs") is
  *     not broken across two lines to fit beside it; it moves under it.
+ *   - side by side, the two codes sit level at every width: from the one-column
+ *     breakpoint to 640px, where the column stops growing, the pair stacks its
+ *     qualifiers under the headings together instead of one tile doing it and
+ *     its neighbour not (which set one code 16px lower). A plaza's lone tile
+ *     keeps its qualifier beside its heading.
  *   - an apartment hands out ONE entry, /apt/<qr>, with the role in the query
  *     (short-term = guest, long-term = resident), on the tile and on Copy link,
  *     and says "parking pass"; a truck plaza keeps /temp/<qr> and its own label.
@@ -53,8 +58,11 @@ const QR_CODE_ID = 'test-plaza-qr-0001';
 
 // The encoder the dashboard bundles (frontend/package.json pins qrcode). The
 // expected code for a link is made here, in Node, so the test does not ask the
-// page what the page drew.
-const QRCode = createRequire(path.join(FRONTEND_DIR, 'package.json'))('qrcode') as {
+// page what the page drew. It is resolved in beforeAll, once the build has run,
+// and not when this file loads: where only tests/ is installed (the post-deploy
+// e2e job), a load-time require stops Playwright reading any spec and the whole
+// run reports 0 tests, where it should fail this spec alone, as its siblings do.
+let QRCode: {
   create(text: string, options: { errorCorrectionLevel: 'M' }): { modules: { size: number; data: Uint8Array } };
 };
 
@@ -63,6 +71,7 @@ let closeServer: () => Promise<void>;
 
 test.beforeAll(async () => {
   ({ origin, close: closeServer } = await buildAndServeFrontend(FRONTEND_DIR));
+  QRCode = createRequire(path.join(FRONTEND_DIR, 'package.json'))('qrcode');
 });
 
 test.afterAll(async () => {
@@ -345,7 +354,7 @@ test.describe('property QR codes @desktop-only', () => {
   // 540 and 580 are where the two tiles are narrowest side by side (the grid
   // goes to one column at 520), and where a qualifier used to break in two.
   for (const width of [360, 390, 540, 580, 600, 700]) {
-    test(`each tile fits its column at ${width}px, with the QR square and whole and its heading unbroken`, async ({ page }) => {
+    test(`each tile fits its column at ${width}px, with the QR square and whole, and its heading and qualifier on one line each`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       const detail = await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
       await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
@@ -359,6 +368,10 @@ test.describe('property QR codes @desktop-only', () => {
         expect(canvas.x + canvas.width, `QR ${n} ends inside its tile`).toBeLessThanOrEqual(tile.x + tile.width);
         expect(Math.abs(canvas.width - canvas.height), `QR ${n} is square`).toBeLessThan(1);
         expect(canvas.width, `QR ${n} stays large enough to scan`).toBeGreaterThanOrEqual(160);
+        // The heading ("Short-term parking pass") is one line and ends inside its tile.
+        const label = (await detail.locator('.pd-share-label').nth(n - 1).boundingBox())!;
+        expect(label.height, `tile ${n}'s heading is one line`).toBeLessThan(18);
+        expect(label.x + label.width, `tile ${n}'s heading ends inside its tile`).toBeLessThanOrEqual(tile.x + tile.width);
         // "up to 72 hrs" and "owner-approved" are not broken across two lines to
         // fit beside the heading: they move under it when there is no room.
         const sub = (await detail.locator('.pd-qr-sub').nth(n - 1).boundingBox())!;
@@ -367,6 +380,65 @@ test.describe('property QR codes @desktop-only', () => {
       }
     });
   }
+
+  // Side by side, whether a tile's qualifier fits beside its heading depends on
+  // the words in that tile and on the font, so left to flow one tile stacked it
+  // while its neighbour did not, and the two codes sat at different heights (16px
+  // apart in Manrope between about 566 and 600px). From the one-column
+  // breakpoint to 640px, where the column stops growing, the pair stacks
+  // together; the layout is the same at every width above that.
+  test('the two QR codes sit level at every width the pair is squeezed, 521 to 640px', async ({ page }) => {
+    await page.setViewportSize({ width: 600, height: 900 });
+    const detail = await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
+    await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => canvasHasInk(page, TILE_CANVAS(2)), { timeout: 15_000 }).toBe(true);
+    const uneven: Array<[width: number, apart: number]> = [];
+    let sideBySide = 0;
+    for (let width = 521; width <= 640; width++) {
+      await page.setViewportSize({ width, height: 900 });
+      const first = (await page.locator(TILE_CANVAS(1)).boundingBox())!;
+      const second = (await page.locator(TILE_CANVAS(2)).boundingBox())!;
+      // WebKit measures media queries against the width left by the dashboard's own
+      // 4px scrollbar, so for the first few widths above 520px it still has one
+      // column. Tiles one above the other have nothing to level.
+      if (Math.abs(first.x - second.x) < 1) continue;
+      sideBySide++;
+      if (Math.abs(first.y - second.y) >= 1) uneven.push([width, Math.round(second.y - first.y)]);
+    }
+    expect(sideBySide, 'widths at which the tiles sit side by side').toBeGreaterThanOrEqual(110);
+    // "566-599px (16px apart)" reads better in a failure than one line per width.
+    const ranges: string[] = [];
+    for (let i = 0; i < uneven.length; ) {
+      let j = i;
+      while (j + 1 < uneven.length && uneven[j + 1][0] === uneven[j][0] + 1 && uneven[j + 1][1] === uneven[i][1]) j++;
+      ranges.push(`${uneven[i][0]}-${uneven[j][0]}px (${uneven[i][1]}px apart)`);
+      i = j + 1;
+    }
+    expect(ranges, 'widths at which the two codes are not level').toEqual([]);
+  });
+
+  test('the pair puts its qualifiers under their headings while squeezed, and beside them once the column is full width', async ({ page }) => {
+    const direction = async (width: number) => {
+      await page.setViewportSize({ width, height: 900 });
+      return page.locator('#qr-harness .pd-qr-head').evaluateAll((heads) => heads.map((h) => getComputedStyle(h).flexDirection));
+    };
+    await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
+    // A few px inside the edges (521 and 640), not on them: WebKit measures a
+    // media query against the width left by the dashboard's 4px scrollbar.
+    expect(await direction(530), 'at 530px').toEqual(['column', 'column']);
+    expect(await direction(580), 'at 580px').toEqual(['column', 'column']);
+    expect(await direction(636), 'at 636px').toEqual(['column', 'column']);
+    expect(await direction(650), 'at 650px').toEqual(['row', 'row']);
+    expect(await direction(1100), 'at 1100px').toEqual(['row', 'row']);
+  });
+
+  test('a truck plaza\'s lone tile keeps its qualifier beside its heading', async ({ page }) => {
+    await page.setViewportSize({ width: 580, height: 900 });
+    const detail = await mountPropertyDetail(page, { propertyType: 'truck_plaza' });
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(1);
+    await expect(detail.locator('.pd-qr-head')).toHaveCSS('flex-direction', 'row');
+  });
 
   // Two tests were removed here, both stale for the same reason: qrcode is
   // bundled (Task 14), not loaded from a CDN.
