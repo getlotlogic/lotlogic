@@ -68,6 +68,13 @@ export interface ResidentApartment {
   name: string;
   /** The harness database has the B1 columns: cap 2 and the registration card. */
   hasRules: boolean;
+  /**
+   * The harness database has backend task B3's `resident_plates.vehicle_photo_url`
+   * (and so, from the same backend branch, the `vehicle_photo_url` register field).
+   * Without it the register call answers 422 to that field and the page sends the
+   * request once more without it.
+   */
+  hasVehiclePhoto: boolean;
 }
 
 /**
@@ -91,13 +98,16 @@ export async function seedResidentApartment(): Promise<ResidentApartment> {
     sql(`UPDATE public.properties SET max_vehicles_per_unit = 2, require_vehicle_registration = true
           WHERE id = ${lit(account.property_id)}`);
   }
+  const hasVehiclePhoto = sqlValue(`SELECT count(*) FROM information_schema.columns
+                                     WHERE table_schema = 'public' AND table_name = 'resident_plates'
+                                       AND column_name = 'vehicle_photo_url'`) === '1';
   // The register route calls services.plate_synonyms.synonym_set, which reads
   // inferred_plate_pairs; the portal subset schema does not carry that table
   // (no portal test drove /resident_plates/register before). An empty one with
   // the columns it reads is what production has for a property with no pairs.
   sql(`CREATE TABLE IF NOT EXISTS public.inferred_plate_pairs (
          property_id uuid, plate_a text, plate_b text, verified_at timestamptz, dismissed_at timestamptz)`);
-  return { slug, propertyId: account.property_id, name: account.signup.name, hasRules };
+  return { slug, propertyId: account.property_id, name: account.signup.name, hasRules, hasVehiclePhoto };
 }
 
 export interface UploadSeen { kind: string; filename: string; partType: string; propertyId: string; token: string }
@@ -168,8 +178,13 @@ export async function toFirstVehicle(page: Page) {
   await expect(page.getByRole('heading', { name: 'Vehicle 1' })).toBeVisible();
 }
 
-/** S3 → S5: one vehicle with its documents, then the ID and the lease. Returns the plate. */
-export async function vehicleAndDocumentsToReview(page: Page, apartment: ResidentApartment, plate = randomPlate()) {
+/**
+ * S3 → S5: one vehicle with its documents (and, unless `vehiclePhoto` is false,
+ * the optional photo of the vehicle), then the ID and the lease. Returns the plate.
+ */
+export async function vehicleAndDocumentsToReview(
+  page: Page, apartment: ResidentApartment, plate = randomPlate(), { vehiclePhoto = true } = {},
+) {
   await page.getByLabel('License plate').fill(plate);
   await upload(page, 'card-plate-v1', photo('plate.png', [40, 60, 90]));
   if (apartment.hasRules) {
@@ -177,6 +192,7 @@ export async function vehicleAndDocumentsToReview(page: Page, apartment: Residen
   } else {
     await expect(page.locator('#card-registration-v1')).toHaveCount(0);
   }
+  if (vehiclePhoto) await upload(page, 'card-vehicle-v1', photo('car.png', [90, 30, 30]));
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', { name: 'Your vehicles' })).toBeVisible();
   const no = page.getByLabel('No', { exact: true });
