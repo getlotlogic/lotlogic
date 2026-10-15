@@ -394,12 +394,19 @@ test.describe('property QR codes @desktop-only', () => {
     await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
     await expect.poll(() => canvasHasInk(page, TILE_CANVAS(2)), { timeout: 15_000 }).toBe(true);
     const uneven: Array<[width: number, apart: number]> = [];
+    let sideBySide = 0;
     for (let width = 521; width <= 640; width++) {
       await page.setViewportSize({ width, height: 900 });
       const first = (await page.locator(TILE_CANVAS(1)).boundingBox())!;
       const second = (await page.locator(TILE_CANVAS(2)).boundingBox())!;
+      // WebKit measures media queries against the width left by the dashboard's own
+      // 4px scrollbar, so for the first few widths above 520px it still has one
+      // column. Tiles one above the other have nothing to level.
+      if (Math.abs(first.x - second.x) < 1) continue;
+      sideBySide++;
       if (Math.abs(first.y - second.y) >= 1) uneven.push([width, Math.round(second.y - first.y)]);
     }
+    expect(sideBySide, 'widths at which the tiles sit side by side').toBeGreaterThanOrEqual(110);
     // "566-599px (16px apart)" reads better in a failure than one line per width.
     const ranges: string[] = [];
     for (let i = 0; i < uneven.length; ) {
@@ -417,10 +424,12 @@ test.describe('property QR codes @desktop-only', () => {
       return page.locator('#qr-harness .pd-qr-head').evaluateAll((heads) => heads.map((h) => getComputedStyle(h).flexDirection));
     };
     await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
-    expect(await direction(521), 'at 521px').toEqual(['column', 'column']);
+    // A few px inside the edges (521 and 640), not on them: WebKit measures a
+    // media query against the width left by the dashboard's 4px scrollbar.
+    expect(await direction(530), 'at 530px').toEqual(['column', 'column']);
     expect(await direction(580), 'at 580px').toEqual(['column', 'column']);
-    expect(await direction(640), 'at 640px').toEqual(['column', 'column']);
-    expect(await direction(641), 'at 641px').toEqual(['row', 'row']);
+    expect(await direction(636), 'at 636px').toEqual(['column', 'column']);
+    expect(await direction(650), 'at 650px').toEqual(['row', 'row']);
     expect(await direction(1100), 'at 1100px').toEqual(['row', 'row']);
   });
 
