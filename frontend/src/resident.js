@@ -7,7 +7,7 @@
 import {
   pgRest, backendRegister, getRecaptchaToken, friendlyErrorMessage,
   escapeHtml, showNotFound, showConnectionError, normalizePlate,
-  REGION_TOKENS, propertyQuery,
+  REGION_TOKENS, propertyQuery, aptEntryUrl,
 } from './shared/register.js';
 
 const app = document.getElementById('app');
@@ -33,6 +33,11 @@ async function init() {
       return;
     }
     property = data;
+    // An apartment has one entry, /apt/<qr>; this page only serves the rest.
+    if (property.property_type === 'apartment') {
+      window.location.replace(aptEntryUrl(qrCodeId, 'resident'));
+      return;
+    }
     showForm();
   } catch (err) {
     console.error('init error:', err);

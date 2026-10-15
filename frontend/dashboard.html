@@ -1158,14 +1158,33 @@
       border-radius: 12px; padding: 14px; display: flex; flex-direction: column;
       align-items: center; gap: 10px; text-align: center;
     }
+    /* The qualifier ("up to 72 hrs", "owner-approved") sits beside the heading
+       when the tile is wide enough and drops under it when not; it is never
+       broken across two lines to squeeze in. */
     .pd-qr-head {
-      display: flex; align-items: baseline; gap: 8px; width: 100%; justify-content: space-between;
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; width: 100%;
+      justify-content: space-between;
     }
-    .pd-qr-sub { font-size: 10px; color: var(--text-faint); letter-spacing: .04em; }
+    .pd-qr-sub { font-size: 10px; color: var(--text-faint); letter-spacing: .04em; white-space: nowrap; }
+    /* Side by side, from the 521px at which the grid has two columns up to the
+       640px at which the column stops growing, a pair puts its qualifiers under
+       the headings in both tiles. Left to flow, whether one fits beside its
+       heading depends on the words in that tile and on the font, so one tile
+       stacked while its neighbour did not and the two codes sat at different
+       heights. Above 640px the tiles are as wide as they get and the qualifiers
+       sit beside the headings, as they did. A lone tile (a plaza's) is left to
+       flow at every width. */
+    @media (min-width: 521px) and (max-width: 640px) {
+      .pd-qr-tile:not(:only-child) .pd-qr-head { flex-direction: column; align-items: flex-start; gap: 2px; }
+    }
     .pd-qr-canvas-wrap {
       background: #fff; padding: 8px; border-radius: 8px; line-height: 0;
     }
-    .pd-qr-canvas-wrap canvas { display: block; width: 160px; height: 160px; }
+    /* qrcode's toCanvas() writes an inline 320px width and height, which beats
+       any stylesheet width, so a fixed size here never applied, and the tile
+       could not shrink below 366px (wider than a phone's column). Follow the
+       tile instead, and keep the QR square. */
+    .pd-qr-canvas-wrap canvas { display: block; max-width: 100%; height: auto !important; }
     .pd-qr-fallback {
       font-size: 11px; font-weight: 600; color: var(--yellow);
       text-align: center; max-width: 176px;

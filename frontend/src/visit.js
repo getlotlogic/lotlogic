@@ -13,6 +13,7 @@ import {
   pgRest, backendRegister, getRecaptchaToken, friendlyErrorMessage,
   escapeHtml, showNotFound, showConnectionError, normalizePlate, normalizePhone,
   newIdempotencyKey, REGION_TOKENS, PROPERTY_COLUMNS, propertyQuery, BACKEND_URL,
+  aptEntryUrl,
 } from './shared/register.js';
 import { DEFAULT_TRUCK_PLAZA_POLICY } from './shared/policy.js';
 
@@ -44,6 +45,11 @@ async function init() {
       return;
     }
     property = data;
+    // An apartment has one entry, /apt/<qr>; this page only serves the rest.
+    if (property.property_type === 'apartment') {
+      window.location.replace(aptEntryUrl(qrCodeId, 'guest'));
+      return;
+    }
     if (plazaPaymentId && property.property_type === 'truck_plaza') {
       handlePlazaReturn(plazaPaymentId);
       return;

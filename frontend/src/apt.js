@@ -19,7 +19,7 @@
 import {
   pgRest, backendRegister, getRecaptchaToken, friendlyErrorMessage,
   escapeHtml, showNotFound, showConnectionError, normalizePlate, normalizePhone,
-  newIdempotencyKey, propertyQuery, logoHtml, BACKEND_URL,
+  newIdempotencyKey, propertyQuery, logoHtml, BACKEND_URL, initialScreenForRole,
 } from './shared/register.js';
 
 async function uploadFile(file, kind, timeoutMs = 30000) {
@@ -80,11 +80,23 @@ async function init() {
       return;
     }
     property = data;
-    showLanding();
+    showFirstScreen();
   } catch (err) {
     console.error('init error:', err);
     showConnectionError(err, init);
   }
+}
+
+// ── First screen: ?role= skips the landing (Task F2) ────────────────
+// The dashboard's QR codes and copy links, and the /perm/ and /temp/ pages for
+// an apartment, arrive as /apt/<qr>?role=resident or ?role=guest. Those open
+// the matching form directly; no role, or one we don't know, is the landing.
+// The back link on each form still returns to the landing.
+function showFirstScreen() {
+  const screen = initialScreenForRole(window.location.search);
+  if (screen === 'resident') showResidentForm();
+  else if (screen === 'guest') showGuestForm();
+  else showLanding();
 }
 
 // ── Landing: Resident vs Guest ──────────────────────────────────────

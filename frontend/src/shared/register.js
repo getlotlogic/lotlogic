@@ -311,3 +311,9 @@ export const PROPERTY_COLUMNS = 'id,name,address,property_type,policy_text,polic
 export function propertyQuery(qrCodeId, columns) {
   return `/properties?select=${columns}&qr_code_id=eq.${encodeURIComponent(qrCodeId)}&limit=1`;
 }
+
+// The apartment entry's pure helpers (?role= -> first screen, the /apt/
+// address) live in ./aptEntry.js, which touches no DOM while loading and so can
+// also be imported by Node tests and by the dashboard. Re-exported here so the
+// three public pages keep a single import source.
+export { initialScreenForRole, aptEntryUrl } from './aptEntry.js';
