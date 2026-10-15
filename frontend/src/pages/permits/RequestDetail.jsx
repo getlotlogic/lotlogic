@@ -12,6 +12,7 @@ import {
   telHref,
   unitLabel,
   unitText,
+  vehicleLine,
 } from '../../lib/permitsQueue.js';
 import { EvidenceCard } from './Evidence.jsx';
 import { MoreMenu, PlateChip, Tag, TypeTag } from './parts.jsx';
@@ -45,6 +46,7 @@ export function RequestDetail({
   const longTerm = isLongTerm(row);
   const name = holderName(row);
   const unit = unitText(row);
+  const car = vehicleLine(row);
   const phone = String(row.phone || '').trim();
   const email = String(row.email || '').trim();
   const tel = telHref(phone);
@@ -64,6 +66,7 @@ export function RequestDetail({
           <span className="pq-sr">Parking pass request for </span>
           <PlateChip row={row} large />
         </h2>
+        {car && <p className="pq-vehicle">{car}</p>}
         <div className="pq-tags">
           <Tag tone={status.tone}>{status.text}</Tag>
           <TypeTag row={row} />
