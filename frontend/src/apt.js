@@ -1390,7 +1390,7 @@ function showGuestForm() {
       <div class="file-hint" id="g_id_hint">Government-issued photo ID.</div>
 
       <label for="g_hours">How long will you be here?</label>
-      <select id="g_hours" required>${hourOptions.join('')}</select>
+      <div class="select-wrap"><select id="g_hours" required>${hourOptions.join('')}</select></div>
 
       <label class="check-row" for="g_temp_tag">
         <input type="checkbox" id="g_temp_tag">

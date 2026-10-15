@@ -169,8 +169,9 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--st
   margin: 0 0 8px;
 }
 
-/* The color select (Task F5a). The browser's own arrow is off (appearance: none,
-   below), so the control draws a chevron of its own and still reads as a menu. */
+/* The selects (Task F5a: Color on both forms, "How long" on the short-term form). The
+   browser's own arrow is off (appearance: none, below), so the control draws a chevron of
+   its own and still reads as a menu. */
 .select-wrap { position: relative; }
 .select-wrap select { padding-right: 44px; }
 .select-wrap::after {

@@ -433,6 +433,11 @@ test.describe('apartment long-term request @portal', () => {
     await expect(make).toHaveAttribute('maxlength', '40');
     await expect(model).toHaveAttribute('maxlength', '40');
     await expect(color.locator('option')).toHaveCount(15);
+    // The page turns the browser's own arrow off, so every select on the form draws the same
+    // chevron of its own: Color and "How long" look like the menus they are.
+    for (const id of ['g_color', 'g_hours']) {
+      expect(await page.locator(`#${id}`).evaluate((el) => getComputedStyle(el.parentElement!, '::after').content), `${id} draws a chevron`).toBe('""');
+    }
     // Marked required for assistive technology, but not `required`: the browser's own bubble would
     // replace the form's words (the empty submit below shows ours).
     for (const control of [make, model, color]) await expect(control).toHaveAttribute('aria-required', 'true');
