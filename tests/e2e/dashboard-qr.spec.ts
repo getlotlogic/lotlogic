@@ -26,6 +26,11 @@
  *     stylesheet width can beat, which made a tile 366px wide and clipped it on
  *     any column narrower than that. The heading's qualifier ("up to 72 hrs") is
  *     not broken across two lines to fit beside it; it moves under it.
+ *   - side by side, the two codes sit level at every width: from the one-column
+ *     breakpoint to 640px, where the column stops growing, the pair stacks its
+ *     qualifiers under the headings together instead of one tile doing it and
+ *     its neighbour not (which set one code 16px lower). A plaza's lone tile
+ *     keeps its qualifier beside its heading.
  *   - an apartment hands out ONE entry, /apt/<qr>, with the role in the query
  *     (short-term = guest, long-term = resident), on the tile and on Copy link,
  *     and says "parking pass"; a truck plaza keeps /temp/<qr> and its own label.
@@ -371,6 +376,56 @@ test.describe('property QR codes @desktop-only', () => {
       }
     });
   }
+
+  // Side by side, whether a tile's qualifier fits beside its heading depends on
+  // the words in that tile and on the font, so left to flow one tile stacked it
+  // while its neighbour did not, and the two codes sat at different heights (16px
+  // apart in Manrope between about 566 and 600px). From the one-column
+  // breakpoint to 640px, where the column stops growing, the pair stacks
+  // together; the layout is the same at every width above that.
+  test('the two QR codes sit level at every width the pair is squeezed, 521 to 640px', async ({ page }) => {
+    await page.setViewportSize({ width: 600, height: 900 });
+    const detail = await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
+    await expect.poll(() => canvasHasInk(page, TILE_CANVAS(1)), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => canvasHasInk(page, TILE_CANVAS(2)), { timeout: 15_000 }).toBe(true);
+    const uneven: Array<[width: number, apart: number]> = [];
+    for (let width = 521; width <= 640; width++) {
+      await page.setViewportSize({ width, height: 900 });
+      const first = (await page.locator(TILE_CANVAS(1)).boundingBox())!;
+      const second = (await page.locator(TILE_CANVAS(2)).boundingBox())!;
+      if (Math.abs(first.y - second.y) >= 1) uneven.push([width, Math.round(second.y - first.y)]);
+    }
+    // "566-599px (16px apart)" reads better in a failure than one line per width.
+    const ranges: string[] = [];
+    for (let i = 0; i < uneven.length; ) {
+      let j = i;
+      while (j + 1 < uneven.length && uneven[j + 1][0] === uneven[j][0] + 1 && uneven[j + 1][1] === uneven[i][1]) j++;
+      ranges.push(`${uneven[i][0]}-${uneven[j][0]}px (${uneven[i][1]}px apart)`);
+      i = j + 1;
+    }
+    expect(ranges, 'widths at which the two codes are not level').toEqual([]);
+  });
+
+  test('the pair puts its qualifiers under their headings while squeezed, and beside them once the column is full width', async ({ page }) => {
+    const direction = async (width: number) => {
+      await page.setViewportSize({ width, height: 900 });
+      return page.locator('#qr-harness .pd-qr-head').evaluateAll((heads) => heads.map((h) => getComputedStyle(h).flexDirection));
+    };
+    await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
+    expect(await direction(521), 'at 521px').toEqual(['column', 'column']);
+    expect(await direction(580), 'at 580px').toEqual(['column', 'column']);
+    expect(await direction(640), 'at 640px').toEqual(['column', 'column']);
+    expect(await direction(641), 'at 641px').toEqual(['row', 'row']);
+    expect(await direction(1100), 'at 1100px').toEqual(['row', 'row']);
+  });
+
+  test('a truck plaza\'s lone tile keeps its qualifier beside its heading', async ({ page }) => {
+    await page.setViewportSize({ width: 580, height: 900 });
+    const detail = await mountPropertyDetail(page, { propertyType: 'truck_plaza' });
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(1);
+    await expect(detail.locator('.pd-qr-head')).toHaveCSS('flex-direction', 'row');
+  });
 
   // Two tests were removed here, both stale for the same reason: qrcode is
   // bundled (Task 14), not loaded from a CDN.
