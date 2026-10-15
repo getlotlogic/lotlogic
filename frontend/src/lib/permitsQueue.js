@@ -3,8 +3,9 @@
 // Everything the Passes tab decides without a DOM: which segment a row is in,
 // how requests group by unit against the property's vehicle cap, which pending
 // row would put a unit over that cap, the age chip against the 72-hour review
-// window, the sentence a denial sends, what each document should prove, and
-// the `?status=&q=` round trip. `scripts/permitsQueue.test.mjs` covers it.
+// window, the sentence a denial sends, what each document should prove, the
+// car on a request (task F5b) and what the search matches, and the
+// `?status=&q=` round trip. `scripts/permitsQueue.test.mjs` covers it.
 //
 // Rows come from `GET /apartment/passes/permits` (`{residents, guests}`) and
 // keep every server column; `queueRows` only adds `kind` (the API path word,
@@ -93,11 +94,36 @@ export function unitLabel(typed) {
   return /^(unit|apt|apartment)\b/i.test(t) ? t : `Unit ${t}`;
 }
 
-/** Plate or unit, both normalised; a search that normalises to nothing keeps every row. */
+function trimmed(value) {
+  return String(value ?? '').trim();
+}
+
+/**
+ * The car in words, "white Honda Civic": the server's `vehicle` display string
+ * when it sent one (task B4); else the color, make and model joined, color in
+ * lower case and make and model as typed; else the free-text description a
+ * request carried before those fields existed; else ''.
+ */
+export function vehicleLine(row) {
+  const shown = trimmed(row?.vehicle);
+  if (shown) return shown;
+  const parts = [trimmed(row?.vehicle_color).toLowerCase(), trimmed(row?.vehicle_make), trimmed(row?.vehicle_model)].filter(Boolean);
+  return parts.length ? parts.join(' ') : trimmed(row?.vehicle_description);
+}
+
+/**
+ * Plate, unit or car. Plate and unit match the search as one run of letters
+ * and digits. The car matches word by word, each word normalised the same way,
+ * so "white civic" finds "white Honda Civic" in either order. A search that
+ * normalises to nothing keeps every row.
+ */
 export function matchesSearch(row, q) {
   const needle = normalizePlate(q);
   if (!needle) return true;
-  return normalizePlate(row?.plate_text).includes(needle) || normalizeUnit(unitText(row)).includes(needle);
+  if (normalizePlate(row?.plate_text).includes(needle) || normalizeUnit(unitText(row)).includes(needle)) return true;
+  const car = normalizePlate(vehicleLine(row));
+  if (!car) return false;
+  return String(q).split(/\s+/).map(normalizePlate).filter(Boolean).every(word => car.includes(word));
 }
 
 // ── The vehicle cap ───────────────────────────────────────────
@@ -355,15 +381,18 @@ export function initialDenyReason(row, { viaOverLimit = false, requireRegistrati
  * The documents to show beside a request, in the order the manager checks
  * them, each with the typed value it should prove. Long-term requests carry
  * five (the vehicle photo is optional — task B3, spec R2b); short-term
- * requests only ever carry a plate photo and a photo ID.
+ * requests only ever carry a plate photo and a photo ID. The plate photo also
+ * names the car on the request (task F5b), so the manager can match the car
+ * in the photo.
  */
 export function evidenceCards(row) {
   const plate = plateText(row);
   const name = holderName(row);
   const unit = unitText(row);
+  const car = vehicleLine(row);
   const plateLine = plate ? `Should show ${plate}` : 'Should show the plate on this request';
   const nameLine = name ? `Should name ${name}` : 'Should name the person on this request';
-  const plateCard = { which: 'plate', title: 'Plate photo', short: 'Plate', present: !!row?.has_plate, should: [plateLine] };
+  const plateCard = { which: 'plate', title: 'Plate photo', short: 'Plate', present: !!row?.has_plate, should: car ? [plateLine, car] : [plateLine] };
   const idCard = { which: 'id', title: 'Photo ID', short: 'ID', present: !!row?.has_id, should: [nameLine] };
   if (!isLongTerm(row)) return [plateCard, idCard];
   const leaseLine = name && unit ? `Should name ${name} and unit ${unit}`

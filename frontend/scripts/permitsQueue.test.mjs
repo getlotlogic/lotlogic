@@ -14,6 +14,7 @@ import {
   normalizeUnit,
   normalizePlate,
   matchesSearch,
+  vehicleLine,
   capOf,
   unitTally,
   overLimitKeys,
@@ -55,7 +56,8 @@ import {
 
 // ── Fixtures ─────────────────────────────────────────────────
 // Shaped exactly like `GET /apartment/passes/permits` rows
-// (`build_resident_list_sql` / `build_guest_list_sql`), every column present.
+// (`build_resident_list_sql` / `build_guest_list_sql`), every column present —
+// including the four vehicle columns task B4 adds (null when no car is on file).
 
 const NOW = Date.parse('2026-10-15T16:00:00Z');
 const HOUR = 3600000;
@@ -75,6 +77,10 @@ function longTerm(id, over = {}) {
     has_plate: true,
     has_registration: true,
     has_vehicle_photo: false,
+    vehicle: null,
+    vehicle_make: null,
+    vehicle_model: null,
+    vehicle_color: null,
     created_at: ago(1),
     reviewed_at: null,
     ...over,
@@ -97,6 +103,10 @@ function shortTerm(id, over = {}) {
     email: 'sam@example.test',
     has_id: true,
     has_plate: true,
+    vehicle: null,
+    vehicle_make: null,
+    vehicle_model: null,
+    vehicle_color: null,
     created_at: ago(1),
     reviewed_at: null,
     ...over,
@@ -169,6 +179,131 @@ test('search matches a normalised plate or unit', () => {
 test('a short-term row is searched by the unit it is visiting', () => {
   const [row] = rowsOf([], [shortTerm('g1', { host_unit: '330' })]);
   assert.equal(matchesSearch(row, '330'), true);
+});
+
+// ── The vehicle line (task F5b) ──────────────────────────────
+// Task B4 puts `vehicle` (the display string) and `vehicle_make` /
+// `vehicle_model` / `vehicle_color` on every row. A request made before that
+// carries at most the free-text `vehicle_description`.
+
+test('the vehicle line is the server\'s display string when it sent one', () => {
+  const [row] = rowsOf([longTerm('v1', {
+    vehicle: 'white Honda Civic',
+    vehicle_color: 'black',
+    vehicle_make: 'Ford',
+    vehicle_model: 'F-150',
+    vehicle_description: 'Blue Kia Soul',
+  })]);
+  assert.equal(vehicleLine(row), 'white Honda Civic', 'the display string beats the three fields and the old description');
+});
+
+test('without a display string the line joins color, make and model, the color in lower case', () => {
+  const [typed] = rowsOf([longTerm('v1', { vehicle_color: 'White', vehicle_make: 'Honda', vehicle_model: 'Civic' })]);
+  assert.equal(vehicleLine(typed), 'white Honda Civic');
+  const [spaced] = rowsOf([longTerm('v2', { vehicle_color: ' beige ', vehicle_make: ' Land Rover ', vehicle_model: ' Defender 90 ' })]);
+  assert.equal(vehicleLine(spaced), 'beige Land Rover Defender 90', 'make and model keep their typing; stray spaces go');
+  for (const blank of ['', '   ', null, undefined]) {
+    const [row] = rowsOf([longTerm('v3', { vehicle: blank, vehicle_color: 'gray', vehicle_make: 'Subaru', vehicle_model: 'Outback' })]);
+    assert.equal(vehicleLine(row), 'gray Subaru Outback', `a blank display string (${JSON.stringify(blank)}) counts as none`);
+  }
+});
+
+test('the three fields beat the free-text description, and a field left blank is skipped', () => {
+  const [all] = rowsOf([longTerm('v1', {
+    vehicle_color: 'red', vehicle_make: 'Kia', vehicle_model: 'Soul', vehicle_description: 'Blue Honda Civic',
+  })]);
+  assert.equal(vehicleLine(all), 'red Kia Soul');
+  const [noColor] = rowsOf([longTerm('v2', { vehicle_color: '', vehicle_make: 'Kia', vehicle_model: 'Soul' })]);
+  assert.equal(vehicleLine(noColor), 'Kia Soul');
+  const [colorOnly] = rowsOf([longTerm('v3', { vehicle_color: 'Green' })]);
+  assert.equal(vehicleLine(colorOnly), 'green');
+});
+
+test('a request made before the three fields existed shows the description it was typed with', () => {
+  const [old] = rowsOf([longTerm('v1', { vehicle_description: '  Blue Honda Civic ' })]);
+  assert.equal(vehicleLine(old), 'Blue Honda Civic', 'as typed, trimmed');
+  const [blanks] = rowsOf([longTerm('v2', { vehicle_description: 'Blue Honda Civic', vehicle_make: null, vehicle_model: '', vehicle_color: '  ' })]);
+  assert.equal(vehicleLine(blanks), 'Blue Honda Civic', 'blank fields do not hide it');
+});
+
+test('no vehicle data is an empty line, never "undefined" or "null"', () => {
+  assert.equal(vehicleLine(rowsOf([longTerm('v1')])[0]), '');
+  assert.equal(vehicleLine(rowsOf([longTerm('v2', { vehicle: '', vehicle_description: '   ' })])[0]), '');
+  const beforeB4 = { id: 'v3', kind: 'resident', key: 'resident:v3', plate_text: 'TEST001' };
+  assert.equal(vehicleLine(beforeB4), '', 'a payload from a backend without the columns');
+  assert.equal(vehicleLine({}), '');
+  assert.equal(vehicleLine(null), '');
+  assert.equal(vehicleLine(undefined), '');
+});
+
+test('a short-term request carries the same vehicle fields', () => {
+  const [row] = rowsOf([], [shortTerm('g1', { vehicle_color: 'Silver', vehicle_make: 'Toyota', vehicle_model: 'Camry' })]);
+  assert.equal(vehicleLine(row), 'silver Toyota Camry');
+});
+
+test('search finds a request by its car: color, make or model, in any case', () => {
+  const [row] = rowsOf([longTerm('s1', { plate_text: 'ABC1234', unit_number: '214', vehicle: 'white Honda Civic' })]);
+  for (const q of ['white', 'WHITE', 'honda', 'Honda', 'civic', 'hon']) {
+    assert.equal(matchesSearch(row, q), true, q);
+  }
+  for (const q of ['black', 'toyota', 'accord']) {
+    assert.equal(matchesSearch(row, q), false, q);
+  }
+});
+
+test('search takes the car in words: "white civic" finds a white Honda Civic, in either order', () => {
+  const [row] = rowsOf([longTerm('s1', { vehicle: 'white Honda Civic' })]);
+  for (const q of ['white civic', 'civic white', 'white honda civic', ' Honda   Civic ']) {
+    assert.equal(matchesSearch(row, q), true, q);
+  }
+  for (const q of ['white accord', 'black civic', 'white civic 2020']) {
+    assert.equal(matchesSearch(row, q), false, `${q} (every word has to be in the car)`);
+  }
+  const [benz] = rowsOf([longTerm('s2', { vehicle_color: 'Black', vehicle_make: 'Mercedes-Benz', vehicle_model: 'C 300' })]);
+  for (const q of ['mercedes benz', 'mercedesbenz', 'black c300', 'c-300']) {
+    assert.equal(matchesSearch(benz, q), true, q);
+  }
+});
+
+test('search reads the car from the three fields, or the old description, when no display string came', () => {
+  const [fields] = rowsOf([longTerm('s1', { vehicle_color: 'Silver', vehicle_make: 'Toyota', vehicle_model: 'Camry' })]);
+  assert.equal(matchesSearch(fields, 'silver camry'), true);
+  assert.equal(matchesSearch(fields, 'toyota'), true);
+  const [old] = rowsOf([longTerm('s2', { vehicle_description: 'Blue Kia Soul' })]);
+  assert.equal(matchesSearch(old, 'kia soul'), true);
+  assert.equal(matchesSearch(old, 'blue'), true);
+  assert.equal(matchesSearch(old, 'honda'), false);
+});
+
+test('a request with no car on file is not found by a car word, and plate and unit search work as before', () => {
+  const [bare] = rowsOf([longTerm('s1', { plate_text: 'ABC1234', unit_number: '#214' })]);
+  assert.equal(matchesSearch(bare, 'honda'), false);
+  assert.equal(matchesSearch(bare, 'white'), false);
+  assert.equal(matchesSearch(bare, 'abc 12'), true);
+  assert.equal(matchesSearch(bare, '214'), true);
+  const [withCar] = rowsOf([longTerm('s2', { plate_text: 'ABC1234', unit_number: '#214', vehicle: 'white Honda Civic' })]);
+  assert.equal(matchesSearch(withCar, 'abc 12'), true, 'the car does not hide the plate');
+  assert.equal(matchesSearch(withCar, '214'), true, 'or the unit');
+  assert.equal(matchesSearch(withCar, 'XYZ'), false);
+});
+
+test('the queue lists, groups and counts only the requests whose car matches the search', () => {
+  const rows = rowsOf([
+    longTerm('a', { plate_text: 'TEST0A', unit_number: '101', vehicle: 'white Honda Civic', created_at: ago(5) }),
+    longTerm('b', { plate_text: 'TEST0B', unit_number: '102', vehicle_color: 'Black', vehicle_make: 'Ford', vehicle_model: 'F-150', created_at: ago(4) }),
+    longTerm('c', { plate_text: 'TEST0C', unit_number: '103', created_at: ago(3) }),
+    longTerm('d', { plate_text: 'TEST0D', unit_number: '104', status: 'approved', vehicle: 'white Toyota Camry', created_at: ago(9), reviewed_at: ago(2) }),
+    longTerm('e', { plate_text: 'TEST0E', unit_number: '105', status: 'rejected', vehicle: 'red Honda Accord', created_at: ago(8), reviewed_at: ago(2) }),
+  ]);
+  const listed = (q) => reviewGroups(rows, { q }).flatMap(g => g.rows).map(r => r.key);
+  assert.deepEqual(listed('honda'), ['resident:a']);
+  assert.deepEqual(listed('f-150'), ['resident:b'], 'the three fields count');
+  assert.deepEqual(listed('red'), [], 'a denied request is not in Needs review');
+  assert.deepEqual(keys(decidedRows(rows, 'approved', 'white')), ['resident:d']);
+  assert.deepEqual(keys(decidedRows(rows, 'denied', 'honda accord')), ['resident:e']);
+  assert.deepEqual(segmentCounts(rows, 'white'), { pending: 1, approved: 1, denied: 0 });
+  assert.deepEqual(segmentCounts(rows, 'honda'), { pending: 1, approved: 0, denied: 1 });
+  assert.deepEqual(segmentCounts(rows), { pending: 3, approved: 1, denied: 1 });
 });
 
 // ── The vehicle cap ──────────────────────────────────────────
@@ -491,6 +626,26 @@ test('the vehicle photo is optional: never missing, never a reason to deny', () 
   assert.equal(initialDenyReason(noCar, {}), null);
   const [legacy] = rowsOf([{ ...longTerm('l'), has_vehicle_photo: undefined }]);
   assert.equal(evidenceCards(legacy).find(c => c.which === 'vehicle').present, false, 'a list without the column reads as not provided');
+});
+
+test('the plate photo card also names the car the photo should show, when the request names one', () => {
+  const [row] = rowsOf([longTerm('r1', {
+    plate_text: 'ABC1234', holder_name: 'Jane Example', unit_number: '214', has_registration: false, has_vehicle_photo: true,
+    vehicle: 'white Honda Civic',
+  })]);
+  assert.deepEqual(evidenceCards(row), [
+    { which: 'plate', title: 'Plate photo', short: 'Plate', present: true, should: ['Should show ABC1234', 'white Honda Civic'] },
+    { which: 'vehicle', title: 'Vehicle photo', short: 'Car', present: true, should: ['Should show ABC1234'] },
+    { which: 'registration', title: 'Registration', short: 'Registration', present: false, should: ['Should show ABC1234', "Should be in a leaseholder's name"] },
+    { which: 'id', title: 'Photo ID', short: 'ID', present: true, should: ['Should name Jane Example'] },
+    { which: 'lease', title: 'Lease', short: 'Lease', present: true, should: ['Should name Jane Example and unit 214'] },
+  ]);
+  const [fields] = rowsOf([longTerm('r2', { plate_text: 'ABC1234', vehicle_color: 'Gray', vehicle_make: 'Subaru', vehicle_model: 'Outback' })]);
+  assert.deepEqual(evidenceCards(fields)[0].should, ['Should show ABC1234', 'gray Subaru Outback']);
+  const [short] = rowsOf([], [shortTerm('g1', { plate_text: 'XYZ987', vehicle_description: 'Blue Kia Soul' })]);
+  assert.deepEqual(evidenceCards(short)[0].should, ['Should show XYZ987', 'Blue Kia Soul']);
+  const [none] = rowsOf([longTerm('r3', { plate_text: 'ABC1234' })]);
+  assert.deepEqual(evidenceCards(none)[0].should, ['Should show ABC1234'], 'no car named, no extra line');
 });
 
 // ── URL state ────────────────────────────────────────────────
