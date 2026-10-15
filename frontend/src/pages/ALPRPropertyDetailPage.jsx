@@ -873,7 +873,7 @@ export function ALPRPropertyDetailPage({
       {/* Two QR codes — one for Temporary, one for Permanent. Owner-only.
           Partners don't share QR codes with drivers — that's the property
           owner's onboarding flow. */}
-      {isOwner && !requestsOnly && (
+      {isOwner && !requestsOnly && property.qr_code_id && (
         <div className="pd-qr-grid">
           <div className="pd-qr-tile">
             <div className="pd-qr-head">

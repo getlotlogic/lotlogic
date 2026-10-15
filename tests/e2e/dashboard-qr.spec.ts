@@ -33,7 +33,8 @@
  *     printed under it, so a pair swapped between the tiles, or still pointing
  *     at the old /temp/ and /perm/ pages, fails here and not on a printed sign.
  *   - the codes are drawn again when the page reloads its data (which unmounts
- *     the tiles).
+ *     the tiles), and a property with no registration address shows no tiles
+ *     rather than a blank box over a link that ends in /null.
  *
  * Tagged @desktop-only so the mobile-safari project (which targets the remote
  * deploy) skips it.
@@ -70,6 +71,9 @@ test.afterAll(async () => {
 type Options = {
   /** Truck plazas only show the self-serve tile; apartments show both. */
   propertyType?: string;
+  /** The property's `qr_code_id`; null is a property that has no slug yet
+   *  (every portal signup, until one is assigned). */
+  qrCodeId?: string | null;
   /** The section the page opens on (the deep link / remembered chip). Left
    *  out, the page picks its own default: Requests for an apartment. */
   initialSection?: string;
@@ -81,7 +85,7 @@ type Options = {
  */
 async function mountPropertyDetail(
   page: Page,
-  { propertyType = 'apartment', initialSection }: Options = {},
+  { propertyType = 'apartment', qrCodeId = QR_CODE_ID, initialSection }: Options = {},
 ) {
   const json = (body: unknown, status = 200) => ({
     status, contentType: 'application/json', body: JSON.stringify(body),
@@ -150,7 +154,7 @@ async function mountPropertyDetail(
       // (loadAll depends on user.id) and nothing the tiles depend on changes.
       signInAs(id: string) { render({ _role: 'owner', id }); },
     };
-  }, { propertyId: PROPERTY_ID, qrCodeId: QR_CODE_ID, type: propertyType, section: initialSection ?? null });
+  }, { propertyId: PROPERTY_ID, qrCodeId, type: propertyType, section: initialSection ?? null });
 
   const detail = page.locator('#qr-harness');
   await expect(detail.locator('[data-testid="pd-section-chips"]')).toBeVisible();
@@ -326,6 +330,15 @@ test.describe('property QR codes @desktop-only', () => {
     await tile.getByRole('button', { name: 'Copy link' }).click();
     await expect(page.getByText('Self-serve link copied')).toBeVisible();
     expect(await copiedLinks(page)).toEqual([`${origin}/temp/${QR_CODE_ID}`]);
+  });
+
+  test('a property with no registration address shows no QR tiles and no link that ends in /null', async ({ page }) => {
+    const detail = await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all', qrCodeId: null });
+    // The page has loaded (its section chips are up); a tile now would be a
+    // blank box over a link the manager could copy and print.
+    await expect(detail.locator('.pd-qr-tile')).toHaveCount(0);
+    await expect(detail.getByRole('button', { name: 'Copy link' })).toHaveCount(0);
+    await expect(detail).not.toContainText('/null');
   });
 
   for (const width of [360, 390, 600]) {
