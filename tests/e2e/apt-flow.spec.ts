@@ -409,6 +409,8 @@ test.describe('apartment long-term request @portal', () => {
     });
 
     await page.goto(`${frontendOrigin()}/apt/${apartment.slug}?role=guest`);
+    await expect(page.getByLabel('Full name')).toBeVisible();
+    await expectNoOfficePhone(page, 'the short-term form');
     await page.getByLabel('Full name').fill('Sam Parker');
     await page.getByLabel("Unit you're visiting").fill('12B');
     await page.getByLabel('Phone number').fill('7045550123');
