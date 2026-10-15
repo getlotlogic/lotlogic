@@ -36,14 +36,17 @@ export function aptEntryUrl(qrCodeId, role) {
 /**
  * The two public registration links a property hands out (the dashboard's QR
  * tiles and Copy link buttons). An apartment has one entry and the role picks
- * the form; every other type keeps its own two pages.
+ * the form; every other type keeps its own two pages. A property with no
+ * `qr_code_id` yet (every portal signup, until one is assigned) has no address
+ * to hand out: both links are null, never one that ends in /null.
  * @param {string} origin  e.g. window.location.origin
- * @param {{property_type?: string|null, qr_code_id?: string|null}} property
- * @returns {{shortTermUrl: string, longTermUrl: string}}
+ * @param {{property_type?: string|null, qr_code_id?: string|null}|null|undefined} property
+ * @returns {{shortTermUrl: string|null, longTermUrl: string|null}}
  */
 export function registrationLinks(origin, property) {
   const qr = property && property.qr_code_id;
-  if (property && property.property_type === 'apartment') {
+  if (!qr) return { shortTermUrl: null, longTermUrl: null };
+  if (property.property_type === 'apartment') {
     return {
       shortTermUrl: origin + aptEntryUrl(qr, 'guest'),
       longTermUrl: origin + aptEntryUrl(qr, 'resident'),

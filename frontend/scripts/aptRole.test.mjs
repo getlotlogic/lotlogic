@@ -95,6 +95,20 @@ test('any other type, or none, keeps /temp/<qr> and /perm/<qr> too', () => {
   }
 });
 
+test('a property with no registration address has no links, not links that end in /null', () => {
+  for (const property_type of ['apartment', 'truck_plaza', null]) {
+    for (const qr_code_id of [null, undefined, '']) {
+      assert.deepEqual(
+        registrationLinks(ORIGIN, { property_type, qr_code_id }),
+        { shortTermUrl: null, longTermUrl: null },
+        `${property_type} / ${JSON.stringify(qr_code_id)}`,
+      );
+    }
+  }
+  assert.deepEqual(registrationLinks(ORIGIN, null), { shortTermUrl: null, longTermUrl: null });
+  assert.deepEqual(registrationLinks(ORIGIN, undefined), { shortTermUrl: null, longTermUrl: null });
+});
+
 // ── what the three public pages do with them ───────────────────────────────
 // resident.js, visit.js and apt.js run `init()` the moment they load and talk
 // to `window`, `document` and `fetch`. This stubs just enough of each to watch
