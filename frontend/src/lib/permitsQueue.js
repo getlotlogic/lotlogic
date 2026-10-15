@@ -369,9 +369,9 @@ export function decisionEmailLine({ propertyName = '', reason = '' } = {}) {
 export const TOW_NOTE = "Please note: vehicles parked on the property without an approved parking pass are subject to tow at the vehicle owner's expense.";
 
 /** Which reason the sheet opens on: over limit from that button, missing when a document is. */
-export function initialDenyReason(row, { viaOverLimit = false, requireRegistration = false } = {}) {
+export function initialDenyReason(row, { viaOverLimit = false, requireRegistration = false, requireLease = true } = {}) {
   if (viaOverLimit) return 'over_cap';
-  if (missingDocs(row, { requireRegistration }).length) return 'document_missing';
+  if (missingDocs(row, { requireRegistration, requireLease }).length) return 'document_missing';
   return null;
 }
 
@@ -385,7 +385,7 @@ export function initialDenyReason(row, { viaOverLimit = false, requireRegistrati
  * names the car on the request (task F5b), so the manager can match the car
  * in the photo.
  */
-export function evidenceCards(row) {
+export function evidenceCards(row, { requireLease = true } = {}) {
   const plate = plateText(row);
   const name = holderName(row);
   const unit = unitText(row);
@@ -399,12 +399,16 @@ export function evidenceCards(row) {
     : name ? `Should name ${name}`
       : unit ? `Should show unit ${unit}`
         : 'Should name a leaseholder';
+  // A property that does not ask for the lease: a lease that came anyway is shown as usual, none is "not required".
+  const leasePresent = !!row?.has_lease;
+  const leaseCard = { which: 'lease', title: 'Lease', short: 'Lease', present: leasePresent, should: [leaseLine] };
+  if (!requireLease && !leasePresent) leaseCard.notRequired = true;
   return [
     plateCard,
     { which: 'vehicle', title: 'Vehicle photo', short: 'Car', present: !!row?.has_vehicle_photo, should: [plateLine] },
     { which: 'registration', title: 'Registration', short: 'Registration', present: !!row?.has_registration, should: [plateLine, "Should be in a leaseholder's name"] },
     idCard,
-    { which: 'lease', title: 'Lease', short: 'Lease', present: !!row?.has_lease, should: [leaseLine] },
+    leaseCard,
   ];
 }
 
@@ -417,9 +421,9 @@ export function docPath(row, which) {
 const OPTIONAL_DOCS = new Set(['vehicle']);
 
 /** Expected documents the row lacks; the registration card only where the property requires it. */
-export function missingDocs(row, { requireRegistration = false } = {}) {
-  return evidenceCards(row)
-    .filter(card => !card.present && !OPTIONAL_DOCS.has(card.which) && (card.which !== 'registration' || requireRegistration))
+export function missingDocs(row, { requireRegistration = false, requireLease = true } = {}) {
+  return evidenceCards(row, { requireLease })
+    .filter(card => !card.present && !card.notRequired && !OPTIONAL_DOCS.has(card.which) && (card.which !== 'registration' || requireRegistration))
     .map(card => card.which);
 }
 

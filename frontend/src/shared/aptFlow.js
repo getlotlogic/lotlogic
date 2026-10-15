@@ -185,7 +185,9 @@ export const STRINGS = {
 
     documents: {
       title: 'Your ID and lease',
+      titleIdOnly: 'Your ID',
       intro: "The property office and its parking enforcement company use these documents to confirm you're on the lease for this unit and that the cars are yours.",
+      introIdOnly: "The property office and its parking enforcement company use this to confirm you're on the lease for this unit and that the cars are yours.",
       idTitle: 'Photo ID',
       idChecks: ['Government-issued, not expired', 'Name matches your lease', 'All four corners visible, no glare'],
       leaseTitle: 'Lease',
@@ -377,6 +379,27 @@ export function requiresRegistration(property) {
   return !!property && property.require_vehicle_registration === true;
 }
 
+/** `properties.require_lease`; a missing column, a missing property or NULL all read true (the lease is asked for). */
+export function requiresLease(property) {
+  return !property || property.require_lease !== false;
+}
+
+/** The "You will need" lines on S1 for these rules (`ctx.requireRegistration`, `ctx.requireLease`). */
+export function startNeeds(ctx = {}) {
+  const S1 = STRINGS.en.start;
+  return [
+    S1.needPlate,
+    ctx.requireRegistration ? S1.needRegistration : null,
+    S1.needId,
+    ctx.requireLease !== false ? S1.needLease : null,
+  ].filter(Boolean);
+}
+
+/** The document cards on S4, and the rows under "Documents" on S5: the lease only where the property asks for it. */
+export function documentSlots(ctx = {}) {
+  return ctx.requireLease !== false ? ['id', 'lease'] : ['id'];
+}
+
 // ── steps ───────────────────────────────────────────────────────────────────
 
 const STEP_NAMES = ['start', 'about', 'vehicles', 'documents', 'review', 'received'];
@@ -476,7 +499,8 @@ const slotKind = (slot) => slot.split(':')[0];
  * photo always (null when it was not added).
  */
 export function docRefs(flow, ctx = {}) {
-  const out = { id: flow.docs.id, lease: flow.docs.lease };
+  const out = { id: flow.docs.id };
+  if (ctx.requireLease !== false) out.lease = flow.docs.lease;
   for (const v of flow.vehicles) {
     out[slotId('plate', v.vid)] = v.docs.plate;
     if (ctx.requireRegistration) out[slotId('registration', v.vid)] = v.docs.registration;
@@ -683,7 +707,8 @@ export function validateStep(key, flow, ctx = {}) {
     case 'documents': {
       const errors = [];
       const id = docError('id', flow.docs.id, ctx, S.documents.errorId, cardId('id'));
-      const lease = docError('lease', flow.docs.lease, ctx, S.documents.errorLease, cardId('lease'));
+      const lease = ctx.requireLease === false ? null
+        : docError('lease', flow.docs.lease, ctx, S.documents.errorLease, cardId('lease'));
       if (id) errors.push(id);
       if (lease) errors.push(lease);
       return errors;

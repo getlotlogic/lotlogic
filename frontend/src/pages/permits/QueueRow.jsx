@@ -17,6 +17,7 @@ import { MoreMenu, PlateChip, Tag, TypeTag, whoLine } from './parts.jsx';
 // sits beside the row button, never inside it.
 
 function DocPill({ card }) {
+  if (card.notRequired) return <span className="pq-doc">{card.short} not required</span>;
   if (card.present) {
     return (
       <span className="pq-doc">
@@ -39,9 +40,9 @@ function RemainingTag({ row, now }) {
   return <Tag tone={left > 0 && left < 3600000 ? 'amber' : left > 0 ? 'green' : 'neutral'}>{fmtPassRemaining(left)}</Tag>;
 }
 
-export function QueueRow({ row, now, selected, overLimit, cap, ageChip, showThumb, showUnit, moreItems, onOpen }) {
+export function QueueRow({ row, now, selected, overLimit, cap, requireLease = true, ageChip, showThumb, showUnit, moreItems, onOpen }) {
   const segment = segmentOf(row);
-  const cards = evidenceCards(row);
+  const cards = evidenceCards(row, { requireLease });
   const who = showUnit ? whoLine(row) : holderName(row);
   const car = vehicleLine(row);
   const live = segment === 'approved' && !isLongTerm(row);

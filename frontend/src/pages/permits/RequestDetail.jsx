@@ -28,6 +28,7 @@ export function RequestDetail({
   headingRef,
   propertyName,
   cap,
+  requireLease = true,
   overLimit,
   ageChip,
   unitChip,
@@ -122,7 +123,7 @@ export function RequestDetail({
 
       <h3 className="pq-section-label">Documents</h3>
       <div className="pq-evidence">
-        {evidenceCards(row).map(card => (
+        {evidenceCards(row, { requireLease }).map(card => (
           <EvidenceCard key={`${row.key}:${card.which}`} row={row} card={card} onZoom={onZoom} />
         ))}
       </div>
