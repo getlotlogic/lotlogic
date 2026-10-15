@@ -3,6 +3,8 @@
 // the S1 gate, field validation, phone formatting, the per-unit cap, the
 // persistence reducer (localStorage, 24 h TTL), the backend error → plain
 // language map, the restored-upload card state, and the copy rule.
+// Task F5a adds the vehicle's make, model and color to all of it (the last
+// section before "copy").
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -15,6 +17,8 @@ import {
   serializeFlow, restoreFlow, receiptFlow,
   registerErrorMessage, rejectedUnknownFields, docFields, sentFlags, invalidDocSlots,
   formatSubmitted, copyText, displayPlate, vehicleRowStatus,
+  VEHICLE_COLORS, VEHICLE_MAKES, normalizeVehicleText, vehicleDescription, vehicleLine,
+  vehicleFields, vehicleFieldErrors, vehicleBackendError,
 } from '../src/shared/aptFlow.js';
 import { cardStatusText, isSatisfied } from '../src/shared/docCard.js';
 
@@ -37,6 +41,9 @@ function completeFlow() {
   f.phone = '(704) 555-0123';
   f.email = 'jane@example.com';
   f.vehicles[0].plate = 'ABC 1234';
+  f.vehicles[0].make = 'Honda';
+  f.vehicles[0].model = 'Civic';
+  f.vehicles[0].color = 'white';
   f.vehicles[0].docs = { plate: ref('plate'), registration: ref('registration', 'pdf'), vehicle: null };
   f.another = 'no';
   f.docs = { id: ref('id'), lease: ref('lease', 'pdf') };
@@ -349,6 +356,7 @@ test('S3: the same plate twice in one request is caught', () => {
   let f = completeFlow();
   ({ flow: f } = addVehicle(f));
   f.vehicles[1].plate = 'abc-1234';
+  Object.assign(f.vehicles[1], { make: 'Ford', model: 'F-150', color: 'blue' });
   f.vehicles[1].docs = { plate: ref('plate'), registration: ref('registration') };
   assert.deepEqual(validateStep('vehicle:v2', f, CTX), [
     { field: 'plate-v2', message: "You've already added ABC1234 to this request" },
@@ -523,7 +531,10 @@ test('the receipt keeps plates, references, the time and the email, and forgets 
     submittedAt: NOW,
     unit: '214',
     email: 'jane@example.com',
-    vehicles: [{ plate: 'ABC1234', ref: '8F3E2A1D', registrationSent: false, vehiclePhotoSent: null }],
+    vehicles: [{
+      plate: 'ABC1234', make: 'Honda', model: 'Civic', color: 'white',
+      ref: '8F3E2A1D', registrationSent: false, vehiclePhotoSent: null, detailsSent: true,
+    }],
   });
   assert.equal(f.name, '');
   assert.equal(f.phone, '');
@@ -556,7 +567,10 @@ test('the saved receipt is cleaned: a malformed email is dropped, unknown fields
   const back = restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID });
   assert.equal(back.receipt.email, '');
   assert.deepEqual(Object.keys(back.receipt).sort(), ['email', 'submittedAt', 'unit', 'vehicles']);
-  assert.deepEqual(back.receipt.vehicles[0], { plate: 'ABC1234', ref: '8F3E2A1D', registrationSent: true, vehiclePhotoSent: null });
+  assert.deepEqual(back.receipt.vehicles[0], {
+    plate: 'ABC1234', make: 'Honda', model: 'Civic', color: 'white',
+    ref: '8F3E2A1D', registrationSent: true, vehiclePhotoSent: null, detailsSent: true,
+  });
   raw.flow.receipt.email = 'x'.repeat(250) + '@example.com';
   assert.equal(restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID }).receipt.email, '', 'longer than an address can be');
   delete raw.flow.receipt.email;
@@ -733,11 +747,11 @@ test('docFields: the registration card when required, the vehicle photo whenever
 
 test('sentFlags: what went with the request, for the receipt', () => {
   const v = completeFlow().vehicles[0];
-  assert.deepEqual(sentFlags(v, CTX), { registrationSent: true, vehiclePhotoSent: null }, 'no vehicle photo: nothing to say');
+  assert.deepEqual(sentFlags(v, CTX), { registrationSent: true, vehiclePhotoSent: null, detailsSent: true }, 'no vehicle photo: nothing to say');
   v.docs.vehicle = ref('vehicle');
-  assert.deepEqual(sentFlags(v, CTX), { registrationSent: true, vehiclePhotoSent: true });
-  assert.deepEqual(sentFlags(v, CTX, ['vehicle_photo_url']), { registrationSent: true, vehiclePhotoSent: false });
-  assert.deepEqual(sentFlags(v, CTX, ['registration_doc_url']), { registrationSent: false, vehiclePhotoSent: true });
+  assert.deepEqual(sentFlags(v, CTX), { registrationSent: true, vehiclePhotoSent: true, detailsSent: true });
+  assert.deepEqual(sentFlags(v, CTX, ['vehicle_photo_url']), { registrationSent: true, vehiclePhotoSent: false, detailsSent: true });
+  assert.deepEqual(sentFlags(v, CTX, ['registration_doc_url']), { registrationSent: false, vehiclePhotoSent: true, detailsSent: true });
   assert.deepEqual(sentFlags(v, { ...CTX, requireRegistration: false }, ['registration_doc_url']).registrationSent, true,
     'not asked for: nothing missing');
   v.docs.registration = null;
@@ -774,6 +788,316 @@ test('displayPlate shows the plate the way it is registered', () => {
   assert.equal(displayPlate('abc 1234'), 'ABC1234');
   assert.equal(displayPlate('ABC-1234 SC'), 'ABC1234', 'the shared normalizer strips a state');
   assert.equal(displayPlate(''), '');
+});
+
+// ── make, model and color (Task F5a) ────────────────────────────────────────
+// Rule R8: every parking pass carries the vehicle's make, model and color, so
+// the tow team can find a car by description. Required on each vehicle of the
+// long-term request (and on the short-term form, which shares these helpers).
+
+const WHITE_CIVIC = { make: 'Honda', model: 'Civic', color: 'white' };
+const BRIEF_MAKES = ['Acura', 'Audi', 'BMW', 'Buick', 'Cadillac', 'Chevrolet', 'Chrysler', 'Dodge', 'Ford', 'GMC', 'Honda', 'Hyundai',
+  'Infiniti', 'Jaguar', 'Jeep', 'Kia', 'Land Rover', 'Lexus', 'Lincoln', 'Mazda', 'Mercedes-Benz', 'Mini', 'Mitsubishi', 'Nissan',
+  'Porsche', 'Ram', 'Subaru', 'Tesla', 'Toyota', 'Volkswagen', 'Volvo'];
+
+test('a new vehicle has an empty make, model and color, and nothing about them sent yet', () => {
+  const f = emptyFlow();
+  assert.deepEqual([f.vehicles[0].make, f.vehicles[0].model, f.vehicles[0].color], ['', '', '']);
+  assert.equal(f.vehicles[0].detailsSent, null);
+  const { flow } = addVehicle(f);
+  assert.deepEqual([flow.vehicles[1].make, flow.vehicles[1].model, flow.vehicles[1].color], ['', '', '']);
+  assert.equal(flow.vehicles[1].detailsSent, null);
+});
+
+test('the color list is the spec\'s fourteen, lowercase, each with a Title Case label', () => {
+  assert.deepEqual(VEHICLE_COLORS, ['white', 'black', 'gray', 'silver', 'blue', 'red', 'green', 'brown', 'beige', 'gold', 'orange', 'yellow', 'purple', 'other']);
+  assert.deepEqual(Object.keys(S.vehicle.colors), VEHICLE_COLORS, 'one label per value, in the same order');
+  for (const value of VEHICLE_COLORS) {
+    assert.equal(S.vehicle.colors[value], value[0].toUpperCase() + value.slice(1), value);
+  }
+});
+
+test('the make suggestions: the brief\'s thirty-one and some more, about forty, alphabetical, no repeats', () => {
+  for (const make of BRIEF_MAKES) assert.ok(VEHICLE_MAKES.includes(make), `${make} is missing`);
+  assert.ok(VEHICLE_MAKES.length >= 38 && VEHICLE_MAKES.length <= 45, `about forty, got ${VEHICLE_MAKES.length}`);
+  const lower = VEHICLE_MAKES.map((m) => m.toLowerCase());
+  assert.equal(new Set(lower).size, lower.length, 'no repeats');
+  assert.deepEqual(lower, [...lower].sort(), 'alphabetical');
+  assert.ok(VEHICLE_MAKES.every((m) => m === m.trim() && m.length >= 2 && m.length <= 40));
+});
+
+test('validateField: the make, the model and the color are each required, in the brief\'s words', () => {
+  assert.equal(validateField('make', ''), 'Add the make.');
+  assert.equal(validateField('make', '   '), 'Add the make.');
+  assert.equal(validateField('make', undefined), 'Add the make.');
+  assert.equal(validateField('make', 'Honda'), null);
+  assert.equal(validateField('model', ''), 'Add the model.');
+  assert.equal(validateField('model', ' \t '), 'Add the model.');
+  assert.equal(validateField('model', 'Civic'), null);
+  assert.equal(validateField('color', ''), 'Pick the color.');
+  assert.equal(validateField('color', null), 'Pick the color.');
+});
+
+test('validateField: a color is one of the list, lowercase — anything else is not a color', () => {
+  for (const good of VEHICLE_COLORS) assert.equal(validateField('color', good), null, good);
+  for (const bad of ['White', 'WHITE', 'navy', 'tan', 'grey', ' white', 'white ', '  ', 'toString']) {
+    assert.equal(validateField('color', bad), 'Pick the color.', JSON.stringify(bad));
+  }
+});
+
+test('S3: make, model and color come right after the plate and before the documents', () => {
+  const f = completeFlow();
+  Object.assign(f.vehicles[0], { plate: '', make: '', model: '', color: '' });
+  f.vehicles[0].docs = { plate: null, registration: null, vehicle: null };
+  assert.deepEqual(validateStep('vehicle:v1', f, CTX), [
+    { field: 'plate-v1', message: 'Enter the license plate' },
+    { field: 'make-v1', message: 'Add the make.' },
+    { field: 'model-v1', message: 'Add the model.' },
+    { field: 'color-v1', message: 'Pick the color.' },
+    { field: 'card-plate-v1', message: 'Add a photo of the plate' },
+    { field: 'card-registration-v1', message: 'Add your vehicle registration card' },
+  ]);
+});
+
+test('S3: each of the three is its own error, whether or not the property asks for the registration card', () => {
+  const cases = [['make', 'make-v1', 'Add the make.'], ['model', 'model-v1', 'Add the model.'], ['color', 'color-v1', 'Pick the color.']];
+  for (const [name, id, message] of cases) {
+    for (const ctx of [CTX, { ...CTX, requireRegistration: false }]) {
+      const f = completeFlow();
+      f.vehicles[0][name] = '  ';
+      assert.deepEqual(validateStep('vehicle:v1', f, ctx), [{ field: id, message }], `${name} / ${ctx.requireRegistration}`);
+    }
+  }
+  assert.deepEqual(validateStep('vehicle:v1', completeFlow(), CTX), [], 'all three given: nothing to fix');
+});
+
+test('S3: every vehicle needs its own make, model and color', () => {
+  let f = completeFlow();
+  ({ flow: f } = addVehicle(f));
+  f.vehicles[1].plate = 'XYZ 789';
+  f.vehicles[1].docs = { plate: ref('plate'), registration: ref('registration'), vehicle: null };
+  assert.deepEqual(validateStep('vehicle:v2', f, CTX).map((e) => e.field), ['make-v2', 'model-v2', 'color-v2']);
+  assert.deepEqual(validateStep('vehicle:v1', f, CTX), [], 'the first one is complete');
+  assert.deepEqual(validateStep('vehicles', f, CTX), [{ field: 'row-v2', message: 'Finish XYZ789, or remove it' }]);
+});
+
+test('S3b and S5 hold back a vehicle that has none of them: not finished, and named in the error summary', () => {
+  const f = completeFlow();
+  f.vehicles[0].make = '';
+  f.vehicles[0].color = '';
+  assert.deepEqual(validateStep('vehicles', f, CTX), [{ field: 'row-v1', message: 'Finish ABC1234, or remove it' }]);
+  assert.deepEqual(validateStep('review', f, CTX), [
+    { field: 'review-vehicle-v1', message: 'Add the make.' },
+    { field: 'review-vehicle-v1', message: 'Pick the color.' },
+  ]);
+  assert.deepEqual(validateStep('review', completeFlow(), CTX), []);
+});
+
+test('a vehicle already sent is locked: it is not asked again for what it went without', () => {
+  const f = completeFlow();
+  Object.assign(f.vehicles[0], { ref: '8F3E2A1D', make: '', model: '', color: '' });
+  assert.deepEqual(validateStep('vehicle:v1', f, CTX), []);
+  assert.deepEqual(validateStep('review', f, CTX), []);
+});
+
+test('vehicleFieldErrors: the three checks on their own (the short-term form uses them), in page order', () => {
+  assert.deepEqual(vehicleFieldErrors({ make: '', model: '', color: '' }), [
+    { field: 'make', message: 'Add the make.' },
+    { field: 'model', message: 'Add the model.' },
+    { field: 'color', message: 'Pick the color.' },
+  ]);
+  assert.deepEqual(vehicleFieldErrors({ make: 'Ford', model: ' ', color: 'blue' }), [{ field: 'model', message: 'Add the model.' }]);
+  assert.deepEqual(vehicleFieldErrors(WHITE_CIVIC), []);
+  assert.deepEqual(vehicleFieldErrors({}).map((e) => e.field), ['make', 'model', 'color']);
+});
+
+test('make and model are trimmed and single-spaced; nothing else about them is changed', () => {
+  assert.equal(normalizeVehicleText('  Land   Rover \t'), 'Land Rover');
+  assert.equal(normalizeVehicleText('f-150'), 'f-150', 'the case is as typed');
+  assert.equal(normalizeVehicleText('Mercedes-Benz'), 'Mercedes-Benz');
+  assert.equal(normalizeVehicleText(undefined), '');
+  assert.equal(normalizeVehicleText(null), '');
+  assert.equal(normalizeVehicleText(42), '');
+});
+
+test('the vehicle is described as <color> <Make> <Model>: the color lowercase, the rest as typed', () => {
+  assert.equal(vehicleDescription(WHITE_CIVIC), 'white Honda Civic');
+  assert.equal(vehicleDescription({ make: 'honda', model: 'civic', color: 'WHITE' }), 'white honda civic', 'only the color is changed');
+  assert.equal(vehicleDescription({ make: ' Land  Rover ', model: 'Range Rover Sport', color: 'silver' }), 'silver Land Rover Range Rover Sport');
+  assert.equal(vehicleDescription({ make: 'Ford', model: 'F-150', color: 'other' }), 'other Ford F-150');
+  assert.equal(vehicleDescription({ make: '', model: '', color: '' }), '');
+  assert.equal(vehicleDescription({ make: 'Honda', model: '', color: '' }), 'Honda', 'whatever is there, nothing invented');
+  assert.equal(vehicleDescription({}), '');
+});
+
+test('the line on S3b, S5 and S6 is "<description> · <plate>"', () => {
+  assert.equal(vehicleLine({ ...WHITE_CIVIC, plate: 'abc 1234' }), 'white Honda Civic · ABC1234');
+  assert.equal(vehicleLine({ ...WHITE_CIVIC, plate: 'ABC1234', ref: '8F3E2A1D' }), 'white Honda Civic · ABC1234', 'a saved receipt line reads the same');
+  assert.equal(vehicleLine({ plate: 'ABC1234' }), 'ABC1234', 'a vehicle with no description is its plate');
+  assert.equal(vehicleLine({ ...WHITE_CIVIC, plate: '' }), 'white Honda Civic');
+  assert.equal(vehicleLine({}), '');
+});
+
+test('vehicleFields: the three request fields — make and model trimmed, the color as chosen', () => {
+  assert.deepEqual(vehicleFields({ make: ' Honda ', model: 'Civic  EX', color: 'white' }),
+    { vehicle_make: 'Honda', vehicle_model: 'Civic EX', vehicle_color: 'white' });
+  assert.deepEqual(vehicleFields(completeFlow().vehicles[0]), { vehicle_make: 'Honda', vehicle_model: 'Civic', vehicle_color: 'white' });
+});
+
+test('make, model and color are saved with the vehicle and come back with it', () => {
+  const f = completeFlow();
+  f.step = 'vehicles';
+  const raw = serializeFlow(f, { now: NOW, propertyId: PID });
+  const saved = JSON.parse(raw).flow.vehicles[0];
+  assert.deepEqual([saved.make, saved.model, saved.color], ['Honda', 'Civic', 'white']);
+  const back = restoreFlow(raw, { now: NOW + 1000, propertyId: PID });
+  assert.deepEqual([back.vehicles[0].make, back.vehicles[0].model, back.vehicles[0].color], ['Honda', 'Civic', 'white']);
+  assert.deepEqual(back, f);
+});
+
+test('restore cleans them: 40 characters at most, a color from the list, anything else empty', () => {
+  const raw = JSON.parse(serializeFlow(completeFlow(), { now: NOW, propertyId: PID }));
+  const restore = () => restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID }).vehicles[0];
+  Object.assign(raw.flow.vehicles[0], { make: 'M'.repeat(100), model: ['Civic'], color: 'plaid' });
+  const v = restore();
+  assert.equal(v.make.length, 40);
+  assert.equal(v.model, '');
+  assert.equal(v.color, '');
+  raw.flow.vehicles[0].color = 'WHITE';
+  assert.equal(restore().color, '', 'the values are lowercase');
+  raw.flow.vehicles[0].color = 'silver';
+  assert.equal(restore().color, 'silver');
+});
+
+test('a request saved before these fields existed restores with them empty — and asks for them', () => {
+  const raw = JSON.parse(serializeFlow(completeFlow(), { now: NOW, propertyId: PID }));
+  for (const name of ['make', 'model', 'color', 'detailsSent']) delete raw.flow.vehicles[0][name];
+  const back = restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID });
+  assert.deepEqual([back.vehicles[0].make, back.vehicles[0].model, back.vehicles[0].color], ['', '', '']);
+  assert.equal(back.vehicles[0].detailsSent, null);
+  assert.deepEqual(validateStep('review', back, CTX).map((e) => e.message), ['Add the make.', 'Add the model.', 'Pick the color.']);
+});
+
+test('a vehicle already sent keeps whether its make, model and color went with it', () => {
+  const f = completeFlow();
+  Object.assign(f.vehicles[0], { ref: '8F3E2A1D', detailsSent: false });
+  const back = restoreFlow(serializeFlow(f, { now: NOW, propertyId: PID }), { now: NOW, propertyId: PID });
+  assert.equal(back.vehicles[0].detailsSent, false);
+  const raw = JSON.parse(serializeFlow(f, { now: NOW, propertyId: PID }));
+  raw.flow.vehicles[0].detailsSent = 'yes';
+  assert.equal(restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID }).vehicles[0].detailsSent, null);
+});
+
+test('the receipt keeps each vehicle\'s make, model and color, so a reload still shows its line', () => {
+  const f = completeFlow();
+  f.vehicles[0].make = ' Honda ';
+  f.vehicles.push({ ...f.vehicles[0], vid: 'v2', plate: 'XYZ 789', make: 'Ford', model: 'F-150', color: 'blue' });
+  const sent = receiptFlow(f, { now: NOW, refs: { v1: '8F3E2A1D', v2: '1A2B3C4D' }, registrationSent: { v1: true, v2: true } });
+  assert.deepEqual(sent.receipt.vehicles.map((v) => [v.plate, v.make, v.model, v.color]), [
+    ['ABC1234', 'Honda', 'Civic', 'white'],
+    ['XYZ789', 'Ford', 'F-150', 'blue'],
+  ]);
+  const back = restoreFlow(serializeFlow(sent, { now: NOW, propertyId: PID }), { now: NOW + 60_000, propertyId: PID });
+  assert.deepEqual(back.receipt, sent.receipt);
+  assert.deepEqual(back.receipt.vehicles.map(vehicleLine), ['white Honda Civic · ABC1234', 'blue Ford F-150 · XYZ789']);
+});
+
+test('a vehicle sent without them (an older backend) says so on the receipt, and keeps saying so after a reload', () => {
+  const sent = receiptFlow(completeFlow(), { now: NOW, refs: { v1: '8F3E2A1D' }, registrationSent: { v1: true }, detailsSent: { v1: false } });
+  assert.equal(sent.receipt.vehicles[0].detailsSent, false);
+  const back = restoreFlow(serializeFlow(sent, { now: NOW, propertyId: PID }), { now: NOW, propertyId: PID });
+  assert.equal(back.receipt.vehicles[0].detailsSent, false);
+  assert.equal(receiptFlow(completeFlow(), { now: NOW, refs: { v1: '8F3E2A1D' }, registrationSent: { v1: true } }).receipt.vehicles[0].detailsSent, true,
+    'nothing said means they went');
+});
+
+test('the saved receipt cleans them: text capped, a color outside the list dropped; one saved before has none', () => {
+  const sent = receiptFlow(completeFlow(), { now: NOW, refs: { v1: '8F3E2A1D' }, registrationSent: { v1: true } });
+  const raw = JSON.parse(serializeFlow(sent, { now: NOW, propertyId: PID }));
+  const restoreReceipt = () => restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID }).receipt.vehicles[0];
+  Object.assign(raw.flow.receipt.vehicles[0], { make: 'M'.repeat(90), model: { x: 1 }, color: 'plaid', detailsSent: 'maybe' });
+  const v = restoreReceipt();
+  assert.equal(v.make.length, 40);
+  assert.equal(v.model, '');
+  assert.equal(v.color, '');
+  assert.equal(v.detailsSent, true, 'only an explicit false is a warning');
+  for (const name of ['make', 'model', 'color', 'detailsSent']) delete raw.flow.receipt.vehicles[0][name];
+  const old = restoreReceipt();
+  assert.deepEqual([old.make, old.model, old.color, old.detailsSent], ['', '', '', true]);
+  assert.equal(vehicleLine(old), 'ABC1234', 'a receipt saved before shows the plate alone');
+});
+
+test('vehicle_required asks for all three in the brief\'s words and points at the first one missing', () => {
+  const err = (...missing) => ({ status: 400, detail: 'vehicle_required', body: { detail: 'vehicle_required', missing } });
+  const m = registerErrorMessage(err('vehicle_make', 'vehicle_model', 'vehicle_color'), ERR_CTX);
+  assert.deepEqual({ code: m.code, message: m.message, field: m.field },
+    { code: 'vehicle_required', message: 'Add the make, model and color of the vehicle.', field: 'make-v1' });
+  assert.equal(registerErrorMessage(err('vehicle_color', 'vehicle_model'), ERR_CTX).field, 'model-v1', 'the page\'s order, not the backend\'s');
+  assert.equal(registerErrorMessage(err('vehicle_color'), ERR_CTX).field, 'color-v1');
+  assert.equal(registerErrorMessage(err('vehicle_make'), { ...ERR_CTX, vid: 'v3' }).field, 'make-v3', 'the vehicle it was about');
+  assert.equal(registerErrorMessage(err('vehicle_make'), { ...ERR_CTX, vid: null }).field, null);
+  assert.equal(registerErrorMessage({ status: 400, detail: 'vehicle_required' }, ERR_CTX).field, 'make-v1', 'no list: the first field');
+  assert.equal(registerErrorMessage(err('something_else'), ERR_CTX).field, 'make-v1', 'a list with nothing we know: the first field');
+});
+
+test('vehicle_color_invalid sends the person back to the list', () => {
+  const m = registerErrorMessage({ status: 400, detail: 'vehicle_color_invalid', body: { detail: 'vehicle_color_invalid' } }, ERR_CTX);
+  assert.deepEqual({ code: m.code, message: m.message, field: m.field },
+    { code: 'vehicle_color_invalid', message: 'Pick the color from the list.', field: 'color-v1' });
+  assert.equal(registerErrorMessage({ status: 400, detail: 'vehicle_color_invalid' }, { ...ERR_CTX, vid: 'v2' }).field, 'color-v2');
+});
+
+test('vehicleBackendError: the same two answers for the short-term form, which names its own fields; nothing else', () => {
+  const required = vehicleBackendError({ status: 400, detail: 'vehicle_required', body: { missing: ['vehicle_color', 'vehicle_model'] } });
+  assert.deepEqual(required, { code: 'vehicle_required', message: 'Add the make, model and color of the vehicle.', field: 'model' });
+  assert.deepEqual(vehicleBackendError({ status: 400, detail: 'vehicle_color_invalid' }),
+    { code: 'vehicle_color_invalid', message: 'Pick the color from the list.', field: 'color' });
+  assert.equal(vehicleBackendError({ status: 400, detail: 'vehicle_required' }).field, 'make');
+  for (const other of [{ status: 400, detail: 'unit_required' }, { status: 500, detail: 'registration_failed' }, { status: 422, detail: [] }, {}, null, undefined]) {
+    assert.equal(vehicleBackendError(other), null, JSON.stringify(other));
+  }
+});
+
+test('an older backend refusing the make, model and color (422, unknown fields) is recognised like the two document fields', () => {
+  const all = ['registration_doc_url', 'vehicle_photo_url', 'vehicle_make', 'vehicle_model', 'vehicle_color'];
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('vehicle_make', 'vehicle_model', 'vehicle_color')), ['vehicle_make', 'vehicle_model', 'vehicle_color']);
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('vehicle_color', 'vehicle_photo_url', 'vehicle_model', 'registration_doc_url', 'vehicle_make')), all,
+    'every unknown field in one answer, in one fixed order');
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('vehicle_color')), ['vehicle_color'], 'one at a time is fine too');
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('vehicle_make', 'vehicle_model'), ['vehicle_make']), ['vehicle_make'],
+    'only the fields this call sent');
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('vehicle_make'), ['vehicle_photo_url']), []);
+  assert.deepEqual(
+    rejectedUnknownFields({ status: 422, detail: [{ type: 'string_too_long', loc: ['body', 'vehicle_make'], msg: 'too long' }] }), [],
+    'a make the backend knows but did not like is not dropped (the form holds it to 40 characters)',
+  );
+  assert.deepEqual(
+    rejectedUnknownFields({ status: 422, detail: [{ type: 'value_error.extra', loc: ['body', 'vehicle_color'], msg: 'extra fields not permitted' }] }),
+    ['vehicle_color'], 'the older pydantic wording too',
+  );
+});
+
+test('sentFlags: the make, model and color went unless the retry left one out', () => {
+  const v = completeFlow().vehicles[0];
+  assert.equal(sentFlags(v, CTX).detailsSent, true);
+  assert.equal(sentFlags(v, CTX, ['vehicle_photo_url', 'registration_doc_url']).detailsSent, true, 'the document fields are another matter');
+  for (const field of ['vehicle_make', 'vehicle_model', 'vehicle_color']) {
+    assert.equal(sentFlags(v, CTX, [field]).detailsSent, false, field);
+  }
+  assert.deepEqual(sentFlags(v, CTX, ['vehicle_make', 'vehicle_model', 'vehicle_color', 'vehicle_photo_url']),
+    { registrationSent: true, vehiclePhotoSent: null, detailsSent: false });
+});
+
+test('the make, model and color copy is the brief\'s, verbatim', () => {
+  assert.deepEqual([S.vehicle.makeLabel, S.vehicle.modelLabel, S.vehicle.colorLabel], ['Make', 'Model', 'Color']);
+  assert.equal(S.vehicle.colorPlaceholder, 'Choose a color');
+  assert.equal(S.vehicle.errorMake, 'Add the make.');
+  assert.equal(S.vehicle.errorModel, 'Add the model.');
+  assert.equal(S.vehicle.errorColor, 'Pick the color.');
+  assert.equal(S.errors.vehicleRequired, 'Add the make, model and color of the vehicle.');
+  assert.equal(S.errors.vehicleColorInvalid, 'Pick the color from the list.');
+  assert.equal(S.received.vehicle, 'Vehicle');
+  assert.equal(S.received.vehicleDetailsNotSent, 'Sent without the make, model and color — the office may ask for them.');
 });
 
 // ── copy ────────────────────────────────────────────────────────────────────

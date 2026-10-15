@@ -3,8 +3,8 @@
 //   S1 start      Before you start — the rules once, what to have ready, and
 //                 "Is your name on the lease?" (No → the short-term pass)
 //   S2 about      About you — name, unit, mobile, email
-//   S3 vehicle:vN Vehicle n — plate, plate photo, registration card, and an
-//                 optional photo of the vehicle
+//   S3 vehicle:vN Vehicle n — plate, make, model and color, plate photo,
+//                 registration card, and an optional photo of the vehicle
 //   S3b vehicles  Your vehicles — the list, "another?" until the unit's cap
 //   S4 documents  Your ID and lease
 //   S5 review     Check your answers — then "Send for review"
@@ -22,9 +22,30 @@ export const TTL_MS = 24 * 60 * 60 * 1000;
 export const STEP_COUNT = 5;
 const FLOW_VERSION = 1;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
-const MAX = { name: 80, unit: 20, phone: 40, email: 254, plate: 10, docName: 120, docType: 60 };
+const MAX = { name: 80, unit: 20, phone: 40, email: 254, plate: 10, docName: 120, docType: 60, vehicleText: 40 };
 
 const plural = (n, one, many) => (Number(n) === 1 ? one : many);
+
+// ── the vehicle's make, model and color (Task F5a, rule R8) ─────────────────
+// Every parking pass carries them, so the tow team can find a car by
+// description. The color is one of a fixed list, stored lowercase (the
+// backend's `services/vehicles.COLORS`); the make and model are free text,
+// 1–40 characters each. The names below are the page's; the request fields
+// are `vehicle_make`, `vehicle_model` and `vehicle_color`.
+export const VEHICLE_FIELDS = ['make', 'model', 'color'];
+const VEHICLE_REQUEST_FIELD = { make: 'vehicle_make', model: 'vehicle_model', color: 'vehicle_color' };
+
+export const VEHICLE_COLORS = [
+  'white', 'black', 'gray', 'silver', 'blue', 'red', 'green', 'brown', 'beige', 'gold', 'orange', 'yellow', 'purple', 'other',
+];
+
+// The <datalist> behind the Make field: suggestions, not a limit (the field is free text).
+export const VEHICLE_MAKES = [
+  'Acura', 'Alfa Romeo', 'Audi', 'BMW', 'Buick', 'Cadillac', 'Chevrolet', 'Chrysler', 'Dodge', 'Fiat', 'Ford', 'Genesis', 'GMC',
+  'Honda', 'Hyundai', 'Infiniti', 'Jaguar', 'Jeep', 'Kia', 'Land Rover', 'Lexus', 'Lincoln', 'Maserati', 'Mazda', 'Mercedes-Benz',
+  'Mercury', 'Mini', 'Mitsubishi', 'Nissan', 'Pontiac', 'Porsche', 'Ram', 'Rivian', 'Saturn', 'Scion', 'Subaru', 'Suzuki', 'Tesla',
+  'Toyota', 'Volkswagen', 'Volvo',
+];
 
 // ── every string a resident can see ─────────────────────────────────────────
 // Sentence case, second person, "parking pass" (long-term / short-term) as the
@@ -97,6 +118,14 @@ export const STRINGS = {
       title: (n) => `Vehicle ${n}`,
       plateLabel: 'License plate',
       plateHint: 'Type it exactly as it appears on the plate, not on the registration. Letters and numbers only.',
+      makeLabel: 'Make',
+      modelLabel: 'Model',
+      colorLabel: 'Color',
+      colorPlaceholder: 'Choose a color',
+      colors: {
+        white: 'White', black: 'Black', gray: 'Gray', silver: 'Silver', blue: 'Blue', red: 'Red', green: 'Green',
+        brown: 'Brown', beige: 'Beige', gold: 'Gold', orange: 'Orange', yellow: 'Yellow', purple: 'Purple', other: 'Other',
+      },
       removeVehicle: 'Remove this vehicle',
       removeConfirm: (plate) => (plate
         ? `Remove ${plate}? Its photos will be removed from this request.`
@@ -116,6 +145,9 @@ export const STRINGS = {
       vehiclePhotoSize: 'Photo, up to 10 MB.',
       errorPlate: 'Enter the license plate',
       errorPlateChars: 'Enter letters and numbers only',
+      errorMake: 'Add the make.',
+      errorModel: 'Add the model.',
+      errorColor: 'Pick the color.',
       errorPlatePhoto: 'Add a photo of the plate',
       errorRegistration: 'Add your vehicle registration card',
       errorDuplicate: (plate) => `You've already added ${plate} to this request`,
@@ -222,6 +254,8 @@ export const STRINGS = {
       unitLimit: (unit, limit) => `Unit ${unit} already has ${limit} ${plural(limit, 'vehicle', 'vehicles')} registered or waiting for approval. Ask the office if one should be removed.`,
       unitLimitUnknown: (unit) => `Unit ${unit} already has the most vehicles allowed registered or waiting for approval. Ask the office if one should be removed.`,
       registrationRequired: 'Add your vehicle registration card.',
+      vehicleRequired: 'Add the make, model and color of the vehicle.',
+      vehicleColorInvalid: 'Pick the color from the list.',
       duplicate: (plate) => `${plate} already has an approved parking pass at this property.`,
       expiredUpload: 'One of your uploads expired — add it again.',
       recaptcha: 'The automated-access check failed – try again.',
@@ -237,12 +271,13 @@ export const STRINGS = {
 
     received: {
       title: 'Request received',
-      plate: 'Plate',
+      vehicle: 'Vehicle',
       reference: 'Reference',
       status: 'Pending approval',
       protected: 'Protected from towing while the office reviews your request (up to 72 hours).',
       registrationNotSent: 'Sent without registration — the office may ask for it.',
       vehiclePhotoNotSent: "Sent without the photo of the vehicle. It's optional, so nothing else is needed.",
+      vehicleDetailsNotSent: 'Sent without the make, model and color — the office may ask for them.',
       submitted: (when) => `Sent ${when}`,
       nextHeading: 'What happens next',
       next: [
@@ -268,10 +303,14 @@ const S = STRINGS.en;
 const newVehicle = (vid) => ({
   vid,
   plate: '',
+  make: '',
+  model: '',
+  color: '',          // one of VEHICLE_COLORS, or ''
   docs: { plate: null, registration: null, vehicle: null }, // vehicle: the optional photo of the car
   ref: null,
   registrationSent: null,
   vehiclePhotoSent: null,
+  detailsSent: null,  // whether the make, model and color went with the request (null: not sent yet)
 });
 
 export function emptyFlow() {
@@ -488,6 +527,38 @@ export function phoneToE164(raw) {
 /** The registered form of a plate: the shared normalizer (uppercase, letters and numbers, no state). */
 export const displayPlate = (raw) => normalizePlate(raw);
 
+/** A make or model as the office gets it: trimmed, runs of spaces made one. The case is as typed. */
+export function normalizeVehicleText(raw) {
+  return typeof raw === 'string' ? raw.trim().replace(/\s+/g, ' ') : '';
+}
+
+/** "white Honda Civic": the color lowercase, the make and model as typed. Whatever is missing is left out. */
+export function vehicleDescription(v) {
+  const o = v || {};
+  const color = typeof o.color === 'string' ? o.color.trim().toLowerCase() : '';
+  return [color, normalizeVehicleText(o.make), normalizeVehicleText(o.model)].filter(Boolean).join(' ');
+}
+
+/**
+ * "white Honda Civic · ABC1234" — a vehicle in the flow or on a saved receipt;
+ * just the plate when nothing describes it (a request saved before the make,
+ * model and color existed), just the description when there is no plate.
+ */
+export function vehicleLine(v) {
+  const description = vehicleDescription(v);
+  const plate = displayPlate(v && v.plate);
+  return description && plate ? `${description} · ${plate}` : (description || plate);
+}
+
+/** The make, model and color as the three request fields. */
+export function vehicleFields(v) {
+  return {
+    [VEHICLE_REQUEST_FIELD.make]: normalizeVehicleText(v.make),
+    [VEHICLE_REQUEST_FIELD.model]: normalizeVehicleText(v.model),
+    [VEHICLE_REQUEST_FIELD.color]: v.color,
+  };
+}
+
 /** One field's error message, or null. */
 export function validateField(field, value) {
   const v = String(value == null ? '' : value);
@@ -504,9 +575,26 @@ export function validateField(field, value) {
       if (plate.length < 2 || REGION_TOKENS.has(plate)) return S.vehicle.errorPlate;
       return null;
     }
+    case 'make': return normalizeVehicleText(v) ? null : S.vehicle.errorMake;
+    case 'model': return normalizeVehicleText(v) ? null : S.vehicle.errorModel;
+    case 'color': return VEHICLE_COLORS.includes(v) ? null : S.vehicle.errorColor;
     default:
       return null;
   }
+}
+
+/**
+ * The make, model and color checks on their own, in page order, each named by
+ * its field (`make`, `model`, `color`). The short-term form uses them as they
+ * are; the long-term flow gives each the id of its own element.
+ * @param {{make?: string, model?: string, color?: string}} v
+ * @returns {{field: 'make'|'model'|'color', message: string}[]}
+ */
+export function vehicleFieldErrors(v) {
+  const o = v || {};
+  return VEHICLE_FIELDS
+    .map((field) => ({ field, message: validateField(field, o[field]) }))
+    .filter((e) => e.message);
 }
 
 function docError(slot, ref, ctx, emptyMessage, field, imagesOnly = false) {
@@ -529,6 +617,7 @@ function vehicleErrors(flow, v, ctx, fieldFor) {
       errors.push({ field: fieldFor('plate'), message: S.vehicle.errorDuplicate(plate) });
     }
   }
+  for (const e of vehicleFieldErrors(v)) errors.push({ field: fieldFor(e.field), message: e.message });
   const photo = docError(slotId('plate', v.vid), v.docs.plate, ctx, S.vehicle.errorPlatePhoto, fieldFor('card-plate'), true);
   if (photo) errors.push(photo);
   if (ctx.requireRegistration) {
@@ -624,6 +713,7 @@ const oneOf = (v, allowed) => (allowed.includes(v) ? v : null);
 const REF_RE = /^[0-9A-F]{8}$/;
 const cleanRefId = (v) => (typeof v === 'string' && REF_RE.test(v.toUpperCase()) ? v.toUpperCase() : null);
 const flag = (v) => (typeof v === 'boolean' ? v : null);
+const cleanColor = (v) => (VEHICLE_COLORS.includes(v) ? v : '');
 const cleanEmail = (v) => (typeof v === 'string' && v.length <= MAX.email && EMAIL_RE.test(v) ? v : '');
 
 function pickDoc(ref) {
@@ -648,9 +738,13 @@ function cleanReceipt(r) {
     .slice(0, 10)
     .map((v) => ({
       plate: str(v.plate, 20),
+      make: str(v.make, MAX.vehicleText),
+      model: str(v.model, MAX.vehicleText),
+      color: cleanColor(v.color),
       ref: cleanRefId(v.ref),
       registrationSent: v.registrationSent !== false,
       vehiclePhotoSent: flag(v.vehiclePhotoSent),
+      detailsSent: v.detailsSent !== false,
     }));
   if (!vehicles.length) return null;
   return { submittedAt: r.submittedAt, unit: str(r.unit, MAX.unit), email: cleanEmail(r.email), vehicles };
@@ -668,6 +762,9 @@ function pickFlow(flow) {
     vehicles: (flow.vehicles || []).map((v) => ({
       vid: v.vid,
       plate: v.plate,
+      make: v.make,
+      model: v.model,
+      color: v.color,
       docs: {
         plate: pickDoc(v.docs && v.docs.plate),
         registration: pickDoc(v.docs && v.docs.registration),
@@ -676,6 +773,7 @@ function pickFlow(flow) {
       ref: v.ref,
       registrationSent: v.registrationSent,
       vehiclePhotoSent: v.vehiclePhotoSent,
+      detailsSent: v.detailsSent,
     })),
     nextVid: flow.nextVid,
     another: flow.another,
@@ -712,6 +810,9 @@ export function restoreFlow(raw, { now, propertyId, ttlMs = TTL_MS }) {
       return {
         vid: v.vid,
         plate: str(v.plate, MAX.plate),
+        make: str(v.make, MAX.vehicleText),
+        model: str(v.model, MAX.vehicleText),
+        color: cleanColor(v.color),
         docs: {
           plate: cleanDoc(docs.plate, propertyId, 'plate'),
           registration: cleanDoc(docs.registration, propertyId, 'registration'),
@@ -720,6 +821,7 @@ export function restoreFlow(raw, { now, propertyId, ttlMs = TTL_MS }) {
         ref: cleanRefId(v.ref),
         registrationSent: flag(v.registrationSent),
         vehiclePhotoSent: flag(v.vehiclePhotoSent),
+        detailsSent: flag(v.detailsSent),
       };
     });
   const highest = vehicles.reduce((m, v) => Math.max(m, Number(v.vid.slice(1))), 0);
@@ -748,16 +850,22 @@ export function restoreFlow(raw, { now, propertyId, ttlMs = TTL_MS }) {
 /**
  * The flow once every vehicle is sent: the receipt (plates, references, time,
  * unit, and the email the backend sent its copy to) and nothing else — the
- * other answers and the document keys are forgotten.
+ * other answers and the document keys are forgotten. Each vehicle keeps its
+ * plate, make, model and color, so the receipt can say "white Honda Civic ·
+ * ABC1234".
  * @param {{now: number, refs: Record<string,string>, registrationSent: Record<string,boolean>,
- *          vehiclePhotoSent?: Record<string,boolean|null>}} sent
+ *          vehiclePhotoSent?: Record<string,boolean|null>, detailsSent?: Record<string,boolean>}} sent
  */
-export function receiptFlow(flow, { now, refs, registrationSent, vehiclePhotoSent = {} }) {
+export function receiptFlow(flow, { now, refs, registrationSent, vehiclePhotoSent = {}, detailsSent = {} }) {
   const vehicles = flow.vehicles.map((v) => ({
     plate: normalizePlate(v.plate),
+    make: normalizeVehicleText(v.make),
+    model: normalizeVehicleText(v.model),
+    color: cleanColor(v.color),
     ref: cleanRefId(refs[v.vid] || v.ref),
     registrationSent: registrationSent[v.vid] !== false,
     vehiclePhotoSent: flag(vehiclePhotoSent[v.vid]),
+    detailsSent: detailsSent[v.vid] !== false,
   }));
   return {
     ...emptyFlow(),
@@ -772,6 +880,30 @@ function detailText(err) {
   if (typeof err.detail === 'string') return err.detail;
   if (err.status && typeof err.message === 'string') return err.message;
   return '';
+}
+
+/**
+ * The backend's two answers about the make, model and color, in plain
+ * language — `400 {"detail": "vehicle_required", "missing": ["vehicle_make", …]}`
+ * and `400 {"detail": "vehicle_color_invalid"}` — or null for anything else.
+ * `field` is the one to put the person at: the first missing one in the page's
+ * order (the color for an invalid color). `err.body` is the response body
+ * backendRegister keeps, where `missing` sits beside `detail`. The short-term
+ * form names its own elements; registerErrorMessage names the long-term ones.
+ * @returns {{code: string, message: string, field: 'make'|'model'|'color'}|null}
+ */
+export function vehicleBackendError(err) {
+  const e = err || {};
+  const detail = detailText(e);
+  if (detail === 'vehicle_color_invalid') {
+    return { code: 'vehicle_color_invalid', message: S.errors.vehicleColorInvalid, field: 'color' };
+  }
+  if (detail === 'vehicle_required') {
+    const missing = e.body && Array.isArray(e.body.missing) ? e.body.missing : [];
+    const field = VEHICLE_FIELDS.find((f) => missing.includes(VEHICLE_REQUEST_FIELD[f])) || VEHICLE_FIELDS[0];
+    return { code: 'vehicle_required', message: S.errors.vehicleRequired, field };
+  }
+  return null;
 }
 
 /**
@@ -793,6 +925,11 @@ export function registerErrorMessage(err, ctx) {
     return { code: 'unit_vehicle_limit', message, field: vehicleField };
   }
   if (detail === 'registration_required') return { code: 'registration_required', message: E.registrationRequired, field: vehicleField };
+  const vehicle = vehicleBackendError(e);
+  if (vehicle) {
+    // The fields are on the vehicle's own step: name the one to start at.
+    return { code: vehicle.code, message: vehicle.message, field: ctx.vid ? fieldId(vehicle.field, ctx.vid) : null };
+  }
   if (e.status === 409 && (detail === 'duplicate_registration' || /already registered/i.test(detail))) {
     return { code: 'duplicate_registration', message: E.duplicate(ctx.plate), field: vehicleField };
   }
@@ -804,11 +941,12 @@ export function registerErrorMessage(err, ctx) {
   return { code: 'unknown', message: E.generic, field: null };
 }
 
-// TEMPORARY (remove once backend tasks B1 and B3 are live): the two document
-// fields an older backend does not have yet. Its register model forbids extra
-// fields, so it answers 422 and the page sends the request once more without
-// them (apt.js registerVehicle), saying so on the receipt.
-export const NEWER_DOC_FIELDS = ['registration_doc_url', 'vehicle_photo_url'];
+// TEMPORARY (remove once backend tasks B1, B3 and B4 are live): the fields an
+// older backend does not have yet — the two documents, then the make, model and
+// color. Its register model forbids extra fields, so it answers 422 and the page
+// sends the request once more without them (apt.js registerVehicle), saying so
+// on the receipt.
+export const NEWER_FIELDS = ['registration_doc_url', 'vehicle_photo_url', ...Object.values(VEHICLE_REQUEST_FIELD)];
 
 /**
  * The fields among `fields` that a 422 names as unknown — pydantic's
@@ -818,14 +956,14 @@ export const NEWER_DOC_FIELDS = ['registration_doc_url', 'vehicle_photo_url'];
  * @param {string[]} [fields] the fields this call sent
  * @returns {string[]}
  */
-export function rejectedUnknownFields(err, fields = NEWER_DOC_FIELDS) {
+export function rejectedUnknownFields(err, fields = NEWER_FIELDS) {
   if (!err || err.status !== 422 || !Array.isArray(err.detail)) return [];
   const unknown = new Set();
   for (const e of err.detail) {
     if (!e || !Array.isArray(e.loc) || !e.loc.length || !/extra/.test(String(e.type || ''))) continue;
     unknown.add(e.loc[e.loc.length - 1]);
   }
-  return NEWER_DOC_FIELDS.filter((f) => fields.includes(f) && unknown.has(f));
+  return NEWER_FIELDS.filter((f) => fields.includes(f) && unknown.has(f));
 }
 
 /** One vehicle's document fields beyond the shared three: only the keys there are. */
@@ -838,12 +976,14 @@ export function docFields(v, ctx = {}) {
 
 /**
  * What went with one vehicle's request, for the receipt. `dropped`: the fields
- * the retry left out. vehiclePhotoSent is null when no photo was added.
+ * the retry left out. vehiclePhotoSent is null when no photo was added;
+ * detailsSent (the make, model and color) is false if the retry left any out.
  */
 export function sentFlags(v, ctx = {}, dropped = []) {
   return {
     registrationSent: !ctx.requireRegistration || (!!v.docs.registration && !dropped.includes('registration_doc_url')),
     vehiclePhotoSent: v.docs.vehicle ? !dropped.includes('vehicle_photo_url') : null,
+    detailsSent: !VEHICLE_FIELDS.some((f) => dropped.includes(VEHICLE_REQUEST_FIELD[f])),
   };
 }
 

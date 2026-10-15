@@ -5,7 +5,8 @@
 //                    restyled it only — same fields, same submit)
 //   ?role=resident   the long-term parking-pass request, in steps (Task F3):
 //                    S1 Before you start → S2 About you → S3 Vehicle n (×N,
-//                    plate photo, registration card, optional vehicle photo) →
+//                    plate, make, model and color, plate photo, registration
+//                    card, optional vehicle photo) →
 //                    S3b Your vehicles → S4 Your ID and lease → S5 Check your
 //                    answers → S6 Request received. The model — strings, step
 //                    router, validation, persistence, error map — is
@@ -35,6 +36,7 @@ import {
   slotId, cardId, docRefs, docState, serializeFlow, restoreFlow, receiptFlow,
   registerErrorMessage, rejectedUnknownFields, docFields, sentFlags, invalidDocSlots,
   formatSubmitted, copyText, displayPlate, vehicleRowStatus,
+  VEHICLE_COLORS, VEHICLE_MAKES, vehicleDescription, vehicleFields, fieldId,
 } from './shared/aptFlow.js';
 import {
   createDocSlot, mountDocCard, prepareFile, xhrUpload, thumbnailHtml, isSatisfied, isBusy,
@@ -324,13 +326,33 @@ const actionsHtml = (label, back = true) => `
     ${back ? `<button type="button" class="back-link" id="backLink">${esc(S.back)}</button>` : ''}
   </div>`;
 
-function textField({ id, label, hint, value, attrs, inputClass = '' }) {
+// `after`: markup that belongs to the input, kept inside the wrapper (the Make field's <datalist>).
+function textField({ id, label, hint, value, attrs, inputClass = '', after = '' }) {
   return `
     <div class="field" id="wrap-${esc(id)}">
       <label for="${esc(id)}">${esc(label)}</label>
       ${hint ? `<p class="hint" id="${esc(id)}-hint">${esc(hint)}</p>` : ''}
       <p class="field-error" id="${esc(id)}-error" hidden></p>
       <input id="${esc(id)}" name="${esc(id)}"${inputClass ? ` class="${esc(inputClass)}"` : ''} value="${esc(value)}"${hint ? ` aria-describedby="${esc(id)}-hint"` : ''} ${attrs}>
+      ${after}
+    </div>`;
+}
+
+// The vehicle's make, model and color, on S3. The make is free text with a list
+// of suggestions; the color is a select whose values are the backend's lowercase list.
+const VEHICLE_TEXT_ATTRS = 'type="text" autocomplete="off" autocapitalize="words" autocorrect="off" spellcheck="false" maxlength="40"';
+const makeSuggestions = () => `<datalist id="vehicle-makes">${VEHICLE_MAKES.map((m) => `<option value="${esc(m)}"></option>`).join('')}</datalist>`;
+
+function colorField({ id, label, value }) {
+  const options = [
+    `<option value="">${esc(S.vehicle.colorPlaceholder)}</option>`,
+    ...VEHICLE_COLORS.map((c) => `<option value="${esc(c)}"${c === value ? ' selected' : ''}>${esc(S.vehicle.colors[c])}</option>`),
+  ].join('');
+  return `
+    <div class="field" id="wrap-${esc(id)}">
+      <label for="${esc(id)}">${esc(label)}</label>
+      <p class="field-error" id="${esc(id)}-error" hidden></p>
+      <div class="select-wrap"><select id="${esc(id)}" name="${esc(id)}" autocomplete="off">${options}</select></div>
     </div>`;
 }
 
@@ -369,7 +391,7 @@ function setInlineError(field, message) {
   if (!el || typeof el.setAttribute !== 'function') return;
   const wrap = document.getElementById(`wrap-${group}`);
   const input = document.getElementById(field);
-  const isTextInput = input && input.tagName === 'INPUT' && input.type !== 'radio';
+  const isTextInput = input && (input.tagName === 'INPUT' || input.tagName === 'SELECT') && input.type !== 'radio';
   if (message) {
     el.innerHTML = `<span class="visually-hidden">${esc(S.errorPrefix)} </span>${esc(message)}`;
     el.hidden = false;
@@ -430,7 +452,8 @@ function resolveError(field) {
   }
 }
 
-function showErrors(errors, title) {
+// `focusSummary: false`: the caller has already put the cursor in the field the error is about.
+function showErrors(errors, title, { focusSummary = true } = {}) {
   clearInlineErrors();
   shownErrors = errors.slice();
   for (const e of errors) {
@@ -445,7 +468,7 @@ function showErrors(errors, title) {
   for (const a of list.querySelectorAll('a[data-target]')) a.addEventListener('click', onSummaryLink);
   box.hidden = errors.length === 0;
   setTitle(title, errors.length > 0);
-  if (errors.length) box.focus();
+  if (errors.length && focusSummary) box.focus();
 }
 
 function onSummaryLink(e) {
@@ -479,10 +502,10 @@ function scheduleSave() {
   saveTimer = setTimeout(saveNow, 250);
 }
 
-/** Text input: keep the answer, validate on blur once typed in, clear the error as soon as it is fixed. */
-function bindTextField(id, field, set) {
+/** Text input or select: keep the answer, validate on blur once changed, clear the error as soon as it is fixed. */
+function bindField(id, field, set) {
   const input = document.getElementById(id);
-  input.addEventListener('input', () => {
+  input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', () => {
     dirty.add(id);
     set(input.value);
     scheduleSave();
@@ -713,7 +736,7 @@ function renderAbout() {
       ${actionsHtml(S.continue)}
     </form>`;
   bindForm(onContinue);
-  for (const f of ['name', 'unit', 'phone', 'email']) bindTextField(f, f, (value) => { flow[f] = value; });
+  for (const f of ['name', 'unit', 'phone', 'email']) bindField(f, f, (value) => { flow[f] = value; });
   setTitle(S.about.title);
 }
 
@@ -722,6 +745,9 @@ function renderVehicle(vid) {
   const v = findVehicle(flow, vid);
   const index = flow.vehicles.indexOf(v);
   const plateId = `plate-${vid}`;
+  const makeId = fieldId('make', vid);
+  const modelId = fieldId('model', vid);
+  const colorId = fieldId('color', vid);
   const plateSlot = slotId('plate', vid);
   const regSlot = slotId('registration', vid);
   const carSlot = slotId('vehicle', vid);
@@ -742,6 +768,9 @@ function renderVehicle(vid) {
           </div>
         </div>` : ''}
       ${textField({ id: plateId, label: S.vehicle.plateLabel, hint: S.vehicle.plateHint, value: v.plate, inputClass: 'plate-input', attrs: 'type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="10"' })}
+      ${textField({ id: makeId, label: S.vehicle.makeLabel, value: v.make, attrs: `${VEHICLE_TEXT_ATTRS} list="vehicle-makes"`, after: makeSuggestions() })}
+      ${textField({ id: modelId, label: S.vehicle.modelLabel, value: v.model, attrs: VEHICLE_TEXT_ATTRS })}
+      ${colorField({ id: colorId, label: S.vehicle.colorLabel, value: v.color })}
       ${cardField(plateSlot)}
       ${rules.requireRegistration ? cardField(regSlot) : ''}
       ${cardField(carSlot)}
@@ -771,10 +800,13 @@ function renderVehicle(vid) {
     sizeLine: S.vehicle.vehiclePhotoSize,
     schematic: 'vehicle',
   });
-  bindTextField(plateId, 'plate', (value) => {
+  bindField(plateId, 'plate', (value) => {
     v.plate = value;
     if (plateCard) plateCard.refresh();
   });
+  bindField(makeId, 'make', (value) => { v.make = value; });
+  bindField(modelId, 'model', (value) => { v.model = value; });
+  bindField(colorId, 'color', (value) => { v.color = value; });
   const removeBtn = document.getElementById('removeVehicleBtn');
   if (index > 0 && !v.ref && removeBtn) {
     const confirm = document.getElementById('removeConfirm');
@@ -812,6 +844,20 @@ function vehicleDone(v) {
   return !validateStep(`vehicle:${v.vid}`, flow, { ...rules, docStates: docStatesNow() }).length;
 }
 
+/**
+ * "white Honda Civic · ABC1234": the description, then the plate. On S3b and S5
+ * the plate is the ink chip; on the receipt (`chip: false`) it is plain, in the
+ * plate's mono face. A vehicle with no description (a receipt saved before the
+ * make, model and color existed) is its plate alone. The dot is decoration; it
+ * belongs to the plate, and apt.css drops it when the plate wraps to a line of
+ * its own. No whitespace between the tags: the pieces are inline-blocks.
+ */
+function vehicleLineHtml(v, plate, { chip = true } = {}) {
+  const description = vehicleDescription(v);
+  const tail = `<span class="vehicle-tail">${description ? '<span class="vehicle-sep" aria-hidden="true"> · </span>' : ''}<span class="${chip ? 'plate-chip' : 'vehicle-plate'}">${esc(plate)}</span></span>`;
+  return `<span class="vehicle-line"><span class="vehicle-flow">${description ? `<span class="vehicle-desc">${esc(description)}</span>` : ''}${tail}</span></span>`;
+}
+
 function vehicleThumbs(v) {
   const thumbs = [thumbnailHtml(slots.get(slotId('plate', v.vid)))];
   if (rules.requireRegistration) thumbs.push(thumbnailHtml(slots.get(slotId('registration', v.vid))));
@@ -834,7 +880,7 @@ function renderVehicles() {
     return `
       <li class="vehicle-row" id="row-${v.vid}" tabindex="-1">
         <div class="row-main">
-          <span class="plate-chip">${esc(name)}</span>
+          ${vehicleLineHtml(v, name)}
           ${vehicleThumbs(v)}
           <span class="row-status${incomplete ? ' is-incomplete' : ''}">${esc(vehicleStatus(v))}</span>
         </div>
@@ -966,7 +1012,7 @@ function renderReview() {
     const incomplete = !v.ref && !vehicleDone(v);
     return `
       <div class="summary-row summary-vehicle" id="review-vehicle-${v.vid}" tabindex="-1">
-        <dt><span class="plate-chip">${esc(name)}</span></dt>
+        <dt>${vehicleLineHtml(v, name)}</dt>
         <dd>${vehicleThumbs(v)}<span class="row-status${incomplete ? ' is-incomplete' : ''}">${esc(vehicleStatus(v))}</span></dd>
         <dd class="summary-action">${v.ref ? '' : `<button type="button" class="text-btn" data-goto="vehicle:${v.vid}" data-focus="plate-${v.vid}">${esc(S.review.change)}<span class="visually-hidden">${esc(S.review.hidden.vehicle(name))}</span></button>`}</dd>
       </div>`;
@@ -1013,11 +1059,12 @@ function renderReceived() {
   const rows = r.vehicles.map((v) => `
     <li class="receipt-vehicle">
       <dl>
-        <dt>${esc(S.received.plate)}</dt><dd>${esc(v.plate)}</dd>
+        <dt>${esc(S.received.vehicle)}</dt><dd class="receipt-car">${vehicleLineHtml(v, v.plate, { chip: false })}</dd>
         <dt>${esc(S.received.reference)}</dt><dd data-ref>${esc(v.ref)}</dd>
       </dl>
       ${v.registrationSent ? '' : `<p class="receipt-note">${esc(S.received.registrationNotSent)}</p>`}
       ${v.vehiclePhotoSent === false ? `<p class="receipt-note">${esc(S.received.vehiclePhotoNotSent)}</p>` : ''}
+      ${v.detailsSent === false ? `<p class="receipt-note">${esc(S.received.vehicleDetailsNotSent)}</p>` : ''}
     </li>`).join('');
   // The address in bold, so a typo is easy to spot (GOV.UK's confirmation page does the same).
   const [emailedBefore, emailedAfter] = S.received.emailed('\u0000').split('\u0000');
@@ -1195,7 +1242,7 @@ function payloadFor(v) {
 
 /** One vehicle → one pending request. Each call mints its own reCAPTCHA token. */
 async function registerVehicle(v) {
-  const extra = docFields(v, rules);
+  const extra = { ...docFields(v, rules), ...vehicleFields(v) };
   const send = async (fields) => backendRegister('/resident_plates/register',
     { ...payloadFor(v), ...fields, recaptcha_token: await mintToken('plate_register') }, 15000);
   try {
@@ -1203,10 +1250,11 @@ async function registerVehicle(v) {
   } catch (err) {
     const dropped = rejectedUnknownFields(err, Object.keys(extra));
     if (!dropped.length) throw err;
-    // TEMPORARY (remove once backend tasks B1 and B3 are live): an older
-    // backend's model forbids a field it does not have yet, so send the request
+    // TEMPORARY (remove once backend tasks B1, B3 and B4 are live): an older
+    // backend's model forbids a field it does not have yet (the registration
+    // card, the vehicle photo, the make, model and color), so send the request
     // once more without it; the receipt says what did not go.
-    console.warn(`register: this backend does not accept ${dropped.join(' or ')} yet; sent without it until it does`);
+    console.warn(`register: this backend does not accept ${dropped.join(', ')} yet; sent without ${dropped.length > 1 ? 'them' : 'it'} until it does`);
     const fields = Object.fromEntries(Object.entries(extra).filter(([name]) => !dropped.includes(name)));
     return { result: await send(fields), ...sentFlags(v, rules, dropped) };
   }
@@ -1229,6 +1277,7 @@ async function onSend(e) {
   const refs = {};
   const registrationSent = {};
   const vehiclePhotoSent = {};
+  const detailsSent = {};
   let current = null;
   try {
     for (const v of flow.vehicles) {
@@ -1239,11 +1288,13 @@ async function onSend(e) {
         v.ref = String((result && (result.reference_id || String(result.id || '').slice(-8))) || '').toUpperCase();
         v.registrationSent = sent.registrationSent;
         v.vehiclePhotoSent = sent.vehiclePhotoSent;
+        v.detailsSent = sent.detailsSent;
         saveNow(); // a vehicle that landed is never sent twice
       }
       refs[v.vid] = v.ref;
       registrationSent[v.vid] = v.registrationSent !== false;
       vehiclePhotoSent[v.vid] = v.vehiclePhotoSent;
+      detailsSent[v.vid] = v.detailsSent !== false;
     }
   } catch (err) {
     sending = false;
@@ -1251,7 +1302,7 @@ async function onSend(e) {
     return;
   }
   sending = false;
-  flow = receiptFlow(flow, { now: Date.now(), refs, registrationSent, vehiclePhotoSent });
+  flow = receiptFlow(flow, { now: Date.now(), refs, registrationSent, vehiclePhotoSent, detailsSent });
   slots.clear();
   saveNow();
   show('received', { mode: 'push' });
@@ -1278,6 +1329,16 @@ function reportSendError(err, v) {
   const partial = flow.vehicles.some((x) => x.ref);
   if (partial && plate && !['unit_vehicle_limit', 'duplicate_registration'].includes(m.code)) {
     message = `${S.errors.notSent(plate)} ${message}`;
+  }
+  if (v && field && ['vehicle_required', 'vehicle_color_invalid'].includes(m.code)) {
+    // The make, model and color are asked for on the vehicle's own step, not on
+    // S5: go there, say what the office needs, and put the cursor in the first
+    // field it named. Continue then returns to S5.
+    flow.returnTo = 'review';
+    saveNow();
+    show(`vehicle:${v.vid}`, { mode: 'push', focusId: field });
+    showErrors([{ field, message }], titleFor(screen), { focusSummary: false });
+    return;
   }
   render('review');
   showErrors([{ field: field || 'continueBtn', message }], S.review.title);
