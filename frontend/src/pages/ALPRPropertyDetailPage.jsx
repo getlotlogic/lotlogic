@@ -508,8 +508,9 @@ export function ALPRPropertyDetailPage({
   const regLinks = property ? registrationLinks(window.location.origin, property) : null;
 
   // Draw the QR codes onto the tiles' canvases. The tiles are not mounted while
-  // Requests is the open section (an apartment's default), and leaving it
-  // mounts fresh, blank canvases, so this runs again whenever they appear.
+  // Requests is the open section (an apartment's default) or while the page
+  // reloads its data, and they come back as fresh, blank canvases, so this runs
+  // again whenever they appear.
   useEffect(() => {
     if (!property?.qr_code_id) return;
     if (typeof QRCode === 'undefined' || typeof QRCode.toCanvas !== 'function') {
@@ -527,7 +528,7 @@ export function ALPRPropertyDetailPage({
     };
     draw(tempQrRef.current, regLinks.shortTermUrl, 'temp');
     draw(permQrRef.current, regLinks.longTermUrl, 'perm');
-  }, [regLinks?.shortTermUrl, regLinks?.longTermUrl, isOwner, requestsOnly]);
+  }, [regLinks?.shortTermUrl, regLinks?.longTermUrl, isOwner, requestsOnly, loading]);
 
   // ── Permanent plates (new /perm submissions land here) ──
   // Same live pattern as parking regs and plate events so the admin doesn't
@@ -872,12 +873,12 @@ export function ALPRPropertyDetailPage({
       {/* Two QR codes — one for Temporary, one for Permanent. Owner-only.
           Partners don't share QR codes with drivers — that's the property
           owner's onboarding flow. */}
-      {isOwner && !requestsOnly && (
+      {isOwner && !requestsOnly && property.qr_code_id && (
         <div className="pd-qr-grid">
           <div className="pd-qr-tile">
             <div className="pd-qr-head">
               <span className="pd-share-label" style={{color:'#3b82f6'}}>{isApartment ? 'Short-term parking pass' : 'Self-serve pass'}</span>
-              <span className="pd-qr-sub">up to 48 hrs</span>
+              <span className="pd-qr-sub">{isApartment ? 'up to 72 hrs' : 'up to 48 hrs'}</span>
             </div>
             <div className="pd-qr-canvas-wrap"><canvas ref={tempQrRef} /></div>
             {qrLibFailed && <div className="pd-qr-fallback" data-testid="qr-unavailable">QR unavailable &mdash; use Copy link</div>}

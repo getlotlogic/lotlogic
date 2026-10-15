@@ -1158,10 +1158,14 @@
       border-radius: 12px; padding: 14px; display: flex; flex-direction: column;
       align-items: center; gap: 10px; text-align: center;
     }
+    /* The qualifier ("up to 72 hrs", "owner-approved") sits beside the heading
+       when the tile is wide enough and drops under it when not; it is never
+       broken across two lines to squeeze in. */
     .pd-qr-head {
-      display: flex; align-items: baseline; gap: 8px; width: 100%; justify-content: space-between;
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; width: 100%;
+      justify-content: space-between;
     }
-    .pd-qr-sub { font-size: 10px; color: var(--text-faint); letter-spacing: .04em; }
+    .pd-qr-sub { font-size: 10px; color: var(--text-faint); letter-spacing: .04em; white-space: nowrap; }
     .pd-qr-canvas-wrap {
       background: #fff; padding: 8px; border-radius: 8px; line-height: 0;
     }

@@ -21,7 +21,7 @@
 import crypto from 'node:crypto';
 import type { Page } from '@playwright/test';
 import {
-  test, expect, skipUnlessPortal, frontendOrigin, pointAtLocalBackend, apiSignup, sqlValue, lit,
+  test, expect, skipUnlessPortal, frontendOrigin, pointAtLocalBackend, apiSignup, seedNStyle, sqlValue, lit,
 } from '../fixtures/portal';
 
 /**
@@ -52,6 +52,10 @@ async function openPublicSite(page: Page) {
 test.describe('apartment entry @portal', () => {
   test.beforeEach(() => {
     skipUnlessPortal();
+    // A signup is addressed to a partner by slug and the backend answers
+    // 404 slug_unknown unless an active partner has it, so N Style has to be
+    // seeded here rather than left to whichever spec ran first.
+    seedNStyle();
   });
 
   test('an old /perm/<slug> sign ends on the long-term form at /apt/<slug>?role=resident', async ({ page }) => {
