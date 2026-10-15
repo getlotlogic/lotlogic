@@ -1,9 +1,10 @@
 // ── The document card: one card per document, upload on select ─────────────
 // Task F3 (the long-term parking-pass request on /apt/<qr>). Each document the
-// office needs (photo of the plate, vehicle registration card, photo ID, lease)
-// gets its own card: a "make sure" line, Take photo / Choose buttons, then a
-// thumbnail with progress, and Retake / Remove. The file is shrunk and uploaded
-// the moment it is chosen, so "Send for review" only posts JSON with the keys.
+// office needs (photo of the plate, vehicle registration card, photo ID, lease,
+// and the optional photo of the vehicle) gets its own card: a "make sure" line,
+// Take photo / Choose buttons, then a thumbnail with progress, and Retake /
+// Remove. The file is shrunk and uploaded the moment it is chosen, so "Send for
+// review" only posts JSON with the keys.
 //
 // Three layers, in this order:
 //   1. Pure: the card's state machine (`cardReducer`) and the helpers around it
@@ -131,6 +132,8 @@ export function classifyUploadFailure(r) {
   if (detail.startsWith('recaptcha:')) return 'recaptcha';
   if (res.status === 413 || detail === 'file too large') return 'too_large';
   if (detail === 'unsupported file type') return 'wrong_type';
+  // TEMPORARY (remove with the register retry in apt.js once backend tasks B1
+  // and B3 are live): an older backend has no "registration" or "vehicle" kind.
   if (detail === 'invalid kind') return 'unsupported_kind';
   if (detail === 'empty file') return 'unreadable';
   return 'upload_failed';
@@ -466,6 +469,8 @@ const esc = (s) => String(s == null ? '' : s)
 // Line-art schematics of each document (decorative; the title says what it is).
 const SCHEMATICS = {
   plate: '<rect x="4" y="8" width="64" height="32" rx="4"/><circle cx="13" cy="14" r="1.4"/><circle cx="59" cy="14" r="1.4"/><rect x="15" y="19" width="42" height="11" rx="2"/><path d="M28 35h16"/>',
+  // the back of a car: the whole car, plate in view
+  vehicle: '<path d="M20 8h32l6 12H14z"/><rect x="8" y="20" width="56" height="18" rx="3"/><rect x="12" y="24" width="8" height="4" rx="1"/><rect x="52" y="24" width="8" height="4" rx="1"/><rect x="28" y="28" width="16" height="7" rx="1"/><path d="M12 38v5h8v-5M52 38v5h8v-5"/>',
   card: '<rect x="4" y="6" width="64" height="36" rx="3"/><path d="M12 15h28M12 22h40M12 29h34M12 36h18"/>',
   id: '<rect x="4" y="6" width="64" height="36" rx="3"/><circle cx="20" cy="21" r="6"/><path d="M11 36c2-5 6-7 9-7s7 2 9 7M36 16h24M36 23h20M36 30h16"/>',
   lease: '<path d="M18 2h28l10 10v34H18z"/><path d="M46 2v10h10M24 18h24M24 25h24M24 32h18M24 39h12"/>',
@@ -484,17 +489,20 @@ const ICON_DOC = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" st
  * Draw one card into `container` and keep it in step with `slot`.
  * @param {HTMLElement} container
  * @param {ReturnType<typeof createDocSlot>} slot
- * @param {{id: string, title: string, note?: string, makeSure?: string[], sizeLine: string,
+ * @param {{id: string, title: string, optional?: boolean, note?: string, makeSure?: string[], sizeLine: string,
  *          schematic: string, strings: any, question?: () => (string|null)}} view
+ *   `optional`: "(optional)" after the title, and Remove in an error state (an
+ *   optional card that failed must not hold the request up).
  * @returns {{refresh: () => void, destroy: () => void, focus: () => void}}
  */
 export function mountDocCard(container, slot, view) {
   const S = view.strings;
   const id = view.id;
   const imagesOnly = !!slot.imagesOnly;
+  const optional = !!view.optional;
   container.innerHTML = `
     <section class="doc-card" id="${esc(id)}" tabindex="-1" aria-labelledby="${esc(id)}-title">
-      <h2 class="doc-title" id="${esc(id)}-title">${esc(view.title)}</h2>
+      <h2 class="doc-title" id="${esc(id)}-title">${esc(view.title)}${optional ? ` <span class="doc-optional">${esc(S.optional)}</span>` : ''}</h2>
       ${view.note ? `<p class="doc-note">${esc(view.note)}</p>` : ''}
       ${view.makeSure && view.makeSure.length ? `<ul class="doc-checks">${view.makeSure.map((m) => `<li>${ICON_CHECK_SQUARE}<span>${esc(m)}</span></li>`).join('')}</ul>` : ''}
       <div class="doc-body"></div>
@@ -558,7 +566,8 @@ export function mountDocCard(container, slot, view) {
       body.innerHTML = `
         <p class="${status === 'error' ? 'doc-error' : 'doc-skipped'}">${status === 'error' ? `<span class="visually-hidden">${esc(S.errorPrefix)} </span>` : ''}${esc(msg)}</p>
         ${status === 'error' && state.retryable ? `<button type="button" class="btn-secondary doc-retry" data-act="retry">${esc(S.retry)}</button>` : ''}
-        ${pickButtons(S.chooseOther)}`;
+        ${pickButtons(S.chooseOther)}
+        ${status === 'error' && optional ? `<div class="doc-actions"><button type="button" class="text-btn danger" data-act="remove">${esc(S.remove)}</button></div>` : ''}`;
     } else if (status === 'done' || status === 'restored') {
       body.innerHTML = `
         ${fileRow(state)}
@@ -658,10 +667,11 @@ export function mountDocCard(container, slot, view) {
 
 /**
  * A small tile for summary rows (S3b, S5): the photo from the slot's bytes, a
- * "PDF" tile for a PDF, or '' (an upload restored from a saved key has no bytes).
+ * "PDF" tile for a PDF, or '' — for a card not uploaded (a skipped one is not
+ * part of the request) or restored from a saved key (no bytes on this phone).
  */
 export function thumbnailHtml(slot, { width = 56, height = 42, className = 'row-thumb' } = {}) {
-  if (!slot || !isSatisfied(slot.state)) return '';
+  if (!slot || !(slot.state.status === 'done' || slot.state.status === 'restored')) return '';
   if (slot.state.file && isPdf(slot.state.file)) {
     return `<span class="${esc(className)} row-glyph" aria-hidden="true">PDF</span>`;
   }

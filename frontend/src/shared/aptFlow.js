@@ -3,7 +3,8 @@
 //   S1 start      Before you start — the rules once, what to have ready, and
 //                 "Is your name on the lease?" (No → the short-term pass)
 //   S2 about      About you — name, unit, mobile, email
-//   S3 vehicle:vN Vehicle n — plate, plate photo, registration card
+//   S3 vehicle:vN Vehicle n — plate, plate photo, registration card, and an
+//                 optional photo of the vehicle
 //   S3b vehicles  Your vehicles — the list, "another?" until the unit's cap
 //   S4 documents  Your ID and lease
 //   S5 review     Check your answers — then "Send for review"
@@ -110,6 +111,9 @@ export const STRINGS = {
       registrationNote: 'The DMV registration card, not the insurance card.',
       registrationChecks: ['Your name is on it', 'The plate number is on it', 'All four corners are visible, no glare'],
       registrationSize: 'Photo or PDF, up to 10 MB.',
+      vehiclePhotoTitle: 'Photo of the vehicle',
+      vehiclePhotoNote: 'The whole car with the plate visible. It helps the office and the tow team recognize your car.',
+      vehiclePhotoSize: 'Photo, up to 10 MB.',
       errorPlate: 'Enter the license plate',
       errorPlateChars: 'Enter letters and numbers only',
       errorPlatePhoto: 'Add a photo of the plate',
@@ -122,6 +126,8 @@ export const STRINGS = {
       unnamed: (n) => `Vehicle ${n}`,
       rowDone: 'Photo and registration card added',
       rowDonePhotoOnly: 'Photo added',
+      rowDoneVehiclePhoto: 'Plate photo, registration card and vehicle photo added',
+      rowDonePhotosOnly: 'Plate and vehicle photos added',
       rowIncomplete: 'Not finished',
       rowSent: (ref) => `Sent · ref ${ref}`,
       change: 'Change',
@@ -159,6 +165,7 @@ export const STRINGS = {
       retake: 'Retake',
       remove: 'Remove',
       retry: 'Try again',
+      optional: '(optional)',
       preparing: 'Preparing photo…',
       preparingFile: 'Preparing file…',
       uploading: (size, pct) => `Uploading ${size} – ${pct}%`,
@@ -235,6 +242,7 @@ export const STRINGS = {
       status: 'Pending approval',
       protected: 'Protected from towing while the office reviews your request (up to 72 hours).',
       registrationNotSent: 'Sent without registration — the office may ask for it.',
+      vehiclePhotoNotSent: "Sent without the photo of the vehicle. It's optional, so nothing else is needed.",
       submitted: (when) => `Sent ${when}`,
       nextHeading: 'What happens next',
       next: [
@@ -256,7 +264,14 @@ const S = STRINGS.en;
 
 // ── flow state ──────────────────────────────────────────────────────────────
 
-const newVehicle = (vid) => ({ vid, plate: '', docs: { plate: null, registration: null }, ref: null, registrationSent: null });
+const newVehicle = (vid) => ({
+  vid,
+  plate: '',
+  docs: { plate: null, registration: null, vehicle: null }, // vehicle: the optional photo of the car
+  ref: null,
+  registrationSent: null,
+  vehiclePhotoSent: null,
+});
 
 export function emptyFlow() {
   return {
@@ -403,18 +418,23 @@ export function stepCaption(key, flow, ctx = {}) {
 
 // ── ids ─────────────────────────────────────────────────────────────────────
 
-/** A document slot: `'id'`, `'lease'`, `'plate:v1'`, `'registration:v1'`. */
+/** A document slot: `'id'`, `'lease'`, `'plate:v1'`, `'registration:v1'`, `'vehicle:v1'`. */
 export const slotId = (kind, vid) => (vid ? `${kind}:${vid}` : kind);
 export const fieldId = (name, vid) => `${name}-${vid}`;
 export const cardId = (slot) => `card-${slot.replace(':', '-')}`;
 const slotKind = (slot) => slot.split(':')[0];
 
-/** Every document slot this request needs → its saved reference (or null). */
+/**
+ * Every document slot this request has → its saved reference (or null): the
+ * registration card only where the property asks for it, the optional vehicle
+ * photo always (null when it was not added).
+ */
 export function docRefs(flow, ctx = {}) {
   const out = { id: flow.docs.id, lease: flow.docs.lease };
   for (const v of flow.vehicles) {
     out[slotId('plate', v.vid)] = v.docs.plate;
     if (ctx.requireRegistration) out[slotId('registration', v.vid)] = v.docs.registration;
+    out[slotId('vehicle', v.vid)] = v.docs.vehicle || null;
   }
   return out;
 }
@@ -491,7 +511,7 @@ export function validateField(field, value) {
 function docError(slot, ref, ctx, emptyMessage, field, imagesOnly = false) {
   const state = (ctx.docStates && ctx.docStates[slot]) || docState(ref);
   if (state.status === 'error') return { field, message: cardStatusText(state, S.card, { imagesOnly }) };
-  if (isSatisfied(state) || isBusy(state)) return null;
+  if (isSatisfied(state) || isBusy(state) || emptyMessage == null) return null;
   return { field, message: emptyMessage };
 }
 
@@ -514,6 +534,9 @@ function vehicleErrors(flow, v, ctx, fieldFor) {
     const reg = docError(slotId('registration', v.vid), v.docs.registration, ctx, S.vehicle.errorRegistration, fieldFor('card-registration'));
     if (reg) errors.push(reg);
   }
+  // Optional: not added is fine; added and failed is an error until it is fixed or removed.
+  const car = docError(slotId('vehicle', v.vid), v.docs.vehicle, ctx, null, fieldFor('card-vehicle'), true);
+  if (car) errors.push(car);
   return errors;
 }
 
@@ -578,6 +601,19 @@ export function validateStep(key, flow, ctx = {}) {
   }
 }
 
+/**
+ * A vehicle's status line on S3b and S5. Its thumbnails are decorative (and a
+ * reload leaves none), so the words say what is attached.
+ */
+export function vehicleRowStatus(v, ctx = {}, { done = true } = {}) {
+  const V = S.vehicles;
+  if (v.ref) return V.rowSent(v.ref);
+  if (!done) return V.rowIncomplete;
+  const car = !!v.docs.vehicle;
+  if (ctx.requireRegistration) return car ? V.rowDoneVehiclePhoto : V.rowDone;
+  return car ? V.rowDonePhotosOnly : V.rowDonePhotoOnly;
+}
+
 // ── persistence (localStorage, keyed by qr_code_id, 24 h) ───────────────────
 
 export const storageKey = (qrCodeId) => `lotlogic:apt:${qrCodeId}`;
@@ -586,6 +622,7 @@ const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
 const oneOf = (v, allowed) => (allowed.includes(v) ? v : null);
 const REF_RE = /^[0-9A-F]{8}$/;
 const cleanRefId = (v) => (typeof v === 'string' && REF_RE.test(v.toUpperCase()) ? v.toUpperCase() : null);
+const flag = (v) => (typeof v === 'boolean' ? v : null);
 
 function pickDoc(ref) {
   if (!ref || typeof ref !== 'object' || typeof ref.key !== 'string' || !ref.key) return null;
@@ -607,7 +644,12 @@ function cleanReceipt(r) {
   const vehicles = r.vehicles
     .filter((v) => v && typeof v === 'object' && cleanRefId(v.ref))
     .slice(0, 10)
-    .map((v) => ({ plate: str(v.plate, 20), ref: cleanRefId(v.ref), registrationSent: v.registrationSent !== false }));
+    .map((v) => ({
+      plate: str(v.plate, 20),
+      ref: cleanRefId(v.ref),
+      registrationSent: v.registrationSent !== false,
+      vehiclePhotoSent: flag(v.vehiclePhotoSent),
+    }));
   if (!vehicles.length) return null;
   return { submittedAt: r.submittedAt, unit: str(r.unit, MAX.unit), vehicles };
 }
@@ -624,9 +666,14 @@ function pickFlow(flow) {
     vehicles: (flow.vehicles || []).map((v) => ({
       vid: v.vid,
       plate: v.plate,
-      docs: { plate: pickDoc(v.docs && v.docs.plate), registration: pickDoc(v.docs && v.docs.registration) },
+      docs: {
+        plate: pickDoc(v.docs && v.docs.plate),
+        registration: pickDoc(v.docs && v.docs.registration),
+        vehicle: pickDoc(v.docs && v.docs.vehicle),
+      },
       ref: v.ref,
       registrationSent: v.registrationSent,
+      vehiclePhotoSent: v.vehiclePhotoSent,
     })),
     nextVid: flow.nextVid,
     another: flow.another,
@@ -663,9 +710,14 @@ export function restoreFlow(raw, { now, propertyId, ttlMs = TTL_MS }) {
       return {
         vid: v.vid,
         plate: str(v.plate, MAX.plate),
-        docs: { plate: cleanDoc(docs.plate, propertyId, 'plate'), registration: cleanDoc(docs.registration, propertyId, 'registration') },
+        docs: {
+          plate: cleanDoc(docs.plate, propertyId, 'plate'),
+          registration: cleanDoc(docs.registration, propertyId, 'registration'),
+          vehicle: cleanDoc(docs.vehicle, propertyId, 'vehicle'),
+        },
         ref: cleanRefId(v.ref),
-        registrationSent: typeof v.registrationSent === 'boolean' ? v.registrationSent : null,
+        registrationSent: flag(v.registrationSent),
+        vehiclePhotoSent: flag(v.vehiclePhotoSent),
       };
     });
   const highest = vehicles.reduce((m, v) => Math.max(m, Number(v.vid.slice(1))), 0);
@@ -694,15 +746,21 @@ export function restoreFlow(raw, { now, propertyId, ttlMs = TTL_MS }) {
 /**
  * The flow once every vehicle is sent: the receipt (plates, references, time,
  * unit) and nothing else — the answers and the document keys are forgotten.
- * @param {{now: number, refs: Record<string,string>, registrationSent: Record<string,boolean>}} sent
+ * @param {{now: number, refs: Record<string,string>, registrationSent: Record<string,boolean>,
+ *          vehiclePhotoSent?: Record<string,boolean|null>}} sent
  */
-export function receiptFlow(flow, { now, refs, registrationSent }) {
+export function receiptFlow(flow, { now, refs, registrationSent, vehiclePhotoSent = {} }) {
   const vehicles = flow.vehicles.map((v) => ({
     plate: normalizePlate(v.plate),
     ref: cleanRefId(refs[v.vid] || v.ref),
     registrationSent: registrationSent[v.vid] !== false,
+    vehiclePhotoSent: flag(vehiclePhotoSent[v.vid]),
   }));
-  return { ...emptyFlow(), step: 'received', receipt: { submittedAt: now, unit: flow.unit.trim(), vehicles } };
+  return {
+    ...emptyFlow(),
+    step: 'received',
+    receipt: { submittedAt: now, unit: flow.unit.trim(), vehicles },
+  };
 }
 
 // ── the backend's answers → plain language (brief item 10) ──────────────────
@@ -743,9 +801,47 @@ export function registerErrorMessage(err, ctx) {
   return { code: 'unknown', message: E.generic, field: null };
 }
 
-/** The 422 an older backend answers to `registration_doc_url` (its model forbids extra fields). */
-export function isRegistrationFieldRejected(err) {
-  return !!err && err.status === 422 && JSON.stringify(err.detail == null ? '' : err.detail).includes('registration_doc_url');
+// TEMPORARY (remove once backend tasks B1 and B3 are live): the two document
+// fields an older backend does not have yet. Its register model forbids extra
+// fields, so it answers 422 and the page sends the request once more without
+// them (apt.js registerVehicle), saying so on the receipt.
+export const NEWER_DOC_FIELDS = ['registration_doc_url', 'vehicle_photo_url'];
+
+/**
+ * The fields among `fields` that a 422 names as unknown — pydantic's
+ * `extra_forbidden` (`value_error.extra` in v1) at `loc: ['body', <field>]`.
+ * [] for any other answer, including a 422 about a field the backend knows.
+ * @param {any} err the error backendRegister threw (`status`, `detail`)
+ * @param {string[]} [fields] the fields this call sent
+ * @returns {string[]}
+ */
+export function rejectedUnknownFields(err, fields = NEWER_DOC_FIELDS) {
+  if (!err || err.status !== 422 || !Array.isArray(err.detail)) return [];
+  const unknown = new Set();
+  for (const e of err.detail) {
+    if (!e || !Array.isArray(e.loc) || !e.loc.length || !/extra/.test(String(e.type || ''))) continue;
+    unknown.add(e.loc[e.loc.length - 1]);
+  }
+  return NEWER_DOC_FIELDS.filter((f) => fields.includes(f) && unknown.has(f));
+}
+
+/** One vehicle's document fields beyond the shared three: only the keys there are. */
+export function docFields(v, ctx = {}) {
+  const out = {};
+  if (ctx.requireRegistration && v.docs.registration) out.registration_doc_url = v.docs.registration.key;
+  if (v.docs.vehicle) out.vehicle_photo_url = v.docs.vehicle.key;
+  return out;
+}
+
+/**
+ * What went with one vehicle's request, for the receipt. `dropped`: the fields
+ * the retry left out. vehiclePhotoSent is null when no photo was added.
+ */
+export function sentFlags(v, ctx = {}, dropped = []) {
+  return {
+    registrationSent: !ctx.requireRegistration || (!!v.docs.registration && !dropped.includes('registration_doc_url')),
+    vehiclePhotoSent: v.docs.vehicle ? !dropped.includes('vehicle_photo_url') : null,
+  };
 }
 
 // ── the receipt ─────────────────────────────────────────────────────────────

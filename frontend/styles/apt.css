@@ -317,6 +317,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .doc-card[data-status=error] { border: 2px solid var(--status-no); }
 .doc-card:focus { outline: 2px solid var(--ink); outline-offset: 2px; }
 .doc-title { font-family: 'Manrope', system-ui, sans-serif; font-size: 16px; font-weight: 700; line-height: 1.35; margin: 0; color: var(--ink); }
+.doc-optional { font-weight: 500; color: var(--ink-2); }
 .doc-note { font-size: 14px; line-height: 1.45; color: var(--ink-2); margin: 0; }
 .doc-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; line-height: 1.4; color: var(--ink-2); }
 .doc-checks li { display: grid; grid-template-columns: 16px 1fr; gap: 8px; }
@@ -379,7 +380,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
   padding: 5px 10px;
   overflow-wrap: anywhere;
 }
-.row-thumbs { display: flex; gap: 6px; }
+.row-thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
 .row-thumb { width: 56px; height: 42px; object-fit: cover; border: 1px solid var(--ink); display: block; }
 .row-glyph { display: flex; align-items: center; justify-content: center; background: var(--paper-2); color: var(--ink-2); font-family: 'DM Mono', ui-monospace, monospace; font-size: 13px; font-weight: 500; }
 .row-status { font-size: 14px; line-height: 1.4; color: var(--ink-2); }

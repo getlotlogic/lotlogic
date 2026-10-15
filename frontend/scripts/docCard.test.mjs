@@ -11,7 +11,7 @@ import {
   MAX_UPLOAD_BYTES, initialCardState, cardReducer, isSatisfied, isBusy,
   precheck, isHeic, isPdf, decodeFailureCode, targetSize, formatBytes,
   classifyUploadFailure, uploadTimeoutMs, uploadFilename, cardStatusText,
-  createDocSlot,
+  createDocSlot, thumbnailHtml,
 } from '../src/shared/docCard.js';
 import { STRINGS } from '../src/shared/aptFlow.js';
 
@@ -197,6 +197,7 @@ test('the upload names the file by kind, so the backend keeps a real extension',
   assert.equal(uploadFilename('plate', 'image/jpeg'), 'plate.jpg');
   assert.equal(uploadFilename('lease', 'application/pdf'), 'lease.pdf');
   assert.equal(uploadFilename('registration', 'image/jpeg'), 'registration.jpg');
+  assert.equal(uploadFilename('vehicle', 'image/jpeg'), 'vehicle.jpg');
 });
 
 test('the upload timeout grows with the file, within limits', () => {
@@ -436,4 +437,63 @@ test('slot: starts restored from a saved key, with no bytes', () => {
   const slot = createDocSlot({ kind: 'id', initial: { key: KEY, name: 'id.jpg', size: 1, type: 'image/jpeg' }, prepare: async () => ({}), upload: async () => ({}) });
   assert.equal(slot.state.status, 'restored');
   assert.equal(slot.blob, null);
+});
+
+// ── the vehicle photo (optional, images only, kind "vehicle") ───────────────
+
+test('slot: the vehicle photo uploads as kind "vehicle", named vehicle.jpg, and refuses a PDF', async () => {
+  const { slot, calls, pending } = fakeSlot({ kind: 'vehicle', imagesOnly: true });
+  slot.select(pdf(), 'files');
+  await flush();
+  assert.equal(slot.state.error, 'wrong_type');
+  assert.equal(calls.upload.length, 0);
+  slot.select(jpg(4 * MB, 'IMG_5001.jpg'), 'camera');
+  await flush();
+  assert.equal(calls.upload[0].kind, 'vehicle');
+  assert.equal(calls.upload[0].filename, 'vehicle.jpg');
+  pending[0].resolve({ status: 200, body: { key: KEY.replace('/plate/', '/vehicle/') } });
+  await flush();
+  assert.equal(slot.state.status, 'done');
+});
+
+test('slot: a card in an error state can be removed, back to empty (an optional card is never a dead end)', async () => {
+  const { slot, pending } = fakeSlot({ kind: 'vehicle', imagesOnly: true });
+  slot.select(jpg(), 'camera');
+  await flush();
+  pending[0].resolve({ status: 502, body: { detail: 'upload failed' } });
+  await flush();
+  assert.equal(slot.state.status, 'error');
+  slot.remove();
+  assert.equal(slot.state.status, 'empty');
+  assert.equal(slot.state.error, null);
+  assert.equal(slot.blob, null);
+});
+
+test('slot: an older backend without the "vehicle" kind skips the card instead of failing it', async () => {
+  const { slot, pending } = fakeSlot({ kind: 'vehicle', imagesOnly: true });
+  slot.select(jpg(), 'camera');
+  await flush();
+  pending[0].resolve({ status: 400, body: { detail: 'invalid kind' } });
+  await flush();
+  assert.equal(slot.state.status, 'skipped');
+  assert.equal(slot.state.key, null, 'nothing to send');
+});
+
+// ── summary thumbnails (S3b, S5) ───────────────────────────────────────────
+
+const slotLike = (state, blob = null) => ({ state: { ...initialCardState(), ...state }, blob });
+
+test('a summary thumbnail is drawn only for a document that will go with the request', () => {
+  const bytes = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: 'image/jpeg' });
+  const done = thumbnailHtml(slotLike({ status: 'done', key: KEY, preview: true, file: jpg() }, bytes));
+  assert.match(done, /^<img class="row-thumb" src="blob:[^"]+" alt="" width="56" height="42" data-object-url="1">$/);
+  URL.revokeObjectURL(/src="([^"]+)"/.exec(done)[1]);
+  assert.equal(thumbnailHtml(slotLike({ status: 'skipped', preview: true, file: jpg() }, bytes)), '',
+    'skipped by an older backend: not part of the request, so no thumbnail');
+  assert.equal(thumbnailHtml(slotLike({ status: 'restored', key: KEY, file: jpg() })), '', 'uploaded earlier: no bytes on this phone');
+  assert.match(thumbnailHtml(slotLike({ status: 'restored', key: KEY, file: pdf() })), /row-glyph[^>]*>PDF</);
+  for (const status of ['empty', 'preparing', 'uploading', 'offline', 'error']) {
+    assert.equal(thumbnailHtml(slotLike({ status, preview: true, file: jpg() }, bytes)), '', status);
+  }
+  assert.equal(thumbnailHtml(undefined), '', 'a card never mounted (the vehicle photo was not added)');
 });

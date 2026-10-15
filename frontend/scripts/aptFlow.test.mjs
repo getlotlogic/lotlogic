@@ -13,8 +13,8 @@ import {
   formatPhone, phoneToE164, validateField, validateStep,
   slotId, fieldId, cardId, docRefs, docState, docKeyValid,
   serializeFlow, restoreFlow, receiptFlow,
-  registerErrorMessage, isRegistrationFieldRejected, invalidDocSlots,
-  formatSubmitted, copyText, displayPlate,
+  registerErrorMessage, rejectedUnknownFields, docFields, sentFlags, invalidDocSlots,
+  formatSubmitted, copyText, displayPlate, vehicleRowStatus,
 } from '../src/shared/aptFlow.js';
 import { cardStatusText, isSatisfied } from '../src/shared/docCard.js';
 
@@ -37,7 +37,7 @@ function completeFlow() {
   f.phone = '(704) 555-0123';
   f.email = 'jane@example.com';
   f.vehicles[0].plate = 'ABC 1234';
-  f.vehicles[0].docs = { plate: ref('plate'), registration: ref('registration', 'pdf') };
+  f.vehicles[0].docs = { plate: ref('plate'), registration: ref('registration', 'pdf'), vehicle: null };
   f.another = 'no';
   f.docs = { id: ref('id'), lease: ref('lease', 'pdf') };
   return f;
@@ -53,6 +53,14 @@ test('a new flow starts on S1 with one empty vehicle', () => {
   assert.equal(f.vehicles[0].vid, 'v1');
   assert.equal(f.vehicles[0].plate, '');
   assert.equal(f.receipt, null);
+});
+
+test('a vehicle has three document slots: the plate photo, the registration card and the optional vehicle photo', () => {
+  const f = emptyFlow();
+  assert.deepEqual(f.vehicles[0].docs, { plate: null, registration: null, vehicle: null });
+  assert.equal(f.vehicles[0].vehiclePhotoSent, null);
+  const { flow } = addVehicle(f);
+  assert.deepEqual(flow.vehicles[1].docs, { plate: null, registration: null, vehicle: null });
 });
 
 test('Continue walks S1 → S2 → S3 → S3b → S4 → S5 in that order', () => {
@@ -287,6 +295,56 @@ test('S3: a card in an error state reports its own message', () => {
   assert.deepEqual(errors, [{ field: 'card-plate-v1', message: 'The selected file must be smaller than 10 MB' }]);
 });
 
+test('S3: the photo of the vehicle is optional — not added is not an error', () => {
+  const f = completeFlow();
+  assert.equal(f.vehicles[0].docs.vehicle, null);
+  assert.deepEqual(validateStep('vehicle:v1', f, CTX), []);
+  assert.deepEqual(validateStep('vehicle:v1', f, { ...CTX, requireRegistration: false }), []);
+  const empty = completeFlow();
+  empty.vehicles[0].docs = { plate: null, registration: null, vehicle: null };
+  assert.equal(validateStep('vehicle:v1', empty, CTX).some((e) => e.field === 'card-vehicle-v1'), false,
+    'an empty vehicle photo card never joins the error summary');
+});
+
+test('S3: an added vehicle photo that failed is reported, in its own words, until it is fixed or removed', () => {
+  const f = completeFlow();
+  const failed = { 'vehicle:v1': { status: 'error', error: 'upload_failed', retryable: true, file: null, key: null } };
+  assert.deepEqual(validateStep('vehicle:v1', f, { ...CTX, docStates: failed }), [
+    { field: 'card-vehicle-v1', message: 'The selected file could not be uploaded – try again' },
+  ]);
+  const wrongType = { 'vehicle:v1': { status: 'error', error: 'wrong_type', retryable: false, file: null, key: null } };
+  assert.deepEqual(validateStep('vehicle:v1', f, { ...CTX, docStates: wrongType }), [
+    { field: 'card-vehicle-v1', message: 'The selected file must be a JPG, PNG or WEBP' },
+  ], 'the vehicle photo is images only, like the plate photo');
+  for (const status of ['empty', 'preparing', 'uploading', 'offline', 'done', 'skipped']) {
+    const docStates = { 'vehicle:v1': { status, error: null, retryable: false, file: null, key: status === 'done' ? key('vehicle') : null } };
+    assert.deepEqual(validateStep('vehicle:v1', f, { ...CTX, docStates }), [], status);
+  }
+});
+
+test('S3b and S5 rows say in words what is attached (their thumbnails are decorative)', () => {
+  const v = completeFlow().vehicles[0];
+  const noReg = { ...CTX, requireRegistration: false };
+  assert.equal(vehicleRowStatus(v, CTX, { done: true }), 'Photo and registration card added');
+  assert.equal(vehicleRowStatus(v, noReg, { done: true }), 'Photo added');
+  v.docs.vehicle = ref('vehicle');
+  assert.equal(vehicleRowStatus(v, CTX, { done: true }), 'Plate photo, registration card and vehicle photo added');
+  assert.equal(vehicleRowStatus(v, noReg, { done: true }), 'Plate and vehicle photos added');
+  assert.equal(vehicleRowStatus(v, CTX, { done: false }), 'Not finished');
+  v.ref = '8F3E2A1D';
+  assert.equal(vehicleRowStatus(v, CTX, { done: true }), 'Sent · ref 8F3E2A1D');
+});
+
+test('S3b and S5: a vehicle whose added photo failed is not finished', () => {
+  const f = completeFlow();
+  const docStates = { 'vehicle:v1': { status: 'error', error: 'recaptcha', retryable: true, file: null, key: null } };
+  assert.deepEqual(validateStep('vehicles', f, { ...CTX, docStates }), [{ field: 'row-v1', message: 'Finish ABC1234, or remove it' }]);
+  assert.deepEqual(validateStep('review', f, { ...CTX, docStates }), [
+    { field: 'review-vehicle-v1', message: 'The automated-access check failed – try again' },
+  ]);
+  assert.deepEqual(validateStep('review', f, CTX), [], 'after a reload (no live card) the saved answers decide');
+});
+
 test('S3: the same plate twice in one request is caught', () => {
   let f = completeFlow();
   ({ flow: f } = addVehicle(f));
@@ -400,6 +458,31 @@ test('restore drops an upload key that is not one of this property\'s, and keeps
   assert.deepEqual(back.vehicles[0].docs.registration, ref('registration', 'pdf'));
 });
 
+test('the vehicle photo key round-trips, and is checked for this property and its own kind', () => {
+  const f = completeFlow();
+  f.vehicles[0].docs.vehicle = ref('vehicle');
+  const back = restoreFlow(serializeFlow(f, { now: NOW, propertyId: PID }), { now: NOW, propertyId: PID });
+  assert.deepEqual(back.vehicles[0].docs.vehicle, ref('vehicle'));
+  assert.deepEqual(back, f);
+  for (const bad of [key('plate'), key('vehicle', 'jpg', OTHER_PID), `apt/${PID}/vehicle/short.jpg`]) {
+    f.vehicles[0].docs.vehicle = { ...ref('vehicle'), key: bad };
+    const again = restoreFlow(serializeFlow(f, { now: NOW, propertyId: PID }), { now: NOW, propertyId: PID });
+    assert.equal(again.vehicles[0].docs.vehicle, null, bad);
+    assert.deepEqual(again.vehicles[0].docs.plate, ref('plate'), 'the other slots are kept');
+  }
+});
+
+test('a vehicle already sent keeps whether its photo went with it', () => {
+  const f = completeFlow();
+  f.vehicles[0].ref = '8F3E2A1D';
+  f.vehicles[0].vehiclePhotoSent = false;
+  const back = restoreFlow(serializeFlow(f, { now: NOW, propertyId: PID }), { now: NOW, propertyId: PID });
+  assert.equal(back.vehicles[0].vehiclePhotoSent, false);
+  const raw = JSON.parse(serializeFlow(f, { now: NOW, propertyId: PID }));
+  raw.flow.vehicles[0].vehiclePhotoSent = 'yes';
+  assert.equal(restoreFlow(JSON.stringify(raw), { now: NOW, propertyId: PID }).vehicles[0].vehiclePhotoSent, null);
+});
+
 test('restore cleans what it reads: lengths, enums and vehicle ids', () => {
   const raw = JSON.stringify({
     v: 1, savedAt: NOW, propertyId: PID,
@@ -421,7 +504,8 @@ test('restore cleans what it reads: lengths, enums and vehicle ids', () => {
   assert.equal(f.vehicles.length, 1, 'a vehicle with a bad id is dropped');
   assert.equal(f.vehicles[0].plate.length, 10);
   assert.equal(f.vehicles[0].ref, null);
-  assert.deepEqual(f.vehicles[0].docs, { plate: null, registration: null });
+  assert.deepEqual(f.vehicles[0].docs, { plate: null, registration: null, vehicle: null });
+  assert.equal(f.vehicles[0].vehiclePhotoSent, null);
   assert.deepEqual(f.docs, { id: null, lease: null });
   assert.equal(f.receipt, null);
 });
@@ -438,7 +522,7 @@ test('the receipt keeps plates, references and the time, and forgets the answers
   assert.deepEqual(f.receipt, {
     submittedAt: NOW,
     unit: '214',
-    vehicles: [{ plate: 'ABC1234', ref: '8F3E2A1D', registrationSent: false }],
+    vehicles: [{ plate: 'ABC1234', ref: '8F3E2A1D', registrationSent: false, vehiclePhotoSent: null }],
   });
   assert.equal(f.name, '');
   assert.equal(f.phone, '');
@@ -447,6 +531,17 @@ test('the receipt keeps plates, references and the time, and forgets the answers
   const back = restoreFlow(serializeFlow(f, { now: NOW, propertyId: PID }), { now: NOW + 60_000, propertyId: PID });
   assert.deepEqual(back.receipt, f.receipt, 'a reload shows the same receipt');
   assert.equal(resolveStep(back.step, back), 'received');
+});
+
+test('a reloaded receipt still says which vehicle photo did not go', () => {
+  const f = completeFlow();
+  f.vehicles.push({ ...f.vehicles[0], vid: 'v2', plate: 'XYZ 789' });
+  const sent = receiptFlow(f, {
+    now: NOW, refs: { v1: '8F3E2A1D', v2: '1a2b3c4d' }, registrationSent: { v1: true, v2: true }, vehiclePhotoSent: { v1: true, v2: false },
+  });
+  assert.deepEqual(sent.receipt.vehicles.map((v) => v.vehiclePhotoSent), [true, false]);
+  const back = restoreFlow(serializeFlow(sent, { now: NOW, propertyId: PID }), { now: NOW + 60_000, propertyId: PID });
+  assert.deepEqual(back.receipt, sent.receipt);
 });
 
 // ── restored uploads ────────────────────────────────────────────────────────
@@ -463,10 +558,13 @@ test('a restored key with no local file is "Uploaded earlier", satisfied, with n
   assert.equal(isSatisfied(docState(null)), false);
 });
 
-test('docRefs lists the slots a request needs, with the registration card only when required', () => {
+test('docRefs lists the slots a request has: the registration card only when required, the vehicle photo always', () => {
   const f = completeFlow();
-  assert.deepEqual(Object.keys(docRefs(f, CTX)).sort(), ['id', 'lease', 'plate:v1', 'registration:v1']);
-  assert.deepEqual(Object.keys(docRefs(f, { ...CTX, requireRegistration: false })).sort(), ['id', 'lease', 'plate:v1']);
+  assert.deepEqual(Object.keys(docRefs(f, CTX)).sort(), ['id', 'lease', 'plate:v1', 'registration:v1', 'vehicle:v1']);
+  assert.deepEqual(Object.keys(docRefs(f, { ...CTX, requireRegistration: false })).sort(), ['id', 'lease', 'plate:v1', 'vehicle:v1']);
+  assert.equal(docRefs(f, CTX)['vehicle:v1'], null, 'not added: an empty slot');
+  f.vehicles[0].docs.vehicle = ref('vehicle');
+  assert.deepEqual(docRefs(f, CTX)['vehicle:v1'], ref('vehicle'));
 });
 
 test('slot, field and card ids', () => {
@@ -485,6 +583,12 @@ test('docKeyValid accepts only this property\'s key for the right kind', () => {
   assert.equal(docKeyValid(`apt/${PID}/id/${HEX}.exe`, PID, 'id'), false);
   assert.equal(docKeyValid(`apt/${PID}/id/short.jpg`, PID, 'id'), false);
   assert.equal(docKeyValid('', PID, 'id'), false);
+});
+
+test('docKeyValid knows the vehicle photo kind', () => {
+  assert.equal(docKeyValid(key('vehicle'), PID, 'vehicle'), true);
+  assert.equal(docKeyValid(key('vehicle'), PID, 'plate'), false);
+  assert.equal(docKeyValid(key('plate'), PID, 'vehicle'), false);
 });
 
 // ── backend errors → plain language (brief item 10) ─────────────────────────
@@ -568,13 +672,57 @@ test('anything else is a calm generic message, never the raw backend text', () =
   assert.equal(registerErrorMessage({ status: 500, detail: 'registration_failed' }, ERR_CTX).code, 'unknown');
 });
 
-test('the 422 that means "registration_doc_url not deployed yet" is recognised, and only that one', () => {
-  assert.equal(isRegistrationFieldRejected({
-    status: 422, detail: [{ type: 'extra_forbidden', loc: ['body', 'registration_doc_url'], msg: 'Extra inputs are not permitted' }],
-  }), true);
-  assert.equal(isRegistrationFieldRejected({ status: 422, detail: [{ loc: ['body', 'email'] }] }), false);
-  assert.equal(isRegistrationFieldRejected({ status: 400, detail: 'registration_doc_url' }), false);
-  assert.equal(isRegistrationFieldRejected(null), false);
+const extraForbidden = (...fields) => ({
+  status: 422,
+  detail: fields.map((f) => ({ type: 'extra_forbidden', loc: ['body', f], msg: 'Extra inputs are not permitted', input: key('vehicle') })),
+});
+
+test('an older backend refusing registration_doc_url or vehicle_photo_url (422, unknown field) is recognised', () => {
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('registration_doc_url')), ['registration_doc_url']);
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('vehicle_photo_url')), ['vehicle_photo_url']);
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('vehicle_photo_url', 'registration_doc_url')),
+    ['registration_doc_url', 'vehicle_photo_url'], 'pydantic names every unknown field in one answer');
+  assert.deepEqual(
+    rejectedUnknownFields({ status: 422, detail: [{ type: 'value_error.extra', loc: ['body', 'vehicle_photo_url'], msg: 'extra fields not permitted' }] }),
+    ['vehicle_photo_url'], 'the older pydantic wording too',
+  );
+});
+
+test('only those two fields, only as unknown fields, and only the ones this call sent', () => {
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('registration_doc_url'), ['vehicle_photo_url']), [],
+    'a field this call did not send is not a reason to drop another');
+  assert.deepEqual(rejectedUnknownFields(extraForbidden('back_plate')), []);
+  assert.deepEqual(rejectedUnknownFields({ status: 422, detail: [{ type: 'value_error', loc: ['body', 'email'], msg: 'bad' }] }), []);
+  assert.deepEqual(rejectedUnknownFields({ status: 422, detail: [{ type: 'string_too_long', loc: ['body', 'vehicle_photo_url'], msg: 'too long' }] }), [],
+    'a field the backend knows but did not like is not dropped');
+  assert.deepEqual(rejectedUnknownFields({ status: 400, detail: 'registration_doc_url' }), []);
+  assert.deepEqual(rejectedUnknownFields({ status: 422, detail: 'vehicle_photo_url' }), []);
+  assert.deepEqual(rejectedUnknownFields({ status: 422 }), []);
+  assert.deepEqual(rejectedUnknownFields(null), []);
+});
+
+test('docFields: the registration card when required, the vehicle photo whenever it was added', () => {
+  const v = completeFlow().vehicles[0];
+  assert.deepEqual(docFields(v, CTX), { registration_doc_url: key('registration', 'pdf') });
+  v.docs.vehicle = ref('vehicle');
+  assert.deepEqual(docFields(v, CTX), { registration_doc_url: key('registration', 'pdf'), vehicle_photo_url: key('vehicle') });
+  assert.deepEqual(docFields(v, { ...CTX, requireRegistration: false }), { vehicle_photo_url: key('vehicle') },
+    'a card the property does not ask for is never sent');
+  v.docs.registration = null;
+  assert.deepEqual(docFields(v, CTX), { vehicle_photo_url: key('vehicle') });
+});
+
+test('sentFlags: what went with the request, for the receipt', () => {
+  const v = completeFlow().vehicles[0];
+  assert.deepEqual(sentFlags(v, CTX), { registrationSent: true, vehiclePhotoSent: null }, 'no vehicle photo: nothing to say');
+  v.docs.vehicle = ref('vehicle');
+  assert.deepEqual(sentFlags(v, CTX), { registrationSent: true, vehiclePhotoSent: true });
+  assert.deepEqual(sentFlags(v, CTX, ['vehicle_photo_url']), { registrationSent: true, vehiclePhotoSent: false });
+  assert.deepEqual(sentFlags(v, CTX, ['registration_doc_url']), { registrationSent: false, vehiclePhotoSent: true });
+  assert.deepEqual(sentFlags(v, { ...CTX, requireRegistration: false }, ['registration_doc_url']).registrationSent, true,
+    'not asked for: nothing missing');
+  v.docs.registration = null;
+  assert.equal(sentFlags(v, CTX).registrationSent, false, 'required but not uploaded (an older backend skipped the card)');
 });
 
 test('invalidDocSlots finds the key the backend refused, or all of them when it cannot tell', () => {
@@ -583,6 +731,12 @@ test('invalidDocSlots finds the key the backend refused, or all of them when it 
   const allGood = { id: ref('id'), lease: ref('lease') };
   assert.deepEqual(invalidDocSlots(allGood, PID).sort(), ['id', 'lease']);
   assert.deepEqual(invalidDocSlots({ id: null, lease: ref('lease') }, PID), ['lease'], 'an empty slot is not a culprit');
+});
+
+test('invalidDocSlots can name the vehicle photo, and skips it when it was never added', () => {
+  const refs = { id: ref('id'), lease: ref('lease'), 'plate:v1': ref('plate'), 'vehicle:v1': { ...ref('vehicle'), key: key('plate') } };
+  assert.deepEqual(invalidDocSlots(refs, PID), ['vehicle:v1']);
+  assert.deepEqual(invalidDocSlots({ ...refs, 'vehicle:v1': null }, PID).sort(), ['id', 'lease', 'plate:v1']);
 });
 
 // ── the receipt ─────────────────────────────────────────────────────────────
@@ -635,6 +789,14 @@ test('the two status phrases are the constraints\' wording', () => {
   assert.equal(S.received.status, 'Pending approval');
   assert.equal(S.received.protected, 'Protected from towing while the office reviews your request (up to 72 hours).');
   assert.match(S.start.ruleReview, /protected from towing while the office reviews your request \(up to 72 hours\)/);
+});
+
+test('the vehicle photo card says what to take and why, and that it is optional', () => {
+  assert.equal(S.vehicle.vehiclePhotoTitle, 'Photo of the vehicle');
+  assert.equal(S.card.optional, '(optional)');
+  assert.equal(S.vehicle.vehiclePhotoNote, 'The whole car with the plate visible. It helps the office and the tow team recognize your car.');
+  assert.equal(S.vehicle.vehiclePhotoSize, 'Photo, up to 10 MB.');
+  assert.equal(S.received.vehiclePhotoNotSent, "Sent without the photo of the vehicle. It's optional, so nothing else is needed.");
 });
 
 test('the attestation is a statement, with the unit in it', () => {

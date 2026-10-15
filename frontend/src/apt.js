@@ -4,7 +4,8 @@
 //   ?role=guest      the short-term form (one page, plate + ID; Task F3
 //                    restyled it only — same fields, same submit)
 //   ?role=resident   the long-term parking-pass request, in steps (Task F3):
-//                    S1 Before you start → S2 About you → S3 Vehicle n (×N) →
+//                    S1 Before you start → S2 About you → S3 Vehicle n (×N,
+//                    plate photo, registration card, optional vehicle photo) →
 //                    S3b Your vehicles → S4 Your ID and lease → S5 Check your
 //                    answers → S6 Request received. The model — strings, step
 //                    router, validation, persistence, error map — is
@@ -32,8 +33,8 @@ import {
   vehicleCap, canAddVehicle, requiresRegistration,
   formatPhone, phoneToE164, validateField, validateStep,
   slotId, cardId, docRefs, docState, serializeFlow, restoreFlow, receiptFlow,
-  registerErrorMessage, isRegistrationFieldRejected, invalidDocSlots,
-  formatSubmitted, copyText, displayPlate,
+  registerErrorMessage, rejectedUnknownFields, docFields, sentFlags, invalidDocSlots,
+  formatSubmitted, copyText, displayPlate, vehicleRowStatus,
 } from './shared/aptFlow.js';
 import {
   createDocSlot, mountDocCard, prepareFile, xhrUpload, thumbnailHtml, isSatisfied, isBusy,
@@ -530,7 +531,8 @@ function onSlotChange(id, state) {
     type: (state.file && state.file.type) || '',
   } : null);
   saveNow();
-  if (isSatisfied(state)) setInlineError(cardId(id), null);
+  // Fixed: uploaded, or — for the optional vehicle photo — removed.
+  if (isSatisfied(state) || (state.status === 'empty' && id.startsWith('vehicle:'))) setInlineError(cardId(id), null);
 }
 
 function getSlot(id) {
@@ -539,7 +541,7 @@ function getSlot(id) {
   const kind = id.split(':')[0];
   slot = createDocSlot({
     kind,
-    imagesOnly: kind === 'plate',
+    imagesOnly: kind === 'plate' || kind === 'vehicle',
     initial: refFor(id),
     prepare: prepareFile,
     upload: uploadDoc,
@@ -722,6 +724,7 @@ function renderVehicle(vid) {
   const plateId = `plate-${vid}`;
   const plateSlot = slotId('plate', vid);
   const regSlot = slotId('registration', vid);
+  const carSlot = slotId('vehicle', vid);
   const plateNow = () => displayPlate(v.plate);
   app.innerHTML = `
     ${topBar()}
@@ -741,6 +744,7 @@ function renderVehicle(vid) {
       ${textField({ id: plateId, label: S.vehicle.plateLabel, hint: S.vehicle.plateHint, value: v.plate, inputClass: 'plate-input', attrs: 'type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="10"' })}
       ${cardField(plateSlot)}
       ${rules.requireRegistration ? cardField(regSlot) : ''}
+      ${cardField(carSlot)}
       ${actionsHtml(S.continue)}
     </form>`;
   bindForm(onContinue);
@@ -760,6 +764,13 @@ function renderVehicle(vid) {
       schematic: 'card',
     });
   }
+  mountCard(carSlot, {
+    title: S.vehicle.vehiclePhotoTitle,
+    optional: true,
+    note: S.vehicle.vehiclePhotoNote,
+    sizeLine: S.vehicle.vehiclePhotoSize,
+    schematic: 'vehicle',
+  });
   bindTextField(plateId, 'plate', (value) => {
     v.plate = value;
     if (plateCard) plateCard.refresh();
@@ -783,10 +794,15 @@ function renderVehicle(vid) {
   setTitle(S.vehicle.title(index + 1));
 }
 
+const VEHICLE_KINDS = ['plate', 'registration', 'vehicle'];
+
+function forgetVehicleSlots(vid) {
+  for (const kind of VEHICLE_KINDS) slots.delete(slotId(kind, vid));
+}
+
 function dropVehicle(vid) {
   flow = removeVehicle(flow, vid);
-  slots.delete(slotId('plate', vid));
-  slots.delete(slotId('registration', vid));
+  forgetVehicleSlots(vid);
   saveNow();
   show('vehicles', { mode: 'replace' });
 }
@@ -799,14 +815,13 @@ function vehicleDone(v) {
 function vehicleThumbs(v) {
   const thumbs = [thumbnailHtml(slots.get(slotId('plate', v.vid)))];
   if (rules.requireRegistration) thumbs.push(thumbnailHtml(slots.get(slotId('registration', v.vid))));
+  thumbs.push(thumbnailHtml(slots.get(slotId('vehicle', v.vid))));
   const html = thumbs.join('');
   return html ? `<div class="row-thumbs">${html}</div>` : '';
 }
 
 function vehicleStatus(v) {
-  if (v.ref) return S.vehicles.rowSent(v.ref);
-  if (!vehicleDone(v)) return S.vehicles.rowIncomplete;
-  return rules.requireRegistration ? S.vehicles.rowDone : S.vehicles.rowDonePhotoOnly;
+  return vehicleRowStatus(v, rules, { done: !!v.ref || vehicleDone(v) });
 }
 
 function renderVehicles() {
@@ -888,8 +903,7 @@ function renderVehicles() {
       opener.focus();
     } else if (t.dataset.removeYes) {
       flow = removeVehicle(flow, t.dataset.removeYes);
-      slots.delete(slotId('plate', t.dataset.removeYes));
-      slots.delete(slotId('registration', t.dataset.removeYes));
+      forgetVehicleSlots(t.dataset.removeYes);
       saveNow();
       render('vehicles');
     }
@@ -1003,6 +1017,7 @@ function renderReceived() {
         <dt>${esc(S.received.reference)}</dt><dd data-ref>${esc(v.ref)}</dd>
       </dl>
       ${v.registrationSent ? '' : `<p class="receipt-note">${esc(S.received.registrationNotSent)}</p>`}
+      ${v.vehiclePhotoSent === false ? `<p class="receipt-note">${esc(S.received.vehiclePhotoNotSent)}</p>` : ''}
     </li>`).join('');
   app.innerHTML = `
     ${topBar()}
@@ -1088,7 +1103,9 @@ async function copyReference() {
 function slotIdsFor(key) {
   const p = parseStep(key);
   if (!p) return [];
-  if (p.name === 'vehicle') return rules.requireRegistration ? [slotId('plate', p.vid), slotId('registration', p.vid)] : [slotId('plate', p.vid)];
+  if (p.name === 'vehicle') {
+    return VEHICLE_KINDS.filter((kind) => kind !== 'registration' || rules.requireRegistration).map((kind) => slotId(kind, p.vid));
+  }
   if (p.name === 'documents') return ['id', 'lease'];
   if (p.name === 'review') return Object.keys(docRefs(flow, rules));
   return [];
@@ -1175,22 +1192,20 @@ function payloadFor(v) {
 
 /** One vehicle → one pending request. Each call mints its own reCAPTCHA token. */
 async function registerVehicle(v) {
-  const registrationKey = rules.requireRegistration && v.docs.registration ? v.docs.registration.key : null;
-  const payload = payloadFor(v);
-  if (registrationKey) payload.registration_doc_url = registrationKey;
+  const extra = docFields(v, rules);
+  const send = async (fields) => backendRegister('/resident_plates/register',
+    { ...payloadFor(v), ...fields, recaptcha_token: await mintToken('plate_register') }, 15000);
   try {
-    const result = await backendRegister('/resident_plates/register',
-      { ...payload, recaptcha_token: await mintToken('plate_register') }, 15000);
-    return { result, registrationSent: !rules.requireRegistration || !!registrationKey };
+    return { result: await send(extra), ...sentFlags(v, rules) };
   } catch (err) {
-    if (!registrationKey || !isRegistrationFieldRejected(err)) throw err;
-    // TEMPORARY (remove once the backend's registration_doc_url ships, Task B1):
-    // an older backend's model forbids the field, so send the request without it.
-    console.warn('register: this backend does not accept registration_doc_url yet; sent without it until it does');
-    delete payload.registration_doc_url;
-    const result = await backendRegister('/resident_plates/register',
-      { ...payload, recaptcha_token: await mintToken('plate_register') }, 15000);
-    return { result, registrationSent: false };
+    const dropped = rejectedUnknownFields(err, Object.keys(extra));
+    if (!dropped.length) throw err;
+    // TEMPORARY (remove once backend tasks B1 and B3 are live): an older
+    // backend's model forbids a field it does not have yet, so send the request
+    // once more without it; the receipt says what did not go.
+    console.warn(`register: this backend does not accept ${dropped.join(' or ')} yet; sent without it until it does`);
+    const fields = Object.fromEntries(Object.entries(extra).filter(([name]) => !dropped.includes(name)));
+    return { result: await send(fields), ...sentFlags(v, rules, dropped) };
   }
 }
 
@@ -1210,22 +1225,22 @@ async function onSend(e) {
   setSending(true);
   const refs = {};
   const registrationSent = {};
+  const vehiclePhotoSent = {};
   let current = null;
   try {
     for (const v of flow.vehicles) {
       current = v;
-      if (v.ref) {
-        refs[v.vid] = v.ref;
-        registrationSent[v.vid] = v.registrationSent !== false;
-        continue;
+      if (!v.ref) {
+        const sent = await registerVehicle(v);
+        const result = sent.result;
+        v.ref = String((result && (result.reference_id || String(result.id || '').slice(-8))) || '').toUpperCase();
+        v.registrationSent = sent.registrationSent;
+        v.vehiclePhotoSent = sent.vehiclePhotoSent;
+        saveNow(); // a vehicle that landed is never sent twice
       }
-      const { result, registrationSent: sentRegistration } = await registerVehicle(v);
-      const ref = String((result && (result.reference_id || String(result.id || '').slice(-8))) || '').toUpperCase();
-      v.ref = ref;
-      v.registrationSent = sentRegistration;
-      refs[v.vid] = ref;
-      registrationSent[v.vid] = sentRegistration;
-      saveNow(); // a vehicle that landed is never sent twice
+      refs[v.vid] = v.ref;
+      registrationSent[v.vid] = v.registrationSent !== false;
+      vehiclePhotoSent[v.vid] = v.vehiclePhotoSent;
     }
   } catch (err) {
     sending = false;
@@ -1233,7 +1248,7 @@ async function onSend(e) {
     return;
   }
   sending = false;
-  flow = receiptFlow(flow, { now: Date.now(), refs, registrationSent });
+  flow = receiptFlow(flow, { now: Date.now(), refs, registrationSent, vehiclePhotoSent });
   slots.clear();
   saveNow();
   show('received', { mode: 'push' });
