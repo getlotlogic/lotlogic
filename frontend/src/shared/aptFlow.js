@@ -536,15 +536,20 @@ export function vehicleDescription(v) {
   return [color, normalizeVehicleText(o.make), normalizeVehicleText(o.model)].filter(Boolean).join(' ');
 }
 
+/** The dot between the description and the plate: "white Honda Civic · ABC1234". */
+export const VEHICLE_LINE_SEPARATOR = ' · ';
+
 /**
- * "white Honda Civic · ABC1234" — a vehicle in the flow or on a saved receipt;
- * just the plate when nothing describes it (a request saved before the make,
- * model and color existed), just the description when there is no plate.
+ * The three parts of "white Honda Civic · ABC1234", the line S3b, S5 and S6 draw
+ * for a vehicle in the flow or on a saved receipt: the description, the dot
+ * (only between a description and a plate) and the plate. The plate is the
+ * vehicle's own unless the page names it otherwise ("Vehicle 2" until it has
+ * one). A request saved before the make, model and color existed has no
+ * description: its line is the plate alone.
  */
-export function vehicleLine(v) {
+export function vehicleLineParts(v, plate = displayPlate(v && v.plate)) {
   const description = vehicleDescription(v);
-  const plate = displayPlate(v && v.plate);
-  return description && plate ? `${description} · ${plate}` : (description || plate);
+  return { description, separator: description && plate ? VEHICLE_LINE_SEPARATOR : '', plate };
 }
 
 /** The make, model and color as the three request fields. */

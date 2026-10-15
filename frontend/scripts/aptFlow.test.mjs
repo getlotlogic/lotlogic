@@ -18,7 +18,7 @@ import {
   serializeFlow, restoreFlow, receiptFlow,
   registerErrorMessage, rejectedUnknownFields, docFields, sentFlags, invalidDocSlots,
   formatSubmitted, copyText, displayPlate, vehicleRowStatus,
-  VEHICLE_COLORS, VEHICLE_MAKES, normalizeVehicleText, vehicleDescription, vehicleLine,
+  VEHICLE_COLORS, VEHICLE_MAKES, normalizeVehicleText, vehicleDescription, vehicleLineParts,
   vehicleFields, vehicleFieldErrors, vehicleBackendError,
 } from '../src/shared/aptFlow.js';
 import { cardStatusText, isSatisfied } from '../src/shared/docCard.js';
@@ -931,12 +931,28 @@ test('the vehicle is described as <color> <Make> <Model>: the color lowercase, t
   assert.equal(vehicleDescription({}), '');
 });
 
-test('the line on S3b, S5 and S6 is "<description> · <plate>"', () => {
-  assert.equal(vehicleLine({ ...WHITE_CIVIC, plate: 'abc 1234' }), 'white Honda Civic · ABC1234');
-  assert.equal(vehicleLine({ ...WHITE_CIVIC, plate: 'ABC1234', ref: '8F3E2A1D' }), 'white Honda Civic · ABC1234', 'a saved receipt line reads the same');
-  assert.equal(vehicleLine({ plate: 'ABC1234' }), 'ABC1234', 'a vehicle with no description is its plate');
-  assert.equal(vehicleLine({ ...WHITE_CIVIC, plate: '' }), 'white Honda Civic');
-  assert.equal(vehicleLine({}), '');
+/**
+ * The text of the line the page draws for a vehicle: the description, the dot and the plate are
+ * three spans in a row, so it reads as their texts one after another.
+ */
+const lineText = (v, plate) => {
+  const parts = vehicleLineParts(v, plate);
+  return `${parts.description}${parts.separator}${parts.plate}`;
+};
+
+test('the line on S3b, S5 and S6 is "<description> · <plate>": three parts, the dot only between two', () => {
+  assert.deepEqual(vehicleLineParts({ ...WHITE_CIVIC, plate: 'abc 1234' }),
+    { description: 'white Honda Civic', separator: ' · ', plate: 'ABC1234' });
+  assert.equal(lineText({ ...WHITE_CIVIC, plate: 'ABC1234', ref: '8F3E2A1D' }), 'white Honda Civic · ABC1234', 'a saved receipt line reads the same');
+  assert.deepEqual(vehicleLineParts({ plate: 'ABC1234' }), { description: '', separator: '', plate: 'ABC1234' },
+    'a vehicle with no description is its plate');
+  assert.deepEqual(vehicleLineParts({ ...WHITE_CIVIC, plate: '' }), { description: 'white Honda Civic', separator: '', plate: '' });
+  assert.deepEqual(vehicleLineParts({}), { description: '', separator: '', plate: '' });
+});
+
+test('the page names a vehicle with no plate yet "Vehicle 2": the line takes the name it is given', () => {
+  assert.deepEqual(vehicleLineParts(WHITE_CIVIC, 'Vehicle 2'), { description: 'white Honda Civic', separator: ' · ', plate: 'Vehicle 2' });
+  assert.deepEqual(vehicleLineParts({}, 'Vehicle 2'), { description: '', separator: '', plate: 'Vehicle 2' });
 });
 
 test('vehicleFields: the three request fields — make and model trimmed, the color as chosen', () => {
@@ -1000,7 +1016,7 @@ test('the receipt keeps each vehicle\'s make, model and color, so a reload still
   ]);
   const back = restoreFlow(serializeFlow(sent, { now: NOW, propertyId: PID }), { now: NOW + 60_000, propertyId: PID });
   assert.deepEqual(back.receipt, sent.receipt);
-  assert.deepEqual(back.receipt.vehicles.map(vehicleLine), ['white Honda Civic · ABC1234', 'blue Ford F-150 · XYZ789']);
+  assert.deepEqual(back.receipt.vehicles.map((v) => lineText(v)), ['white Honda Civic · ABC1234', 'blue Ford F-150 · XYZ789']);
 });
 
 test('a vehicle sent without them (an older backend) says so on the receipt, and keeps saying so after a reload', () => {
@@ -1025,7 +1041,7 @@ test('the saved receipt cleans them: text capped, a color outside the list dropp
   for (const name of ['make', 'model', 'color', 'detailsSent']) delete raw.flow.receipt.vehicles[0][name];
   const old = restoreReceipt();
   assert.deepEqual([old.make, old.model, old.color, old.detailsSent], ['', '', '', true]);
-  assert.equal(vehicleLine(old), 'ABC1234', 'a receipt saved before shows the plate alone');
+  assert.equal(lineText(old), 'ABC1234', 'a receipt saved before shows the plate alone');
 });
 
 test('vehicle_required asks for all three in the brief\'s words and points at the first one missing', () => {

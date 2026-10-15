@@ -37,7 +37,7 @@ import {
   slotId, cardId, docRefs, docState, serializeFlow, restoreFlow, receiptFlow,
   registerErrorMessage, rejectedUnknownFields, docFields, sentFlags, invalidDocSlots,
   formatSubmitted, copyText, displayPlate, vehicleRowStatus,
-  VEHICLE_COLORS, VEHICLE_MAKES, normalizeVehicleText, vehicleDescription, vehicleFields,
+  VEHICLE_COLORS, VEHICLE_MAKES, normalizeVehicleText, vehicleLineParts, vehicleFields,
   vehicleFieldErrors, vehicleBackendError, fieldId,
 } from './shared/aptFlow.js';
 import {
@@ -854,11 +854,12 @@ function vehicleDone(v) {
  * plate's mono face. A vehicle with no description (a receipt saved before the
  * make, model and color existed) is its plate alone. The dot is decoration; it
  * belongs to the plate, and apt.css drops it when the plate wraps to a line of
- * its own. No whitespace between the tags: the pieces are inline-blocks.
+ * its own. No whitespace between the tags: the pieces are inline-blocks. The
+ * parts, and the dot that goes between them, are `vehicleLineParts`' (unit-tested).
  */
 function vehicleLineHtml(v, plate, { chip = true } = {}) {
-  const description = vehicleDescription(v);
-  const tail = `<span class="vehicle-tail">${description ? '<span class="vehicle-sep" aria-hidden="true"> · </span>' : ''}<span class="${chip ? 'plate-chip' : 'vehicle-plate'}">${esc(plate)}</span></span>`;
+  const { description, separator } = vehicleLineParts(v, plate);
+  const tail = `<span class="vehicle-tail">${separator ? `<span class="vehicle-sep" aria-hidden="true">${esc(separator)}</span>` : ''}<span class="${chip ? 'plate-chip' : 'vehicle-plate'}">${esc(plate)}</span></span>`;
   return `<span class="vehicle-line"><span class="vehicle-flow">${description ? `<span class="vehicle-desc">${esc(description)}</span>` : ''}${tail}</span></span>`;
 }
 
