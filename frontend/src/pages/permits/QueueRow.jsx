@@ -23,7 +23,10 @@ function DocPill({ card }) {
       </span>
     );
   }
-  const missing = card.which === 'plate' ? 'No plate photo' : card.which === 'id' ? 'No ID' : `No ${card.short.toLowerCase()}`;
+  const missing = card.which === 'plate' ? 'No plate photo'
+    : card.which === 'vehicle' ? 'No car photo'
+      : card.which === 'id' ? 'No ID'
+        : `No ${card.short.toLowerCase()}`;
   return <span className="pq-doc is-missing">{missing}</span>;
 }
 

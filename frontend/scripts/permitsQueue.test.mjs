@@ -74,6 +74,7 @@ function longTerm(id, over = {}) {
     has_lease: true,
     has_plate: true,
     has_registration: true,
+    has_vehicle_photo: false,
     created_at: ago(1),
     reviewed_at: null,
     ...over,
@@ -448,10 +449,11 @@ test('the deny sheet opens on "over limit" from the over-limit button, on "missi
 
 // ── Evidence ─────────────────────────────────────────────────
 
-test('a long-term request shows four documents in order, each with what it should prove', () => {
-  const [row] = rowsOf([longTerm('r1', { plate_text: 'ABC1234', holder_name: 'Jane Example', unit_number: '214', has_registration: false })]);
+test('a long-term request shows five documents in order, each with what it should prove', () => {
+  const [row] = rowsOf([longTerm('r1', { plate_text: 'ABC1234', holder_name: 'Jane Example', unit_number: '214', has_registration: false, has_vehicle_photo: true })]);
   assert.deepEqual(evidenceCards(row), [
     { which: 'plate', title: 'Plate photo', short: 'Plate', present: true, should: ['Should show ABC1234'] },
+    { which: 'vehicle', title: 'Vehicle photo', short: 'Car', present: true, should: ['Should show ABC1234'] },
     { which: 'registration', title: 'Registration', short: 'Registration', present: false, should: ['Should show ABC1234', "Should be in a leaseholder's name"] },
     { which: 'id', title: 'Photo ID', short: 'ID', present: true, should: ['Should name Jane Example'] },
     { which: 'lease', title: 'Lease', short: 'Lease', present: true, should: ['Should name Jane Example and unit 214'] },
@@ -470,6 +472,7 @@ test('each document streams from the scoped docs proxy', () => {
   const [lt] = rowsOf([longTerm('7f1c2b9e-0000-4000-8000-000000000001')]);
   const [st] = rowsOf([], [shortTerm('7f1c2b9e-0000-4000-8000-000000000002')]);
   assert.equal(docPath(lt, 'registration'), '/apartment/docs/resident/7f1c2b9e-0000-4000-8000-000000000001/registration');
+  assert.equal(docPath(lt, 'vehicle'), '/apartment/docs/resident/7f1c2b9e-0000-4000-8000-000000000001/vehicle');
   assert.equal(docPath(st, 'plate'), '/apartment/docs/guest/7f1c2b9e-0000-4000-8000-000000000002/plate');
 });
 
@@ -479,6 +482,15 @@ test('missing documents are the expected ones a row lacks; registration only whe
   assert.deepEqual(missingDocs(lt, { requireRegistration: true }), ['registration', 'lease']);
   assert.deepEqual(missingDocs(lt, { requireRegistration: false }), ['lease']);
   assert.deepEqual(missingDocs(st, {}), ['id']);
+});
+
+test('the vehicle photo is optional: never missing, never a reason to deny', () => {
+  const [noCar] = rowsOf([longTerm('c', { has_vehicle_photo: false })]);
+  assert.equal(evidenceCards(noCar).find(c => c.which === 'vehicle').present, false, 'still shown, as Not provided');
+  assert.deepEqual(missingDocs(noCar, { requireRegistration: true }), []);
+  assert.equal(initialDenyReason(noCar, {}), null);
+  const [legacy] = rowsOf([{ ...longTerm('l'), has_vehicle_photo: undefined }]);
+  assert.equal(evidenceCards(legacy).find(c => c.which === 'vehicle').present, false, 'a list without the column reads as not provided');
 });
 
 // ── URL state ────────────────────────────────────────────────

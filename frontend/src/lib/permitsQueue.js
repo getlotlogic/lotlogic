@@ -354,7 +354,8 @@ export function initialDenyReason(row, { viaOverLimit = false, requireRegistrati
 /**
  * The documents to show beside a request, in the order the manager checks
  * them, each with the typed value it should prove. Long-term requests carry
- * four; short-term requests only ever carry a plate photo and a photo ID.
+ * five (the vehicle photo is optional — task B3, spec R2b); short-term
+ * requests only ever carry a plate photo and a photo ID.
  */
 export function evidenceCards(row) {
   const plate = plateText(row);
@@ -371,6 +372,7 @@ export function evidenceCards(row) {
         : 'Should name a leaseholder';
   return [
     plateCard,
+    { which: 'vehicle', title: 'Vehicle photo', short: 'Car', present: !!row?.has_vehicle_photo, should: [plateLine] },
     { which: 'registration', title: 'Registration', short: 'Registration', present: !!row?.has_registration, should: [plateLine, "Should be in a leaseholder's name"] },
     idCard,
     { which: 'lease', title: 'Lease', short: 'Lease', present: !!row?.has_lease, should: [leaseLine] },
@@ -382,10 +384,13 @@ export function docPath(row, which) {
   return `/apartment/docs/${row.kind}/${encodeURIComponent(row.id)}/${which}`;
 }
 
+// Documents a request may leave out: never "missing", never a deny reason.
+const OPTIONAL_DOCS = new Set(['vehicle']);
+
 /** Expected documents the row lacks; the registration card only where the property requires it. */
 export function missingDocs(row, { requireRegistration = false } = {}) {
   return evidenceCards(row)
-    .filter(card => !card.present && (card.which !== 'registration' || requireRegistration))
+    .filter(card => !card.present && !OPTIONAL_DOCS.has(card.which) && (card.which !== 'registration' || requireRegistration))
     .map(card => card.which);
 }
 
