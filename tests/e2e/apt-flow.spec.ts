@@ -319,6 +319,7 @@ test.describe('apartment long-term request @portal', () => {
     await expect(change).toBeFocused();
     await change.click();
     await expect(page.getByRole('heading', { name: 'Vehicle 1' })).toBeVisible();
+    await expect(page.getByLabel('Make', { exact: true }), 'Change puts the cursor in the first field the vehicle is missing, not the plate').toBeFocused();
     await fillVehicle(page);
     await page.getByRole('button', { name: 'Continue' }).click();
     await expect(page.getByRole('heading', { name: 'Check your answers' })).toBeVisible();

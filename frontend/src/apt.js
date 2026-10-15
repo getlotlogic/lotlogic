@@ -1014,11 +1014,15 @@ function renderReview() {
   const vehicles = flow.vehicles.map((v, i) => {
     const name = displayPlate(v.plate) || S.vehicles.unnamed(i + 1);
     const incomplete = !v.ref && !vehicleDone(v);
+    // Change leaves the cursor in the first thing the vehicle is missing (a request saved before
+    // the make, model and color existed lacks them), else at the top of the step, the plate.
+    const missing = displayPlate(v.plate) ? vehicleFieldErrors(v)[0] : null;
+    const focusId = missing ? fieldId(missing.field, v.vid) : `plate-${v.vid}`;
     return `
       <div class="summary-row summary-vehicle" id="review-vehicle-${v.vid}" tabindex="-1">
         <dt>${vehicleLineHtml(v, name)}</dt>
         <dd>${vehicleThumbs(v)}<span class="row-status${incomplete ? ' is-incomplete' : ''}">${esc(vehicleStatus(v))}</span></dd>
-        <dd class="summary-action">${v.ref ? '' : `<button type="button" class="text-btn" data-goto="vehicle:${v.vid}" data-focus="plate-${v.vid}">${esc(S.review.change)}<span class="visually-hidden">${esc(S.review.hidden.vehicle(name))}</span></button>`}</dd>
+        <dd class="summary-action">${v.ref ? '' : `<button type="button" class="text-btn" data-goto="vehicle:${v.vid}" data-focus="${esc(focusId)}">${esc(S.review.change)}<span class="visually-hidden">${esc(S.review.hidden.vehicle(name))}</span></button>`}</dd>
       </div>`;
   }).join('');
   const docRow = (id, key, hidden) => {
