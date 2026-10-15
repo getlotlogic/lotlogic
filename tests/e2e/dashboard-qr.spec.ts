@@ -24,7 +24,8 @@
  *   - each tile fits its column on a phone and on a tablet, with the QR square
  *     and whole: the library sizes the canvas with an inline 320px that no
  *     stylesheet width can beat, which made a tile 366px wide and clipped it on
- *     any column narrower than that.
+ *     any column narrower than that. The heading's qualifier ("up to 72 hrs") is
+ *     not broken across two lines to fit beside it; it moves under it.
  *   - an apartment hands out ONE entry, /apt/<qr>, with the role in the query
  *     (short-term = guest, long-term = resident), on the tile and on Copy link,
  *     and says "parking pass"; a truck plaza keeps /temp/<qr> and its own label.
@@ -341,8 +342,10 @@ test.describe('property QR codes @desktop-only', () => {
     await expect(detail).not.toContainText('/null');
   });
 
-  for (const width of [360, 390, 600]) {
-    test(`each tile fits its column at ${width}px, with the QR square and whole`, async ({ page }) => {
+  // 540 and 580 are where the two tiles are narrowest side by side (the grid
+  // goes to one column at 520), and where a qualifier used to break in two.
+  for (const width of [360, 390, 540, 580, 600, 700]) {
+    test(`each tile fits its column at ${width}px, with the QR square and whole and its heading unbroken`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       const detail = await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
       await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
@@ -356,6 +359,11 @@ test.describe('property QR codes @desktop-only', () => {
         expect(canvas.x + canvas.width, `QR ${n} ends inside its tile`).toBeLessThanOrEqual(tile.x + tile.width);
         expect(Math.abs(canvas.width - canvas.height), `QR ${n} is square`).toBeLessThan(1);
         expect(canvas.width, `QR ${n} stays large enough to scan`).toBeGreaterThanOrEqual(160);
+        // "up to 72 hrs" and "owner-approved" are not broken across two lines to
+        // fit beside the heading: they move under it when there is no room.
+        const sub = (await detail.locator('.pd-qr-sub').nth(n - 1).boundingBox())!;
+        expect(sub.height, `tile ${n}'s qualifier is one line`).toBeLessThan(18);
+        expect(sub.x + sub.width, `tile ${n}'s qualifier ends inside its tile`).toBeLessThanOrEqual(tile.x + tile.width);
       }
     });
   }
