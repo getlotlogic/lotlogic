@@ -1466,6 +1466,9 @@ async function handleGuestSubmit(e) {
   const btn = document.getElementById('submitBtn');
   const errorDiv = document.getElementById('errorMsg');
   errorDiv.innerHTML = '';
+  // A new attempt starts clean: the last answer about the make, model or color
+  // is replaced by whatever this one brings (nothing, ours, or the backend's).
+  for (const field of ['make', 'model', 'color']) setInlineError(`g_${field}`, null);
   btn.disabled = true;
   btn.textContent = 'Submitting…';
 
