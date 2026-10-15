@@ -191,6 +191,20 @@ export const verifyPartnerProperty = (id) => post(`/partner/properties/${seg(id)
 /** POST /partner/properties/{id}/reject `{reason}` */
 export const rejectPartnerProperty = (id, body) => post(`/partner/properties/${seg(id)}/reject`, body);
 
+// ── /apartment/passes/lot-status and /timeline (task F7) ─────
+
+/**
+ * GET /apartment/passes/lot-status?property_id= → the state of the lot: counts,
+ * `do_not_tow`, `towable`, `expiring_soon`, `recent`, `open_requests`.
+ * Plates, cars and times only - never a name, unit, phone or document.
+ */
+export const getLotStatus = (propertyId) =>
+  get(`/apartment/passes/lot-status${query({ property_id: propertyId })}`);
+
+/** GET /apartment/passes/timeline?property_id=&plate= → `{plate, events}`, newest first. */
+export const getPlateTimeline = (propertyId, plate) =>
+  get(`/apartment/passes/timeline${query({ property_id: propertyId, plate })}`);
+
 // ── /partner/slack/* ─────────────────────────────────────────
 
 /** GET /partner/slack/status → `{connected, team_name, feed_channel_set, revoked}` */
@@ -230,6 +244,6 @@ export const requestsApi = {
   inviteMember, updateMember, removeMember, approveMember, declineMember,
   joinProperty, resendJoinRequest, createApartmentProperty, updateApartmentProperty,
   archiveApartmentProperty, listPartnerProperties, verifyPartnerProperty,
-  rejectPartnerProperty, getSlackStatus, slackInstallLink, listSlackIdentities, updateSlackIdentity,
+  rejectPartnerProperty, getLotStatus, getPlateTimeline, getSlackStatus, slackInstallLink, listSlackIdentities, updateSlackIdentity,
   deleteSlackIdentity, setSlackFeedChannel, getRequestAction, postRequestAction,
 };
