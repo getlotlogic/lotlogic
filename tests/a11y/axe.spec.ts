@@ -21,6 +21,9 @@ import {
   PORTAL_E2E, pointAtLocalBackend, seedNStyle, frontendOrigin, randomPlate, uiLogin,
   apiSignup, apiVerify, apiCreateRequest, apiConfirmProperty, apiToken, api, mintActionToken,
 } from '../fixtures/portal';
+import {
+  seedResidentApartment, openResidentFlow, toFirstVehicle, vehicleAndDocumentsToReview, upload, photo,
+} from '../fixtures/aptFlow';
 import http from 'node:http';
 import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
@@ -279,6 +282,30 @@ test.describe('accessibility @a11y', () => {
     await page.goto(`/r/${mintActionToken(hold.id, 'extend24')}`);
     await expect(page.getByRole('button', { name: /^Extend/ })).toBeVisible({ timeout: 15_000 });
     await scan(page, 'request-action-preview');
+  });
+
+  // Task F3 — the long-term parking-pass request on /apt/<slug>?role=resident:
+  // S1 (the rules and the leaseholder question), S3 (a vehicle with its
+  // document cards, after a photo uploaded) and S6 (the receipt). The page
+  // reads its property row and sends the request through the local backend
+  // (fixtures/aptFlow.ts), so this runs only under the portal suite.
+  test('apartment request S1, S3 and S6 have no serious a11y violations @portal', async ({ page }) => {
+    test.skip(!PORTAL_E2E, 'needs the local backend and harness database (PORTAL_E2E=1)');
+    const apartment = await seedResidentApartment();
+    await openResidentFlow(page, apartment);
+    await page.goto(`/apt/${apartment.slug}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    await scan(page, 'apt-s1-before-you-start');
+
+    await toFirstVehicle(page);
+    await page.getByLabel('License plate').fill(randomPlate());
+    await upload(page, 'card-plate-v1', photo('plate.png', [40, 60, 90]));
+    await scan(page, 'apt-s3-vehicle');
+
+    await vehicleAndDocumentsToReview(page, apartment);
+    await page.getByRole('button', { name: 'Send for review' }).click();
+    await expect(page.getByRole('heading', { name: 'Request received' })).toBeVisible({ timeout: 20_000 });
+    await scan(page, 'apt-s6-request-received');
   });
 
   test('marketing pitch pages are accessible', async ({ page }) => {
