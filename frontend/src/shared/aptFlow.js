@@ -71,6 +71,15 @@ export const STRINGS = {
       visitSub: 'Get a short-term parking pass, up to 72 hours',
     },
 
+    // S0: /apt/<group> (Task F6, spec 9) — the person picks the address
+    pick: {
+      title: 'Which address are you at?',
+      resident: 'Pick the building your lease is for.',
+      guest: "Pick the address you're visiting.",
+      office: 'Not sure? Ask the office.',
+      listLabel: 'Addresses',
+    },
+
     start: {
       title: 'Before you start',
       rulesHeading: 'The rules',

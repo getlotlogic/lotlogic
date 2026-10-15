@@ -112,10 +112,10 @@ export interface ResidentApartment {
  * property gets Fort Mill's rules: two vehicles per unit, registration card
  * required.
  */
-export async function seedResidentApartment(): Promise<ResidentApartment> {
+export async function seedResidentApartment(opts: { slug?: string } = {}): Promise<ResidentApartment> {
   seedNStyle(); // the signup partner (slug "nstyle") must exist
   const account = await apiSignup();
-  const slug = `apt-flow-${crypto.randomBytes(4).toString('hex')}`;
+  const slug = opts.slug ?? `apt-flow-${crypto.randomBytes(4).toString('hex')}`;
   const type = sqlValue(`UPDATE public.properties SET qr_code_id = ${lit(slug)}
                           WHERE id = ${lit(account.property_id)} RETURNING property_type`);
   expect(type, 'a portal signup is an apartment property').toBe('apartment');
@@ -134,6 +134,34 @@ export async function seedResidentApartment(): Promise<ResidentApartment> {
                                        WHERE table_schema = 'public' AND table_name = 'resident_plates'
                                          AND column_name = 'vehicle_make'`) === '1';
   return { slug, propertyId: account.property_id, name: account.signup.name, hasRules, hasVehiclePhoto, hasVehicleDetails };
+}
+
+export interface GroupMember extends ResidentApartment { address: string }
+export interface ApartmentGroup {
+  /** The shared prefix: /apt/<group> is the one link. */
+  group: string;
+  /** The members, in qr_code_id order: <group>-1, <group>-2, ... */
+  members: GroupMember[];
+}
+
+/**
+ * A group of `n` apartments under one fresh prefix (Task F6): `<group>-1` ... `<group>-n`, each
+ * verified, with its own name and a one-line address (the legacy `address` column, the only
+ * address the anon role can read). They are created in reverse so that insertion order is not
+ * the order the page must show.
+ */
+export async function seedApartmentGroup(n: number): Promise<ApartmentGroup> {
+  const group = `grp-${crypto.randomBytes(4).toString('hex')}`;
+  const members: GroupMember[] = [];
+  for (let i = n; i >= 1; i--) {
+    const apartment = await seedResidentApartment({ slug: `${group}-${i}` });
+    const name = `Grove Townhomes ${'I'.repeat(i)}`;
+    const address = `${100 * i} Grove Street`;
+    sql(`UPDATE public.properties SET name = ${lit(name)}, address = ${lit(address)}, verification_status = 'verified'
+          WHERE id = ${lit(apartment.propertyId)}`);
+    members.unshift({ ...apartment, name, address });
+  }
+  return { group, members };
 }
 
 export interface UploadSeen { kind: string; filename: string; partType: string; propertyId: string; token: string }

@@ -606,3 +606,10 @@ input[type=file]::file-selector-button {
   .doc-bar, .doc-card, .choice-btn { transition: none; }
   .doc-progress.is-indeterminate .doc-bar { animation: none; width: 100%; opacity: .45; }
 }
+
+/* ── S0 which address (a group's link, spec 9) ─────────────────────────── */
+.pick-lead { font-size: 16px; line-height: 1.5; color: var(--ink-2); margin: 0 0 8px; }
+.pick-list { list-style: none; margin: 0; padding: 0; }
+.pick-btn { min-height: 72px; }
+.pick-btn .sub { font-size: 16px; }
+.pick-office { font-size: 16px; line-height: 1.5; color: var(--ink-2); margin: 20px 0 0; }

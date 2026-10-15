@@ -39,6 +39,11 @@
  *     short-term confirmation shows it or a link that dials it. The panel for a page
  *     a content blocker holds back still does, and a test says so.
  *
+ * One QR for a group of properties (Task F6, spec 9) has its own block at the end: /apt/<group>
+ * shows "Which address are you at?" for two or more verified apartments under <group>-, a tap
+ * rewrites the URL to that property and continues as a direct visit, one sibling goes straight
+ * in, an unknown prefix is the unknown-property state.
+ *
  * Portal suite (tests/README.md, "Portal suite"): local backend and a
  * throwaway Postgres only. Without PORTAL_E2E=1 every test here is reported as
  * skipped, never failed.
@@ -46,7 +51,7 @@
 import { test, expect, skipUnlessPortal, frontendOrigin, sql, lit, PRODUCTION_API, pointAtLocalBackend } from '../fixtures/portal';
 import {
   seedResidentApartment, openResidentFlow, toFirstVehicle, vehicleAndDocumentsToReview, fillVehicle,
-  photo, VEHICLE, vehicleLine, RESIDENT, OFFICE_PHONE, expectNoOfficePhone,
+  photo, VEHICLE, vehicleLine, RESIDENT, OFFICE_PHONE, expectNoOfficePhone, seedApartmentGroup,
 } from '../fixtures/aptFlow';
 
 test.describe('apartment long-term request @portal', () => {
@@ -513,5 +518,89 @@ test.describe('apartment long-term request @portal', () => {
     await expect(panel).toHaveText(`Something is blocking this page from sending. Turn off content blockers for this site, or call ${OFFICE_PHONE.shown}.`);
     await expect(panel.locator('a')).toHaveAttribute('href', `tel:${OFFICE_PHONE.stored}`);
     await expect(panel.locator('a')).toHaveText(OFFICE_PHONE.shown);
+  });
+});
+
+test.describe('one QR for a group of properties @portal', () => {
+  test.beforeEach(() => {
+    skipUnlessPortal();
+  });
+
+  test('the group link lists the siblings in order; a tap lands on that property\'s S1 with the URL rewritten', async ({ page }) => {
+    const { group, members } = await seedApartmentGroup(3);
+    await openResidentFlow(page, members[0]);
+    await page.goto(`${frontendOrigin()}/apt/${group}?role=resident`);
+
+    await expect(page.getByRole('heading', { name: 'Which address are you at?' })).toBeVisible();
+    await expect(page.getByText('Pick the building your lease is for.')).toBeVisible();
+    await expect(page.getByText('Not sure? Ask the office.')).toBeVisible();
+    const buttons = page.locator('.pick-btn');
+    await expect(buttons).toHaveCount(3);
+    for (let i = 0; i < 3; i++) {
+      await expect(buttons.nth(i).locator('.choice-title')).toHaveText(members[i].name);
+      await expect(buttons.nth(i).locator('.sub')).toHaveText(members[i].address);
+    }
+    await expectNoOfficePhone(page, 'S0');
+
+    // 52 px targets and 16 px text, as F5a asserted for the flow's controls
+    for (let i = 0; i < 3; i++) {
+      const box = await buttons.nth(i).boundingBox();
+      expect(box!.height, `target ${i}`).toBeGreaterThanOrEqual(52);
+      expect(await buttons.nth(i).locator('.sub').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
+    }
+    for (const sel of ['.pick-lead', '.pick-office']) {
+      expect(await page.locator(sel).evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), sel).toBeGreaterThanOrEqual(16);
+    }
+
+    await buttons.nth(1).click();
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    const landed = new URL(page.url());
+    expect(landed.pathname + landed.search).toBe(`/apt/${members[1].slug}?role=resident`);
+    await expect(page.locator('.flow-top .property-name')).toHaveText(members[1].name);
+
+    // the same as a direct visit: a reload stays on that property
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    await expect(page.locator('.flow-top .property-name')).toHaveText(members[1].name);
+  });
+
+  test('a guest link carries the role through and says which address the person is visiting', async ({ page }) => {
+    const { group, members } = await seedApartmentGroup(2);
+    await openResidentFlow(page, members[0]);
+    await page.goto(`${frontendOrigin()}/apt/${group}?role=guest`);
+    await expect(page.getByText("Pick the address you're visiting.")).toBeVisible();
+    await page.locator('.pick-btn').nth(0).click();
+    await expect(page).toHaveURL(new RegExp(`/apt/${members[0].slug}\\?role=guest$`));
+    await expect(page.locator('#guestForm')).toBeVisible();
+    await expect(page.locator('.property-name strong')).toHaveText(members[0].name);
+  });
+
+  test('a prefix with one sibling goes straight to it, no S0', async ({ page }) => {
+    const { group, members } = await seedApartmentGroup(1);
+    await openResidentFlow(page, members[0]);
+    await page.goto(`${frontendOrigin()}/apt/${group}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    await expect(page.locator('.pick-btn')).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`/apt/${members[0].slug}\\?role=resident$`));
+    await expect(page.locator('.flow-top .property-name')).toHaveText(members[0].name);
+  });
+
+  test('an exact property slug is never a group, even when siblings sit under it', async ({ page }) => {
+    const { group, members } = await seedApartmentGroup(2);
+    // a property whose slug is the prefix itself
+    const parent = await seedResidentApartment({ slug: group });
+    await openResidentFlow(page, parent);
+    await page.goto(`${frontendOrigin()}/apt/${group}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Before you start' })).toBeVisible();
+    await expect(page.locator('.pick-btn')).toHaveCount(0);
+    expect(members.length).toBe(2);
+  });
+
+  test('an unknown prefix is the unknown-property state', async ({ page }) => {
+    await pointAtLocalBackend(page);
+    await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+    await page.goto(`${frontendOrigin()}/apt/no-such-group-${Date.now()}?role=resident`);
+    await expect(page.getByRole('heading', { name: 'Property not found' })).toBeVisible();
+    await expect(page.locator('.pick-btn')).toHaveCount(0);
   });
 });
