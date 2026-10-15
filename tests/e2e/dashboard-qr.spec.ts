@@ -53,8 +53,11 @@ const QR_CODE_ID = 'test-plaza-qr-0001';
 
 // The encoder the dashboard bundles (frontend/package.json pins qrcode). The
 // expected code for a link is made here, in Node, so the test does not ask the
-// page what the page drew.
-const QRCode = createRequire(path.join(FRONTEND_DIR, 'package.json'))('qrcode') as {
+// page what the page drew. It is resolved in beforeAll, once the build has run,
+// and not when this file loads: where only tests/ is installed (the post-deploy
+// e2e job), a load-time require stops Playwright reading any spec and the whole
+// run reports 0 tests, where it should fail this spec alone, as its siblings do.
+let QRCode: {
   create(text: string, options: { errorCorrectionLevel: 'M' }): { modules: { size: number; data: Uint8Array } };
 };
 
@@ -63,6 +66,7 @@ let closeServer: () => Promise<void>;
 
 test.beforeAll(async () => {
   ({ origin, close: closeServer } = await buildAndServeFrontend(FRONTEND_DIR));
+  QRCode = createRequire(path.join(FRONTEND_DIR, 'package.json'))('qrcode');
 });
 
 test.afterAll(async () => {
