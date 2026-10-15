@@ -2,7 +2,8 @@
 //
 //   no ?role=        the landing: "I live here" / "I'm visiting"
 //   ?role=guest      the short-term form (one page, plate + ID; Task F3
-//                    restyled it only — same fields, same submit)
+//                    restyled it only; Task F5a added the vehicle's make,
+//                    model and color)
 //   ?role=resident   the long-term parking-pass request, in steps (Task F3):
 //                    S1 Before you start → S2 About you → S3 Vehicle n (×N,
 //                    plate, make, model and color, plate photo, registration
@@ -36,7 +37,8 @@ import {
   slotId, cardId, docRefs, docState, serializeFlow, restoreFlow, receiptFlow,
   registerErrorMessage, rejectedUnknownFields, docFields, sentFlags, invalidDocSlots,
   formatSubmitted, copyText, displayPlate, vehicleRowStatus,
-  VEHICLE_COLORS, VEHICLE_MAKES, vehicleDescription, vehicleFields, fieldId,
+  VEHICLE_COLORS, VEHICLE_MAKES, normalizeVehicleText, vehicleDescription, vehicleFields,
+  vehicleFieldErrors, vehicleBackendError, fieldId,
 } from './shared/aptFlow.js';
 import {
   createDocSlot, mountDocCard, prepareFile, xhrUpload, thumbnailHtml, isSatisfied, isBusy,
@@ -326,10 +328,11 @@ const actionsHtml = (label, back = true) => `
     ${back ? `<button type="button" class="back-link" id="backLink">${esc(S.back)}</button>` : ''}
   </div>`;
 
+// `wrapClass`: the short-term form's fields are not `.field`s (its labels carry their own spacing).
 // `after`: markup that belongs to the input, kept inside the wrapper (the Make field's <datalist>).
-function textField({ id, label, hint, value, attrs, inputClass = '', after = '' }) {
+function textField({ id, label, hint, value, attrs, inputClass = '', wrapClass = 'field', after = '' }) {
   return `
-    <div class="field" id="wrap-${esc(id)}">
+    <div class="${esc(wrapClass)}" id="wrap-${esc(id)}">
       <label for="${esc(id)}">${esc(label)}</label>
       ${hint ? `<p class="hint" id="${esc(id)}-hint">${esc(hint)}</p>` : ''}
       <p class="field-error" id="${esc(id)}-error" hidden></p>
@@ -338,21 +341,22 @@ function textField({ id, label, hint, value, attrs, inputClass = '', after = '' 
     </div>`;
 }
 
-// The vehicle's make, model and color, on S3. The make is free text with a list
-// of suggestions; the color is a select whose values are the backend's lowercase list.
+// The vehicle's make, model and color, on S3 and on the short-term form. The
+// make is free text with a list of suggestions; the color is a select whose
+// values are the backend's lowercase list.
 const VEHICLE_TEXT_ATTRS = 'type="text" autocomplete="off" autocapitalize="words" autocorrect="off" spellcheck="false" maxlength="40"';
 const makeSuggestions = () => `<datalist id="vehicle-makes">${VEHICLE_MAKES.map((m) => `<option value="${esc(m)}"></option>`).join('')}</datalist>`;
 
-function colorField({ id, label, value }) {
+function colorField({ id, label, value, wrapClass = 'field', attrs = '' }) {
   const options = [
     `<option value="">${esc(S.vehicle.colorPlaceholder)}</option>`,
     ...VEHICLE_COLORS.map((c) => `<option value="${esc(c)}"${c === value ? ' selected' : ''}>${esc(S.vehicle.colors[c])}</option>`),
   ].join('');
   return `
-    <div class="field" id="wrap-${esc(id)}">
+    <div class="${esc(wrapClass)}" id="wrap-${esc(id)}">
       <label for="${esc(id)}">${esc(label)}</label>
       <p class="field-error" id="${esc(id)}-error" hidden></p>
-      <div class="select-wrap"><select id="${esc(id)}" name="${esc(id)}" autocomplete="off">${options}</select></div>
+      <div class="select-wrap"><select id="${esc(id)}" name="${esc(id)}" autocomplete="off"${attrs ? ` ${attrs}` : ''}>${options}</select></div>
     </div>`;
 }
 
@@ -502,13 +506,17 @@ function scheduleSave() {
   saveTimer = setTimeout(saveNow, 250);
 }
 
-/** Text input or select: keep the answer, validate on blur once changed, clear the error as soon as it is fixed. */
-function bindField(id, field, set) {
+/**
+ * Text input or select: keep the answer, validate on blur once changed, clear
+ * the error as soon as it is fixed. `persist: false` for the short-term form,
+ * which keeps nothing.
+ */
+function bindField(id, field, set, { persist = true } = {}) {
   const input = document.getElementById(id);
   input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', () => {
     dirty.add(id);
     set(input.value);
-    scheduleSave();
+    if (persist) scheduleSave();
     if (showsError(id) && !validateField(field, input.value)) setInlineError(id, null);
   });
   input.addEventListener('blur', () => {
@@ -517,7 +525,7 @@ function bindField(id, field, set) {
       if (formatted !== input.value && !validateField('phone', formatted)) {
         input.value = formatted;
         set(formatted);
-        scheduleSave();
+        if (persist) scheduleSave();
       }
     }
     if (dirty.has(id) || showsError(id)) setInlineError(id, validateField(field, input.value));
@@ -1374,6 +1382,10 @@ function showGuestForm() {
       <label for="g_plate">License plate</label>
       <input type="text" id="g_plate" class="plate-input" placeholder="ABC 1234" required maxlength="10" autocomplete="off" autocapitalize="characters" spellcheck="false">
 
+      ${textField({ id: 'g_make', label: S.vehicle.makeLabel, value: '', wrapClass: 'vehicle-field', attrs: `${VEHICLE_TEXT_ATTRS} list="vehicle-makes" aria-required="true"`, after: makeSuggestions() })}
+      ${textField({ id: 'g_model', label: S.vehicle.modelLabel, value: '', wrapClass: 'vehicle-field', attrs: `${VEHICLE_TEXT_ATTRS} aria-required="true"` })}
+      ${colorField({ id: 'g_color', label: S.vehicle.colorLabel, value: '', wrapClass: 'vehicle-field', attrs: 'aria-required="true"' })}
+
       <label for="g_plate_photo">Photo of the plate</label>
       <input type="file" id="g_plate_photo" accept="image/*,application/pdf" aria-describedby="g_plate_photo_hint">
       <div class="file-hint" id="g_plate_photo_hint">Photo of the plate. Choose from your library or files.</div>
@@ -1405,6 +1417,9 @@ function showGuestForm() {
 
   document.getElementById('guestForm').addEventListener('submit', handleGuestSubmit);
   document.getElementById('backLink').addEventListener('click', goBack);
+  // The make, model and color are checked here with the long-term form's words;
+  // an error clears as soon as the field is fixed. This form keeps no answers.
+  for (const field of ['make', 'model', 'color']) bindField(`g_${field}`, field, () => {}, { persist: false });
 
   // Reveal the optional expiry date only when the temp-tag box is checked.
   const tempTagBox = document.getElementById('g_temp_tag');
@@ -1421,6 +1436,20 @@ let idempotencyKey = null;
 function setProgress(text) {
   const el = document.getElementById('progressMsg');
   if (el) el.textContent = text || '';
+}
+
+/** The make, model and color problems an error carries: ours (found before anything was sent) or the backend's two answers. */
+function guestVehicleProblems(err) {
+  if (err && err.vehicleProblems) return err.vehicleProblems;
+  const answer = vehicleBackendError(err);
+  return answer ? [{ field: answer.field, message: answer.message }] : null;
+}
+
+/** Say what is missing next to each field, and put the cursor in the first one. */
+function showGuestVehicleProblems(problems) {
+  for (const p of problems) setInlineError(`g_${p.field}`, p.message);
+  const first = document.getElementById(`g_${problems[0].field}`);
+  if (first) first.focus();
 }
 
 let guestSubmitting = false;
@@ -1441,6 +1470,11 @@ async function handleGuestSubmit(e) {
     const phone = normalizePhone(document.getElementById('g_phone').value);
     const email = document.getElementById('g_email').value.trim();
     const plateText = normalizePlate(document.getElementById('g_plate').value);
+    const vehicle = {
+      make: normalizeVehicleText(document.getElementById('g_make').value),
+      model: normalizeVehicleText(document.getElementById('g_model').value),
+      color: document.getElementById('g_color').value,
+    };
     const stayHours = parseInt(document.getElementById('g_hours').value, 10);
     const isTempTag = document.getElementById('g_temp_tag').checked;
     const tagExpRaw = document.getElementById('g_tag_exp').value;
@@ -1451,6 +1485,8 @@ async function handleGuestSubmit(e) {
     if (!phone || phone.length < 11) throw new Error('Please enter a valid phone number.');
     if (!email) throw new Error('Please enter your email.');
     if (!plateText || plateText.length < 2) throw new Error('Please enter a valid license plate number.');
+    const vehicleProblems = vehicleFieldErrors(vehicle);
+    if (vehicleProblems.length) throw Object.assign(new Error(vehicleProblems[0].message), { vehicleProblems });
     if (!stayHours || stayHours < 1 || stayHours > 72) throw new Error('Choose how long you will be parked (1–72 hours).');
 
     const plateInput = document.getElementById('g_plate_photo');
@@ -1472,6 +1508,7 @@ async function handleGuestSubmit(e) {
     const result = await backendRegister('/visitor_passes/register', {
       property_id: property.id,
       plate_text: plateText,
+      ...vehicleFields(vehicle),
       visitor_name: visitorName,
       host_unit: hostUnit,
       phone: phone,
@@ -1490,7 +1527,9 @@ async function handleGuestSubmit(e) {
     showSuccess({ refId, validUntil: result && result.valid_until ? result.valid_until : null, plate: result && result.plate_text ? result.plate_text : null });
   } catch (err) {
     setProgress('');
-    errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
+    const problems = guestVehicleProblems(err);
+    if (problems) showGuestVehicleProblems(problems);
+    else errorDiv.innerHTML = '<div class="error">' + escapeHtml(friendlyErrorMessage(err)) + '</div>';
     btn.disabled = false;
     btn.textContent = 'Get my pass →';
     guestSubmitting = false;
