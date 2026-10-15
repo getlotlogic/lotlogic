@@ -354,7 +354,7 @@ test.describe('property QR codes @desktop-only', () => {
   // 540 and 580 are where the two tiles are narrowest side by side (the grid
   // goes to one column at 520), and where a qualifier used to break in two.
   for (const width of [360, 390, 540, 580, 600, 700]) {
-    test(`each tile fits its column at ${width}px, with the QR square and whole and its heading unbroken`, async ({ page }) => {
+    test(`each tile fits its column at ${width}px, with the QR square and whole, and its heading and qualifier on one line each`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       const detail = await mountPropertyDetail(page, { propertyType: 'apartment', initialSection: 'all' });
       await expect(detail.locator('.pd-qr-tile')).toHaveCount(2);
@@ -368,6 +368,10 @@ test.describe('property QR codes @desktop-only', () => {
         expect(canvas.x + canvas.width, `QR ${n} ends inside its tile`).toBeLessThanOrEqual(tile.x + tile.width);
         expect(Math.abs(canvas.width - canvas.height), `QR ${n} is square`).toBeLessThan(1);
         expect(canvas.width, `QR ${n} stays large enough to scan`).toBeGreaterThanOrEqual(160);
+        // The heading ("Short-term parking pass") is one line and ends inside its tile.
+        const label = (await detail.locator('.pd-share-label').nth(n - 1).boundingBox())!;
+        expect(label.height, `tile ${n}'s heading is one line`).toBeLessThan(18);
+        expect(label.x + label.width, `tile ${n}'s heading ends inside its tile`).toBeLessThanOrEqual(tile.x + tile.width);
         // "up to 72 hrs" and "owner-approved" are not broken across two lines to
         // fit beside the heading: they move under it when there is no room.
         const sub = (await detail.locator('.pd-qr-sub').nth(n - 1).boundingBox())!;
