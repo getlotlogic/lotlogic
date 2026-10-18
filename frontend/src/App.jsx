@@ -29,6 +29,7 @@ import { OverviewPage } from './pages/OverviewPage.jsx';
 import { AccountPage } from './pages/AccountPage.jsx';
 import { PlateLookupPage } from './pages/PlateLookupPage.jsx';
 import { SignupPage } from './pages/SignupPage.jsx';
+import { headerName, partnerFieldsFromMe } from './lib/partnerTeam.js';
 
 // Heavy tabs — lazy so a phone loads a login form, not a billing console.
 // Each of these eight modules also carries `export default` for this.
@@ -111,6 +112,9 @@ export function App() {
           signup_source: me.signup_source,
           created_at: me.created_at,
           email_verify_sent_at: me.email_verify_sent_at ?? null,
+          // A partner: the company's name and, for a team login, the member
+          // (spec 2026-10-18-tow-company-team §1.2). `{}` for an owner.
+          ...partnerFieldsFromMe(me),
         };
         const unchanged = Object.keys(next).every(k => prev[k] === next[k]);
         if (unchanged) return prev; // no change — avoid state churn / re-renders
@@ -510,9 +514,16 @@ export function App() {
         .maybeSingle()
         .then(({ data, error }) => {
           if (error || !data) return;
-          const merged = { ...session, ...data, _ts: Date.now() };
-          setOwner(merged);
-          try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
+          // Onto the CURRENT session, not the login-time one: the /auth/me
+          // self-heal may have landed first, and a team member's company
+          // name comes only from there.
+          setOwner(prev => {
+            // Gone, or a different account signed in meanwhile: leave it alone.
+            if (!prev || prev.id !== session.id) return prev;
+            const merged = { ...prev, ...data, _ts: Date.now() };
+            try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
+            return merged;
+          });
         });
     }
   }
@@ -993,7 +1004,7 @@ export function App() {
               )}
             </div>
           )}
-          <div className="header-name" title={owner.business_name || owner.contact_name}>{owner.business_name || owner.contact_name}</div>
+          <div className="header-name" title={headerName(owner)}>{headerName(owner)}</div>
         </div>
       </header>
 

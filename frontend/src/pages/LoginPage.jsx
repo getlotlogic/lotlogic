@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { authLogin, authRequestPasswordReset } from '../lib/api.js';
 import { RETURN_TO_KEY, returnToTarget } from '../lib/deepLink.js';
+import { sessionNames } from '../lib/partnerTeam.js';
 
 // ── Login ─────────────────────────────────────────────────────
 export function LoginPage({ onLogin }) {
@@ -46,8 +47,9 @@ export function LoginPage({ onLogin }) {
       onLogin({
         id: base.id,
         email: base.email || trimmed,
-        business_name: base.display_name,
-        company_name: role === 'partner' ? base.display_name : undefined,
+        // A tow-company member's display_name is the person, not the company
+        // (business_name / company_name then come from /auth/me).
+        ...sessionNames(base),
         // Surface admin flags into the session at login time so the dashboard
         // doesn't have to wait for the /auth/me self-heal to fire (which
         // races against the first loadData call). Backend /auth/login

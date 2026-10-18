@@ -10,6 +10,7 @@ import { RoleChips } from '../ui/RoleChips.jsx';
 import { PhoneInput } from '../ui/PhoneInput.jsx';
 import { PasswordField } from '../ui/PasswordField.jsx';
 import { VerifyEmailSheet } from './property/VerifyEmailSheet.jsx';
+import { sessionNames } from '../lib/partnerTeam.js';
 import {
   ERR, ROLES, DRAFT_KEY,
   propertyNameError, fullNameError, emailError, normalizeEmail,
@@ -60,8 +61,7 @@ function sessionFromAuth(res, fallbackEmail) {
   return {
     id: base.id,
     email: base.email || fallbackEmail,
-    business_name: base.display_name,
-    company_name: role === 'partner' ? base.display_name : undefined,
+    ...sessionNames(base),
     is_admin: !!base.is_admin,
     is_platform_admin: !!base.is_platform_admin,
     // A self-serve signup is unverified by construction (spec §3.5) — the
