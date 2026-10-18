@@ -139,6 +139,48 @@ test('nativeOpenTarget: anything that is not an /app link on the dashboard origi
   for (const url of rejected) assert.equal(nativeOpenTarget(url), null, String(url));
 });
 
+test('nativeOpenTarget: a page served from localhost also follows its local /app links (dev)', () => {
+  for (const pageHost of ['localhost', '127.0.0.1']) {
+    const cases = [
+      ['http://localhost:8000/app?property=p1&section=requests&request=r1',
+        '/app?property=p1&section=requests&request=r1'],
+      ['https://localhost/app', '/app'],
+      ['http://127.0.0.1:8252/app/?tab=lookup', '/app/?tab=lookup'],
+      ['http://LOCALHOST:3000/app#row', '/app'],
+      // The dashboard origin and the root-relative form stay accepted.
+      ['https://lotlogicparking.com/app?property=p1', '/app?property=p1'],
+      ['/app?property=p1', '/app?property=p1'],
+    ];
+    for (const [url, want] of cases) assert.equal(nativeOpenTarget(url, pageHost), want, `${pageHost}: ${url}`);
+  }
+});
+
+test('nativeOpenTarget: a page served from localhost still refuses everything else', () => {
+  const rejected = [
+    'http://localhost:8000/admin',
+    'http://localhost:8000/apple',
+    'http://user@localhost:8000/app',
+    'http://localhost.evil.example/app',
+    'http://127.0.0.1.evil.example/app',
+    'http://evil.example/app?property=p1',
+    'http://10.0.0.5:8000/app',
+    'ftp://localhost/app',
+    'ws://localhost:8000/app',
+    '//localhost:8000/app',
+  ];
+  for (const url of rejected) assert.equal(nativeOpenTarget(url, 'localhost'), null, url);
+});
+
+test('nativeOpenTarget: off localhost (the shell, a browser, no page at all) localhost links are refused', () => {
+  const local = ['http://localhost:8000/app?property=p1&request=r1', 'https://localhost/app', 'http://127.0.0.1:8252/app'];
+  for (const pageHost of ['lotlogicparking.com', 'www.lotlogicparking.com', 'evil.example', '', undefined]) {
+    for (const url of local) assert.equal(nativeOpenTarget(url, pageHost), null, `${pageHost}: ${url}`);
+  }
+  // With no page host given it reads the page's own, and node has no page.
+  assert.equal(nativeOpenTarget('http://localhost:8000/app'), null);
+  assert.equal(createNativeOpenRouter().open('http://localhost:8000/app'), false);
+});
+
 // ── where it routes ────────────────────────────────────────────
 
 test('nativeDeepLink: a request link with no section opens the Requests section', () => {

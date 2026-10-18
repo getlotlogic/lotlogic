@@ -374,6 +374,14 @@ test.describe('native shell bridge @desktop-only', () => {
     await expect(second).toBeInViewport();
     await expect(row).not.toHaveClass(/req-flag/);
     expect(await page.evaluate(() => (window as unknown as Record<string, any>).__sameDocument)).toBe(true);
+
+    // In dev (this page is served from 127.0.0.1) a link on the local server
+    // is followed too.
+    expect(await open(`${origin}/app?property=${PROPERTY_ID}&section=requests&request=${REQUEST_ID}`)).toBe(true);
+    await expect(row).toHaveClass(/req-flag/, { timeout: 20_000 });
+    await expect(row).toBeInViewport();
+    await expect(second).not.toHaveClass(/req-flag/);
+    expect(await page.evaluate(() => (window as unknown as Record<string, any>).__sameDocument)).toBe(true);
   });
 
   test('in the shell, a push opened before sign-in lands on its request once the person signs in', async ({ page }) => {

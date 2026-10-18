@@ -28,6 +28,12 @@ export const NATIVE = !!(WIN && WIN.ReactNativeWebView);
 export const APP_ORIGIN = 'https://lotlogicparking.com';
 
 /**
+ * The local hosts a dev build is served from. Only a page that is itself on
+ * one of them also follows `http(s)://` `/app` links on them (any port).
+ */
+const DEV_HOSTS = new Set(['localhost', '127.0.0.1']);
+
+/**
  * Post one message to the shell on `win`, as the JSON string
  * react-native-webview's `onMessage` receives. A window with no shell, or a
  * shell that throws, posts nothing and never breaks the page.
@@ -65,22 +71,32 @@ export const SIGNED_OUT_MESSAGE = Object.freeze({ type: 'signed_out' });
 
 /**
  * What `LOTLOGIC_NATIVE_OPEN(url)` accepts: an `/app` link on
- * https://lotlogicparking.com, absolute or as a root-relative `/app…` path.
+ * https://lotlogicparking.com, absolute or as a root-relative `/app…` path,
+ * and, in dev only (the page itself is served from localhost or 127.0.0.1),
+ * an `http(s)://localhost[:port]/app…` or `127.0.0.1` link too.
  * Returns the path and query to route to (`/app?property=…`; any fragment is
- * dropped), or null for anything else: another origin or scheme, a port, a
- * user name, a protocol-relative `//host`, a path that is not `/app` or
- * under `/app/`.
+ * dropped), or null for anything else: another origin or scheme, a port
+ * (outside dev), a user name, a protocol-relative `//host`, a path that is
+ * not `/app` or under `/app/`.
  * @param {unknown} url
+ * @param {string} [pageHost] the hostname the page is served from (defaults
+ *   to the page's own)
  * @returns {string|null}
  */
-export function nativeOpenTarget(url) {
+export function nativeOpenTarget(url, pageHost = WIN?.location?.hostname) {
   if (typeof url !== 'string') return null;
   const raw = url.trim();
   // A root-relative path resolves against the dashboard origin; anything else
   // must be an absolute url on its own (so `app?x` or `evil/app` is refused).
+  // A protocol-relative `//host` lands on another origin and is refused, in
+  // dev too: only an absolute url can name a local host.
+  const relative = raw.startsWith('/');
   let parsed;
-  try { parsed = raw.startsWith('/') ? new URL(raw, APP_ORIGIN) : new URL(raw); } catch { return null; }
-  if (parsed.origin !== APP_ORIGIN || parsed.username || parsed.password) return null;
+  try { parsed = relative ? new URL(raw, APP_ORIGIN) : new URL(raw); } catch { return null; }
+  if (parsed.username || parsed.password) return null;
+  const devLink = !relative && DEV_HOSTS.has(pageHost) && DEV_HOSTS.has(parsed.hostname)
+    && (parsed.protocol === 'http:' || parsed.protocol === 'https:');
+  if (parsed.origin !== APP_ORIGIN && !devLink) return null;
   if (parsed.pathname !== '/app' && !parsed.pathname.startsWith('/app/')) return null;
   return `${parsed.pathname}${parsed.search}`;
 }
