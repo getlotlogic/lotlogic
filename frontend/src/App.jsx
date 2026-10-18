@@ -518,7 +518,8 @@ export function App() {
           // self-heal may have landed first, and a team member's company
           // name comes only from there.
           setOwner(prev => {
-            if (!prev) return prev;
+            // Gone, or a different account signed in meanwhile: leave it alone.
+            if (!prev || prev.id !== session.id) return prev;
             const merged = { ...prev, ...data, _ts: Date.now() };
             try { localStorage.setItem('lotlogic_session', JSON.stringify(merged)); } catch {}
             return merged;
