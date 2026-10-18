@@ -10,8 +10,10 @@
 //     the phone for push with it);
 //   - routes `window.LOTLOGIC_NATIVE_OPEN(url)`, which the shell calls with a
 //     push's `data.url`, to that property, section and request without a
-//     reload.
-// In a browser none of this exists: nothing is posted and no global is made.
+//     reload;
+//   - marks `<html>` with the class `native` (a hook for shell-only CSS).
+// In a browser none of this exists: nothing is posted, no global is made and
+// no class is set.
 //
 // The shell talks to the page only through those two directions; it sets
 // `localStorage['lotlogic_session']` itself before the page loads, so a
@@ -144,7 +146,10 @@ export function createNativeOpenRouter() {
 }
 
 const router = createNativeOpenRouter();
-if (NATIVE) WIN.LOTLOGIC_NATIVE_OPEN = router.open;
+if (NATIVE) {
+  WIN.LOTLOGIC_NATIVE_OPEN = router.open;
+  WIN.document?.documentElement?.classList.add('native');
+}
 
 /** App.jsx's listener for `LOTLOGIC_NATIVE_OPEN`; returns the unsubscribe. */
 export const onNativeOpen = router.listen;

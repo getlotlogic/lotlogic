@@ -10,8 +10,9 @@
  *     person signs out;
  *   - exposes `window.LOTLOGIC_NATIVE_OPEN(url)`, which the shell calls with a
  *     push's `data.url` to land on that property, section and request
- *     without reloading the page.
- * Without it (any browser) nothing changes: no post, no global.
+ *     without reloading the page;
+ *   - marks `<html>` with the class `native`, a hook for shell-only CSS.
+ * Without it (any browser) nothing changes: no post, no global, no class.
  *
  * Serves the BUILT frontend (fixtures/buildAndServeFrontend.ts, with
  * vercel.json's rewrites so `/app` is the real route) and answers every
@@ -404,13 +405,17 @@ test.describe('native shell bridge @desktop-only', () => {
   // for everyone (viewport-fit=cover, the home-screen web app). Inside the
   // shell that is what clears the notch; the browser keeps exactly what it
   // had — making it shell-only would take it away from the home-screen web
-  // app, which the bridge must not change.
-  test('in the shell, the header clears the notch and the nav clears the home indicator', async ({ page }) => {
+  // app, which the bridge must not change. `html.native` is there only in
+  // the shell, as a hook for shell-only CSS.
+  const htmlIsNative = (page: Page) => page.evaluate(() => document.documentElement.classList.contains('native'));
+
+  test('in the shell, <html> is marked native, the header clears the notch and the nav clears the home indicator', async ({ page }) => {
     await installShell(page);
     await stubNetwork(page, 'owner');
     await seedSession(page, 'owner');
     await page.goto(`${origin}/app`);
     await expect(header(page)).toBeVisible({ timeout: 20_000 });
+    expect(await htmlIsNative(page)).toBe(true);
 
     expect(await chromeMetrics(page), 'no notch, no padding').toEqual({
       headerPaddingTop: '0px', headerHeight: '58px', navPaddingBottom: '0px',
@@ -421,11 +426,12 @@ test.describe('native shell bridge @desktop-only', () => {
     });
   });
 
-  test('in a browser, the same notch gets the same header and nav as before the bridge', async ({ page }) => {
+  test('in a browser, <html> is not marked native and the same notch gets the same header and nav as before the bridge', async ({ page }) => {
     await stubNetwork(page, 'owner');
     await seedSession(page, 'owner');
     await page.goto(`${origin}/app`);
     await expect(header(page)).toBeVisible({ timeout: 20_000 });
+    expect(await htmlIsNative(page)).toBe(false);
 
     await emulateNotch(page);
     expect(await chromeMetrics(page)).toEqual({
