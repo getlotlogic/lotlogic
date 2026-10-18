@@ -6,8 +6,9 @@
  * The app is the dashboard in a WebView. react-native-webview puts
  * `window.ReactNativeWebView` on the page; when it is there the dashboard
  *   - posts `{type:"session", token, email, role}` after every sign-in and
- *     once on load when a session exists, and `{type:"signed_out"}` when the
- *     person signs out;
+ *     once on load when a session exists, and `{type:"signed_out"}` whenever
+ *     it drops its session: the person signs out, the server refuses the
+ *     token (a 401), or the stored session is too old to use at load;
  *   - exposes `window.LOTLOGIC_NATIVE_OPEN(url)`, which the shell calls with a
  *     push's `data.url` to land on that property, section and request
  *     without reloading the page;
@@ -107,8 +108,8 @@ function requestList() {
 }
 
 interface StubOptions {
-  /** `GET /auth/me` answers 401 (an expired or revoked token). */
-  meUnauthorized?: boolean;
+  /** Every backend call but `/auth/login` answers 401 (an expired or revoked token). */
+  unauthorized?: boolean;
 }
 
 async function stubNetwork(page: Page, role: Role, opts: StubOptions = {}) {
@@ -159,8 +160,8 @@ async function stubNetwork(page: Page, role: Role, opts: StubOptions = {}) {
           subject: { id: account.id, email: account.email, type: role, display_name: account.name },
         });
       }
+      if (opts.unauthorized) return json(route, { detail: 'invalid_token' }, 401);
       if (req.method() === 'GET' && p === '/auth/me') {
-        if (opts.meUnauthorized) return json(route, { detail: 'invalid_token' }, 401);
         return json(route, {
           email: account.email,
           is_admin: false,
@@ -210,10 +211,13 @@ async function installShell(page: Page): Promise<string[]> {
   return posted;
 }
 
-/** What the shell's injected bootstrap does before the page loads (§3.3). */
-async function seedSession(page: Page, role: Role) {
+/**
+ * What the shell's injected bootstrap does before the page loads (§3.3).
+ * `ageMs` back-dates the session's `_ts` stamp.
+ */
+async function seedSession(page: Page, role: Role, ageMs = 0) {
   const account = ACCOUNTS[role];
-  await page.addInitScript(({ account, role, token }) => {
+  await page.addInitScript(({ account, role, token, ageMs }) => {
     // Once per page, not once per document: a reload must find what the
     // page itself left (sign-out clears it).
     if (sessionStorage.getItem('__seeded')) return;
@@ -226,9 +230,9 @@ async function seedSession(page: Page, role: Role) {
       is_platform_admin: false,
       _role: role,
       _token: token,
-      _ts: Date.now(),
+      _ts: Date.now() - ageMs,
     }));
-  }, { account, role, token: TOKEN });
+  }, { account, role, token: TOKEN, ageMs });
 }
 
 const parse = (raw: string) => JSON.parse(raw);
@@ -325,18 +329,35 @@ test.describe('native shell bridge @desktop-only', () => {
     });
   }
 
-  test('in the shell, a stored session the server refuses is posted on load but is not a sign-out', async ({ page }) => {
+  test('in the shell, a stored session the server refuses is posted on load, then signed_out', async ({ page }) => {
     const posted = await installShell(page);
-    await stubNetwork(page, 'owner', { meUnauthorized: true });
+    await stubNetwork(page, 'owner', { unauthorized: true });
     await seedSession(page, 'owner');
 
     await page.goto(`${origin}/app`);
     await expect(page.locator('#login-email')).toBeVisible({ timeout: 20_000 });
-    // Settle: anything the bounce were going to post has had its chance.
-    await page.waitForTimeout(500);
-    expect(posted.map(parse)).toStrictEqual([
+    const expected = [
       { type: 'session', token: TOKEN, email: ACCOUNTS.owner.email, role: 'owner' },
-    ]);
+      { type: 'signed_out' },
+    ];
+    await expect.poll(() => posted.map(parse)).toStrictEqual(expected);
+    // Settle: every load-time call is refused (several 401s at once), and the
+    // shell still hears signed_out once.
+    await page.waitForTimeout(500);
+    expect(posted.map(parse)).toStrictEqual(expected);
+    expect(await page.evaluate(() => localStorage.getItem('lotlogic_session'))).toBeNull();
+  });
+
+  test('in the shell, a stored session older than seven days is dropped at load with signed_out, never posted', async ({ page }) => {
+    const posted = await installShell(page);
+    await stubNetwork(page, 'owner');
+    await seedSession(page, 'owner', 8 * 86_400_000);
+
+    await page.goto(`${origin}/app`);
+    await expect(page.locator('#login-email')).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => posted.map(parse)).toStrictEqual([{ type: 'signed_out' }]);
+    await page.waitForTimeout(500);
+    expect(posted.map(parse)).toStrictEqual([{ type: 'signed_out' }]);
   });
 
   // (c) ──────────────────────────────────────────────────────────

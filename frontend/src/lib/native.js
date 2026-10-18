@@ -5,9 +5,10 @@
 // `window.ReactNativeWebView` on the page before any script runs; that is the
 // only sign the page is inside the shell. When it is there, App.jsx
 //   - posts `{type: "session", token, email, role}` after every sign-in and
-//     once on load when a session exists, and `{type: "signed_out"}` when the
-//     person signs out (the shell keeps the token behind Face ID and registers
-//     the phone for push with it);
+//     once on load when a session exists, and `{type: "signed_out"}` whenever
+//     the page drops its session: sign-out, a 401, a stored session too old
+//     to use (the shell keeps the token behind Face ID and registers the
+//     phone for push with it, so it must drop its copy too);
 //   - routes `window.LOTLOGIC_NATIVE_OPEN(url)`, which the shell calls with a
 //     push's `data.url`, to that property, section and request without a
 //     reload;
@@ -70,6 +71,38 @@ export function sessionMessage(session) {
 }
 
 export const SIGNED_OUT_MESSAGE = Object.freeze({ type: 'signed_out' });
+
+/**
+ * What the page tells the shell about its session, through `post`.
+ * `session(stored)` posts the session message (nothing without a token);
+ * `signedOut()` posts `signed_out` once per session the page drops, though
+ * it can drop one several ways at once (several load-time requests 401
+ * together, each firing `lotlogic:auth-expired`). The first drop always
+ * posts, since the shell may have injected the session the page refused;
+ * a later `session` re-arms it.
+ */
+export function createShellSession(post) {
+  let signedOut = false;
+  return {
+    session(stored) {
+      const message = sessionMessage(stored);
+      if (!message) return false;
+      signedOut = false;
+      return post(message);
+    },
+    signedOut() {
+      if (signedOut) return false;
+      signedOut = true;
+      return post(SIGNED_OUT_MESSAGE);
+    },
+  };
+}
+
+const shellSession = createShellSession(nativePost);
+/** Post the stored session to the shell; a no-op in a browser. */
+export const nativeSession = shellSession.session;
+/** Tell the shell the page dropped its session; a no-op in a browser. */
+export const nativeSignedOut = shellSession.signedOut;
 
 /**
  * What `LOTLOGIC_NATIVE_OPEN(url)` accepts: an `/app` link on

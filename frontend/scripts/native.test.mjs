@@ -19,6 +19,7 @@ import {
   nativeOpenTarget,
   nativeDeepLink,
   createNativeOpenRouter,
+  createShellSession,
 } from '../src/lib/native.js';
 
 // ── where the bridge lives ─────────────────────────────────────
@@ -91,6 +92,58 @@ test('sessionMessage: no token, no message', () => {
 test('SIGNED_OUT_MESSAGE is {type: "signed_out"} and cannot be edited', () => {
   assert.deepEqual(SIGNED_OUT_MESSAGE, { type: 'signed_out' });
   assert.ok(Object.isFrozen(SIGNED_OUT_MESSAGE));
+});
+
+// ── what the shell hears about the session ─────────────────────
+
+function recordingShell() {
+  const sent = [];
+  const shell = createShellSession((m) => { sent.push(m); return true; });
+  return { sent, shell };
+}
+
+test('shell session: a stored session is posted as the session message', () => {
+  const { sent, shell } = recordingShell();
+  assert.equal(shell.session({ _token: 't0k3n', email: 'office@example.com', _role: 'owner', id: 'x' }), true);
+  assert.deepEqual(sent, [{ type: 'session', token: 't0k3n', email: 'office@example.com', role: 'owner' }]);
+});
+
+test('shell session: no token, nothing posted', () => {
+  const { sent, shell } = recordingShell();
+  assert.equal(shell.session(null), false);
+  assert.equal(shell.session({ email: 'office@example.com', _role: 'owner' }), false);
+  assert.deepEqual(sent, []);
+});
+
+test('shell session: the first drop posts signed_out even with no session posted (the shell may have injected one)', () => {
+  const { sent, shell } = recordingShell();
+  assert.equal(shell.signedOut(), true);
+  assert.deepEqual(sent, [{ type: 'signed_out' }]);
+});
+
+test('shell session: one signed_out per dropped session, however many ways it is dropped', () => {
+  const { sent, shell } = recordingShell();
+  shell.session({ _token: 't0k3n', email: 'office@example.com', _role: 'owner' });
+  // Several load-time requests 401 together, each firing lotlogic:auth-expired.
+  assert.equal(shell.signedOut(), true);
+  assert.equal(shell.signedOut(), false);
+  assert.equal(shell.signedOut(), false);
+  assert.deepEqual(sent.map((m) => m.type), ['session', 'signed_out']);
+});
+
+test('shell session: a new session re-arms signed_out', () => {
+  const { sent, shell } = recordingShell();
+  shell.signedOut();
+  shell.session({ _token: 't0k3n', email: 'truck@example.com', _role: 'partner' });
+  shell.signedOut();
+  shell.signedOut();
+  assert.deepEqual(sent.map((m) => m.type), ['signed_out', 'session', 'signed_out']);
+});
+
+test('shell session: posts the frozen signed_out message itself', () => {
+  const { sent, shell } = recordingShell();
+  shell.signedOut();
+  assert.equal(sent[0], SIGNED_OUT_MESSAGE);
 });
 
 // ── what LOTLOGIC_NATIVE_OPEN accepts ──────────────────────────

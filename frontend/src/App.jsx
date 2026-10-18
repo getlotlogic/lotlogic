@@ -9,7 +9,7 @@ import { SkeletonCards } from './ui/Skeletons.jsx';
 import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview, NavIconRequests } from './ui/icons.jsx';
 import { lazyPage } from './lib/lazyPage.js';
 import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink, readJoinReturnTo } from './lib/deepLink.js';
-import { NATIVE, nativePost, sessionMessage, SIGNED_OUT_MESSAGE, onNativeOpen, nativeDeepLink } from './lib/native.js';
+import { NATIVE, nativeSession, nativeSignedOut, onNativeOpen, nativeDeepLink } from './lib/native.js';
 import { readActionToken, hideActionToken } from './lib/requestAction.js';
 import { navTabsFor, partnerRequestsReady, isKnownTab } from './lib/features.js';
 import { verifyState, secondsUntilResend, cooldownRetryAfter, sentAtForRetryAfter } from './lib/verifyState.js';
@@ -66,12 +66,15 @@ export function App() {
       if (!s) return null;
       const parsed = JSON.parse(s);
       // Session expires after 7 days locally, or sooner if the JWT is missing.
+      // Inside the iPhone app the shell put it there, so it drops its copy too.
       if (!parsed._token) {
         localStorage.removeItem('lotlogic_session');
+        nativeSignedOut();
         return null;
       }
       if (parsed._ts && Date.now() - parsed._ts > 7 * 86400000) {
         localStorage.removeItem('lotlogic_session');
+        nativeSignedOut();
         return null;
       }
       return parsed;
@@ -81,6 +84,9 @@ export function App() {
   useEffect(() => {
     function onAuthExpired() {
       setOwner(null);
+      // The server refused the token: inside the iPhone app the shell drops
+      // its copy too, or it would keep the dead token behind Face ID.
+      nativeSignedOut();
     }
     window.addEventListener('lotlogic:auth-expired', onAuthExpired);
     return () => window.removeEventListener('lotlogic:auth-expired', onAuthExpired);
@@ -90,12 +96,12 @@ export function App() {
   // Face ID and registers the phone for push with it, so it is handed the
   // session on load when one was restored, after every sign-in, and again
   // whenever the token or the account's email changes (a code-confirm
-  // renewal, "Change email"). A 401 that drops the session is not a sign-out
-  // and posts nothing; `logout` below is. In a browser this never posts.
+  // renewal, "Change email"). Every way the page drops its session posts
+  // `signed_out`: `logout` below, a 401 (`lotlogic:auth-expired` above) and
+  // a stored session refused at load. In a browser this never posts.
   useEffect(() => {
     if (!NATIVE) return;
-    const message = sessionMessage(owner);
-    if (message) nativePost(message);
+    nativeSession(owner);
   }, [owner?._token, owner?.email, owner?._role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Self-heal stale sessions: always re-fetch admin flags from /auth/me
@@ -602,7 +608,7 @@ export function App() {
     setOwner(null); setLots([]); setLotsLoaded(false); setLotStates({}); setViolations([]); setAlprViolations([]); setPartners([]); setViewAs(null);
     setTab('lots');
     try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
-    nativePost(SIGNED_OUT_MESSAGE);
+    nativeSignedOut();
   }
 
   // Pull-to-refresh handler
