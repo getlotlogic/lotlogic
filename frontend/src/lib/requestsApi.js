@@ -10,8 +10,8 @@
 // Routes: `/apartment/requests*` (spec §8.3 `routers/tow_requests.py`),
 // `/partner/lookup`, `/auth/signup*`, `/auth/verify-email`,
 // `/auth/resend-verification`, `/auth/change-email`, `/properties/*/members*`,
-// `/apartment/properties*`, `/partner/properties*`, `/partner/slack/*` and the
-// two public `/requests/action` entries.
+// `/apartment/properties*`, `/partner/properties*`, `/partner/slack/*`,
+// `/partner/team*` and the two public `/requests/action` entries.
 
 import { API, apiFetch, errorFromResponse, getSessionToken } from './api.js';
 
@@ -228,6 +228,27 @@ export const deleteSlackIdentity = (slackUserId) => del(`/partner/slack/identiti
 /** POST /partner/slack/feed-channel `{channel_id}` */
 export const setSlackFeedChannel = (body) => post('/partner/slack/feed-channel', body);
 
+// ── /partner/team* (spec 2026-10-18-tow-company-team §1.3) ───
+//
+// The tow company's people. Every member reads the roster; only an Admin
+// changes it (the backend answers 404, never 403, otherwise). Errors carry
+// `email_in_use` / `last_admin` as `.code`.
+
+/** GET /partner/team → `{members: [{id, name, email, phone, role, last_login_at, has_password, slack_linked, properties}]}` */
+export const listTeam = () => get('/partner/team');
+
+/** POST /partner/team/invite `{name, email, phone?, role}` — 409 `email_in_use` */
+export const inviteTeammate = (body) => post('/partner/team/invite', body);
+
+/** PATCH /partner/team/{member_id} `{role?, phone?, name?}` — 409 `last_admin` */
+export const patchTeammate = (memberId, body) => patch(`/partner/team/${seg(memberId)}`, body);
+
+/** DELETE /partner/team/{member_id} — `removed_at = now()`, 409 `last_admin` */
+export const removeTeammate = (memberId) => del(`/partner/team/${seg(memberId)}`);
+
+/** POST /partner/team/{member_id}/resend — a new set-password mail */
+export const resendTeammate = (memberId) => post(`/partner/team/${seg(memberId)}/resend`, {});
+
 // ── /requests/action (public, exact paths) ───────────────────
 
 /** GET /requests/action?token= → `{action, request}` preview */
@@ -246,4 +267,5 @@ export const requestsApi = {
   archiveApartmentProperty, listPartnerProperties, verifyPartnerProperty,
   rejectPartnerProperty, getLotStatus, getPlateTimeline, getSlackStatus, slackInstallLink, listSlackIdentities, updateSlackIdentity,
   deleteSlackIdentity, setSlackFeedChannel, getRequestAction, postRequestAction,
+  listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate,
 };
