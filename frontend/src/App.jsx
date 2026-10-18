@@ -9,6 +9,7 @@ import { SkeletonCards } from './ui/Skeletons.jsx';
 import { NavIconJobs, NavIconLots, NavIconEarnings, NavIconAccount, NavIconActivity, NavIconOverview, NavIconRequests } from './ui/icons.jsx';
 import { lazyPage } from './lib/lazyPage.js';
 import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink, readJoinReturnTo } from './lib/deepLink.js';
+import { NATIVE, nativePost, sessionMessage, SIGNED_OUT_MESSAGE, onNativeOpen, nativeDeepLink } from './lib/native.js';
 import { readActionToken, hideActionToken } from './lib/requestAction.js';
 import { navTabsFor, partnerRequestsReady, isKnownTab } from './lib/features.js';
 import { verifyState, secondsUntilResend, cooldownRetryAfter, sentAtForRetryAfter } from './lib/verifyState.js';
@@ -84,6 +85,18 @@ export function App() {
     window.addEventListener('lotlogic:auth-expired', onAuthExpired);
     return () => window.removeEventListener('lotlogic:auth-expired', onAuthExpired);
   }, []);
+
+  // Inside the iPhone app (lib/native.js) the shell keeps the session behind
+  // Face ID and registers the phone for push with it, so it is handed the
+  // session on load when one was restored, after every sign-in, and again
+  // whenever the token or the account's email changes (a code-confirm
+  // renewal, "Change email"). A 401 that drops the session is not a sign-out
+  // and posts nothing; `logout` below is. In a browser this never posts.
+  useEffect(() => {
+    if (!NATIVE) return;
+    const message = sessionMessage(owner);
+    if (message) nativePost(message);
+  }, [owner?._token, owner?.email, owner?._role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Self-heal stale sessions: always re-fetch admin flags from /auth/me
   // on mount, so a user who was elevated to admin after their cached
@@ -391,6 +404,27 @@ export function App() {
     cleanDeepLink();
   }, [owner, deepLink, openVerifySheet]);
 
+  // `window.LOTLOGIC_NATIVE_OPEN(url)` — the iPhone app's push tap, on a page
+  // that is already loaded (lib/native.js accepts only the dashboard's own
+  // `/app` links). The url becomes the deep link exactly as if the page had
+  // been opened on it: the address bar takes it, the apply-once effect above
+  // runs again, and `navNonce` remounts the open tab so the Lots page, the
+  // property page and its Requests section read their deep-link props afresh
+  // instead of keeping the ones they mounted with. Signed out, the link waits
+  // in `deepLink` for the sign-in, like a cold start's. Never in a browser.
+  const [navNonce, setNavNonce] = useState(0);
+  useEffect(() => {
+    if (!NATIVE) return undefined;
+    return onNativeOpen((target) => {
+      try { window.history.replaceState(null, '', target); } catch { /* blocked */ }
+      setPublicRoute(null);
+      setViewAs(null);
+      setDeepLink(nativeDeepLink(target));
+      deepLinkAppliedRef.current = false;
+      setNavNonce(n => n + 1);
+    });
+  }, []);
+
   // `/slack/oauth_redirect` lands the partner back on
   // `/app?tab=account&slack=connected` (or `…&slack=error`) — a key
   // deepLink.js deliberately leaves alone ("for whoever owns it"). Read it
@@ -568,6 +602,7 @@ export function App() {
     setOwner(null); setLots([]); setLotsLoaded(false); setLotStates({}); setViolations([]); setAlprViolations([]); setPartners([]); setViewAs(null);
     setTab('lots');
     try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
+    nativePost(SIGNED_OUT_MESSAGE);
   }
 
   // Pull-to-refresh handler
@@ -1056,7 +1091,7 @@ export function App() {
           <div className="last-updated" aria-live="polite">Updated {lastRefreshLabel}</div>
         )}
 
-        <div key={tab + (viewAs?.id || '')} className="page-slide">
+        <div key={tab + (viewAs?.id || '') + (navNonce ? `:${navNonce}` : '')} className="page-slide">
           <React.Suspense fallback={<SkeletonCards />}>
           {tab === 'overview' && isOwner && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
           {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
