@@ -51,6 +51,11 @@ const TARGET_FILES = [
   // State of the lot (task F7): the pure half and the folder holding the tab
   // and the timeline.
   'src/lib/lotStatus.js',
+  // The tow company's Team (spec 2026-10-18-tow-company-team §1.4): the
+  // section and its pure half. The `driver` role value stays a bare token,
+  // which isNotCopy() lets through; what is read is "Truck".
+  'src/pages/account/PartnerTeamSection.jsx',
+  'src/lib/partnerTeam.js',
 ];
 const TARGET_DIRS = ['src/pages/property', 'src/pages/permits', 'src/pages/lot'];
 
@@ -347,6 +352,8 @@ test('the scanner is looking at files that exist', () => {
   assert.ok(found.length >= 1, 'portalNaming scanned nothing — the target list has gone stale');
   // holdTime.js ships in this task, so it is always in scope.
   assert.ok(found.includes('src/lib/holdTime.js'), found.join(', '));
+  assert.ok(found.includes('src/pages/account/PartnerTeamSection.jsx'), found.join(', '));
+  assert.ok(found.includes('src/lib/partnerTeam.js'), found.join(', '));
   assert.ok(found.some(f => f.startsWith('src/pages/property/')), found.join(', '));
 });
 

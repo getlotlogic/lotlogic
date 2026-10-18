@@ -7,6 +7,7 @@ import { TowTruckPlatesEditor } from './account/TowTruckPlatesEditor.jsx';
 import { TeamSection } from './property/TeamSection.jsx';
 import { AddPropertyForm } from '../ui/AddPropertyForm.jsx';
 import { SlackSection } from './account/SlackSection.jsx';
+import { PartnerTeamSection } from './account/PartnerTeamSection.jsx';
 import { passwordError, PASSWORD_MIN } from '../lib/signupValidation.js';
 
 // ── Account / Settings page ────────────────────────────────────
@@ -246,9 +247,9 @@ export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setA
       {/* Profile card */}
       <div style={{textAlign:'center', marginBottom:20}}>
         <div style={{width:64, height:64, borderRadius:16, background:'linear-gradient(135deg, #3b82f6, #2563eb)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:22, fontWeight:800, color:'#fff'}}>
-          {(user.contact_name || user.business_name || 'U').charAt(0).toUpperCase()}
+          {(user.member_name || user.contact_name || user.business_name || 'U').charAt(0).toUpperCase()}
         </div>
-        <div style={{fontSize:20, fontWeight:800, color:'var(--text-primary)'}}>{user.contact_name || user.business_name}</div>
+        <div style={{fontSize:20, fontWeight:800, color:'var(--text-primary)'}}>{user.member_name || user.contact_name || user.business_name}</div>
         <div style={{fontSize:13, color:'var(--text-faint)', marginTop:2}}>{user.email}</div>
         <div style={{marginTop:6}}>
           <span style={{fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, textTransform:'uppercase', letterSpacing:'.06em',
@@ -284,8 +285,8 @@ export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setA
         )}
       </div>
 
-      {/* Team, per property (spec §5.7) — owners only; a partner manages
-          people through Slack (§6.1), not here. */}
+      {/* Team, per property (spec §5.7) — owners only. A tow company's
+          people are the partner Team section further down. */}
       {isOwner && teamProperties.map(p => (
         <TeamSection key={p.id} property={p} user={user} />
       ))}
@@ -336,6 +337,10 @@ export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setA
       {/* Tow-truck plates — enforcement partners only. Used by the tow-confirm
           edge function to match camera sightings against partner trucks. */}
       {!isOwner && <TowTruckPlatesEditor user={user} />}
+
+      {/* The tow company's Team (spec 2026-10-18-tow-company-team §1.4), next
+          to Slack. Hides itself when `/partner/team` 404s. */}
+      {!isOwner && <PartnerTeamSection user={user} />}
 
       {/* Slack: Connect Slack + Slack people (spec §5.7, §6.1). Hides itself
           entirely when the backend hasn't shipped the Slack routes yet. */}
