@@ -20,6 +20,12 @@
  *   - an owner's Account has no company Team section and never asks for one;
  *   - axe finds nothing serious or critical in the section, in either theme.
  *
+ * P2 (spec §2.2, §2.3, §4 — task U1 builds the routes in parallel):
+ *   - an Admin sees "All properties" on their own row and a checklist on a
+ *     Truck's; "No properties yet" for a Truck with none;
+ *   - Save PUTs `{property_ids}` and toasts; a 422 `unknown_property` reads
+ *     as the reload sentence; a Dispatch member sees the checklist too.
+ *
  * Run: cd tests && npx playwright test e2e/partner-team
  */
 import path from 'node:path';
@@ -39,13 +45,29 @@ const COMPANY_ID = '22222222-2222-4222-8222-222222222222';
 const COMPANY = 'Queen City Towing';
 const DANA_ID = '33333333-3333-4333-8333-333333333331';
 const SAM_ID = '33333333-3333-4333-8333-333333333332';
+const TERRY_ID = '33333333-3333-4333-8333-333333333333';
 const OWNER_ID = '44444444-4444-4444-8444-444444444444';
 const PROPERTY_ID = '55555555-5555-4555-8555-555555555555';
+// The company's two live properties (`/auth/me.properties` for an Admin or
+// Dispatch: every one; for a Truck: their assignment).
+const OAK_ID = '66666666-6666-4666-8666-666666666661';
+const SPRING_ID = '66666666-6666-4666-8666-666666666662';
+const OAK = { id: OAK_ID, name: 'Oak Hill Commons' };
+const SPRING = { id: SPRING_ID, name: 'Spring Lake Apartments' };
+const COMPANY_PROPERTIES = [OAK, SPRING];
+const asMeProperty = (p: { id: string; name: string }) => ({
+  ...p, address: '1 Main St', role: 'partner', property_type: 'apartment', verification_status: 'verified',
+  features: { passes: true, qr: true, cameras: false },
+});
 const FAKE_TOKEN = 'fake.jwt.for-test';
 
 type MemberRole = 'admin' | 'dispatcher' | 'driver';
 
-/** Two members: the signed-in Admin (Dana) and a Truck who has not set a password (Sam). */
+/**
+ * Three members: Dana (the signed-in Admin, or Dispatch), a Truck who has not
+ * set a password and has no property yet (Sam), and a Truck with an
+ * assignment (Terry).
+ */
 function roster(danaRole: MemberRole = 'admin') {
   return {
     members: [
@@ -58,6 +80,11 @@ function roster(danaRole: MemberRole = 'admin') {
         id: SAM_ID, name: 'Sam Ortiz', email: 'sam@queencitytow.test', phone: null,
         role: 'driver', last_login_at: null, has_password: false, slack_linked: false, properties: [],
       },
+      {
+        id: TERRY_ID, name: 'Terry Banks', email: 'terry@queencitytow.test', phone: '+17045550103',
+        role: 'driver', last_login_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
+        has_password: true, slack_linked: false, properties: [OAK],
+      },
     ],
   };
 }
@@ -68,6 +95,7 @@ interface Seen {
   deletes: string[];
   resends: string[];
   teamGets: number;
+  assigns: Array<{ id: string; body: unknown; query: string }>;
 }
 
 interface StubOpts {
@@ -77,6 +105,8 @@ interface StubOpts {
   invite?: { status: number; detail?: string };
   /** The post-login `enforcement_partners` Supabase read, answered after this many ms. */
   partnerRowDelayMs?: number;
+  /** What `PUT /partner/team/{id}/properties` answers. */
+  assign?: { status: number; detail?: string };
 }
 
 const json = (route: Route, status: number, body: unknown) => route.fulfill({
@@ -87,9 +117,11 @@ const json = (route: Route, status: number, body: unknown) => route.fulfill({
 });
 
 async function stub(page: Page, opts: StubOpts): Promise<Seen> {
-  const seen: Seen = { invites: [], patches: [], deletes: [], resends: [], teamGets: 0 };
+  const seen: Seen = { invites: [], patches: [], deletes: [], resends: [], teamGets: 0, assigns: [] };
   const memberRole = opts.memberRole ?? 'admin';
   const partner = opts.account === 'partner';
+  const me = { id: DANA_ID, name: 'Dana Reyes', email: 'dana@queencitytow.test' };
+  const team = () => roster(memberRole);
 
   // Lowest priority (registered first): nothing but the local build may load.
   await page.route('**/*', (route) => {
@@ -119,7 +151,7 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
         headers: {
           'access-control-allow-origin': '*',
           'access-control-allow-headers': '*',
-          'access-control-allow-methods': 'GET,POST,PATCH,DELETE,OPTIONS',
+          'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
         },
       });
     }
@@ -129,8 +161,8 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
         expires_in: 604800,
         subject: partner
           ? {
-            type: 'partner', id: COMPANY_ID, email: 'dana@queencitytow.test', display_name: 'Dana Reyes',
-            member_id: DANA_ID, member_role: memberRole, is_admin: false, is_platform_admin: false,
+            type: 'partner', id: COMPANY_ID, email: me.email, display_name: me.name,
+            member_id: me.id, member_role: memberRole, is_admin: false, is_platform_admin: false,
           }
           : {
             type: 'owner', id: OWNER_ID, email: 'office@springlake.test', display_name: 'Spring Lake Apartments',
@@ -141,10 +173,11 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
     if (m === 'GET' && p === '/auth/me') {
       return json(route, 200, partner
         ? {
-          type: 'partner', id: COMPANY_ID, email: 'dana@queencitytow.test', display_name: COMPANY,
+          type: 'partner', id: COMPANY_ID, email: me.email, display_name: COMPANY,
           company_name: COMPANY, phone: '+17045550100', is_admin: false, is_platform_admin: false,
-          pending_joins: 0, pending_properties: 0, lots: [], properties: [],
-          member: { id: DANA_ID, name: 'Dana Reyes', role: memberRole },
+          pending_joins: 0, pending_properties: 0, lots: [],
+          properties: COMPANY_PROPERTIES.map(asMeProperty),
+          member: { id: me.id, name: me.name, role: memberRole, properties: [], admin_names: ['Dana Reyes'] },
         }
         : {
           type: 'owner', id: OWNER_ID, email: 'office@springlake.test', display_name: 'Spring Lake Apartments',
@@ -160,7 +193,19 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
     }
     if (m === 'GET' && p === '/partner/team') {
       seen.teamGets += 1;
-      return json(route, 200, roster(memberRole));
+      return json(route, 200, team());
+    }
+    const props = p.match(/^\/partner\/team\/([^/]+)\/properties$/);
+    if (props && m === 'PUT') {
+      const id = decodeURIComponent(props[1]);
+      const body = req.postDataJSON() as { property_ids: string[] };
+      seen.assigns.push({ id, body, query: url.search });
+      const answer = opts.assign ?? { status: 200 };
+      if (answer.status >= 400) return json(route, answer.status, { detail: answer.detail });
+      const member = team().members.find((x) => x.id === id);
+      return json(route, 200, {
+        member: { ...member, properties: COMPANY_PROPERTIES.filter((x) => body.property_ids.includes(x.id)) },
+      });
     }
     if (m === 'POST' && p === '/partner/team/invite') {
       const body = req.postDataJSON();
@@ -212,7 +257,7 @@ test.describe('partner Team section', () => {
     await openAccount(page);
 
     await expect(team(page).getByText('Team', { exact: true })).toBeVisible();
-    await expect(team(page).getByTestId('team-member')).toHaveCount(2);
+    await expect(team(page).getByTestId('team-member')).toHaveCount(3);
 
     const dana = memberRow(page, 'Dana Reyes');
     await expect(dana.getByRole('combobox', { name: 'Role for Dana Reyes' })).toHaveValue('admin');
@@ -357,7 +402,7 @@ test.describe('partner Team section', () => {
     await signIn(page, 'dana@queencitytow.test');
     await openAccount(page);
 
-    await expect(team(page).getByTestId('team-member')).toHaveCount(2);
+    await expect(team(page).getByTestId('team-member')).toHaveCount(3);
     await expect(memberRow(page, 'Dana Reyes').locator('.settings-row-value')).toHaveText('Dispatch');
     await expect(memberRow(page, 'Sam Ortiz').locator('.settings-row-value')).toHaveText('Truck');
     await expect(team(page).getByRole('button', { name: 'Add a teammate' })).toHaveCount(0);
@@ -401,5 +446,94 @@ test.describe('partner Team section', () => {
     await expect(page.locator('#team-section')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Add a teammate', exact: true })).toHaveCount(0);
     expect(seen.teamGets).toBe(0);
+  });
+});
+
+// ── P2: assignments and scope ────────────────────────────────
+
+const props = (page: Page, name: string) => memberRow(page, name).getByTestId('member-properties');
+
+test.describe('partner Team: properties (P2)', () => {
+  test('an Admin sees "All properties" on their own row and a checklist on a Truck\'s', async ({ page }) => {
+    await stub(page, { account: 'partner' });
+    await signIn(page, 'dana@queencitytow.test');
+    await openAccount(page);
+
+    await expect(props(page, 'Dana Reyes')).toHaveText('PropertiesAll properties');
+    await expect(props(page, 'Dana Reyes').getByRole('checkbox')).toHaveCount(0);
+
+    const terry = props(page, 'Terry Banks');
+    await expect(terry.getByRole('checkbox')).toHaveCount(2);
+    await expect(terry.getByRole('checkbox', { name: 'Oak Hill Commons' })).toBeChecked();
+    await expect(terry.getByRole('checkbox', { name: 'Spring Lake Apartments' })).not.toBeChecked();
+    await expect(terry.getByRole('button', { name: 'Save properties for Terry Banks' })).toBeDisabled();
+    await expect(terry).not.toContainText('No properties yet');
+
+    // A Truck with none: the amber line, and the same checklist, empty.
+    const sam = props(page, 'Sam Ortiz');
+    await expect(sam.getByText('No properties yet', { exact: true })).toBeVisible();
+    await expect(sam.getByRole('checkbox', { checked: true })).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText(/\bdriver\b/i);
+  });
+
+  test('Save posts {property_ids}, shows the toast and updates the row', async ({ page }) => {
+    const seen = await stub(page, { account: 'partner' });
+    await signIn(page, 'dana@queencitytow.test');
+    await openAccount(page);
+
+    const terry = props(page, 'Terry Banks');
+    await terry.getByRole('checkbox', { name: 'Spring Lake Apartments' }).check();
+    await terry.getByRole('button', { name: 'Save properties for Terry Banks' }).click();
+    await expect.poll(() => seen.assigns).toEqual([{ id: TERRY_ID, body: { property_ids: [OAK_ID, SPRING_ID] }, query: '' }]);
+    await expect(page.locator('.toast.success')).toHaveText('Properties saved for Terry Banks');
+    await expect(terry.getByRole('checkbox', { name: 'Spring Lake Apartments' })).toBeChecked();
+    await expect(terry.getByRole('button', { name: 'Save properties for Terry Banks' })).toBeDisabled();
+
+    // The first property for a Truck with none: the amber line goes.
+    const sam = props(page, 'Sam Ortiz');
+    await sam.getByRole('checkbox', { name: 'Oak Hill Commons' }).check();
+    await sam.getByRole('button', { name: 'Save properties for Sam Ortiz' }).click();
+    await expect.poll(() => seen.assigns.length).toBe(2);
+    expect(seen.assigns[1]).toEqual({ id: SAM_ID, body: { property_ids: [OAK_ID] }, query: '' });
+    await expect(sam).not.toContainText('No properties yet');
+
+    // Unassigning everything is a real save: an empty list, not nothing.
+    await terry.getByRole('checkbox', { name: 'Oak Hill Commons' }).uncheck();
+    await terry.getByRole('checkbox', { name: 'Spring Lake Apartments' }).uncheck();
+    await terry.getByRole('button', { name: 'Save properties for Terry Banks' }).click();
+    await expect.poll(() => seen.assigns.length).toBe(3);
+    expect(seen.assigns[2]).toEqual({ id: TERRY_ID, body: { property_ids: [] }, query: '' });
+    await expect(terry.getByText('No properties yet', { exact: true })).toBeVisible();
+  });
+
+  test('a 422 unknown_property reads as the reload sentence', async ({ page }) => {
+    const seen = await stub(page, { account: 'partner', assign: { status: 422, detail: 'unknown_property' } });
+    await signIn(page, 'dana@queencitytow.test');
+    await openAccount(page);
+
+    const terry = props(page, 'Terry Banks');
+    await terry.getByRole('checkbox', { name: 'Spring Lake Apartments' }).check();
+    await terry.getByRole('button', { name: 'Save properties for Terry Banks' }).click();
+    await expect(terry.getByRole('alert')).toHaveText("One of those properties isn't yours any more. Reload and try again.");
+    expect(seen.assigns).toHaveLength(1);
+    await expect(page.locator('body')).not.toContainText('unknown_property');
+    // Nothing was saved: the pick is still there to retry.
+    await expect(terry.getByRole('checkbox', { name: 'Spring Lake Apartments' })).toBeChecked();
+  });
+
+  test('a Dispatch member sees the checklist too, and saves', async ({ page }) => {
+    const seen = await stub(page, { account: 'partner', memberRole: 'dispatcher' });
+    await signIn(page, 'dana@queencitytow.test');
+    await openAccount(page);
+
+    await expect(props(page, 'Dana Reyes')).toHaveText('PropertiesAll properties');
+    const terry = props(page, 'Terry Banks');
+    await expect(terry.getByRole('checkbox')).toHaveCount(2);
+    await terry.getByRole('checkbox', { name: 'Spring Lake Apartments' }).check();
+    await terry.getByRole('button', { name: 'Save properties for Terry Banks' }).click();
+    await expect.poll(() => seen.assigns.map((a) => a.id)).toEqual([TERRY_ID]);
+    await expect(page.locator('.toast.success')).toHaveText('Properties saved for Terry Banks');
+    // Still no roster changes for Dispatch.
+    await expect(team(page).getByRole('button', { name: 'Add a teammate' })).toHaveCount(0);
   });
 });

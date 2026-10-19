@@ -135,9 +135,13 @@ export function lastAdminBlocked(members, target) {
 
 // ── Error codes → sentences ──────────────────────────────────
 
+/** `PUT /partner/team/{id}/properties` 422 `unknown_property` (spec §2.2). */
+export const UNKNOWN_PROPERTY_SENTENCE = "One of those properties isn't yours any more. Reload and try again.";
+
 export const TEAM_ERROR_COPY = Object.freeze({
   email_in_use: 'That email already has a LotLogic login.',
   last_admin: LAST_ADMIN_REASON,
+  unknown_property: UNKNOWN_PROPERTY_SENTENCE,
 });
 
 const GENERIC = 'Something went wrong. Try again.';
@@ -196,4 +200,92 @@ export function partnerFieldsFromMe(me) {
 export function headerName(user) {
   if (!user) return '';
   return user.member_name || user.business_name || user.contact_name || '';
+}
+
+// ── P2: assignments and scope (spec §2.2, §2.3, §4) ──────────
+//
+// A Truck sees only the properties assigned to them; an Admin or Dispatch
+// sees everything the company sees. `GET /partner/team` gives every member
+// `properties: [{id, name}]` — `[]` for an Admin or Dispatch means "All
+// properties", for a Truck it is the assignment and `[]` means none.
+
+export const ALL_PROPERTIES = 'All properties';
+export const NO_PROPERTIES_YET = 'No properties yet';
+
+/**
+ * Admin and Dispatch assign properties (spec §2.2); a partner session with
+ * no `member_role` is the company's own pre-team login, its first Admin.
+ */
+export function canAssignProperties(user) {
+  if (!user || user._role !== 'partner') return false;
+  return user.member_role == null || user.member_role === 'admin' || user.member_role === 'dispatcher';
+}
+
+/** The ids in a member's `properties`: `[{id, name}]`, or bare ids from a P1 backend. */
+export function memberPropertyIds(member) {
+  const list = Array.isArray(member?.properties) ? member.properties : [];
+  const ids = [];
+  for (const p of list) {
+    const id = typeof p === 'string' ? p : p?.id;
+    if (typeof id === 'string' && id) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * What a member's Properties row shows to `viewer`:
+ *   `{kind: 'all', text}`              an Admin or Dispatch member — no control;
+ *   `{kind: 'checklist', empty, note}` a Truck, to someone who may assign;
+ *   `{kind: 'list', empty, text}`      a Truck, to another Truck — read only.
+ * `names` (id → name) names a bare id; one it cannot name is counted, never
+ * shown raw.
+ */
+export function propertiesRow(member, viewer, names = {}) {
+  if (!member) return null;
+  if (member.role !== 'driver') return { kind: 'all', text: ALL_PROPERTIES };
+  const list = Array.isArray(member.properties) ? member.properties : [];
+  const empty = memberPropertyIds(member).length === 0;
+  if (canAssignProperties(viewer)) return { kind: 'checklist', empty, note: empty ? NO_PROPERTIES_YET : null };
+  if (empty) return { kind: 'list', empty, text: NO_PROPERTIES_YET };
+  const named = [];
+  let unnamed = 0;
+  for (const p of list) {
+    const id = typeof p === 'string' ? p : p?.id;
+    if (!id) continue;
+    const name = (typeof p === 'object' && p?.name) || names?.[id];
+    if (name) named.push(name); else unnamed += 1;
+  }
+  return { kind: 'list', empty, text: [...named, ...(unnamed ? [`${unnamed} more`] : [])].join(', ') };
+}
+
+/** The checklist's rows: `{id, name}` by name, each id once. */
+export function assignableProperties(properties) {
+  const seen = new Set();
+  const out = [];
+  for (const p of (Array.isArray(properties) ? properties : [])) {
+    if (!p || typeof p.id !== 'string' || !p.id || seen.has(p.id)) continue;
+    seen.add(p.id);
+    out.push({ id: p.id, name: p.name || p.address || 'Unnamed property' });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * The `property_ids` a Save sends: the picked ids the checklist actually
+ * shows, in the order picked. An assignment the company no longer has live
+ * (archived since) is not on the checklist, so it is dropped rather than sent
+ * back to be refused (422 `unknown_property`) on every try.
+ */
+export function idsToSave(pickedIds, properties) {
+  const shown = new Set((Array.isArray(properties) ? properties : []).map(p => p && p.id));
+  return (Array.isArray(pickedIds) ? pickedIds : []).filter(id => shown.has(id));
+}
+
+/** True when the two id lists hold the same ids, in any order. */
+export function sameIdSet(a, b) {
+  const x = new Set(a || []);
+  const y = new Set(b || []);
+  if (x.size !== y.size) return false;
+  for (const id of x) if (!y.has(id)) return false;
+  return true;
 }

@@ -15,9 +15,12 @@ import {
   lastAdminBlocked, LAST_ADMIN_REASON,
   teamErrorMessage, removeConfirmText,
   sessionNames, partnerFieldsFromMe, headerName,
+  canAssignProperties, ALL_PROPERTIES, NO_PROPERTIES_YET, UNKNOWN_PROPERTY_SENTENCE,
+  memberPropertyIds, propertiesRow, assignableProperties, sameIdSet, idsToSave,
 } from '../src/lib/partnerTeam.js';
 import {
   listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate, requestsApi, teamPath,
+  assignProperties,
 } from '../src/lib/requestsApi.js';
 
 // ── role labels ──────────────────────────────────────────────
@@ -348,4 +351,138 @@ test('teamPath leaves a plain call alone and adds ?partner_id= for an impersonat
   assert.equal(teamPath('/partner/team', 'a320a1c8-90b5-43a9-85a7-4ca31ed0de35'),
     '/partner/team?partner_id=a320a1c8-90b5-43a9-85a7-4ca31ed0de35');
   assert.equal(teamPath('/partner/team/abc/resend', 'x y&z'), '/partner/team/abc/resend?partner_id=x%20y%26z');
+});
+
+// ── P2: assignments and scope (spec §2.2, §2.3, §4) ──────────
+
+test('canAssignProperties: an Admin and Dispatch may, a Truck may not', () => {
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: 'admin' }), true);
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: 'dispatcher' }), true);
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: 'driver' }), false);
+});
+
+test('canAssignProperties: a partner session from before team logins may (it is the company Admin)', () => {
+  assert.equal(canAssignProperties({ _role: 'partner' }), true);
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: null }), true);
+});
+
+test('canAssignProperties: never an owner, never no session, never an unknown role', () => {
+  assert.equal(canAssignProperties({ _role: 'owner' }), false);
+  assert.equal(canAssignProperties({ _role: 'owner', member_role: 'admin' }), false);
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: 'manager' }), false);
+  assert.equal(canAssignProperties(null), false);
+  assert.equal(canAssignProperties(undefined), false);
+});
+
+test('the Properties row strings are the spec copy', () => {
+  assert.equal(ALL_PROPERTIES, 'All properties');
+  assert.equal(NO_PROPERTIES_YET, 'No properties yet');
+});
+
+test('memberPropertyIds reads [{id, name}], tolerates bare ids, and nothing', () => {
+  assert.deepEqual(memberPropertyIds({ properties: [{ id: 'p1', name: 'Oak Hill' }, { id: 'p2', name: 'Spring Lake' }] }), ['p1', 'p2']);
+  assert.deepEqual(memberPropertyIds({ properties: ['p1', 'p2'] }), ['p1', 'p2']);
+  assert.deepEqual(memberPropertyIds({ properties: [{ name: 'no id' }, null, '', 'p3'] }), ['p3']);
+  assert.deepEqual(memberPropertyIds({ properties: [] }), []);
+  assert.deepEqual(memberPropertyIds({}), []);
+  assert.deepEqual(memberPropertyIds(null), []);
+});
+
+const ADMIN_VIEWER = { _role: 'partner', member_role: 'admin' };
+const DISPATCH_VIEWER = { _role: 'partner', member_role: 'dispatcher' };
+const TRUCK_VIEWER = { _role: 'partner', member_role: 'driver' };
+const TERRY = { id: 'm4', name: 'Terry Banks', role: 'driver', properties: [{ id: 'p1', name: 'Oak Hill' }, { id: 'p2', name: 'Spring Lake' }] };
+const NEW_TRUCK = { id: 'm5', name: 'Sam Ortiz', role: 'driver', properties: [] };
+
+test('propertiesRow: an Admin or Dispatch member reads "All properties", with no control, for every viewer', () => {
+  for (const viewer of [ADMIN_VIEWER, DISPATCH_VIEWER, TRUCK_VIEWER]) {
+    assert.deepEqual(propertiesRow({ ...DANA, properties: [] }, viewer), { kind: 'all', text: 'All properties' });
+    assert.deepEqual(propertiesRow({ id: 'm6', name: 'Lee', role: 'dispatcher', properties: [] }, viewer), { kind: 'all', text: 'All properties' });
+  }
+  // an assignment on an Admin restricts nothing, so it is not shown
+  assert.deepEqual(propertiesRow({ ...DANA, properties: [{ id: 'p1', name: 'Oak Hill' }] }, ADMIN_VIEWER), { kind: 'all', text: 'All properties' });
+});
+
+test('propertiesRow: a Truck, to an Admin or Dispatch, is a checklist', () => {
+  for (const viewer of [ADMIN_VIEWER, DISPATCH_VIEWER, { _role: 'partner' }]) {
+    assert.deepEqual(propertiesRow(TERRY, viewer), { kind: 'checklist', empty: false, note: null });
+    assert.deepEqual(propertiesRow(NEW_TRUCK, viewer), { kind: 'checklist', empty: true, note: 'No properties yet' });
+  }
+});
+
+test('propertiesRow: a Truck, to another Truck, is read-only text', () => {
+  assert.deepEqual(propertiesRow(TERRY, TRUCK_VIEWER), { kind: 'list', empty: false, text: 'Oak Hill, Spring Lake' });
+  assert.deepEqual(propertiesRow(NEW_TRUCK, TRUCK_VIEWER), { kind: 'list', empty: true, text: 'No properties yet' });
+});
+
+test('propertiesRow: bare ids are named from the list given, and never shown raw', () => {
+  const names = { p1: 'Oak Hill' };
+  assert.deepEqual(
+    propertiesRow({ ...TERRY, properties: ['p1', 'p9'] }, TRUCK_VIEWER, names),
+    { kind: 'list', empty: false, text: 'Oak Hill, 1 more' },
+  );
+});
+
+test('propertiesRow: nothing for no member', () => {
+  assert.equal(propertiesRow(null, ADMIN_VIEWER), null);
+});
+
+test('assignableProperties: {id, name}, sorted by name, each id once', () => {
+  assert.deepEqual(
+    assignableProperties([
+      { id: 'p2', name: 'Spring Lake', property_type: 'apartment' },
+      { id: 'p1', name: 'Oak Hill' },
+      { id: 'p2', name: 'Spring Lake' },
+      { name: 'no id' },
+      null,
+      { id: 'p3', address: '9 Elm St' },
+    ]),
+    [{ id: 'p3', name: '9 Elm St' }, { id: 'p1', name: 'Oak Hill' }, { id: 'p2', name: 'Spring Lake' }],
+  );
+  assert.deepEqual(assignableProperties(null), []);
+});
+
+test('sameIdSet: order does not matter, membership does', () => {
+  assert.equal(sameIdSet(['a', 'b'], ['b', 'a']), true);
+  assert.equal(sameIdSet([], []), true);
+  assert.equal(sameIdSet(['a'], ['a', 'b']), false);
+  assert.equal(sameIdSet(['a', 'b'], ['a']), false);
+  assert.equal(sameIdSet(['a', 'c'], ['a', 'b']), false);
+});
+
+test('teamErrorMessage: a 422 unknown_property is the reload sentence', () => {
+  assert.equal(UNKNOWN_PROPERTY_SENTENCE, "One of those properties isn't yours any more. Reload and try again.");
+  assert.equal(
+    teamErrorMessage(apiError(422, 'unknown_property'), 'Could not save those properties. Try again.'),
+    "One of those properties isn't yours any more. Reload and try again.",
+  );
+});
+
+test('assignProperties: PUT /partner/team/{id}/properties with {property_ids}', async () => {
+  const c = await seen(() => assignProperties('m 4', ['p1', 'p2']));
+  assert.ok(c.url.endsWith('/partner/team/m%204/properties'), c.url);
+  assert.equal(c.method, 'PUT');
+  assert.deepEqual(c.body, { property_ids: ['p1', 'p2'] });
+  assert.equal(requestsApi.assignProperties, assignProperties);
+});
+
+test('assignProperties: an empty set is sent as an empty list, not skipped', async () => {
+  const c = await seen(() => assignProperties('m4', []));
+  assert.deepEqual(c.body, { property_ids: [] });
+});
+
+test("assignProperties: View as Partner names the company, like the other Team calls", async () => {
+  const c = await seen(() => assignProperties('m4', ['p1'], { partnerId: 'a320a1c8-90b5-43a9-85a7-4ca31ed0de35' }));
+  assert.ok(c.url.endsWith('/partner/team/m4/properties?partner_id=a320a1c8-90b5-43a9-85a7-4ca31ed0de35'), c.url);
+  assert.equal(c.method, 'PUT');
+});
+
+test('idsToSave: only the ids the checklist shows, in the order picked', () => {
+  const list = [{ id: 'p1', name: 'Oak Hill' }, { id: 'p2', name: 'Spring Lake' }];
+  // p9 is an assignment the company no longer has live (archived since): it
+  // is not on the checklist, so it is not sent back to be refused with a 422.
+  assert.deepEqual(idsToSave(['p2', 'p9', 'p1'], list), ['p2', 'p1']);
+  assert.deepEqual(idsToSave([], list), []);
+  assert.deepEqual(idsToSave(['p1'], []), []);
+  assert.deepEqual(idsToSave(null, list), []);
 });
