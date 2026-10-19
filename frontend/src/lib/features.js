@@ -59,10 +59,25 @@ const OWNER_PORTAL_ONLY_TABS = [
  *
  * @param {'owner'|'partner'} role
  * @param {Array<object>|null|undefined} properties `/auth/me.properties`
- * @param {{partnerRequestsReady?: boolean}} [opts]
+ * @param {{partnerRequestsReady?: boolean, memberRole?: string|null}} [opts]
+ *   `memberRole` is the partner member's role (`admin` | `dispatcher` |
+ *   `driver`); `driver` is a Truck. Ignored for an owner.
  * @returns {Array<{id: string, label: string}>}
  */
 export function navTabsFor(role, properties, opts = {}) {
+  if (role === 'partner' && opts.memberRole === 'driver') {
+    // A Truck (tow-company team spec §2.3, P2). Their token carries no
+    // `partner_id`, so Lots and Activity (PostgREST reads) would be empty
+    // for them by construction; Lookup and Requests go through the API,
+    // which scopes them to their assigned properties. Whatever those
+    // properties are — the truck-plaza rule below is for everyone else.
+    const requestsReady = opts.partnerRequestsReady ?? partnerRequestsReady;
+    return [
+      { id: 'lookup', label: 'Lookup' },
+      ...(requestsReady ? [{ id: 'requests', label: 'Requests' }] : []),
+      { id: 'account', label: 'Account' },
+    ];
+  }
   if (role === 'partner') {
     // Requests and Lookup are the communication portal's surfaces. A partner
     // whose only properties are truck plazas (NMLD) is not on the portal —
@@ -86,4 +101,13 @@ export function navTabsFor(role, properties, opts = {}) {
   const list = Array.isArray(properties) ? properties : [];
   const portalOnly = list.length > 0 && list.every(isPortalOnly);
   return (portalOnly ? OWNER_PORTAL_ONLY_TABS : OWNER_TABS).map(t => ({ ...t }));
+}
+
+/**
+ * Where a session lands when its tab is not one it may see: a Truck on
+ * Requests (spec §2.3 — Lots and Activity do not exist for them), everyone
+ * else on Lots, as before.
+ */
+export function homeTabFor(memberRole) {
+  return memberRole === 'driver' ? 'requests' : 'lots';
 }

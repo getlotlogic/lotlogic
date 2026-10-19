@@ -11,7 +11,7 @@ import { lazyPage } from './lib/lazyPage.js';
 import { readDeepLink, cleanDeepLink, readPublicRoute, readJoinSlug, emptyDeepLink, readJoinReturnTo } from './lib/deepLink.js';
 import { NATIVE, nativeSession, nativeSignedOut, onNativeOpen, nativeDeepLink } from './lib/native.js';
 import { readActionToken, hideActionToken } from './lib/requestAction.js';
-import { navTabsFor, partnerRequestsReady, isKnownTab } from './lib/features.js';
+import { navTabsFor, partnerRequestsReady, isKnownTab, homeTabFor } from './lib/features.js';
 import { verifyState, secondsUntilResend, cooldownRetryAfter, sentAtForRetryAfter } from './lib/verifyState.js';
 import { requestsApi } from './lib/requestsApi.js';
 import { VerifyBanner } from './ui/VerifyBanner.jsx';
@@ -30,7 +30,7 @@ import { OverviewPage } from './pages/OverviewPage.jsx';
 import { AccountPage } from './pages/AccountPage.jsx';
 import { PlateLookupPage } from './pages/PlateLookupPage.jsx';
 import { SignupPage } from './pages/SignupPage.jsx';
-import { headerName, partnerFieldsFromMe } from './lib/partnerTeam.js';
+import { headerName, partnerFieldsFromMe, isTruck, askAdminSentence } from './lib/partnerTeam.js';
 
 // Heavy tabs — lazy so a phone loads a login form, not a billing console.
 // Each of these eight modules also carries `export default` for this.
@@ -116,7 +116,7 @@ export function App() {
       // The property list with its `features` flags. Absent on a backend that
       // has not deployed the portal shape yet — leave the state alone then, so
       // the nav keeps every tab rather than collapsing on a missing key.
-      if (Array.isArray(me.properties)) setProperties(me.properties);
+      if (Array.isArray(me.properties)) { setProperties(me.properties); setPropertiesKnown(true); }
       setOwner(prev => {
         if (!prev) return prev;
         // email_verified / signup_source / created_at / email_verify_sent_at
@@ -255,6 +255,10 @@ export function App() {
   // `/auth/me.properties` — the per-property `features` flags behind the
   // bottom-nav rule (spec §5) and the §5.6 upsell chips.
   const [properties, setProperties] = useState([]);
+  // True once `/auth/me` has answered with a list — until then an empty
+  // `properties` means "not known yet", not "none" (a Truck's empty state
+  // must not flash on load).
+  const [propertiesKnown, setPropertiesKnown] = useState(false);
   // id → name, for the partner Requests tab's property group headers: the
   // request shape carries `property_id`, not the name.
   const propertyNames = useMemo(() => {
@@ -339,6 +343,17 @@ export function App() {
 
   // When viewing as a partner, filter lots/violations to that partner's lots
   const effectiveUser = viewAs ? { ...viewAs, _role: 'partner' } : owner;
+  // A Truck signed in (tow-company team spec §2.3, P2). Their token carries
+  // no `partner_id`, so every PostgREST read is empty for them: they get
+  // Lookup · Requests · Account, and no page that reads `supabase.from(...)`
+  // renders for them — the tab guards below, not just the hidden nav. View
+  // as Partner is the company's own view, never a Truck's.
+  const truck = !viewAs && isTruck(owner);
+  // "Ask {Admin name} to assign you a property." once `/auth/me` says a
+  // Truck has none.
+  const noPropertyNote = truck && propertiesKnown && properties.length === 0
+    ? askAdminSentence(owner?.member_admin_name)
+    : null;
 
   const viewAsLotIdsEarly = viewAs ? lots.filter(l => l.partner_id === viewAs.id).map(l => l.id) : null;
   // SaaS accounts (all-apartment, e.g. N Style + the apartment owners) have no
@@ -371,7 +386,7 @@ export function App() {
     ]
     : [];
   const navTabs = (() => {
-    const base = navTabsFor(isOwner ? 'owner' : 'partner', properties, { partnerRequestsReady });
+    const base = navTabsFor(isOwner ? 'owner' : 'partner', properties, { partnerRequestsReady, memberRole: truck ? 'driver' : null });
     const account = base.filter(t => t.id === 'account');
     return [...base.filter(t => t.id !== 'account'), ...navExtras, ...account];
   })();
@@ -387,10 +402,16 @@ export function App() {
     // tab-persistence effect would write the bounce back to localStorage).
     // The transient `loading` flag is NOT a safe guard here: on mount this
     // effect fires before the loadData effect ever sets loading=true.
-    if (!lotsLoaded) return;
-    if (!validTabs.includes(tab)) setTab('lots');
+    // A Truck's nav never depends on lots, so it is settled at once: a Truck
+    // landing on Lots or Activity (the default tab, a remembered one, a
+    // `?property=` link) goes to Requests.
+    if (!lotsLoaded && !truck) return;
+    if (!validTabs.includes(tab)) {
+      const home = homeTabFor(truck ? 'driver' : null);
+      setTab(validTabs.includes(home) ? home : (validTabs[0] || 'account'));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [owner, viewAs, isOwner, isPlatformAdmin, tab, showMoney, lotsLoaded, validTabs.join(',')]);
+  }, [owner, viewAs, isOwner, isPlatformAdmin, tab, showMoney, lotsLoaded, truck, validTabs.join(',')]);
 
   // Apply the deep link, once, as soon as there is a session. Deliberately not
   // while signed out: the query has to survive the sign-in (LoginPage replays
@@ -464,6 +485,13 @@ export function App() {
   const loadData = useCallback(async (o, silent = false) => {
     if (!o) return;
     const myId = ++loadIdRef.current; // Each call gets a unique ID
+    // A Truck: every read below is PostgREST, which answers nothing for a
+    // token without `partner_id` — so ask nothing, and settle on empty.
+    if (isTruck(o)) {
+      setLots([]); setLotsLoaded(true); setLotStates({}); setViolations([]); setAlprViolations([]);
+      setLastRefresh(new Date());
+      return;
+    }
     if (!silent) setLoading(true);
     try {
       const filter = o._role === 'partner'
@@ -546,7 +574,7 @@ export function App() {
     // real data instead of placeholders. Backend's GET /partners/me strips
     // these fields by design (PartnerSelfResponse), so go straight to
     // Supabase — column-level RLS allows the partner to SELECT their own row.
-    if (session._role === 'partner' && supabase && session.id) {
+    if (session._role === 'partner' && !isTruck(session) && supabase && session.id) {
       supabase
         .from('enforcement_partners')
         .select('tow_fee, boot_fee, tow_truck_plates')
@@ -596,7 +624,7 @@ export function App() {
   // state, and none of them refetch it on their own.
   function refreshProperties() {
     apiFetch('/auth/me').then(me => {
-      if (me && Array.isArray(me.properties)) setProperties(me.properties);
+      if (me && Array.isArray(me.properties)) { setProperties(me.properties); setPropertiesKnown(true); }
     }).catch(() => {});
   }
 
@@ -606,6 +634,9 @@ export function App() {
     if (realtimeRef.current) { supabase?.removeChannel(realtimeRef.current); realtimeRef.current = null; }
     if (alprRealtimeRef.current) { supabase?.removeChannel(alprRealtimeRef.current); alprRealtimeRef.current = null; }
     setOwner(null); setLots([]); setLotsLoaded(false); setLotStates({}); setViolations([]); setAlprViolations([]); setPartners([]); setViewAs(null);
+    // The next account's property list is its own: a Truck signing in after
+    // an Admin on this device must not inherit the Admin's.
+    setProperties([]); setPropertiesKnown(false);
     setTab('lots');
     try { localStorage.removeItem('lotlogic_session'); localStorage.removeItem('lotlogic_email'); } catch {}
     nativeSignedOut();
@@ -727,7 +758,7 @@ export function App() {
   const violationsRef = React.useRef(violations);
   violationsRef.current = violations;
   useEffect(() => {
-    if (!supabase || !owner) return;
+    if (!supabase || !owner || isTruck(owner)) return;
     const activeCamIds = () => {
       const pending = violationsRef.current.filter(v => ['pending', 'alerted', 'acknowledged'].includes(v.status));
       return [...new Set(pending.map(v => v.camera_id).filter(Boolean))];
@@ -815,7 +846,7 @@ export function App() {
   // Subscribe to ALPR violation changes
   const alprRealtimeRef = useRef(null);
   useEffect(() => {
-    if (!owner) return;
+    if (!owner || isTruck(owner)) return;
     let active = true;
     let refreshTimer = null;
     db.getProperties(owner.id, owner._role).then(props => {
@@ -1100,8 +1131,8 @@ export function App() {
         <div key={tab + (viewAs?.id || '') + (navNonce ? `:${navNonce}` : '')} className="page-slide">
           <React.Suspense fallback={<SkeletonCards />}>
           {tab === 'overview' && isOwner && !viewAs && <OverviewPage violations={violations} lots={lots} partners={partners} lotStates={lotStates} onViewAs={handleViewAs} />}
-          {tab === 'jobs' && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
-          {tab === 'lots' && <ALPRPropertiesPage
+          {tab === 'jobs' && !truck && <JobsPage lots={effectiveLots} violations={effectiveViolations} alprViolations={alprViolations} loading={loading} lotStates={effectiveLotStates} onAction={() => loadData(owner, true)} isOwner={isOwner} deepLinkViolationId={deepLinkViolationId} user={effectiveUser} onNavigate={setTab} />}
+          {tab === 'lots' && !truck && <ALPRPropertiesPage
             user={effectiveUser}
             impersonating={!!viewAs}
             initialSelectedId={deepLink.property}
@@ -1121,9 +1152,10 @@ export function App() {
             pendingJoins={pendingJoins}
             propertyNames={propertyNames}
             onBadgeChange={bumpRequestsBadge}
+            noPropertyNote={noPropertyNote}
           />}
-          {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} plate={deepLink.plate} property={deepLink.property} />}
-          {tab === 'activity' && isOperator && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
+          {tab === 'lookup' && isOperator && <PlateLookupPage user={effectiveUser} plate={deepLink.plate} property={deepLink.property} noPropertyNote={noPropertyNote} />}
+          {tab === 'activity' && isOperator && !truck && <OperatorActivityPage violations={effectiveViolations} lots={effectiveLots} />}
           {tab === 'account' && <AccountPage user={effectiveUser} isImpersonating={!!viewAs} onLogout={logout} autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh} refreshInterval={refreshInterval} setRefreshInterval={setRefreshInterval} showFees={showMoney} isPlatformAdmin={isPlatformAdmin} properties={isOwner ? properties : []} onPropertyAdded={refreshProperties} />}
           </React.Suspense>
         </div>

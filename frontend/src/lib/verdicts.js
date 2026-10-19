@@ -167,3 +167,14 @@ export function scopeOptions({ properties, partnerLookupAvailable, companyName }
   }
   return opts;
 }
+
+// "Checked at your {n} properties" (tow-company team spec §2.2, §4): a
+// Truck's verdict JSON carries `scope: {property_count: n}` — their check
+// covers only their assigned properties, and the page says so under the
+// verdict. Absent for everyone else, so no line. One property reads "1
+// property".
+export function scopeCountLine(scope) {
+  const n = scope?.property_count;
+  if (!Number.isInteger(n) || n < 0) return null;
+  return `Checked at your ${n} ${n === 1 ? 'property' : 'properties'}`;
+}

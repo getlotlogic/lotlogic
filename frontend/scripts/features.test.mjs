@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { navTabsFor, isPortalOnly, partnerRequestsReady, KNOWN_TAB_IDS, isKnownTab } from '../src/lib/features.js';
+import { navTabsFor, isPortalOnly, partnerRequestsReady, KNOWN_TAB_IDS, isKnownTab, homeTabFor } from '../src/lib/features.js';
 
 const ids = tabs => tabs.map(t => t.id);
 const labelOf = (tabs, id) => tabs.find(t => t.id === id)?.label;
@@ -103,4 +103,60 @@ test('a partner with only truck plazas (NMLD) keeps the pre-portal nav: no Reque
 test('a partner with an apartment property (N Style) gets Requests and Lookup', () => {
   const mixed = [{ id: 'p1', property_type: 'truck_plaza' }, { id: 'p2', property_type: 'apartment', features: { cameras: false } }];
   assert.deepEqual(ids(navTabsFor('partner', mixed, { partnerRequestsReady: true })), ['lots', 'requests', 'lookup', 'activity', 'account']);
+});
+
+// ── A Truck signed in (tow-company team spec §2.3, P2) ───────
+//
+// A Truck's token carries no `partner_id`, so every surface that reads
+// PostgREST (Lots, Activity) is empty for them by construction; their nav is
+// the API-backed three, whatever their properties are.
+
+const TWO_APARTMENTS = [
+  { id: 'p1', name: 'Oak Hill', property_type: 'apartment', features: { cameras: false } },
+  { id: 'p2', name: 'Spring Lake', property_type: 'apartment', features: { cameras: true } },
+];
+
+test('a Truck gets Lookup · Requests · Account, nothing else', () => {
+  const tabs = navTabsFor('partner', TWO_APARTMENTS, { memberRole: 'driver', partnerRequestsReady: true });
+  assert.deepEqual(ids(tabs), ['lookup', 'requests', 'account']);
+  assert.equal(labelOf(tabs, 'lookup'), 'Lookup');
+  assert.equal(labelOf(tabs, 'requests'), 'Requests');
+  assert.equal(labelOf(tabs, 'account'), 'Account');
+});
+
+test('a Truck with no property yet keeps the same three (the pages carry the empty state)', () => {
+  assert.deepEqual(ids(navTabsFor('partner', [], { memberRole: 'driver', partnerRequestsReady: true })), ['lookup', 'requests', 'account']);
+  assert.deepEqual(ids(navTabsFor('partner', null, { memberRole: 'driver', partnerRequestsReady: true })), ['lookup', 'requests', 'account']);
+});
+
+test('a Truck never gets Lots or Activity, even at truck plazas', () => {
+  const plazaOnly = [{ id: 'p1', property_type: 'truck_plaza', features: { cameras: true } }];
+  const tabs = ids(navTabsFor('partner', plazaOnly, { memberRole: 'driver', partnerRequestsReady: true }));
+  assert.deepEqual(tabs, ['lookup', 'requests', 'account']);
+});
+
+test('the shipped Requests constant applies to a Truck as well', () => {
+  const tabs = ids(navTabsFor('partner', TWO_APARTMENTS, { memberRole: 'driver' }));
+  assert.equal(tabs.includes('requests'), partnerRequestsReady === true);
+  assert.equal(tabs.includes('lots'), false);
+  assert.equal(tabs.includes('activity'), false);
+});
+
+test('Admin, Dispatch and a pre-team login keep the full partner nav and the truck-plaza rule', () => {
+  const plazaOnly = [{ id: 'p1', property_type: 'truck_plaza' }];
+  for (const memberRole of ['admin', 'dispatcher', null, undefined]) {
+    assert.deepEqual(ids(navTabsFor('partner', TWO_APARTMENTS, { memberRole, partnerRequestsReady: true })),
+      ['lots', 'requests', 'lookup', 'activity', 'account'], String(memberRole));
+    assert.deepEqual(ids(navTabsFor('partner', plazaOnly, { memberRole, partnerRequestsReady: true })),
+      ['lots', 'activity', 'account'], String(memberRole));
+  }
+});
+
+test('an owner nav ignores a member role', () => {
+  assert.deepEqual(ids(navTabsFor('owner', [], { memberRole: 'driver' })), FOUR);
+});
+
+test('homeTabFor: a Truck lands on Requests, everyone else on Lots', () => {
+  assert.equal(homeTabFor('driver'), 'requests');
+  for (const r of ['admin', 'dispatcher', null, undefined]) assert.equal(homeTabFor(r), 'lots', String(r));
 });

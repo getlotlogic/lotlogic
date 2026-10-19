@@ -192,6 +192,10 @@ export function partnerFieldsFromMe(me) {
     out.member_id = me.member.id ?? null;
     out.member_role = me.member.role ?? null;
     out.member_name = me.member.name ?? null;
+    // P2 (spec §2.3): who a Truck with no property should ask. Kept as one
+    // string, not the list, so the /auth/me self-heal's equality check in
+    // App.jsx stays a plain `===`.
+    if (Array.isArray(me.member.admin_names)) out.member_admin_name = firstAdminName(me.member.admin_names);
   }
   return out;
 }
@@ -211,6 +215,11 @@ export function headerName(user) {
 
 export const ALL_PROPERTIES = 'All properties';
 export const NO_PROPERTIES_YET = 'No properties yet';
+
+/** A partner member signed in with the Truck role (the DB's third value). */
+export function isTruck(user) {
+  return !!user && user._role === 'partner' && user.member_role === 'driver';
+}
 
 /**
  * Admin and Dispatch assign properties (spec §2.2); a partner session with
@@ -288,4 +297,19 @@ export function sameIdSet(a, b) {
   if (x.size !== y.size) return false;
   for (const id of x) if (!y.has(id)) return false;
   return true;
+}
+
+/** The first non-blank name in `/auth/me.member.admin_names`, or null. */
+export function firstAdminName(adminNames) {
+  if (!Array.isArray(adminNames)) return null;
+  for (const n of adminNames) {
+    const t = typeof n === 'string' ? n.trim() : '';
+    if (t) return t;
+  }
+  return null;
+}
+
+/** A Truck with no property: spec §2.3 / §4, verbatim. */
+export function askAdminSentence(adminName) {
+  return `Ask ${adminName || 'your Admin'} to assign you a property.`;
 }

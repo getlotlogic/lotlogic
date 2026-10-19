@@ -24,7 +24,13 @@
  *   - an Admin sees "All properties" on their own row and a checklist on a
  *     Truck's; "No properties yet" for a Truck with none;
  *   - Save PUTs `{property_ids}` and toasts; a 422 `unknown_property` reads
- *     as the reload sentence; a Dispatch member sees the checklist too.
+ *     as the reload sentence; a Dispatch member sees the checklist too;
+ *   - a Truck gets Lookup · Requests · Account (no Lots, no Activity), lands
+ *     on Requests even from a remembered Activity tab, never reads PostgREST,
+ *     picks only their properties, reads "Checked at your 2 properties" under
+ *     a Lookup verdict, and sees the roster read-only;
+ *   - a Truck with no property reads "Ask {Admin name} to assign you a
+ *     property." on Requests and Lookup ("your Admin" when none is named).
  *
  * Run: cd tests && npx playwright test e2e/partner-team
  */
@@ -63,12 +69,14 @@ const FAKE_TOKEN = 'fake.jwt.for-test';
 
 type MemberRole = 'admin' | 'dispatcher' | 'driver';
 
+type Prop = { id: string; name: string };
+
 /**
  * Three members: Dana (the signed-in Admin, or Dispatch), a Truck who has not
  * set a password and has no property yet (Sam), and a Truck with an
- * assignment (Terry).
+ * assignment (Terry — the one signed in when the session is a Truck's).
  */
-function roster(danaRole: MemberRole = 'admin') {
+function roster(danaRole: MemberRole = 'admin', terryProperties: Prop[] = [OAK]) {
   return {
     members: [
       {
@@ -83,7 +91,7 @@ function roster(danaRole: MemberRole = 'admin') {
       {
         id: TERRY_ID, name: 'Terry Banks', email: 'terry@queencitytow.test', phone: '+17045550103',
         role: 'driver', last_login_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
-        has_password: true, slack_linked: false, properties: [OAK],
+        has_password: true, slack_linked: false, properties: terryProperties,
       },
     ],
   };
@@ -96,6 +104,8 @@ interface Seen {
   resends: string[];
   teamGets: number;
   assigns: Array<{ id: string; body: unknown; query: string }>;
+  /** Every PostgREST path the page asked for (`/rest/v1/...`). */
+  rest: string[];
 }
 
 interface StubOpts {
@@ -107,6 +117,10 @@ interface StubOpts {
   partnerRowDelayMs?: number;
   /** What `PUT /partner/team/{id}/properties` answers. */
   assign?: { status: number; detail?: string };
+  /** A Truck session: their `/auth/me.properties` (and Terry's roster row). */
+  truckProperties?: Prop[];
+  /** A Truck session: `/auth/me.member.admin_names`. */
+  adminNames?: string[];
 }
 
 const json = (route: Route, status: number, body: unknown) => route.fulfill({
@@ -117,11 +131,16 @@ const json = (route: Route, status: number, body: unknown) => route.fulfill({
 });
 
 async function stub(page: Page, opts: StubOpts): Promise<Seen> {
-  const seen: Seen = { invites: [], patches: [], deletes: [], resends: [], teamGets: 0, assigns: [] };
+  const seen: Seen = { invites: [], patches: [], deletes: [], resends: [], teamGets: 0, assigns: [], rest: [] };
   const memberRole = opts.memberRole ?? 'admin';
   const partner = opts.account === 'partner';
-  const me = { id: DANA_ID, name: 'Dana Reyes', email: 'dana@queencitytow.test' };
-  const team = () => roster(memberRole);
+  // A Truck session is Terry's; Dana stays the company's Admin.
+  const truck = memberRole === 'driver';
+  const truckProperties = opts.truckProperties ?? COMPANY_PROPERTIES;
+  const me = truck
+    ? { id: TERRY_ID, name: 'Terry Banks', email: 'terry@queencitytow.test' }
+    : { id: DANA_ID, name: 'Dana Reyes', email: 'dana@queencitytow.test' };
+  const team = () => (truck ? roster('admin', truckProperties) : roster(memberRole));
 
   // Lowest priority (registered first): nothing but the local build may load.
   await page.route('**/*', (route) => {
@@ -133,6 +152,7 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
 
   await page.route(`${SUPABASE}/**`, async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname.startsWith('/rest/v1/')) seen.rest.push(url.pathname);
     if (url.pathname === '/rest/v1/enforcement_partners' && partner && opts.partnerRowDelayMs !== undefined) {
       await new Promise((r) => setTimeout(r, opts.partnerRowDelayMs));
       return json(route, 200, { tow_fee: 250, boot_fee: 0, tow_truck_plates: ['QCT100'] });
@@ -176,8 +196,10 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
           type: 'partner', id: COMPANY_ID, email: me.email, display_name: COMPANY,
           company_name: COMPANY, phone: '+17045550100', is_admin: false, is_platform_admin: false,
           pending_joins: 0, pending_properties: 0, lots: [],
-          properties: COMPANY_PROPERTIES.map(asMeProperty),
-          member: { id: me.id, name: me.name, role: memberRole, properties: [], admin_names: ['Dana Reyes'] },
+          properties: (truck ? truckProperties : COMPANY_PROPERTIES).map(asMeProperty),
+          member: truck
+            ? { id: me.id, name: me.name, role: memberRole, properties: truckProperties, admin_names: opts.adminNames ?? ['Dana Reyes'] }
+            : { id: me.id, name: me.name, role: memberRole, properties: [], admin_names: ['Dana Reyes'] },
         }
         : {
           type: 'owner', id: OWNER_ID, email: 'office@springlake.test', display_name: 'Spring Lake Apartments',
@@ -205,6 +227,16 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
       const member = team().members.find((x) => x.id === id);
       return json(route, 200, {
         member: { ...member, properties: COMPANY_PROPERTIES.filter((x) => body.property_ids.includes(x.id)) },
+      });
+    }
+    // The Requests tab's list: nothing active.
+    if (m === 'GET' && p === '/apartment/requests') return json(route, 200, { items: [] });
+    // The Lookup "All properties" check: a Truck's verdict says how many
+    // properties it covered (spec §2.2).
+    if (m === 'GET' && p === '/partner/lookup') {
+      return json(route, 200, {
+        verdict: 'not_registered', matches: [],
+        ...(truck ? { scope: { property_count: truckProperties.length } } : {}),
       });
     }
     if (m === 'POST' && p === '/partner/team/invite') {
@@ -535,5 +567,104 @@ test.describe('partner Team: properties (P2)', () => {
     await expect(page.locator('.toast.success')).toHaveText('Properties saved for Terry Banks');
     // Still no roster changes for Dispatch.
     await expect(team(page).getByRole('button', { name: 'Add a teammate' })).toHaveCount(0);
+  });
+});
+
+/**
+ * Records, from the first paint, whether a page a Truck must never reach was
+ * ever on screen — even for one frame before App.jsx re-routes the tab. A
+ * hidden nav button is not enough (spec §2.3): the render itself is guarded.
+ * The markers are each page's own first-render text: Lots (ALPRPropertiesPage)
+ * opens on "Loading properties..." (ASCII dots; Lookup's uses "…"), Activity
+ * (OperatorActivityPage) on "Your Activity".
+ */
+async function watchForbiddenPages(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __forbiddenSeen: string[] };
+    w.__forbiddenSeen = [];
+    const markers: Array<[string, string]> = [['lots', 'Loading properties...'], ['activity', 'Your Activity']];
+    const check = () => {
+      const text = document.body ? document.body.textContent || '' : '';
+      for (const [id, marker] of markers) {
+        if (text.includes(marker) && !w.__forbiddenSeen.includes(id)) w.__forbiddenSeen.push(id);
+      }
+    };
+    new MutationObserver(check).observe(document, { subtree: true, childList: true, characterData: true });
+  });
+}
+const forbiddenSeen = (page: Page) => page.evaluate(() => (window as unknown as { __forbiddenSeen: string[] }).__forbiddenSeen);
+
+test.describe('a Truck signed in (P2)', () => {
+  const navTabs = (page: Page) => page.locator('.bottom-nav').getByRole('tab');
+
+  test('Lookup · Requests · Account, landing on Requests, and no PostgREST read anywhere', async ({ page }) => {
+    // A fresh device opens on the default tab, Lots — which a Truck may not
+    // see, and whose page would read PostgREST if it rendered at all.
+    await watchForbiddenPages(page);
+    const seen = await stub(page, { account: 'partner', memberRole: 'driver' });
+    await signIn(page, 'terry@queencitytow.test');
+
+    await expect(page.locator('.header-name')).toHaveText('Terry Banks');
+    await expect(navTabs(page)).toHaveText(['Lookup', 'Requests', 'Account']);
+    await expect(page.getByRole('tab', { name: 'Lots' })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: 'Activity' })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: 'Requests' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('heading', { name: 'REQUESTS' })).toBeVisible();
+    await expect(page.getByText('Nothing active.')).toBeVisible();
+
+    // Lookup: only their properties, and the verdict says how many it covered.
+    await page.getByRole('tab', { name: 'Lookup' }).click();
+    const picker = page.locator('#lookup-scope');
+    await expect(picker.locator('option')).toHaveText(['Oak Hill Commons', 'Spring Lake Apartments', `All ${COMPANY} properties`]);
+    await picker.selectOption('all');
+    await page.locator('#lookup-plate').fill('ABC1234');
+    await page.getByRole('button', { name: 'Check', exact: true }).click();
+    await expect(page.getByTestId('lookup-scope-line')).toHaveText('Checked at your 2 properties');
+
+    // Account: the roster read-only, their own properties named, no company
+    // plates editor (a PostgREST write).
+    await page.getByRole('tab', { name: 'Account' }).click();
+    await expect(team(page).getByTestId('team-member')).toHaveCount(3);
+    await expect(props(page, 'Terry Banks')).toHaveText('PropertiesOak Hill Commons, Spring Lake Apartments');
+    await expect(props(page, 'Sam Ortiz')).toHaveText('PropertiesNo properties yet');
+    await expect(props(page, 'Dana Reyes')).toHaveText('PropertiesAll properties');
+    await expect(team(page).getByRole('checkbox')).toHaveCount(0);
+    await expect(page.locator('#tow-truck-plates')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText(/\bdriver\b/i);
+
+    expect(seen.rest).toEqual([]);
+    expect(await forbiddenSeen(page)).toEqual([]);
+  });
+
+  test('a remembered Activity tab (this device\'s last session) still lands on Requests', async ({ page }) => {
+    await page.addInitScript(() => { try { localStorage.setItem('lotlogic_tab', 'activity'); } catch { /* blocked */ } });
+    await watchForbiddenPages(page);
+    const seen = await stub(page, { account: 'partner', memberRole: 'driver' });
+    await signIn(page, 'terry@queencitytow.test');
+    await expect(page.getByRole('tab', { name: 'Requests' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('heading', { name: 'REQUESTS' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Activity' })).toHaveCount(0);
+    expect(seen.rest).toEqual([]);
+    expect(await forbiddenSeen(page)).toEqual([]);
+  });
+
+  test('with no property yet: "Ask {Admin name} to assign you a property." on Requests and Lookup', async ({ page }) => {
+    const seen = await stub(page, { account: 'partner', memberRole: 'driver', truckProperties: [], adminNames: ['Dana Reyes', 'Lee Park'] });
+    await signIn(page, 'terry@queencitytow.test');
+
+    await expect(navTabs(page)).toHaveText(['Lookup', 'Requests', 'Account']);
+    await expect(page.getByText('Ask Dana Reyes to assign you a property.')).toBeVisible();
+    await expect(page.getByText('Nothing active.')).toHaveCount(0);
+
+    await page.getByRole('tab', { name: 'Lookup' }).click();
+    await expect(page.getByText('Ask Dana Reyes to assign you a property.')).toBeVisible();
+    await expect(page.locator('#lookup-plate')).toHaveCount(0);
+    expect(seen.rest).toEqual([]);
+  });
+
+  test('with no Admin named, the sentence asks "your Admin"', async ({ page }) => {
+    await stub(page, { account: 'partner', memberRole: 'driver', truckProperties: [], adminNames: [] });
+    await signIn(page, 'terry@queencitytow.test');
+    await expect(page.getByText('Ask your Admin to assign you a property.')).toBeVisible();
   });
 });

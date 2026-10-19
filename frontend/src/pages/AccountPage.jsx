@@ -8,6 +8,7 @@ import { TeamSection } from './property/TeamSection.jsx';
 import { AddPropertyForm } from '../ui/AddPropertyForm.jsx';
 import { SlackSection } from './account/SlackSection.jsx';
 import { PartnerTeamSection } from './account/PartnerTeamSection.jsx';
+import { isTruck } from '../lib/partnerTeam.js';
 import { passwordError, PASSWORD_MIN } from '../lib/signupValidation.js';
 
 // ── Account / Settings page ────────────────────────────────────
@@ -336,7 +337,11 @@ export function AccountPage({ user, isImpersonating, onLogout, autoRefresh, setA
 
       {/* Tow-truck plates — enforcement partners only. Used by the tow-confirm
           edge function to match camera sightings against partner trucks. */}
-      {!isOwner && <TowTruckPlatesEditor user={user} />}
+      {/* Not for a Truck (tow-company team spec §2.3): the editor reads and
+          writes the company row through PostgREST, which a Truck's token
+          (no `partner_id`) cannot reach — and the company's trucks are an
+          Admin's setting. */}
+      {!isOwner && !isTruck(user) && <TowTruckPlatesEditor user={user} />}
 
       {/* The tow company's Team (spec 2026-10-18-tow-company-team §1.4), next
           to Slack. Hides itself when `/partner/team` 404s. */}

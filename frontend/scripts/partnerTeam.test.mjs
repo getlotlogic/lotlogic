@@ -15,8 +15,9 @@ import {
   lastAdminBlocked, LAST_ADMIN_REASON,
   teamErrorMessage, removeConfirmText,
   sessionNames, partnerFieldsFromMe, headerName,
-  canAssignProperties, ALL_PROPERTIES, NO_PROPERTIES_YET, UNKNOWN_PROPERTY_SENTENCE,
+  isTruck, canAssignProperties, ALL_PROPERTIES, NO_PROPERTIES_YET, UNKNOWN_PROPERTY_SENTENCE,
   memberPropertyIds, propertiesRow, assignableProperties, sameIdSet, idsToSave,
+  firstAdminName, askAdminSentence,
 } from '../src/lib/partnerTeam.js';
 import {
   listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate, requestsApi, teamPath,
@@ -355,6 +356,19 @@ test('teamPath leaves a plain call alone and adds ?partner_id= for an impersonat
 
 // ── P2: assignments and scope (spec §2.2, §2.3, §4) ──────────
 
+test('isTruck: a partner member whose role is the third one', () => {
+  assert.equal(isTruck({ _role: 'partner', member_role: 'driver' }), true);
+  assert.equal(isTruck({ _role: 'partner', member_role: 'admin' }), false);
+  assert.equal(isTruck({ _role: 'partner', member_role: 'dispatcher' }), false);
+  // a company login from before team logins is the company's Admin
+  assert.equal(isTruck({ _role: 'partner' }), false);
+  assert.equal(isTruck({ _role: 'partner', member_role: null }), false);
+  // never an owner, never no session
+  assert.equal(isTruck({ _role: 'owner', member_role: 'driver' }), false);
+  assert.equal(isTruck(null), false);
+  assert.equal(isTruck(undefined), false);
+});
+
 test('canAssignProperties: an Admin and Dispatch may, a Truck may not', () => {
   assert.equal(canAssignProperties({ _role: 'partner', member_role: 'admin' }), true);
   assert.equal(canAssignProperties({ _role: 'partner', member_role: 'dispatcher' }), true);
@@ -455,6 +469,38 @@ test('teamErrorMessage: a 422 unknown_property is the reload sentence', () => {
   assert.equal(
     teamErrorMessage(apiError(422, 'unknown_property'), 'Could not save those properties. Try again.'),
     "One of those properties isn't yours any more. Reload and try again.",
+  );
+});
+
+test('firstAdminName: the first name the backend lists, skipping blanks', () => {
+  assert.equal(firstAdminName(['Austin Ward', 'Lee Park']), 'Austin Ward');
+  assert.equal(firstAdminName(['  ', ' Lee Park ']), 'Lee Park');
+  assert.equal(firstAdminName([]), null);
+  assert.equal(firstAdminName(null), null);
+  assert.equal(firstAdminName('Austin Ward'), null);
+});
+
+test('askAdminSentence: the spec empty state, with the Admin or "your Admin"', () => {
+  assert.equal(askAdminSentence('Austin Ward'), 'Ask Austin Ward to assign you a property.');
+  assert.equal(askAdminSentence(null), 'Ask your Admin to assign you a property.');
+  assert.equal(askAdminSentence(''), 'Ask your Admin to assign you a property.');
+});
+
+test("partnerFieldsFromMe: a Truck's /auth/me carries the first Admin's name", () => {
+  assert.deepEqual(
+    partnerFieldsFromMe({
+      type: 'partner', company_name: 'Queen City Towing',
+      member: { id: 'm4', name: 'Terry Banks', role: 'driver', properties: [], admin_names: ['Austin Ward', 'Dana Reyes'] },
+    }),
+    {
+      company_name: 'Queen City Towing', business_name: 'Queen City Towing',
+      member_id: 'm4', member_role: 'driver', member_name: 'Terry Banks', member_admin_name: 'Austin Ward',
+    },
+  );
+  // an empty list still says so: the fallback sentence names "your Admin"
+  assert.equal(
+    partnerFieldsFromMe({ type: 'partner', member: { id: 'm4', name: 'Terry', role: 'driver', admin_names: [] } }).member_admin_name,
+    null,
   );
 });
 

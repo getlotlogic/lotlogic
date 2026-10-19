@@ -73,7 +73,13 @@ const COPY = {
   rejectPlaceholder: 'Tell us why (required)',
 };
 
-export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeChange }) {
+// `noPropertyNote`: a Truck with no property yet (tow-company team spec
+// §2.3) reads "Ask {Admin name} to assign you a property." where the empty
+// list would say "Nothing active." — App.jsx builds the sentence. The list
+// itself is already theirs: `/apartment/requests` scopes a Truck to their
+// assigned properties server-side, and `propertyNames` is their own
+// `/auth/me.properties`.
+export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeChange, noPropertyNote = null }) {
   const { addToast } = useToast();
   const [items, setItems] = useState([]);
   const [recent, setRecent] = useState([]);
@@ -134,9 +140,11 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
   const toDo = badgeCount({ ...countActionable(items), pendingProps: pending.length, pendingJoins });
   // The Recent chip is a second view, so it gets its own empty state — the
   // spec's "Nothing active." sentence is a claim about the active list.
-  const empty = emptyStateKind(chip) === 'recent'
-    ? { title: COPY.emptyRecentTitle, body: COPY.emptyRecentBody }
-    : { title: COPY.emptyTitle, body: COPY.emptyBody };
+  const empty = noPropertyNote
+    ? { title: noPropertyNote, body: '' }
+    : emptyStateKind(chip) === 'recent'
+      ? { title: COPY.emptyRecentTitle, body: COPY.emptyRecentBody }
+      : { title: COPY.emptyTitle, body: COPY.emptyBody };
 
   // Every write ends the same way: tell App the badge moved, then re-read the
   // list rather than patching a row by hand — the server owns the state
@@ -269,9 +277,11 @@ export function PartnerRequestsPage({ pendingJoins = 0, propertyNames, onBadgeCh
           padding: 18, textAlign: 'center',
         }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>{empty.title}</div>
-          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.5 }}>
-            {empty.body}
-          </div>
+          {empty.body && (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.5 }}>
+              {empty.body}
+            </div>
+          )}
         </div>
       )}
 
