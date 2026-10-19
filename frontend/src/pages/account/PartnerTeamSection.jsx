@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate } from '../../lib/requestsApi.js';
+import { isImpersonating } from '../../lib/db.js';
 import { useToast } from '../../ui/Toast.jsx';
 import {
   TEAM_ROLES, teamRoleLabel, canManageTeam, teamMembers, buildInvite,
@@ -42,6 +43,9 @@ export function PartnerTeamSection({ user }) {
   const { addToast } = useToast();
   const manage = canManageTeam(user);
   const companyName = user?.company_name || user?.business_name || '';
+  // "View as Partner": the session is a platform admin's, `user` is the company
+  // viewed; every call names it, and the backend allows that for an admin only.
+  const partnerId = isImpersonating(user?.id) ? user.id : undefined;
 
   // null = first load in flight; false = 404, hide the section; true = show it.
   const [available, setAvailable] = useState(null);
@@ -54,7 +58,7 @@ export function PartnerTeamSection({ user }) {
   const [busyId, setBusyId] = useState(null); // member id of a row mid-action
 
   const load = useCallback(() => (
-    listTeam()
+    listTeam({ partnerId })
       .then(res => { setMembers(teamMembers(res)); setLoadFailed(false); setAvailable(true); })
       .catch(e => {
         if (e && e.status === 404) { setAvailable(false); return; }
@@ -76,7 +80,7 @@ export function PartnerTeamSection({ user }) {
     setInviting(true);
     setError('');
     try {
-      await inviteTeammate(built.body);
+      await inviteTeammate(built.body, { partnerId });
       setInvite(EMPTY_INVITE);
       setShowInvite(false);
       addToast(`Invite sent to ${built.body.email}`, 'success');
@@ -92,7 +96,7 @@ export function PartnerTeamSection({ user }) {
     if (role === m.role) return;
     setBusyId(m.id);
     try {
-      await patchTeammate(m.id, { role });
+      await patchTeammate(m.id, { role }, { partnerId });
       setMembers(prev => prev.map(x => (x.id === m.id ? { ...x, role } : x)));
       addToast(`${m.name || 'That teammate'} is now ${teamRoleLabel(role)}`, 'success');
     } catch (e2) {
@@ -106,7 +110,7 @@ export function PartnerTeamSection({ user }) {
     if (!window.confirm(removeConfirmText(m, companyName))) return;
     setBusyId(m.id);
     try {
-      await removeTeammate(m.id);
+      await removeTeammate(m.id, { partnerId });
       setMembers(prev => prev.filter(x => x.id !== m.id));
     } catch (e2) {
       addToast(teamErrorMessage(e2, 'Could not remove access. Try again.'), 'error');
@@ -118,7 +122,7 @@ export function PartnerTeamSection({ user }) {
   async function resend(m) {
     setBusyId(m.id);
     try {
-      await resendTeammate(m.id);
+      await resendTeammate(m.id, { partnerId });
       addToast(m.email ? `Set-up link sent to ${m.email}` : 'Set-up link sent', 'success');
     } catch (e2) {
       addToast(teamErrorMessage(e2, 'Could not send the set-up link. Try again.'), 'error');

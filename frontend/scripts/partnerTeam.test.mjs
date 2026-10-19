@@ -17,7 +17,7 @@ import {
   sessionNames, partnerFieldsFromMe, headerName,
 } from '../src/lib/partnerTeam.js';
 import {
-  listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate, requestsApi,
+  listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate, requestsApi, teamPath,
 } from '../src/lib/requestsApi.js';
 
 // ── role labels ──────────────────────────────────────────────
@@ -337,4 +337,15 @@ test('resendTeammate: POST /partner/team/{id}/resend', async () => {
   assert.equal(c.method, 'POST');
   assert.deepEqual(c.body, {});
   assert.equal(requestsApi.resendTeammate, resendTeammate);
+});
+
+
+// ── View as Partner (2026-10-19): a platform admin names the company it acts for ──
+test('teamPath leaves a plain call alone and adds ?partner_id= for an impersonated company', () => {
+  assert.equal(teamPath('/partner/team'), '/partner/team');
+  assert.equal(teamPath('/partner/team', undefined), '/partner/team');
+  assert.equal(teamPath('/partner/team', ''), '/partner/team');
+  assert.equal(teamPath('/partner/team', 'a320a1c8-90b5-43a9-85a7-4ca31ed0de35'),
+    '/partner/team?partner_id=a320a1c8-90b5-43a9-85a7-4ca31ed0de35');
+  assert.equal(teamPath('/partner/team/abc/resend', 'x y&z'), '/partner/team/abc/resend?partner_id=x%20y%26z');
 });

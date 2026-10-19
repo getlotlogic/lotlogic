@@ -235,19 +235,25 @@ export const setSlackFeedChannel = (body) => post('/partner/slack/feed-channel',
 // `email_in_use` / `last_admin` as `.code`.
 
 /** GET /partner/team → `{members: [{id, name, email, phone, role, last_login_at, has_password, slack_linked, properties}]}` */
-export const listTeam = () => get('/partner/team');
+/** `?partner_id=` on a Team call: a platform admin acting for the company it
+ *  is viewing as (tow-company team spec §1.3, 2026-10-19). Anyone else leaves
+ *  it off and acts in their own company. */
+export const teamPath = (path, partnerId) =>
+  partnerId ? `${path}?partner_id=${encodeURIComponent(String(partnerId))}` : path;
+
+export const listTeam = ({ partnerId } = {}) => get(teamPath('/partner/team', partnerId));
 
 /** POST /partner/team/invite `{name, email, phone?, role}` — 409 `email_in_use` */
-export const inviteTeammate = (body) => post('/partner/team/invite', body);
+export const inviteTeammate = (body, { partnerId } = {}) => post(teamPath('/partner/team/invite', partnerId), body);
 
 /** PATCH /partner/team/{member_id} `{role?, phone?, name?}` — 409 `last_admin` */
-export const patchTeammate = (memberId, body) => patch(`/partner/team/${seg(memberId)}`, body);
+export const patchTeammate = (memberId, body, { partnerId } = {}) => patch(teamPath(`/partner/team/${seg(memberId)}`, partnerId), body);
 
 /** DELETE /partner/team/{member_id} — `removed_at = now()`, 409 `last_admin` */
-export const removeTeammate = (memberId) => del(`/partner/team/${seg(memberId)}`);
+export const removeTeammate = (memberId, { partnerId } = {}) => del(teamPath(`/partner/team/${seg(memberId)}`, partnerId));
 
 /** POST /partner/team/{member_id}/resend — a new set-password mail */
-export const resendTeammate = (memberId) => post(`/partner/team/${seg(memberId)}/resend`, {});
+export const resendTeammate = (memberId, { partnerId } = {}) => post(teamPath(`/partner/team/${seg(memberId)}/resend`, partnerId), {});
 
 // ── /requests/action (public, exact paths) ───────────────────
 
