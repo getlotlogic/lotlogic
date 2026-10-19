@@ -124,6 +124,8 @@ interface StubOpts {
   truckProperties?: Prop[];
   /** A Truck session: `/auth/me.member.admin_names`. */
   adminNames?: string[];
+  /** What `GET /auth/me` answers instead of its body (an outage). */
+  meStatus?: number;
   /** An Admin or Dispatch session: rows added to `/auth/me.properties` as given. */
   meExtraProperties?: Array<Record<string, unknown>>;
 }
@@ -196,6 +198,7 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
       });
     }
     if (m === 'GET' && p === '/auth/me') {
+      if (opts.meStatus) return json(route, opts.meStatus, { detail: 'unavailable' });
       return json(route, 200, partner
         ? {
           type: 'partner', id: COMPANY_ID, email: me.email, display_name: COMPANY,
@@ -688,6 +691,18 @@ test.describe('a Truck signed in (P2)', () => {
     await page.getByRole('tab', { name: 'Lookup' }).click();
     await expect(page.getByText('Ask Dana Reyes to assign you a property.')).toBeVisible();
     await expect(page.locator('#lookup-plate')).toHaveCount(0);
+    expect(seen.rest).toEqual([]);
+  });
+
+  test('Lookup never falls back to a PostgREST read when /auth/me fails', async ({ page }) => {
+    // db.getProperties reads the properties table when /auth/me throws; a
+    // Truck's token has no partner_id, so that read could only come back
+    // empty, and a Truck reads nothing through PostgREST at all.
+    const seen = await stub(page, { account: 'partner', memberRole: 'driver', meStatus: 503 });
+    await signIn(page, 'terry@queencitytow.test');
+    await expect(navTabs(page)).toHaveText(['Lookup', 'Requests', 'Account']);
+    await page.getByRole('tab', { name: 'Lookup' }).click();
+    await expect(page.getByText('No apartment properties assigned to this account.')).toBeVisible();
     expect(seen.rest).toEqual([]);
   });
 

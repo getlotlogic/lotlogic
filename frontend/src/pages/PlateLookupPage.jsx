@@ -153,7 +153,9 @@ export function PlateLookupPage({ user, plate: deepPlate = null, property: deepP
 
   useEffect(() => {
     let alive = true;
-    db.getProperties(user.id, user._role)
+    // A Truck reads nothing through PostgREST (their token has no
+    // partner_id): if /auth/me fails, no column-read fallback.
+    db.getProperties(user.id, user._role, { columnFallback: !isTruck(user) })
       .then(p => {
         if (!alive) return;
         const apts = scopePropsToPartner(p || [], user).filter(x => x.property_type === 'apartment')
