@@ -4,6 +4,7 @@ import { apiFetch } from '../lib/api.js';
 import { scopePropsToPartner } from '../shared/scope.js';
 import { PlateTimeline } from './lot/PlateTimeline.jsx';
 import { verdictPresentation, resolveAllScopeResult, scopeOptions, scopeCountLine } from '../lib/verdicts.js';
+import { isTruck } from '../lib/partnerTeam.js';
 
 const REMEMBERED_KEY = 'lotlogic_lookup_property';
 const ALL_SCOPE = 'all';
@@ -267,7 +268,7 @@ export function PlateLookupPage({ user, plate: deepPlate = null, property: deepP
   }
 
   const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.06em', margin: '16px 0 6px' };
-  const options = scopeOptions({ properties, partnerLookupAvailable, companyName: user.company_name });
+  const options = scopeOptions({ properties, partnerLookupAvailable, companyName: user.company_name, truck: isTruck(user) });
   const selectedPropertyName = properties?.find(p => p.id === scopeValue)?.name;
 
   return (

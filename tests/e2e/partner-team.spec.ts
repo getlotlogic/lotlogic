@@ -644,7 +644,7 @@ test.describe('a Truck signed in (P2)', () => {
     // Lookup: only their properties, and the verdict says how many it covered.
     await page.getByRole('tab', { name: 'Lookup' }).click();
     const picker = page.locator('#lookup-scope');
-    await expect(picker.locator('option')).toHaveText(['Oak Hill Commons', 'Spring Lake Apartments', `All ${COMPANY} properties`]);
+    await expect(picker.locator('option')).toHaveText(['Oak Hill Commons', 'Spring Lake Apartments', 'All your properties']);
     await picker.selectOption('all');
     await page.locator('#lookup-plate').fill('ABC1234');
     await page.getByRole('button', { name: 'Check', exact: true }).click();

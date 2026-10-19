@@ -303,6 +303,11 @@ test('scopeOptions includes "All" labelled from companyName when available', () 
   assert.equal(all.label, 'All N Style properties');
 });
 
+test('scopeOptions: for a Truck, "All your properties" — their check covers only theirs', () => {
+  const opts = scopeOptions({ properties: [{ id: 'p1', name: 'Spring Lake' }], partnerLookupAvailable: true, companyName: 'N Style', truck: true });
+  assert.equal(opts.find(o => o.value === 'all').label, 'All your properties');
+});
+
 test('scopeOptions falls back to "All properties" with no companyName', () => {
   const opts = scopeOptions({ properties: [], partnerLookupAvailable: true, companyName: '' });
   const all = opts.find(o => o.value === 'all');
