@@ -94,15 +94,15 @@ export function PartnerTeamSection({ user }) {
   useEffect(() => { load(); }, [load, user?.id]);
 
   // Only someone who may assign needs the company's property list; a Truck's
-  // section never asks for it.
+  // section never asks for it, nor does a section hidden by a 404.
   useEffect(() => {
-    if (!assign || !user?.id) return undefined;
+    if (!assign || !user?.id || available !== true) return undefined;
     let alive = true;
     db.getProperties(user.id, user._role)
       .then(p => { if (alive) setCompanyProperties(assignableProperties(scopePropsToPartner(p || [], user))); })
       .catch(() => { if (alive) setCompanyProperties([]); });
     return () => { alive = false; };
-  }, [assign, user?.id, user?._role]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [assign, available, user?.id, user?._role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const propertyNames = useMemo(() => {
     const map = {};

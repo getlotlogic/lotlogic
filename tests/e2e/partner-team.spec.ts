@@ -106,6 +106,8 @@ interface Seen {
   deletes: string[];
   resends: string[];
   teamGets: number;
+  /** How many times the page asked for `GET /auth/me`. */
+  meGets: number;
   assigns: Array<{ id: string; body: unknown; query: string }>;
   /** Every PostgREST path the page asked for (`/rest/v1/...`). */
   rest: string[];
@@ -124,6 +126,8 @@ interface StubOpts {
   truckProperties?: Prop[];
   /** A Truck session: `/auth/me.member.admin_names`. */
   adminNames?: string[];
+  /** What `GET /partner/team` answers instead of the roster (404: a backend without the route). */
+  teamStatus?: number;
   /** What `GET /auth/me` answers instead of its body (an outage). */
   meStatus?: number;
   /** An Admin or Dispatch session: rows added to `/auth/me.properties` as given. */
@@ -138,7 +142,7 @@ const json = (route: Route, status: number, body: unknown) => route.fulfill({
 });
 
 async function stub(page: Page, opts: StubOpts): Promise<Seen> {
-  const seen: Seen = { invites: [], patches: [], deletes: [], resends: [], teamGets: 0, assigns: [], rest: [] };
+  const seen: Seen = { invites: [], patches: [], deletes: [], resends: [], teamGets: 0, meGets: 0, assigns: [], rest: [] };
   const memberRole = opts.memberRole ?? 'admin';
   const partner = opts.account === 'partner';
   // A Truck session is Terry's; Dana stays the company's Admin.
@@ -198,6 +202,7 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
       });
     }
     if (m === 'GET' && p === '/auth/me') {
+      seen.meGets += 1;
       if (opts.meStatus) return json(route, opts.meStatus, { detail: 'unavailable' });
       return json(route, 200, partner
         ? {
@@ -225,6 +230,7 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
     }
     if (m === 'GET' && p === '/partner/team') {
       seen.teamGets += 1;
+      if (opts.teamStatus) return json(route, opts.teamStatus, { detail: 'not_found' });
       return json(route, 200, team());
     }
     const props = p.match(/^\/partner\/team\/([^/]+)\/properties$/);
@@ -583,6 +589,25 @@ test.describe('partner Team: properties (P2)', () => {
     await terry.getByRole('checkbox', { name: 'Spring Lake Apartments' }).check();
     await terry.getByRole('button', { name: 'Save properties for Terry Banks' }).click();
     await expect.poll(() => seen.assigns).toEqual([{ id: TERRY_ID, body: { property_ids: [OAK_ID, SPRING_ID] }, query: '' }]);
+  });
+
+  test('a backend with no Team route: the section hides and never asks for the property list', async ({ page }) => {
+    const seen = await stub(page, { account: 'partner', teamStatus: 404 });
+    // Waits until no new /auth/me has arrived for a moment.
+    const settle = async () => {
+      let last = -1;
+      while (seen.meGets !== last) { last = seen.meGets; await page.waitForTimeout(400); }
+    };
+    await signIn(page, 'dana@queencitytow.test');
+    await expect(page.locator('.header-name')).toHaveText('Dana Reyes');
+    await settle();
+    const before = seen.meGets;
+
+    await openAccount(page);
+    await expect.poll(() => seen.teamGets).toBeGreaterThanOrEqual(1);
+    await settle();
+    await expect(page.locator('#team-section')).toHaveCount(0);
+    expect(seen.meGets).toBe(before);
   });
 
   test('a Dispatch member sees the checklist too, and saves', async ({ page }) => {
