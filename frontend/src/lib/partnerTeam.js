@@ -245,13 +245,18 @@ export function memberPropertyIds(member) {
  * What a member's Properties row shows to `viewer`:
  *   `{kind: 'all', text}`              an Admin or Dispatch member — no control;
  *   `{kind: 'checklist', empty, note}` a Truck, to someone who may assign;
- *   `{kind: 'list', empty, text}`      a Truck, to another Truck — read only.
+ *   `{kind: 'list', empty, text}`      a Truck, to themself — read only;
+ *   `null`                              another Truck, to a Truck: the roster
+ *                                       names only the properties the viewer
+ *                                       covers too, so the row would be
+ *                                       false (spec §2.4).
  * `names` (id → name) names a bare id; one it cannot name is counted, never
  * shown raw.
  */
 export function propertiesRow(member, viewer, names = {}) {
   if (!member) return null;
   if (member.role !== 'driver') return { kind: 'all', text: ALL_PROPERTIES };
+  if (isTruck(viewer) && member.id !== viewer.member_id) return null;
   const list = Array.isArray(member.properties) ? member.properties : [];
   const empty = memberPropertyIds(member).length === 0;
   if (canAssignProperties(viewer)) return { kind: 'checklist', empty, note: empty ? NO_PROPERTIES_YET : null };

@@ -424,15 +424,20 @@ test('propertiesRow: a Truck, to an Admin or Dispatch, is a checklist', () => {
   }
 });
 
-test('propertiesRow: a Truck, to another Truck, is read-only text', () => {
-  assert.deepEqual(propertiesRow(TERRY, TRUCK_VIEWER), { kind: 'list', empty: false, text: 'Oak Hill, Spring Lake' });
-  assert.deepEqual(propertiesRow(NEW_TRUCK, TRUCK_VIEWER), { kind: 'list', empty: true, text: 'No properties yet' });
+test('propertiesRow: a Truck reads their own row as text, and gets no row for another Truck', () => {
+  assert.deepEqual(propertiesRow(TERRY, { ...TRUCK_VIEWER, member_id: 'm4' }), { kind: 'list', empty: false, text: 'Oak Hill, Spring Lake' });
+  assert.deepEqual(propertiesRow(NEW_TRUCK, { ...TRUCK_VIEWER, member_id: 'm5' }), { kind: 'list', empty: true, text: 'No properties yet' });
+  // The backend shows a Truck only the overlap with their own properties, so
+  // another Truck's row would read "No properties yet" when it is not true.
+  assert.equal(propertiesRow(NEW_TRUCK, { ...TRUCK_VIEWER, member_id: 'm4' }), null);
+  assert.equal(propertiesRow(TERRY, { ...TRUCK_VIEWER, member_id: 'm5' }), null);
+  assert.equal(propertiesRow(TERRY, TRUCK_VIEWER), null);
 });
 
 test('propertiesRow: bare ids are named from the list given, and never shown raw', () => {
   const names = { p1: 'Oak Hill' };
   assert.deepEqual(
-    propertiesRow({ ...TERRY, properties: ['p1', 'p9'] }, TRUCK_VIEWER, names),
+    propertiesRow({ ...TERRY, properties: ['p1', 'p9'] }, { ...TRUCK_VIEWER, member_id: 'm4' }, names),
     { kind: 'list', empty: false, text: 'Oak Hill, 1 more' },
   );
 });

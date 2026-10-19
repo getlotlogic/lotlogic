@@ -683,7 +683,9 @@ test.describe('a Truck signed in (P2)', () => {
     await page.getByRole('tab', { name: 'Account' }).click();
     await expect(team(page).getByTestId('team-member')).toHaveCount(3);
     await expect(props(page, 'Terry Banks')).toHaveText('PropertiesOak Hill Commons, Spring Lake Apartments');
-    await expect(props(page, 'Sam Ortiz')).toHaveText('PropertiesNo properties yet');
+    // Another Truck's row carries no Properties row: the backend names only
+    // the overlap with Terry's, so "No properties yet" there would be false.
+    await expect(props(page, 'Sam Ortiz')).toHaveCount(0);
     await expect(props(page, 'Dana Reyes')).toHaveText('PropertiesAll properties');
     await expect(team(page).getByRole('checkbox')).toHaveCount(0);
     await expect(page.locator('#tow-truck-plates')).toHaveCount(0);
