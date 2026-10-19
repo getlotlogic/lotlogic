@@ -15,9 +15,13 @@ import {
   lastAdminBlocked, LAST_ADMIN_REASON,
   teamErrorMessage, removeConfirmText,
   sessionNames, partnerFieldsFromMe, headerName,
+  isTruck, canAssignProperties, ALL_PROPERTIES, NO_PROPERTIES_YET, UNKNOWN_PROPERTY_SENTENCE,
+  memberPropertyIds, propertiesRow, assignableProperties, sameIdSet, idsToSave,
+  firstAdminName, askAdminSentence,
 } from '../src/lib/partnerTeam.js';
 import {
   listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate, requestsApi, teamPath,
+  assignProperties,
 } from '../src/lib/requestsApi.js';
 
 // ── role labels ──────────────────────────────────────────────
@@ -348,4 +352,207 @@ test('teamPath leaves a plain call alone and adds ?partner_id= for an impersonat
   assert.equal(teamPath('/partner/team', 'a320a1c8-90b5-43a9-85a7-4ca31ed0de35'),
     '/partner/team?partner_id=a320a1c8-90b5-43a9-85a7-4ca31ed0de35');
   assert.equal(teamPath('/partner/team/abc/resend', 'x y&z'), '/partner/team/abc/resend?partner_id=x%20y%26z');
+});
+
+// ── P2: assignments and scope (spec §2.2, §2.3, §4) ──────────
+
+test('isTruck: a partner member whose role is the third one', () => {
+  assert.equal(isTruck({ _role: 'partner', member_role: 'driver' }), true);
+  assert.equal(isTruck({ _role: 'partner', member_role: 'admin' }), false);
+  assert.equal(isTruck({ _role: 'partner', member_role: 'dispatcher' }), false);
+  // a company login from before team logins is the company's Admin
+  assert.equal(isTruck({ _role: 'partner' }), false);
+  assert.equal(isTruck({ _role: 'partner', member_role: null }), false);
+  // never an owner, never no session
+  assert.equal(isTruck({ _role: 'owner', member_role: 'driver' }), false);
+  assert.equal(isTruck(null), false);
+  assert.equal(isTruck(undefined), false);
+});
+
+test('canAssignProperties: an Admin and Dispatch may, a Truck may not', () => {
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: 'admin' }), true);
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: 'dispatcher' }), true);
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: 'driver' }), false);
+});
+
+test('canAssignProperties: a partner session from before team logins may (it is the company Admin)', () => {
+  assert.equal(canAssignProperties({ _role: 'partner' }), true);
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: null }), true);
+});
+
+test('canAssignProperties: never an owner, never no session, never an unknown role', () => {
+  assert.equal(canAssignProperties({ _role: 'owner' }), false);
+  assert.equal(canAssignProperties({ _role: 'owner', member_role: 'admin' }), false);
+  assert.equal(canAssignProperties({ _role: 'partner', member_role: 'manager' }), false);
+  assert.equal(canAssignProperties(null), false);
+  assert.equal(canAssignProperties(undefined), false);
+});
+
+test('the Properties row strings are the spec copy', () => {
+  assert.equal(ALL_PROPERTIES, 'All properties');
+  assert.equal(NO_PROPERTIES_YET, 'No properties yet');
+});
+
+test('memberPropertyIds reads [{id, name}], tolerates bare ids, and nothing', () => {
+  assert.deepEqual(memberPropertyIds({ properties: [{ id: 'p1', name: 'Oak Hill' }, { id: 'p2', name: 'Spring Lake' }] }), ['p1', 'p2']);
+  assert.deepEqual(memberPropertyIds({ properties: ['p1', 'p2'] }), ['p1', 'p2']);
+  assert.deepEqual(memberPropertyIds({ properties: [{ name: 'no id' }, null, '', 'p3'] }), ['p3']);
+  assert.deepEqual(memberPropertyIds({ properties: [] }), []);
+  assert.deepEqual(memberPropertyIds({}), []);
+  assert.deepEqual(memberPropertyIds(null), []);
+});
+
+const ADMIN_VIEWER = { _role: 'partner', member_role: 'admin' };
+const DISPATCH_VIEWER = { _role: 'partner', member_role: 'dispatcher' };
+const TRUCK_VIEWER = { _role: 'partner', member_role: 'driver' };
+const TERRY = { id: 'm4', name: 'Terry Banks', role: 'driver', properties: [{ id: 'p1', name: 'Oak Hill' }, { id: 'p2', name: 'Spring Lake' }] };
+const NEW_TRUCK = { id: 'm5', name: 'Sam Ortiz', role: 'driver', properties: [] };
+
+test('propertiesRow: an Admin or Dispatch member reads "All properties", with no control, for every viewer', () => {
+  for (const viewer of [ADMIN_VIEWER, DISPATCH_VIEWER, TRUCK_VIEWER]) {
+    assert.deepEqual(propertiesRow({ ...DANA, properties: [] }, viewer), { kind: 'all', text: 'All properties' });
+    assert.deepEqual(propertiesRow({ id: 'm6', name: 'Lee', role: 'dispatcher', properties: [] }, viewer), { kind: 'all', text: 'All properties' });
+  }
+  // an assignment on an Admin restricts nothing, so it is not shown
+  assert.deepEqual(propertiesRow({ ...DANA, properties: [{ id: 'p1', name: 'Oak Hill' }] }, ADMIN_VIEWER), { kind: 'all', text: 'All properties' });
+});
+
+test('propertiesRow: a Truck, to an Admin or Dispatch, is a checklist', () => {
+  for (const viewer of [ADMIN_VIEWER, DISPATCH_VIEWER, { _role: 'partner' }]) {
+    assert.deepEqual(propertiesRow(TERRY, viewer), { kind: 'checklist', empty: false, note: null });
+    assert.deepEqual(propertiesRow(NEW_TRUCK, viewer), { kind: 'checklist', empty: true, note: 'No properties yet' });
+  }
+});
+
+test('propertiesRow: a Truck reads their own row as text, and gets no row for another Truck', () => {
+  assert.deepEqual(propertiesRow(TERRY, { ...TRUCK_VIEWER, member_id: 'm4' }), { kind: 'list', empty: false, text: 'Oak Hill, Spring Lake' });
+  assert.deepEqual(propertiesRow(NEW_TRUCK, { ...TRUCK_VIEWER, member_id: 'm5' }), { kind: 'list', empty: true, text: 'No properties yet' });
+  // The backend shows a Truck only the overlap with their own properties, so
+  // another Truck's row would read "No properties yet" when it is not true.
+  assert.equal(propertiesRow(NEW_TRUCK, { ...TRUCK_VIEWER, member_id: 'm4' }), null);
+  assert.equal(propertiesRow(TERRY, { ...TRUCK_VIEWER, member_id: 'm5' }), null);
+  assert.equal(propertiesRow(TERRY, TRUCK_VIEWER), null);
+});
+
+test('propertiesRow: bare ids are named from the list given, and never shown raw', () => {
+  const names = { p1: 'Oak Hill' };
+  assert.deepEqual(
+    propertiesRow({ ...TERRY, properties: ['p1', 'p9'] }, { ...TRUCK_VIEWER, member_id: 'm4' }, names),
+    { kind: 'list', empty: false, text: 'Oak Hill, 1 more' },
+  );
+});
+
+test('propertiesRow: nothing for no member', () => {
+  assert.equal(propertiesRow(null, ADMIN_VIEWER), null);
+});
+
+test('assignableProperties: {id, name}, sorted by name, each id once', () => {
+  assert.deepEqual(
+    assignableProperties([
+      { id: 'p2', name: 'Spring Lake', property_type: 'apartment' },
+      { id: 'p1', name: 'Oak Hill' },
+      { id: 'p2', name: 'Spring Lake' },
+      { name: 'no id' },
+      null,
+      { id: 'p3', address: '9 Elm St' },
+    ]),
+    [{ id: 'p3', name: '9 Elm St' }, { id: 'p1', name: 'Oak Hill' }, { id: 'p2', name: 'Spring Lake' }],
+  );
+  assert.deepEqual(assignableProperties(null), []);
+});
+
+test('assignableProperties: only the company\'s live properties — a truck plaza, a rejected or an archived one would be refused (422 unknown_property) on every try', () => {
+  // A partner's /auth/me.properties carries its truck plazas (navTabsFor's
+  // truck-plaza rule depends on it), and View as Partner's column read keeps
+  // rejected rows. The PUT accepts only the company's live properties:
+  // never a truck plaza, never a rejected one, never an archived one.
+  const rows = [
+    { id: 'a', name: 'Oak Hill', property_type: 'apartment', verification_status: 'verified' },
+    { id: 't', name: 'I-85 Truck Plaza', property_type: 'truck_plaza', verification_status: 'verified' },
+    { id: 'r', name: 'Elm Court', property_type: 'apartment', verification_status: 'rejected' },
+    { id: 'x', name: 'Birch Row', property_type: 'apartment', verification_status: 'verified', archived_at: '2026-10-01T00:00:00Z' },
+    { id: 'p', name: 'Pine Ridge', property_type: 'apartment', verification_status: 'pending' },
+    { id: 'n', name: 'Maple Yard' },
+  ];
+  const shown = assignableProperties(rows);
+  assert.deepEqual(shown.map(p => p.id), ['n', 'a', 'p']);
+  // So a Save never sends a truck plaza back, even one picked before.
+  assert.deepEqual(idsToSave(['a', 't', 'r', 'x'], shown), ['a']);
+});
+
+test('sameIdSet: order does not matter, membership does', () => {
+  assert.equal(sameIdSet(['a', 'b'], ['b', 'a']), true);
+  assert.equal(sameIdSet([], []), true);
+  assert.equal(sameIdSet(['a'], ['a', 'b']), false);
+  assert.equal(sameIdSet(['a', 'b'], ['a']), false);
+  assert.equal(sameIdSet(['a', 'c'], ['a', 'b']), false);
+});
+
+test('teamErrorMessage: a 422 unknown_property is the reload sentence', () => {
+  assert.equal(UNKNOWN_PROPERTY_SENTENCE, "One of those properties isn't yours any more. Reload and try again.");
+  assert.equal(
+    teamErrorMessage(apiError(422, 'unknown_property'), 'Could not save those properties. Try again.'),
+    "One of those properties isn't yours any more. Reload and try again.",
+  );
+});
+
+test('firstAdminName: the first name the backend lists, skipping blanks', () => {
+  assert.equal(firstAdminName(['Austin Ward', 'Lee Park']), 'Austin Ward');
+  assert.equal(firstAdminName(['  ', ' Lee Park ']), 'Lee Park');
+  assert.equal(firstAdminName([]), null);
+  assert.equal(firstAdminName(null), null);
+  assert.equal(firstAdminName('Austin Ward'), null);
+});
+
+test('askAdminSentence: the spec empty state, with the Admin or "your Admin"', () => {
+  assert.equal(askAdminSentence('Austin Ward'), 'Ask Austin Ward to assign you a property.');
+  assert.equal(askAdminSentence(null), 'Ask your Admin to assign you a property.');
+  assert.equal(askAdminSentence(''), 'Ask your Admin to assign you a property.');
+});
+
+test("partnerFieldsFromMe: a Truck's /auth/me carries the first Admin's name", () => {
+  assert.deepEqual(
+    partnerFieldsFromMe({
+      type: 'partner', company_name: 'Queen City Towing',
+      member: { id: 'm4', name: 'Terry Banks', role: 'driver', properties: [], admin_names: ['Austin Ward', 'Dana Reyes'] },
+    }),
+    {
+      company_name: 'Queen City Towing', business_name: 'Queen City Towing',
+      member_id: 'm4', member_role: 'driver', member_name: 'Terry Banks', member_admin_name: 'Austin Ward',
+    },
+  );
+  // an empty list still says so: the fallback sentence names "your Admin"
+  assert.equal(
+    partnerFieldsFromMe({ type: 'partner', member: { id: 'm4', name: 'Terry', role: 'driver', admin_names: [] } }).member_admin_name,
+    null,
+  );
+});
+
+test('assignProperties: PUT /partner/team/{id}/properties with {property_ids}', async () => {
+  const c = await seen(() => assignProperties('m 4', ['p1', 'p2']));
+  assert.ok(c.url.endsWith('/partner/team/m%204/properties'), c.url);
+  assert.equal(c.method, 'PUT');
+  assert.deepEqual(c.body, { property_ids: ['p1', 'p2'] });
+  assert.equal(requestsApi.assignProperties, assignProperties);
+});
+
+test('assignProperties: an empty set is sent as an empty list, not skipped', async () => {
+  const c = await seen(() => assignProperties('m4', []));
+  assert.deepEqual(c.body, { property_ids: [] });
+});
+
+test("assignProperties: View as Partner names the company, like the other Team calls", async () => {
+  const c = await seen(() => assignProperties('m4', ['p1'], { partnerId: 'a320a1c8-90b5-43a9-85a7-4ca31ed0de35' }));
+  assert.ok(c.url.endsWith('/partner/team/m4/properties?partner_id=a320a1c8-90b5-43a9-85a7-4ca31ed0de35'), c.url);
+  assert.equal(c.method, 'PUT');
+});
+
+test('idsToSave: only the ids the checklist shows, in the order picked', () => {
+  const list = [{ id: 'p1', name: 'Oak Hill' }, { id: 'p2', name: 'Spring Lake' }];
+  // p9 is an assignment the company no longer has live (archived since): it
+  // is not on the checklist, so it is not sent back to be refused with a 422.
+  assert.deepEqual(idsToSave(['p2', 'p9', 'p1'], list), ['p2', 'p1']);
+  assert.deepEqual(idsToSave([], list), []);
+  assert.deepEqual(idsToSave(['p1'], []), []);
+  assert.deepEqual(idsToSave(null, list), []);
 });

@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate } from '../../lib/requestsApi.js';
-import { isImpersonating } from '../../lib/db.js';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate, assignProperties } from '../../lib/requestsApi.js';
+import { db, isImpersonating } from '../../lib/db.js';
+import { scopePropsToPartner } from '../../shared/scope.js';
 import { useToast } from '../../ui/Toast.jsx';
 import {
   TEAM_ROLES, teamRoleLabel, canManageTeam, teamMembers, buildInvite,
   memberStatusLine, memberPhone, lastAdminBlocked, LAST_ADMIN_REASON,
   teamErrorMessage, removeConfirmText,
+  canAssignProperties, propertiesRow, memberPropertyIds, assignableProperties, sameIdSet, idsToSave,
 } from '../../lib/partnerTeam.js';
 
 // ── Partner Account → Team (spec 2026-10-18-tow-company-team §1.4) ──
@@ -19,8 +21,15 @@ import {
 // shipped the route, or a session the route does not answer for (a platform
 // admin's View as Partner), exactly as SlackSection hides itself.
 //
-// P2/P3 fields on a member (`properties`, `slack_linked`) are not rendered
-// yet.
+// P2 (spec §2.2, §2.3): each member's **Properties** row — "All properties"
+// for an Admin or Dispatch, a checklist with Save for a Truck when the
+// viewer may assign (Admin, Dispatch), read-only text otherwise; "No
+// properties yet" in amber for a Truck with none. The checklist lists the
+// company's live properties as the VIEWER's `/auth/me.properties` gives them
+// (an Admin or Dispatch is unrestricted, so that is every one), read through
+// `db.getProperties` so a platform admin's View as Partner gets the viewed
+// company's own (the `tow_company_id` column read) rather than the admin's.
+// The P3 field (`slack_linked`) is not rendered yet.
 
 const EMPTY_INVITE = { name: '', email: '', phone: '', role: '' };
 
@@ -38,6 +47,14 @@ const rowBtn = {
 // `--red` on the card passes 4.5:1 in both themes; the office section's
 // #f87171-on-pink does not in the light theme (axe: color-contrast).
 const removeBtn = { ...rowBtn, color: 'var(--red)', border: '1px solid var(--red)' };
+// `--yellow` is the dashboard's amber, 4.5:1 or better on `--bg-card` in
+// both themes (the Requests tab's "not yet confirmed" uses it the same way).
+const AMBER = 'var(--yellow)';
+// Read by a screen reader, not shown: the dashboard shell has no class for it.
+const VISUALLY_HIDDEN = {
+  position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0,
+};
 
 export function PartnerTeamSection({ user }) {
   const { addToast } = useToast();
@@ -56,6 +73,13 @@ export function PartnerTeamSection({ user }) {
   const [inviting, setInviting] = useState(false);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState(null); // member id of a row mid-action
+  // Properties (P2): the checklist's rows, each Truck's unsaved picks, and a
+  // failed save's sentence, by member id.
+  const assign = canAssignProperties(user);
+  const [companyProperties, setCompanyProperties] = useState(null); // null = not loaded
+  const [picks, setPicks] = useState({});
+  const [assignErrors, setAssignErrors] = useState({});
+  const [savingId, setSavingId] = useState(null); // member id of a Save in flight
 
   const load = useCallback(() => (
     listTeam({ partnerId })
@@ -68,6 +92,57 @@ export function PartnerTeamSection({ user }) {
   ), []);
 
   useEffect(() => { load(); }, [load, user?.id]);
+
+  // Only someone who may assign needs the company's property list; a Truck's
+  // section never asks for it, nor does a section hidden by a 404.
+  useEffect(() => {
+    if (!assign || !user?.id || available !== true) return undefined;
+    let alive = true;
+    db.getProperties(user.id, user._role)
+      .then(p => { if (alive) setCompanyProperties(assignableProperties(scopePropsToPartner(p || [], user))); })
+      .catch(() => { if (alive) setCompanyProperties([]); });
+    return () => { alive = false; };
+  }, [assign, available, user?.id, user?._role]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const propertyNames = useMemo(() => {
+    const map = {};
+    for (const p of companyProperties || []) map[p.id] = p.name;
+    return map;
+  }, [companyProperties]);
+
+  function picked(m) {
+    return Object.prototype.hasOwnProperty.call(picks, m.id) ? picks[m.id] : memberPropertyIds(m);
+  }
+
+  function togglePick(m, propertyId, on) {
+    const current = picked(m);
+    const next = on ? [...current.filter(id => id !== propertyId), propertyId] : current.filter(id => id !== propertyId);
+    setPicks(prev => ({ ...prev, [m.id]: next }));
+    setAssignErrors(prev => ({ ...prev, [m.id]: '' }));
+  }
+
+  async function saveProperties(m) {
+    const ids = idsToSave(picked(m), companyProperties);
+    setBusyId(m.id);
+    setSavingId(m.id);
+    setAssignErrors(prev => ({ ...prev, [m.id]: '' }));
+    try {
+      const res = await assignProperties(m.id, ids, { partnerId });
+      // The row takes the server's answer; a response without the member
+      // still shows what was saved.
+      const saved = res && res.member && typeof res.member === 'object'
+        ? res.member
+        : { properties: ids.map(id => ({ id, name: propertyNames[id] || '' })) };
+      setMembers(prev => prev.map(x => (x.id === m.id ? { ...x, ...saved, id: x.id } : x)));
+      setPicks(prev => { const next = { ...prev }; delete next[m.id]; return next; });
+      addToast(`Properties saved for ${m.name || 'that teammate'}`, 'success');
+    } catch (e2) {
+      setAssignErrors(prev => ({ ...prev, [m.id]: teamErrorMessage(e2, 'Could not save those properties. Try again.') }));
+    } finally {
+      setBusyId(null);
+      setSavingId(null);
+    }
+  }
 
   async function sendInvite(e) {
     e.preventDefault();
@@ -162,6 +237,7 @@ export function PartnerTeamSection({ user }) {
         const busy = busyId === m.id;
         const isSelf = !!user?.member_id && m.id === user.member_id;
         const line = [memberPhone(m.phone), memberStatusLine(m)].filter(Boolean).join(' · ');
+        const row = propertiesRow(m, user, propertyNames);
         return (
           <div className="settings-row" key={m.id} data-testid="team-member" style={{ flexWrap: 'wrap', gap: 8 }}>
             <div className="settings-row-info">
@@ -200,6 +276,19 @@ export function PartnerTeamSection({ user }) {
                 >Remove access</button>
               )}
             </div>
+            {row && (
+              <MemberProperties
+                member={m}
+                row={row}
+                properties={companyProperties}
+                picked={row.kind === 'checklist' ? picked(m) : []}
+                busy={busy}
+                saving={savingId === m.id}
+                error={assignErrors[m.id] || ''}
+                onToggle={(propertyId, on) => togglePick(m, propertyId, on)}
+                onSave={() => saveProperties(m)}
+              />
+            )}
           </div>
         );
       })}
@@ -250,5 +339,59 @@ export function PartnerTeamSection({ user }) {
         </form>
       )}
     </div>
+  );
+}
+
+// One member's Properties row (spec §2.3). `row` is `propertiesRow(...)`.
+function MemberProperties({ member, row, properties, picked, busy, saving, error, onToggle, onSave }) {
+  const label = <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 4 }}>Properties</div>;
+  const wrap = { flexBasis: '100%', minWidth: 0 };
+  if (row.kind !== 'checklist') {
+    return (
+      <div style={wrap} data-testid="member-properties">
+        {label}
+        <div style={{ fontSize: 13, fontWeight: row.empty ? 700 : 600, color: row.empty ? AMBER : 'var(--text-primary)' }}>{row.text}</div>
+      </div>
+    );
+  }
+  const saved = memberPropertyIds(member);
+  const unchanged = sameIdSet(saved, picked);
+  const list = properties || [];
+  return (
+    <fieldset style={{ ...wrap, border: 'none', margin: 0, padding: 0 }} data-testid="member-properties">
+      <legend style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 4, padding: 0 }}>
+        Properties<span style={VISUALLY_HIDDEN}> for {member.name}</span>
+      </legend>
+      {row.note && <div style={{ fontSize: 13, fontWeight: 700, color: AMBER, marginBottom: 6 }}>{row.note}</div>}
+      {properties === null && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading properties…</div>}
+      {properties !== null && list.length === 0 && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Your company has no properties to assign yet.</div>
+      )}
+      {list.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {list.map(p => (
+            <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-primary)', cursor: busy ? 'wait' : 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={picked.includes(p.id)}
+                disabled={busy}
+                onChange={e => onToggle(p.id, e.target.checked)}
+              />
+              {p.name}
+            </label>
+          ))}
+          <div>
+            <button
+              type="button"
+              style={{ ...rowBtn, marginTop: 4, cursor: busy ? 'wait' : unchanged ? 'not-allowed' : 'pointer', opacity: unchanged ? 0.6 : 1 }}
+              disabled={busy || unchanged}
+              aria-label={`Save properties for ${member.name}`}
+              onClick={onSave}
+            >{saving ? 'Saving…' : 'Save'}</button>
+          </div>
+        </div>
+      )}
+      {error && <div role="alert" style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>{error}</div>}
+    </fieldset>
   );
 }

@@ -755,7 +755,9 @@ export const db = {
   //   2. "View as Partner" — `/auth/me` only ever answers for the signed-in
   //      subject, and an impersonating admin is asking about a DIFFERENT
   //      account, so that path keeps the owner-column read.
-  async getProperties(userId, role) {
+  // `columnFallback: false` (a Truck, whose token has no `partner_id`) never
+  // reads PostgREST: a failed `/auth/me` is an empty list.
+  async getProperties(userId, role, { columnFallback = true } = {}) {
     if (!userId) return [];
     if (!isImpersonating(userId)) {
       try {
@@ -763,6 +765,7 @@ export const db = {
         if (me && Array.isArray(me.properties)) return me.properties;
       } catch { /* offline / old backend — fall through to the column read */ }
     }
+    if (!columnFallback) return [];
     return db.getPropertiesByOwnerColumn(userId, role);
   },
   // "Not ours" (spec §3.8) — an archived, rejected property is excluded from

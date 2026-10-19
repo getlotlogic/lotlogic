@@ -42,6 +42,7 @@ function send(method, path, body) {
 }
 const post = (path, body) => send('POST', path, body);
 const patch = (path, body) => send('PATCH', path, body);
+const put = (path, body) => send('PUT', path, body);
 const del = (path) => apiFetch(path, { method: 'DELETE' });
 
 /** multipart — never set content-type by hand, the boundary comes from FormData. */
@@ -231,8 +232,9 @@ export const setSlackFeedChannel = (body) => post('/partner/slack/feed-channel',
 // ── /partner/team* (spec 2026-10-18-tow-company-team §1.3) ───
 //
 // The tow company's people. Every member reads the roster; only an Admin
-// changes it (the backend answers 404, never 403, otherwise). Errors carry
-// `email_in_use` / `last_admin` as `.code`.
+// changes it (the backend answers 404, never 403, otherwise), except a
+// member's properties, which Dispatch assigns too (P2). Errors carry
+// `email_in_use` / `last_admin` / `unknown_property` as `.code`.
 
 /** GET /partner/team → `{members: [{id, name, email, phone, role, last_login_at, has_password, slack_linked, properties}]}` */
 /** `?partner_id=` on a Team call: a platform admin acting for the company it
@@ -255,6 +257,11 @@ export const removeTeammate = (memberId, { partnerId } = {}) => del(teamPath(`/p
 /** POST /partner/team/{member_id}/resend — a new set-password mail */
 export const resendTeammate = (memberId, { partnerId } = {}) => post(teamPath(`/partner/team/${seg(memberId)}/resend`, partnerId), {});
 
+/** PUT /partner/team/{member_id}/properties `{property_ids}` (spec §2.2, Admin or
+ *  Dispatch) → `{member}`; replaces the set. 422 `unknown_property`, 404 `not_found`. */
+export const assignProperties = (memberId, propertyIds, { partnerId } = {}) =>
+  put(teamPath(`/partner/team/${seg(memberId)}/properties`, partnerId), { property_ids: [...(propertyIds || [])] });
+
 // ── /requests/action (public, exact paths) ───────────────────
 
 /** GET /requests/action?token= → `{action, request}` preview */
@@ -273,5 +280,5 @@ export const requestsApi = {
   archiveApartmentProperty, listPartnerProperties, verifyPartnerProperty,
   rejectPartnerProperty, getLotStatus, getPlateTimeline, getSlackStatus, slackInstallLink, listSlackIdentities, updateSlackIdentity,
   deleteSlackIdentity, setSlackFeedChannel, getRequestAction, postRequestAction,
-  listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate,
+  listTeam, inviteTeammate, patchTeammate, removeTeammate, resendTeammate, assignProperties,
 };

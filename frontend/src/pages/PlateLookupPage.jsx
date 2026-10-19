@@ -3,7 +3,8 @@ import { db } from '../lib/db.js';
 import { apiFetch } from '../lib/api.js';
 import { scopePropsToPartner } from '../shared/scope.js';
 import { PlateTimeline } from './lot/PlateTimeline.jsx';
-import { verdictPresentation, resolveAllScopeResult, scopeOptions } from '../lib/verdicts.js';
+import { verdictPresentation, resolveAllScopeResult, scopeOptions, scopeCountLine } from '../lib/verdicts.js';
+import { isTruck } from '../lib/partnerTeam.js';
 
 const REMEMBERED_KEY = 'lotlogic_lookup_property';
 const ALL_SCOPE = 'all';
@@ -54,6 +55,8 @@ function PlateLookupVerdict({ out, scope, propertyName, history, typedPlate, onP
       : <div style={{ marginTop: 12, fontSize: 14, opacity: .85 }}>Temp tag{d.tag_expiration ? ' · expires ' + fmtTagDate(d.tag_expiration) : ''}</div>
   ) : null;
   const suggestions = out.verdict === 'not_registered' && Array.isArray(out.suggestions) ? out.suggestions : [];
+  // A Truck's check covers only their properties, and says so (spec §2.2).
+  const scopeLine = scopeCountLine(out.scope);
 
   return (
     <>
@@ -94,6 +97,7 @@ function PlateLookupVerdict({ out, scope, propertyName, history, typedPlate, onP
       )}
       {tag}
     </div>
+    {scopeLine && <div data-testid="lookup-scope-line" style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', textAlign: 'center' }}>{scopeLine}</div>}
     <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>Checked just now · logged</div>
     {/* Fuzzy near-misses: a typo or partial read shouldn't dead-end at
         "not registered". Tapping a plate re-runs the lookup on it, so the
@@ -126,9 +130,10 @@ function PlateLookupVerdict({ out, scope, propertyName, history, typedPlate, onP
   );
 }
 
-export function PlateLookupPage({ user, plate: deepPlate = null, property: deepProperty = null }) {
-  // Load the partner's OWN properties (RLS-scoped by tow_company_id via
-  // db.getProperties) — same source ALPRPropertiesPage uses. The App-level
+export function PlateLookupPage({ user, plate: deepPlate = null, property: deepProperty = null, noPropertyNote = null }) {
+  // Load the partner's OWN properties (`/auth/me.properties` via
+  // db.getProperties — for a Truck, only their assigned ones, scoped by the
+  // backend; tow-company team spec §2.3). The App-level
   // `lots` state comes from the `lots` table, which has no property_type and
   // doesn't include the apartment registry rows, so we must not use it here.
   const [properties, setProperties] = useState(null); // null = still loading
@@ -148,7 +153,9 @@ export function PlateLookupPage({ user, plate: deepPlate = null, property: deepP
 
   useEffect(() => {
     let alive = true;
-    db.getProperties(user.id, user._role)
+    // A Truck reads nothing through PostgREST (their token has no
+    // partner_id): if /auth/me fails, no column-read fallback.
+    db.getProperties(user.id, user._role, { columnFallback: !isTruck(user) })
       .then(p => {
         if (!alive) return;
         const apts = scopePropsToPartner(p || [], user).filter(x => x.property_type === 'apartment')
@@ -220,7 +227,7 @@ export function PlateLookupPage({ user, plate: deepPlate = null, property: deepP
         const out = await apiFetch(`/partner/lookup?plate=${encodeURIComponent(pl)}`);
         if (req !== lookupReqRef.current) return;
         const resolved = resolveAllScopeResult(out, rememberedPropertyId);
-        const rendered = { verdict: resolved.verdict, detail: { ...resolved.detail, plate: pl } };
+        const rendered = { verdict: resolved.verdict, detail: { ...resolved.detail, plate: pl }, scope: out?.scope };
         setResult(rendered);
         vibrateIfDoNotTow(rendered, 'all');
       } else {
@@ -263,7 +270,7 @@ export function PlateLookupPage({ user, plate: deepPlate = null, property: deepP
   }
 
   const labelStyle = { display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.06em', margin: '16px 0 6px' };
-  const options = scopeOptions({ properties, partnerLookupAvailable, companyName: user.company_name });
+  const options = scopeOptions({ properties, partnerLookupAvailable, companyName: user.company_name, truck: isTruck(user) });
   const selectedPropertyName = properties?.find(p => p.id === scopeValue)?.name;
 
   return (
@@ -273,7 +280,7 @@ export function PlateLookupPage({ user, plate: deepPlate = null, property: deepP
       {properties === null ? (
         <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading properties…</div>
       ) : properties.length === 0 ? (
-        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, border: '1px solid var(--border)', borderRadius: 12 }}>No apartment properties assigned to this account.</div>
+        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, border: '1px solid var(--border)', borderRadius: 12 }}>{noPropertyNote || 'No apartment properties assigned to this account.'}</div>
       ) : (
         <>
           <label style={labelStyle} htmlFor="lookup-scope">Checking</label>

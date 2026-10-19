@@ -3,7 +3,7 @@
 // can't silently shift another's signal word or tone.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { verdictPresentation, resolveAllScopeResult, scopeOptions } from '../src/lib/verdicts.js';
+import { verdictPresentation, resolveAllScopeResult, scopeOptions, scopeCountLine } from '../src/lib/verdicts.js';
 
 const BANNED = /\b(resident|visitor|permanent|temporary|guest|driver)s?\b/i;
 
@@ -303,8 +303,33 @@ test('scopeOptions includes "All" labelled from companyName when available', () 
   assert.equal(all.label, 'All N Style properties');
 });
 
+test('scopeOptions: for a Truck, "All your properties" — their check covers only theirs', () => {
+  const opts = scopeOptions({ properties: [{ id: 'p1', name: 'Spring Lake' }], partnerLookupAvailable: true, companyName: 'N Style', truck: true });
+  assert.equal(opts.find(o => o.value === 'all').label, 'All your properties');
+});
+
 test('scopeOptions falls back to "All properties" with no companyName', () => {
   const opts = scopeOptions({ properties: [], partnerLookupAvailable: true, companyName: '' });
   const all = opts.find(o => o.value === 'all');
   assert.equal(all.label, 'All properties');
+});
+
+// ── "Checked at your {n} properties" (tow-company team spec §2.2, §4) ──
+//
+// The verdict JSON carries `scope: {property_count: n}` only for a Truck; the
+// line is absent for everyone else.
+
+test('scopeCountLine: the spec line for a Truck', () => {
+  assert.equal(scopeCountLine({ property_count: 3 }), 'Checked at your 3 properties');
+  assert.equal(scopeCountLine({ property_count: 11 }), 'Checked at your 11 properties');
+});
+
+test('scopeCountLine: one property reads as one', () => {
+  assert.equal(scopeCountLine({ property_count: 1 }), 'Checked at your 1 property');
+});
+
+test('scopeCountLine: no line without a count', () => {
+  for (const bad of [undefined, null, {}, { property_count: null }, { property_count: '3' }, { property_count: 2.5 }, { property_count: -1 }]) {
+    assert.equal(scopeCountLine(bad), null, JSON.stringify(bad));
+  }
 });

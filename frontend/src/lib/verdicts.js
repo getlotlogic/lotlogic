@@ -160,10 +160,24 @@ export function resolveAllScopeResult(result, rememberedPropertyId) {
 // Task 20 Step 2: the route doesn't exist on the live backend until Task 8
 // ships, so the All option is rendered only once a probe has proven it's
 // there (`partnerLookupAvailable`).
-export function scopeOptions({ properties, partnerLookupAvailable, companyName } = {}) {
+// A Truck's "All" covers only their own properties (tow-company team spec
+// §2.2), so it reads "All your properties", never the company's name.
+export function scopeOptions({ properties, partnerLookupAvailable, companyName, truck = false } = {}) {
   const opts = (properties || []).map(p => ({ value: p.id, label: p.name || p.address || p.id }));
   if (partnerLookupAvailable) {
-    opts.push({ value: 'all', label: companyName ? `All ${companyName} properties` : 'All properties' });
+    const label = truck ? 'All your properties' : (companyName ? `All ${companyName} properties` : 'All properties');
+    opts.push({ value: 'all', label });
   }
   return opts;
+}
+
+// "Checked at your {n} properties" (tow-company team spec §2.2, §4): a
+// Truck's verdict JSON carries `scope: {property_count: n}` — their check
+// covers only their assigned properties, and the page says so under the
+// verdict. Absent for everyone else, so no line. One property reads "1
+// property".
+export function scopeCountLine(scope) {
+  const n = scope?.property_count;
+  if (!Number.isInteger(n) || n < 0) return null;
+  return `Checked at your ${n} ${n === 1 ? 'property' : 'properties'}`;
 }
