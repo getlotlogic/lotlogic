@@ -61,6 +61,9 @@ const SPRING_ID = '66666666-6666-4666-8666-666666666662';
 const OAK = { id: OAK_ID, name: 'Oak Hill Commons' };
 const SPRING = { id: SPRING_ID, name: 'Spring Lake Apartments' };
 const COMPANY_PROPERTIES = [OAK, SPRING];
+// Also in an Admin's /auth/me.properties in one test, never assignable.
+const PLAZA_ID = '66666666-6666-4666-8666-666666666663';
+const REJECTED_ID = '66666666-6666-4666-8666-666666666664';
 const asMeProperty = (p: { id: string; name: string }) => ({
   ...p, address: '1 Main St', role: 'partner', property_type: 'apartment', verification_status: 'verified',
   features: { passes: true, qr: true, cameras: false },
@@ -121,6 +124,8 @@ interface StubOpts {
   truckProperties?: Prop[];
   /** A Truck session: `/auth/me.member.admin_names`. */
   adminNames?: string[];
+  /** An Admin or Dispatch session: rows added to `/auth/me.properties` as given. */
+  meExtraProperties?: Array<Record<string, unknown>>;
 }
 
 const json = (route: Route, status: number, body: unknown) => route.fulfill({
@@ -196,7 +201,9 @@ async function stub(page: Page, opts: StubOpts): Promise<Seen> {
           type: 'partner', id: COMPANY_ID, email: me.email, display_name: COMPANY,
           company_name: COMPANY, phone: '+17045550100', is_admin: false, is_platform_admin: false,
           pending_joins: 0, pending_properties: 0, lots: [],
-          properties: (truck ? truckProperties : COMPANY_PROPERTIES).map(asMeProperty),
+          properties: truck
+            ? truckProperties.map(asMeProperty)
+            : [...COMPANY_PROPERTIES.map(asMeProperty), ...(opts.meExtraProperties ?? [])],
           member: truck
             ? { id: me.id, name: me.name, role: memberRole, properties: truckProperties, admin_names: opts.adminNames ?? ['Dana Reyes'] }
             : { id: me.id, name: me.name, role: memberRole, properties: [], admin_names: ['Dana Reyes'] },
@@ -551,6 +558,28 @@ test.describe('partner Team: properties (P2)', () => {
     await expect(page.locator('body')).not.toContainText('unknown_property');
     // Nothing was saved: the pick is still there to retry.
     await expect(terry.getByRole('checkbox', { name: 'Spring Lake Apartments' })).toBeChecked();
+  });
+
+  test('the checklist offers only the company\'s live properties: never a truck plaza or a rejected one', async ({ page }) => {
+    // A partner's /auth/me.properties includes its truck plazas; the PUT
+    // refuses one (422 unknown_property), so ticking it could never save.
+    const seen = await stub(page, {
+      account: 'partner',
+      meExtraProperties: [
+        { ...asMeProperty({ id: PLAZA_ID, name: 'I-85 Truck Plaza' }), property_type: 'truck_plaza' },
+        { ...asMeProperty({ id: REJECTED_ID, name: 'Elm Court' }), verification_status: 'rejected' },
+      ],
+    });
+    await signIn(page, 'dana@queencitytow.test');
+    await openAccount(page);
+
+    const terry = props(page, 'Terry Banks');
+    await expect(terry.getByRole('checkbox')).toHaveCount(2);
+    await expect(terry).not.toContainText('I-85 Truck Plaza');
+    await expect(terry).not.toContainText('Elm Court');
+    await terry.getByRole('checkbox', { name: 'Spring Lake Apartments' }).check();
+    await terry.getByRole('button', { name: 'Save properties for Terry Banks' }).click();
+    await expect.poll(() => seen.assigns).toEqual([{ id: TERRY_ID, body: { property_ids: [OAK_ID, SPRING_ID] }, query: '' }]);
   });
 
   test('a Dispatch member sees the checklist too, and saves', async ({ page }) => {

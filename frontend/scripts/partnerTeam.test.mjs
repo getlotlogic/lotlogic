@@ -456,6 +456,25 @@ test('assignableProperties: {id, name}, sorted by name, each id once', () => {
   assert.deepEqual(assignableProperties(null), []);
 });
 
+test('assignableProperties: only the company\'s live properties — a truck plaza, a rejected or an archived one would be refused (422 unknown_property) on every try', () => {
+  // A partner's /auth/me.properties carries its truck plazas (navTabsFor's
+  // truck-plaza rule depends on it), and View as Partner's column read keeps
+  // rejected rows. The PUT accepts only the company's live properties:
+  // never a truck plaza, never a rejected one, never an archived one.
+  const rows = [
+    { id: 'a', name: 'Oak Hill', property_type: 'apartment', verification_status: 'verified' },
+    { id: 't', name: 'I-85 Truck Plaza', property_type: 'truck_plaza', verification_status: 'verified' },
+    { id: 'r', name: 'Elm Court', property_type: 'apartment', verification_status: 'rejected' },
+    { id: 'x', name: 'Birch Row', property_type: 'apartment', verification_status: 'verified', archived_at: '2026-10-01T00:00:00Z' },
+    { id: 'p', name: 'Pine Ridge', property_type: 'apartment', verification_status: 'pending' },
+    { id: 'n', name: 'Maple Yard' },
+  ];
+  const shown = assignableProperties(rows);
+  assert.deepEqual(shown.map(p => p.id), ['n', 'a', 'p']);
+  // So a Save never sends a truck plaza back, even one picked before.
+  assert.deepEqual(idsToSave(['a', 't', 'r', 'x'], shown), ['a']);
+});
+
 test('sameIdSet: order does not matter, membership does', () => {
   assert.equal(sameIdSet(['a', 'b'], ['b', 'a']), true);
   assert.equal(sameIdSet([], []), true);

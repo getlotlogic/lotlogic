@@ -267,12 +267,25 @@ export function propertiesRow(member, viewer, names = {}) {
   return { kind: 'list', empty, text: [...named, ...(unnamed ? [`${unnamed} more`] : [])].join(', ') };
 }
 
-/** The checklist's rows: `{id, name}` by name, each id once. */
+/**
+ * True for one of the company's live properties, the only ones
+ * `PUT /partner/team/{id}/properties` accepts (the backend's
+ * `LIVE_PARTNER_PROPERTY`; any other id is 422 `unknown_property`). A
+ * partner's `/auth/me.properties` carries its truck plazas, and View as
+ * Partner's column read keeps rejected rows, so both are dropped here.
+ */
+function isAssignable(p) {
+  return p.property_type !== 'truck_plaza'
+    && p.verification_status !== 'rejected'
+    && !p.archived_at;
+}
+
+/** The checklist's rows: `{id, name}` by name, each id once, live ones only. */
 export function assignableProperties(properties) {
   const seen = new Set();
   const out = [];
   for (const p of (Array.isArray(properties) ? properties : [])) {
-    if (!p || typeof p.id !== 'string' || !p.id || seen.has(p.id)) continue;
+    if (!p || typeof p.id !== 'string' || !p.id || seen.has(p.id) || !isAssignable(p)) continue;
     seen.add(p.id);
     out.push({ id: p.id, name: p.name || p.address || 'Unnamed property' });
   }
