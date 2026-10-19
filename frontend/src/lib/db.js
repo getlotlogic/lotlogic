@@ -70,7 +70,7 @@ export const ACTIVE_ROSTER_CAP = 500;
 // one — i.e. an admin inside "View as Partner". `/auth/me` only ever answers
 // for the subject holding the token, so anything that asks about another
 // account has to go to the tables instead.
-function isImpersonating(userId) {
+export function isImpersonating(userId) {
   try {
     const session = JSON.parse(localStorage.getItem('lotlogic_session') || '{}');
     return !!(session && session.id && userId && session.id !== userId);
@@ -788,7 +788,9 @@ export const db = {
   async getPropertiesByOwnerColumn(userId, role) {
     if (!userId) return [];
     if (supabase) {
-      let q = supabase.from('properties').select('*');
+      // Archived (soft-deleted) properties leave every Lots list, as they
+      // do in /auth/me.properties; this read is the "View as Partner" path.
+      let q = supabase.from('properties').select('*').is('archived_at', null);
       // Platform admins see every property; RLS still gates non-admins via
       // owner_id / tow_company_id policies. Read the flag from the live
       // session object first (server-fresh from /auth/login or /auth/me)
