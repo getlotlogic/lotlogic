@@ -1,9 +1,10 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { emailProvider, sendEmail, type SendEmailResult } from "../_shared/email.ts";
 
 // Internal-only function — gated by INTERNAL_TOKEN, never called from a
 // browser, so no CORS preflight needed.
-function json(body: unknown, status: number) {
+function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -99,7 +100,7 @@ serve(async (req) => {
   // billing surface. If Resend is unreachable we return 502 and the
   // cron will re-attempt on the next sweep — the violation row is not
   // marked dispatched until a 200 comes back.
-  const resendKey = Deno.env.get("RESEND_API_KEY");
+  const provider = emailProvider();
   // Default to the actual SendGrid-authenticated sender. The previous
   // generic "noreply@lotlogic.com" fallback was unauthenticated — if
   // FROM_EMAIL ever got unset every dispatch would land in spam folders
@@ -107,8 +108,8 @@ serve(async (req) => {
   const fromEmail = Deno.env.get("FROM_EMAIL") || "dispatch@lotlogicparking.com";
   const jwtSecret = Deno.env.get("JWT_SECRET") || "";
   const backendUrl = Deno.env.get("BACKEND_URL") || "https://lotlogic-backend-production.up.railway.app";
-  if (!resendKey) {
-    return json({ error: "Email provider not configured (set RESEND_API_KEY)" }, 500);
+  if (provider === "none") {
+    return json({ error: "Email provider not configured (set TWILIO_EMAIL_API_KEY_SID/SECRET or RESEND_API_KEY)" }, 500);
   }
 
   const supabase = createClient(
@@ -134,7 +135,7 @@ serve(async (req) => {
   // fired — that's why we're sending the cancellation). Bail out here
   // before the dispatch-path setup.
   if (notificationKind === "left_before_tow") {
-    return await sendLeftBeforeTowEmail(supabase, violation, resendKey, fromEmail);
+    return await sendLeftBeforeTowEmail(supabase, violation, fromEmail);
   }
 
   if (violation.sms_sent_at) {
@@ -295,6 +296,16 @@ serve(async (req) => {
   const overstayMs = lastPass?.valid_until ? now - new Date(lastPass.valid_until).getTime() : 0;
   const overstayAgo = overstayMs > 0 ? humanDuration(overstayMs) : null;
 
+  // Overstay copy must NOT use firstSeen/"seen X ago". An overstay dispatch
+  // fires precisely because NO camera saw the vehicle leave — and for a
+  // cron-fired overstay there's no plate_event at all, so firstSeen collapses
+  // to violation.created_at (~the dispatch hold, "5 minutes ago"), which reads
+  // as a nonsensical "seen 5 minutes ago". Anchor overstay copy on the pass
+  // timeline instead: registered at valid_from, expired at valid_until,
+  // overstaying for overstayAgo.
+  const isOverstay = (violation.violation_type ?? "").toLowerCase() === "overstay";
+  const registeredAt = lastPass?.valid_from ?? null;
+
   const passLine = (() => {
     if (!lastPass) return "NONE (never registered)";
     const duration = lastPass.valid_from && lastPass.valid_until
@@ -351,8 +362,8 @@ serve(async (req) => {
         return {
           subjectReason: "Active overstay",
           badge: "Active overstay",
-          textStatus: `ACTIVE OVERSTAY (${firstSeenAgo})`,
-          preheaderLead: `Active overstay · ${firstSeenAgo} on property`,
+          textStatus: `ACTIVE OVERSTAY${overstayAgo ? ` (${overstayAgo} past expiry)` : ""}`,
+          preheaderLead: `Active overstay${overstayAgo ? ` · ${overstayAgo} past pass expiry` : ""}`,
         };
     }
   })();
@@ -373,7 +384,9 @@ serve(async (req) => {
     `PLATE        ${violation.plate_text}`,
     lastPass?.back_plate ? `TRAILER      ${lastPass.back_plate}` : null,
     `STATUS       ${reasonCopy.textStatus}`,
-    `FIRST SEEN   ${formatLocal(firstSeen)}`,
+    isOverstay
+      ? `REGISTERED   ${formatLocal(registeredAt)}  (pass expired ${formatLocal(lastPass?.valid_until)})`
+      : `FIRST SEEN   ${formatLocal(firstSeen)}`,
     triggerEvent?.confidence != null ? `READ CONF.   ${Math.round(triggerEvent.confidence * 100)}%` : null,
     `PASS         ${passLine}`,
     lastPass?.visitor_name ? `PASS HOLDER  ${lastPass.visitor_name}` : null,
@@ -438,9 +451,9 @@ serve(async (req) => {
 </tr>`;
 
   // Plate-card subtitle is violation-type-aware. Overstays foreground the
-  // overstay duration ("Overstayed 2h past 1:00 PM"); other types keep
-  // the simpler "on property since" framing.
-  const isOverstay = (violation.violation_type ?? "").toLowerCase() === "overstay";
+  // overstay duration and the pass timeline (registered → expired) — NOT a
+  // "seen X ago" line, because an overstay means we never saw the vehicle
+  // leave. Other types keep the camera-based "on property since" framing.
   const plateSubtitle = isOverstay && overstayAgo
     ? `
 <div style="margin-top:14px; font-family:'Fraunces',Georgia,serif; font-style:italic; font-size:20px; color:#9A5530; line-height:1.1;">
@@ -450,7 +463,7 @@ serve(async (req) => {
   past pass expiry &middot; ${escapeHtml(formatLocal(lastPass?.valid_until))}
 </div>
 <div style="margin-top:10px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:12px; color:#6F6450;">
-  Vehicle arrived ${escapeHtml(firstSeenAgo)} ago &middot; ${escapeHtml(formatLocal(firstSeen))}
+  Registered &middot; ${escapeHtml(formatLocal(registeredAt))}
 </div>`
     : `
 <div style="margin-top:12px; font-family:'Manrope','Helvetica Neue',Arial,sans-serif; font-size:13px; color:#3D3528;">
@@ -595,7 +608,7 @@ serve(async (req) => {
     return json({ status: "already_sent_by_concurrent_invocation", violation_id: violation.id }, 200);
   }
 
-  const sendResult = await sendViaResend(resendKey, fromEmail, recipient, ccList, subject, textBody, html);
+  const sendResult = await sendDispatchEmail(fromEmail, recipient, ccList, subject, textBody, html);
 
   if (!sendResult.ok) {
     // Resend failed. Revert the claim so the cron retries on next tick.
@@ -643,7 +656,6 @@ async function sendLeftBeforeTowEmail(
     plate_text: string;
     left_before_tow_at: string | null;
   },
-  resendKey: string,
   fromEmail: string,
 ): Promise<Response> {
   // Atomic idempotency claim. Multiple invocations of this function can
@@ -728,7 +740,7 @@ async function sendLeftBeforeTowEmail(
   </td></tr>
 </table>
 </body></html>`;
-  const sendResult = await sendViaResend(resendKey, fromEmail, partner.email, [], subject, textBody, html);
+  const sendResult = await sendDispatchEmail(fromEmail, partner.email, [], subject, textBody, html);
   if (!sendResult.ok) {
     // Roll the claim back so the cron sweep can re-claim on the next tick.
     // Without this, a failed Resend call leaves the column populated and
@@ -744,12 +756,9 @@ async function sendLeftBeforeTowEmail(
   return json({ status: "stand_down_sent", violation_id: violation.id, to: partner.email, message_id: sendResult.messageId ?? null }, 200);
 }
 
-type SendResult =
-  | { ok: true; provider: "resend"; messageId: string | null }
-  | { ok: false; provider: "resend"; status: number; body: unknown };
+type SendResult = SendEmailResult;
 
-async function sendViaResend(
-  apiKey: string,
+async function sendDispatchEmail(
   fromEmail: string,
   to: string,
   cc: string[],
@@ -759,30 +768,23 @@ async function sendViaResend(
 ): Promise<SendResult> {
   // Operator kill-switch — runs the full dispatch state machine (load
   // violation, exit check, atomic claim, compose subject/body, audit
-  // log) and stops only at the HTTP POST to Resend. Caller still gets
-  // ok:true so upstream marks the row as dispatched and the cron won't
-  // re-fire when emails resume. Resume by unsetting the env var.
+  // log) and stops only at the HTTP POST to the email provider. Caller
+  // still gets ok:true so upstream marks the row as dispatched and the
+  // cron won't re-fire when emails resume. Resume by unsetting the env var.
   if ((Deno.env.get("DISPATCH_EMAILS_DISABLED") || "").toLowerCase() === "true") {
-    console.log("sendViaResend suppressed by DISPATCH_EMAILS_DISABLED", {
+    console.log("sendDispatchEmail suppressed by DISPATCH_EMAILS_DISABLED", {
       to, cc, subject, fromEmail,
     });
-    return { ok: true, provider: "resend", messageId: null };
+    return { ok: true, provider: emailProvider(), messageId: null };
   }
-  const payload: Record<string, unknown> = {
-    from: fromEmail, to: [to], subject, html: htmlBody, text: textBody,
-  };
-  if (cc.length > 0) payload.cc = cc;
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
+  // Provider (Twilio Email, else Resend) is picked in _shared/email.ts.
+  return await sendEmail({
+    from: fromEmail,
+    fromName: Deno.env.get("FROM_NAME") || undefined,
+    to: [to],
+    cc,
+    subject,
+    html: htmlBody,
+    text: textBody,
   });
-  const text = await res.text().catch(() => "");
-  let body: unknown;
-  try { body = JSON.parse(text); } catch { body = text; }
-  if (!res.ok) return { ok: false, provider: "resend", status: res.status, body };
-  return { ok: true, provider: "resend", messageId: (body as { id?: string })?.id ?? null };
 }

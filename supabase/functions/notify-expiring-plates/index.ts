@@ -1,14 +1,15 @@
 // Supabase Edge Function: notify-expiring-plates
 // Runs daily via cron. Emails permanent-pass holders whose plates expire within 72 hours.
-// Requires RESEND_API_KEY env var and SUPABASE_SERVICE_ROLE_KEY.
+// Requires an email provider (TWILIO_EMAIL_API_KEY_SID/SECRET or RESEND_API_KEY)
+// and SUPABASE_SERVICE_ROLE_KEY.
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { emailProvider, sendEmail as sendOutboundEmail } from "../_shared/email.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "noreply@lotlogic.com";
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "dispatch@lotlogicparking.com";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -29,24 +30,15 @@ interface ResidentPlate {
 }
 
 async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
-  if (!RESEND_API_KEY) {
+  if (emailProvider() === "none") {
     console.log(`[DRY RUN] Would email ${to}: ${subject}`);
     // Return false so we don't mark as notified when no email was actually sent
     return false;
   }
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ from: FROM_EMAIL, to: [to], subject, html }),
-  });
-
+  const res = await sendOutboundEmail({ from: FROM_EMAIL, to: [to], subject, html });
   if (!res.ok) {
-    const err = await res.text();
-    console.error(`Failed to send email to ${to}: ${err}`);
+    console.error(`Failed to send email to ${to} via ${res.provider}: ${JSON.stringify(res.body)}`);
     return false;
   }
   return true;
@@ -181,7 +173,7 @@ serve(async (req: Request) => {
       message: `Notified ${sentCount} permanent-pass holder(s)`,
       count: sentCount,
       skipped: skippedCount,
-      dry_run: !RESEND_API_KEY,
+      dry_run: emailProvider() === "none",
     });
   } catch (err) {
     console.error("Unexpected error:", err);
