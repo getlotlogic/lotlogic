@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { emailProvider, sendEmail } from "../_shared/email.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -258,9 +259,8 @@ async function notifyOwnerOfTruckArrival(
     seenAt: string;
   },
 ): Promise<void> {
-  const resendKey = Deno.env.get("RESEND_API_KEY");
-  if (!resendKey) {
-    console.log("notifyOwnerOfTruckArrival skipped: RESEND_API_KEY not set");
+  if (emailProvider() === "none") {
+    console.log("notifyOwnerOfTruckArrival skipped: no email provider configured");
     return;
   }
 
@@ -326,22 +326,8 @@ Open dashboard: https://lotlogicparking.com/app
 — LotView`;
   const html = `<p><strong>${partnerName}</strong> truck <code>${truckPlate}</code> entered <strong>${propertyName}</strong> at <strong>${seenLocal} ET</strong>.</p><p><a href="https://lotlogicparking.com/app">Open LotView dashboard</a></p>`;
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${resendKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: fromEmail,
-      to: [recipient],
-      subject,
-      text,
-      html,
-    }),
-  });
+  const res = await sendEmail({ from: fromEmail, to: [recipient], subject, text, html });
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.warn(`resend ${res.status}: ${body.slice(0, 200)}`);
+    console.warn(`${res.provider} ${res.status}: ${JSON.stringify(res.body).slice(0, 200)}`);
   }
 }

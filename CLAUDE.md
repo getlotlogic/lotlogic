@@ -314,16 +314,16 @@ supabase secrets set JWT_SECRET=$SUPABASE_JWT_SECRET  # tow-dispatch-email
 ```
 
 New env vars required:
-- `tow-dispatch-email`: `JWT_SECRET` (= the Supabase JWT secret = backend's `JWT_SECRET`), `BACKEND_URL` (optional, defaults to prod), `SENDGRID_API_KEY` (primary provider) OR `RESEND_API_KEY` (fallback), `FROM_EMAIL` (must be on a domain-authenticated sender — currently `dispatch@lotlogicparking.com`), `FROM_NAME` (optional, "LotLogic" default), `EMAIL_OVERRIDE_TO` (optional test-recipient override; unset in prod).
+- `tow-dispatch-email`: `JWT_SECRET` (= the Supabase JWT secret = backend's `JWT_SECRET`), `BACKEND_URL` (optional, defaults to prod), email provider via `supabase/functions/_shared/email.ts`: `TWILIO_EMAIL_API_KEY_SID` + `TWILIO_EMAIL_API_KEY_SECRET` (primary, Twilio Email) OR `RESEND_API_KEY` (fallback), `FROM_EMAIL` (must be on a domain-authenticated sender — currently `dispatch@lotlogicparking.com`), `FROM_NAME` / `EMAIL_FROM_NAME` (optional, "LotLogic" default), `EMAIL_OVERRIDE_TO` (optional test-recipient override; unset in prod). The same two Twilio vars drive `tow-confirm`, `notify-expiring-plates`, and `weather-risk-eval`.
 - `tow-confirm`: `TOW_CONFIRM_MIN_CONFIDENCE` (default 0.65 — lowered from 0.85 on 2026-04-26; 0.85 dropped night-IR Charlotte frames and the 0.70-confidence inherit path, so partner-truck sightings never reached `tow-confirm` correlation), `TOW_CONFIRM_LOOKBACK_MINUTES` (default 180)
 - `camera-snapshot` / `pr-ingest`: `PLATE_RECOGNIZER_TOKEN`, `PR_MIN_SCORE` (default `0.8`), `PR_DEDUP_WINDOW_SECONDS` (default `0`; currently `300` in prod), `CAMERA_SNAPSHOT_URL_SECRET` (primary) or `PR_INGEST_URL_SECRET` (fallback shared secret for the trailing-path URL), `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_PUBLIC_BASE_URL`.
 
-## Email sending (added Apr 2026)
+## Email sending (updated 2026-10-23)
 
-Domain: `lotlogicparking.com` registered in Cloudflare (Gabe's account). Inbound = Cloudflare Email Routing (FREE); forwards `dispatch@`, `gabriel@`, + future custom addresses to `standardvendingcompany@gmail.com`. Outbound = SendGrid (Twilio's email product) with the domain Domain-Authenticated via 3 CNAMEs in Cloudflare DNS (gray cloud / DNS-only — NOT proxied). `FROM_EMAIL=dispatch@lotlogicparking.com`. Single Sender Verification is not used.
+Domain: `lotlogicparking.com` registered in Cloudflare (account owned by standardvendingcompany@gmail.com; gabriel@lotlogicparking.com is Super Administrator). Inbound = Google Workspace mailboxes since 2026-10-21 (Cloudflare Email Routing is OFF). Outbound from the edge functions = **Twilio Email** (comms.twilio.com) under the LotLogic Twilio account on gabriel@lotlogicparking.com, domain-authenticated via 3 DNS-only CNAMEs in Cloudflare (`em8991`, `llp._domainkey`, `llp2._domainkey` — custom DKIM selector `llp`), with Resend as the fallback when the Twilio vars are unset. The Railway backend uses the same Twilio account (see `lotlogic-backend/services/email.py`). `FROM_EMAIL=dispatch@lotlogicparking.com`. The legacy SendGrid CNAMEs (`em9679`, `s1._domainkey`, `s2._domainkey`, `url3442`) are still in DNS for the old SendGrid account and can be removed once that account is retired.
 
 Guardrails:
-- Never turn on the orange cloud (Cloudflare proxy) for SendGrid CNAMEs — they're `em{N}.lotlogicparking.com`, `s1._domainkey.lotlogicparking.com`, `s2._domainkey.lotlogicparking.com` and must be DNS-only.
+- Never turn on the orange cloud (Cloudflare proxy) for the email CNAMEs — `em{N}.lotlogicparking.com`, `llp._domainkey`, `llp2._domainkey` (Twilio) and the legacy `s1._domainkey` / `s2._domainkey` (SendGrid) must be DNS-only.
 - SendGrid tracking is explicitly disabled per-message in `tow-dispatch-email/index.ts` via `tracking_settings`. Re-enabling it will route every link through `url{N}.lotlogicparking.com` and the branded-link SSL cert breaks Tow / No Tow buttons until provisioned.
 - `EMAIL_OVERRIDE_TO` currently set to `standardvendingcompany@gmail.com` during testing. Production: unset the secret and emails route to each violation's `enforcement_partners.email`.
 

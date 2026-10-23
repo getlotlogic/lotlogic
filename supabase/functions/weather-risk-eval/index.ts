@@ -15,6 +15,7 @@
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { emailProvider, sendEmail as sendOutboundEmail } from "../_shared/email.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -68,16 +69,11 @@ function fmtDay(d: Day): string {
 }
 
 async function sendEmail(subject: string, text: string): Promise<{ ok: boolean; detail?: unknown }> {
-  const apiKey = Deno.env.get("RESEND_API_KEY");
   const from = Deno.env.get("FROM_EMAIL") || "dispatch@lotlogicparking.com";
   const to = Deno.env.get("ALERT_TO") || "gabriel@lotlogicparking.com";
-  if (!apiKey) return { ok: false, detail: "RESEND_API_KEY not set" };
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from, to: [to], subject, text }),
-  });
-  if (!res.ok) return { ok: false, detail: await res.text().catch(() => res.status) };
+  if (emailProvider() === "none") return { ok: false, detail: "no email provider configured" };
+  const res = await sendOutboundEmail({ from, to: [to], subject, text });
+  if (!res.ok) return { ok: false, detail: `${res.provider} ${res.status}: ${JSON.stringify(res.body)}` };
   return { ok: true };
 }
 
